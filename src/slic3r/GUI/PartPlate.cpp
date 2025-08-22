@@ -3,6 +3,7 @@
 #include <numeric>
 #include <vector>
 #include <string>
+#include <boost/log/trivial.hpp>
 #include <regex>
 #include <future>
 #include <GL/glew.h>
@@ -397,11 +398,43 @@ void PartPlate::calc_triangles(const ExPolygon &poly)
 
 void PartPlate::calc_exclude_triangles(const ExPolygon &poly)
 {
+
+    if (poly.contour.points.empty()) {
+        m_exclude_triangles.reset(); 
+        return; 
+    }
+
+
+    // Log the entry into the function and the initial size of the input polygon's points.
+    BOOST_LOG_TRIVIAL(error) << "Entering calc_exclude_triangles function. Input polygon contour points size: " << poly.contour.points.size();
+    // Log the number of holes in the polygon.
+    BOOST_LOG_TRIVIAL(error) << "Input polygon holes count: " << poly.holes.size();
+
+    // Reset the m_exclude_triangles object.
     m_exclude_triangles.reset();
 
-    if (!init_model_from_poly(m_exclude_triangles, poly, GROUND_Z))
-		BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ":Unable to create exclude triangles\n";
+    // Log the state just before calling init_model_from_poly.
+    BOOST_LOG_TRIVIAL(error) << "Attempting to initialize model from polygon...";
+
+    // Call init_model_from_poly and store its return value.
+    bool init_success = init_model_from_poly(m_exclude_triangles, poly, GROUND_Z);
+
+    // Log the result of init_model_from_poly.
+    if (!init_success) {
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ":Unable to create exclude triangles. init_model_from_poly returned false.\n";
+    } else {
+        BOOST_LOG_TRIVIAL(error) << "Successfully initialized model from polygon.";
+    }
 }
+
+
+
+
+
+
+
+
+
 
 static bool init_model_from_lines(GLModel &model, const Lines &lines, float z)
 {
@@ -2545,132 +2578,184 @@ void PartPlate::generate_print_polygon(ExPolygon &print_polygon)
 
 void PartPlate::generate_exclude_polygon(ExPolygon &exclude_polygon)
 {
-	auto compute_exclude_points = [&exclude_polygon](Vec2d& center, double radius, double start_angle, double stop_angle, int count)
-	{
-		double angle_steps;
-		angle_steps = (stop_angle - start_angle) / (count - 1);
-		for(int j = 0; j < count; j++ )
-		{
-			double angle = start_angle + j * angle_steps;
-			double x = center(0) + ::cos(angle) * radius;
-			double y = center(1) + ::sin(angle) * radius;
-			exclude_polygon.contour.append({ scale_(x), scale_(y) });
-		}
-	};
+    // Clear the polygon before starting to ensure a clean state
+    exclude_polygon.clear();
 
-	int points_count = 8;
-	if (m_exclude_area.size() == 4)
-	{
-		//rectangle case
-		for (int i = 0; i < 4; i++)
-		{
-			const Vec2d& p = m_exclude_area[i];
-			Vec2d center;
-			double start_angle, stop_angle, radius;
-			radius = 1.f; // ORCA use equal rounding for all corners
-			switch (i) {
-				case 0: // Left-Bottom
-					center(0)   = p(0) + radius;
-					center(1)   = p(1) + radius;
-					start_angle = 1.0 * PI; //180
-					stop_angle  = 1.5 * PI; //270
-					compute_exclude_points(center, radius, start_angle, stop_angle, points_count);
-				break;
-				case 1: // Right-Bottom
-					center(0)   = p(0) - radius;
-					center(1)   = p(1) + radius;
-					start_angle = 1.5 * PI; //270
-					stop_angle  = 2.0 * PI; //360
-					compute_exclude_points(center, radius, start_angle, stop_angle, points_count);
-					break;
-				case 2: // Right-Top
-					center(0)   = p(0) - radius;
-					center(1)   = p(1) - radius;
- 					start_angle = 0.0 * PI; //0
-					stop_angle  = 0.5 * PI; //90
-					compute_exclude_points(center, radius, start_angle, stop_angle, points_count);
-					break;
-				case 3: // Left-Top
-					center(0)   = p(0) + radius;
-					center(1)   = p(1) - radius;
-					start_angle = 0.5 * PI; //90
-					stop_angle  = 1.0 * PI; //180
-					compute_exclude_points(center, radius, start_angle, stop_angle, points_count);
-					break;
-			}
-		}
-	}
-	else {
-		for (const Vec2d& p : m_exclude_area) {
-			exclude_polygon.contour.append({ scale_(p(0)), scale_(p(1)) });
-		}
-	}
+    // Log the initial state of m_exclude_area
+    BOOST_LOG_TRIVIAL(error) << "Entering generate_exclude_polygon. m_exclude_area size: " << m_exclude_area.size();
 
-	exclude_polygon.contour.make_counter_clockwise();
+    auto compute_exclude_points = [&exclude_polygon](Vec2d& center, double radius, double start_angle, double stop_angle, int count)
+    {
+        BOOST_LOG_TRIVIAL(error) << "  compute_exclude_points called with count: " << count << ", radius: " << radius
+                                 << ", start_angle: " << start_angle << ", stop_angle: " << stop_angle;
+
+        if (count <= 1) {
+            BOOST_LOG_TRIVIAL(error) << "  compute_exclude_points: count <= 1 branch taken.";
+            double x = center(0) + ::cos(start_angle) * radius;
+            double y = center(1) + ::sin(start_angle) * radius;
+            // Log the point before appending
+            BOOST_LOG_TRIVIAL(error) << "  compute_exclude_points: Appending single point (" << scale_(x) << ", " << scale_(y) << ")";
+            exclude_polygon.contour.append({ scale_(x), scale_(y) });
+            return;
+        }
+
+        double angle_steps;
+        angle_steps = (stop_angle - start_angle) / (count - 1);
+        for(int j = 0; j < count; j++ )
+        {
+            double angle = start_angle + j * angle_steps;
+            double x = center(0) + ::cos(angle) * radius;
+            double y = center(1) + ::sin(angle) * radius;
+            // Log the point before appending
+            BOOST_LOG_TRIVIAL(error) << "  compute_exclude_points: Loop iteration " << j << ", angle: " << angle
+                                     << ", Appending point (" << scale_(x) << ", " << scale_(y) << ")";
+            exclude_polygon.contour.append({ scale_(x), scale_(y) });
+        }
+    };
+
+    int points_count = 8;
+    if (m_exclude_area.size() == 4)
+    {
+        //rectangle case
+        BOOST_LOG_TRIVIAL(error) << "  generate_exclude_polygon: m_exclude_area size is 4 (rectangle case).";
+        for (int i = 0; i < 4; i++)
+        {
+            const Vec2d& p = m_exclude_area[i];
+            Vec2d center;
+            double start_angle, stop_angle, radius;
+            radius = 1.f; // ORCA use equal rounding for all corners
+            switch (i) {
+                case 0: // Left-Bottom
+                    center(0)   = p(0) + radius;
+                    center(1)   = p(1) + radius;
+                    start_angle = 1.0 * PI; //180
+                    stop_angle  = 1.5 * PI; //270
+                    BOOST_LOG_TRIVIAL(error) << "  generate_exclude_polygon: Case 0 (Left-Bottom), p(" << p(0) << "," << p(1) << ")";
+                    compute_exclude_points(center, radius, start_angle, stop_angle, points_count);
+                break;
+                case 1: // Right-Bottom
+                    center(0)   = p(0) - radius;
+                    center(1)   = p(1) + radius;
+                    start_angle = 1.5 * PI; //270
+                    stop_angle  = 2.0 * PI; //360
+                    BOOST_LOG_TRIVIAL(error) << "  generate_exclude_polygon: Case 1 (Right-Bottom), p(" << p(0) << "," << p(1) << ")";
+                    compute_exclude_points(center, radius, start_angle, stop_angle, points_count);
+                    break;
+                case 2: // Right-Top
+                    center(0)   = p(0) - radius;
+                    center(1)   = p(1) - radius;
+                    start_angle = 0.0 * PI; //0
+                    stop_angle  = 0.5 * PI; //90
+                    BOOST_LOG_TRIVIAL(error) << "  generate_exclude_polygon: Case 2 (Right-Top), p(" << p(0) << "," << p(1) << ")";
+                    compute_exclude_points(center, radius, start_angle, stop_angle, points_count);
+                    break;
+                case 3: // Left-Top
+                    center(0)   = p(0) + radius;
+                    center(1)   = p(1) - radius;
+                    start_angle = 0.5 * PI; //90
+                    stop_angle  = 1.0 * PI; //180
+                    BOOST_LOG_TRIVIAL(error) << "  generate_exclude_polygon: Case 3 (Left-Top), p(" << p(0) << "," << p(1) << ")";
+                    compute_exclude_points(center, radius, start_angle, stop_angle, points_count);
+                    break;
+            }
+        }
+        BOOST_LOG_TRIVIAL(error) << "  generate_exclude_polygon: After rectangle corner processing, exclude_polygon contour points size: " << exclude_polygon.contour.points.size();
+    }
+    else {
+        BOOST_LOG_TRIVIAL(error) << "  generate_exclude_polygon: m_exclude_area size is NOT 4 (direct append case).";
+        for (const Vec2d& p : m_exclude_area) {
+            // Log the point before appending
+            BOOST_LOG_TRIVIAL(error) << "  generate_exclude_polygon: Appending m_exclude_area point (" << scale_(p(0)) << ", " << scale_(p(1)) << ")";
+            exclude_polygon.contour.append({ scale_(p(0)), scale_(p(1)) });
+        }
+        BOOST_LOG_TRIVIAL(error) << "  generate_exclude_polygon: After direct append, exclude_polygon contour points size: " << exclude_polygon.contour.points.size();
+    }
+
+    BOOST_LOG_TRIVIAL(error) << "  generate_exclude_polygon: Before make_counter_clockwise. Current points size: " << exclude_polygon.contour.points.size();
+    exclude_polygon.contour.make_counter_clockwise();
+    BOOST_LOG_TRIVIAL(error) << "  generate_exclude_polygon: After make_counter_clockwise. Final points size: " << exclude_polygon.contour.points.size();
 }
+
+
+
 
 bool PartPlate::set_shape(const Pointfs& shape, const Pointfs& exclude_areas, Vec2d position, float height_to_lid, float height_to_rod)
 {
-	Pointfs new_shape, new_exclude_areas;
-	for (const Vec2d& p : shape) {
-		new_shape.push_back(Vec2d(p.x() + position.x(), p.y() + position.y()));
-	}
+    // Log the initial input parameters for exclude_areas
+    BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Entering PartPlate::set_shape. Input 'exclude_areas' size: " << exclude_areas.size();
+    if (!exclude_areas.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: First point in input 'exclude_areas': (" << exclude_areas[0](0) << ", " << exclude_areas[0](1) << ")";
+    }
 
-	for (const Vec2d& p : exclude_areas) {
-		new_exclude_areas.push_back(Vec2d(p.x() + position.x(), p.y() + position.y()));
-	}
-	if ((m_shape == new_shape)&&(m_exclude_area == new_exclude_areas)
-		&&(m_height_to_lid == height_to_lid)&&(m_height_to_rod == height_to_rod)) {
-		BOOST_LOG_TRIVIAL(info) << "PartPlate same shape, skip directly";
-		return false;
-	}
+    Pointfs new_shape, new_exclude_areas;
+    for (const Vec2d& p : shape) {
+        new_shape.push_back(Vec2d(p.x() + position.x(), p.y() + position.y()));
+    }
 
-	m_height_to_lid =  height_to_lid;
-	m_height_to_rod =  height_to_rod;
+    for (const Vec2d& p : exclude_areas) {
+        new_exclude_areas.push_back(Vec2d(p.x() + position.x(), p.y() + position.y()));
+    }
 
-	if ((m_shape != new_shape) || (m_exclude_area != new_exclude_areas))
-	{
-		/*m_shape.clear();
-		for (const Vec2d& p : shape) {
-			m_shape.push_back(Vec2d(p.x() + position.x(), p.y() + position.y()));
-		}
+    // Log the state of new_exclude_areas after population
+    BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: After populating 'new_exclude_areas', its size: " << new_exclude_areas.size();
+    if (!new_exclude_areas.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: First point in 'new_exclude_areas': (" << new_exclude_areas[0](0) << ", " << new_exclude_areas[0](1) << ")";
+    }
 
-		m_exclude_area.clear();
-		for (const Vec2d& p : exclude_areas) {
-			m_exclude_area.push_back(Vec2d(p.x() + position.x(), p.y() + position.y()));
-		}*/
-		m_shape = std::move(new_shape);
-		m_exclude_area = std::move(new_exclude_areas);
 
-		calc_bounding_boxes();
+    if ((m_shape == new_shape)&&(m_exclude_area == new_exclude_areas)
+        &&(m_height_to_lid == height_to_lid)&&(m_height_to_rod == height_to_rod)) {
+        BOOST_LOG_TRIVIAL(info) << "CALL_SITE_LOG: PartPlate same shape, skip directly"; // Added CALL_SITE_LOG
+        return false;
+    }
 
-		ExPolygon logo_poly;
-		generate_logo_polygon(logo_poly);
-		m_logo_triangles.reset();
-		if (!init_model_from_poly(m_logo_triangles, logo_poly, GROUND_Z + 0.02f))
-			BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ":Unable to create logo triangles\n";
+    m_height_to_lid =  height_to_lid;
+    m_height_to_rod =  height_to_rod;
 
-		ExPolygon poly;
-		/*for (const Vec2d& p : m_shape) {
-			poly.contour.append({ scale_(p(0)), scale_(p(1)) });
-		}*/
-		generate_print_polygon(poly);
-		calc_triangles(poly);
+    // The section where calc_exclude_triangles is called, with added logging.
+    if ((m_shape != new_shape) || (m_exclude_area != new_exclude_areas))
+    {
+        // Log the size of m_exclude_area just before assignment
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Before 'm_exclude_area = std::move(new_exclude_areas)', m_exclude_area size: " << m_exclude_area.size();
+        m_shape = std::move(new_shape);
+        m_exclude_area = std::move(new_exclude_areas);
+        // Log the size of m_exclude_area just after assignment
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: After 'm_exclude_area = std::move(new_exclude_areas)', m_exclude_area size: " << m_exclude_area.size();
+
+        calc_bounding_boxes();
+
+        ExPolygon logo_poly;
+        generate_logo_polygon(logo_poly);
+        m_logo_triangles.reset();
+        if (!init_model_from_poly(m_logo_triangles, logo_poly, GROUND_Z + 0.02f))
+            BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: " << __FUNCTION__ << ":Unable to create logo triangles\n"; // Added CALL_SITE_LOG
+
+        ExPolygon poly;
+        /*for (const Vec2d& p : m_shape) {
+            poly.contour.append({ scale_(p(0)), scale_(p(1)) });
+        }*/
+        generate_print_polygon(poly);
+        calc_triangles(poly);
         init_raycaster_from_model(m_triangles);
 
-		ExPolygon exclude_poly;
-		/*for (const Vec2d& p : m_exclude_area) {
-			exclude_poly.contour.append({ scale_(p(0)), scale_(p(1)) });
-		}*/
-		generate_exclude_polygon(exclude_poly);
-		calc_exclude_triangles(exclude_poly);
+        ExPolygon exclude_poly;
+        /*for (const Vec2d& p : m_exclude_area) {
+            exclude_poly.contour.append({ scale_(p(0)), scale_(p(1)) });
+        }*/
+        generate_exclude_polygon(exclude_poly);
 
-		const BoundingBox& pp_bbox = poly.contour.bounding_box();
-		calc_gridlines(poly, pp_bbox);
+        // Add logging before calling calc_exclude_triangles to inspect exclude_poly
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Before calling calc_exclude_triangles. exclude_poly contour points size: " << exclude_poly.contour.points.size();
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Before calling calc_exclude_triangles. exclude_poly holes count: " << exclude_poly.holes.size();
 
-		//calc_vertex_for_icons_background(5, m_del_and_background_icon);
-		//calc_vertex_for_icons(4, m_del_icon);
-		calc_vertex_for_icons(0, m_del_icon);
+        calc_exclude_triangles(exclude_poly);
+
+        const BoundingBox& pp_bbox = poly.contour.bounding_box();
+        calc_gridlines(poly, pp_bbox);
+
+        //calc_vertex_for_icons_background(5, m_del_and_background_icon);
+        //calc_vertex_for_icons(4, m_del_icon);
+        calc_vertex_for_icons(0, m_del_icon);
         calc_vertex_for_icons(1, m_orient_icon);
         calc_vertex_for_icons(2, m_arrange_icon);
         calc_vertex_for_icons(3, m_lock_icon);
@@ -2678,17 +2763,14 @@ bool PartPlate::set_shape(const Pointfs& shape, const Pointfs& exclude_areas, Ve
         calc_vertex_for_icons(5, m_move_front_icon);
         // ORCA also change bed_icon_count number in calc_vertex_for_icons() after adding or removing icons for circular shaped beds that uses vertical alingment for icons
 
-		//calc_vertex_for_number(0, (m_plate_index < 9), m_plate_idx_icon);
-		calc_vertex_for_number(0, false, m_plate_idx_icon);
-		if (m_plater) {
-			// calc vertex for plate name
-			generate_plate_name_texture();
-		}
-	}
-
-	calc_height_limit();
-
-	return true;
+        //calc_vertex_for_number(0, (m_plate_index < 9), m_plate_idx_icon);
+        calc_vertex_for_number(0, false, m_plate_idx_icon);
+        if (m_plater) {
+            // calc vertex for plate name
+            generate_plate_name_texture();
+        }
+    }
+    return true; // Assuming the function should return true if the shape was updated
 }
 
 const BoundingBox PartPlate::get_bounding_box_crd()
@@ -3547,7 +3629,6 @@ void PartPlateList::reset(bool do_init)
 	return;
 }
 
-//reset partplate to init states
 void PartPlateList::reinit()
 {
 	clear(true, true);
@@ -3556,6 +3637,12 @@ void PartPlateList::reinit()
 
 	//reset plate 0's position
 	Vec2d pos = compute_shape_position(0, m_plate_cols);
+    // Add logging before calling set_shape
+    BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Before calling PartPlate::set_shape from PartPlateList::reinit. Argument 'm_exclude_areas' size: " << m_exclude_areas.size();
+    if (!m_exclude_areas.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: First point in argument 'm_exclude_areas': (" << m_exclude_areas[0](0) << ", " << m_exclude_areas[0](1) << ")";
+    }
+
 	m_plate_list[0]->set_shape(m_shape, m_exclude_areas, pos, m_height_to_lid, m_height_to_rod);
 	//reset unprintable plate's position
 	Vec3d origin2 = compute_origin_for_unprintable();
@@ -3578,78 +3665,89 @@ void PartPlateList::update_plates()
 
 int PartPlateList::create_plate(bool adjust_position)
 {
-	PartPlate* plate = NULL;
-	Vec3d origin;
-	int new_index;
+    PartPlate* plate = NULL;
+    Vec3d origin;
+    int new_index;
 
-	new_index = m_plate_list.size();
-	if (new_index >= MAX_PLATES_COUNT)
-		return -1;
-	int cols = compute_colum_count(new_index + 1);
-	int old_cols = compute_colum_count(new_index);
+    new_index = m_plate_list.size();
+    if (new_index >= MAX_PLATES_COUNT)
+        return -1;
+    int cols = compute_colum_count(new_index + 1);
+    int old_cols = compute_colum_count(new_index);
 
-	origin = compute_origin(new_index, cols);
-	plate = new PartPlate(this, origin, m_plate_width, m_plate_depth, m_plate_height, m_plater, m_model, true, printer_technology);
-	assert(plate != NULL);
+    origin = compute_origin(new_index, cols);
+    plate = new PartPlate(this, origin, m_plate_width, m_plate_depth, m_plate_height, m_plater, m_model, true, printer_technology);
+    assert(plate != NULL);
 
-	if (printer_technology == ptFFF)
-	{
-		Print* print = new Print();
-		GCodeResult* gcode = new GCodeResult();
-		m_print_list.emplace(m_print_index, print);
-		m_gcode_result_list.emplace(m_print_index, gcode);
-		plate->set_print(print, gcode, m_print_index);
-		m_print_index++;
-	}
+    if (printer_technology == ptFFF)
+    {
+        Print* print = new Print();
+        GCodeResult* gcode = new GCodeResult();
+        m_print_list.emplace(m_print_index, print);
+        m_gcode_result_list.emplace(m_print_index, gcode);
+        plate->set_print(print, gcode, m_print_index);
+        m_print_index++;
+    }
 
-	plate->set_index(new_index);
-	Vec2d pos = compute_shape_position(new_index, cols);
-	plate->set_shape(m_shape, m_exclude_areas, pos, m_height_to_lid, m_height_to_rod);
-	m_plate_list.emplace_back(plate);
-	update_plate_cols();
-	if (old_cols != cols)
-	{
-		BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(":old_cols %1% -> new_cols %2%") % old_cols % cols;
-		//update the origin of each plate
-		update_all_plates_pos_and_size(adjust_position, false);
-		set_shapes(m_shape, m_exclude_areas, m_logo_texture_filename, m_height_to_lid, m_height_to_rod);
+    plate->set_index(new_index);
+    Vec2d pos = compute_shape_position(new_index, cols);
+    
+    // Log before calling plate->set_shape
+    BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Before calling plate->set_shape from PartPlateList::create_plate. Argument 'm_exclude_areas' size: " << m_exclude_areas.size();
+    if (!m_exclude_areas.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: First point in argument 'm_exclude_areas': (" << m_exclude_areas[0](0) << ", " << m_exclude_areas[0](1) << ")";
+    }
+    plate->set_shape(m_shape, m_exclude_areas, pos, m_height_to_lid, m_height_to_rod);
+    m_plate_list.emplace_back(plate);
+    update_plate_cols();
+    if (old_cols != cols)
+    {
+        BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(":old_cols %1% -> new_cols %2%") % old_cols % cols;
+        //update the origin of each plate
+        update_all_plates_pos_and_size(adjust_position, false);
+        
+        // Log before calling set_shapes
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Before calling set_shapes from PartPlateList::create_plate. Argument 'm_exclude_areas' size: " << m_exclude_areas.size();
+        if (!m_exclude_areas.empty()) {
+            BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: First point in argument 'm_exclude_areas': (" << m_exclude_areas[0](0) << ", " << m_exclude_areas[0](1) << ")";
+        }
+        set_shapes(m_shape, m_exclude_areas, m_logo_texture_filename, m_height_to_lid, m_height_to_rod);
 
-		if (m_plater) {
-			Vec2d pos = compute_shape_position(m_current_plate, cols);
-			m_plater->set_bed_position(pos);
-		}
-	}
-	else
-	{
-		BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": the same cols %1%") % old_cols;
-		Vec3d origin2 = compute_origin_for_unprintable();
-		unprintable_plate.set_pos_and_size(origin2, m_plate_width, m_plate_depth, m_plate_height, false);
+        if (m_plater) {
+            Vec2d pos = compute_shape_position(m_current_plate, cols);
+            m_plater->set_bed_position(pos);
+        }
+    }
+    else
+    {
+        BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": the same cols %1%") % old_cols;
+        Vec3d origin2 = compute_origin_for_unprintable();
+        unprintable_plate.set_pos_and_size(origin2, m_plate_width, m_plate_depth, m_plate_height, false);
 
-		//update bounding_boxes
-		calc_bounding_boxes();
-	}
+        //update bounding_boxes
+        calc_bounding_boxes();
+    }
 
-	// update wipe tower config
-	if (m_plater) {
-		// In GUI mode
+    // update wipe tower config
+    if (m_plater) {
+        // In GUI mode
         set_default_wipe_tower_pos_for_plate(new_index);
-	}
+    }
 
-	unprintable_plate.set_index(new_index+1);
+    unprintable_plate.set_index(new_index+1);
 
-	//reload all objects here
-	if (adjust_position)
-		construct_objects_list_for_new_plate(new_index);
+    //reload all objects here
+    if (adjust_position)
+        construct_objects_list_for_new_plate(new_index);
 
-	if (m_plater) {
-		// In GUI mode
-		wxGetApp().obj_list()->on_plate_added(plate);
-	}
+    if (m_plater) {
+        // In GUI mode
+        wxGetApp().obj_list()->on_plate_added(plate);
+    }
 
-	BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(":created a new plate %1%") % new_index;
-	return new_index;
+    BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(":created a new plate %1%") % new_index;
+    return new_index;
 }
-
 
 int PartPlateList::duplicate_plate(int index)
 {
@@ -3718,122 +3816,124 @@ int PartPlateList::destroy_print(int print_index)
 	return result;
 }
 
-//delete a plate by index
-//keep its instance at origin position and add them into next plate if have
-//update the plate index and position after it
 int PartPlateList::delete_plate(int index)
 {
-	int ret = 0;
-	PartPlate* plate = NULL;
+    int ret = 0;
+    PartPlate* plate = NULL;
 
-	BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(":delete plate %1%, count %2%") % index % m_plate_list.size();
-	if (index >= m_plate_list.size())
-	{
-		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":can not find plate");
-		return -1;
-	}
-	if (m_plate_list.size() <= 1)
-	{
-		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":only one plate left, can not delete");
-		return -1;
-	}
+    BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(":delete plate %1%, count %2%") % index % m_plate_list.size();
+    if (index >= m_plate_list.size())
+    {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":can not find plate");
+        return -1;
+    }
+    if (m_plate_list.size() <= 1)
+    {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":only one plate left, can not delete");
+        return -1;
+    }
 
-	plate = m_plate_list[index];
-	if (index != plate->get_index())
-	{
-		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":plate %1%, has an invalid index %2%") % index % plate->get_index();
-		return -1;
-	}
+    plate = m_plate_list[index];
+    if (index != plate->get_index())
+    {
+        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":plate %1%, has an invalid index %2%") % index % plate->get_index();
+        return -1;
+    }
 
-	if (m_plater) {
-		// In GUI mode
-		// BBS: add wipe tower logic
-		DynamicConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
-		ConfigOptionFloats* wipe_tower_x = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_x");
-		ConfigOptionFloats* wipe_tower_y = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_y");
-		// wipe_tower_x and wip_tower_y may be less than plate count in the following case:
-		// 1. wipe_tower is enabled after creating new plates
-		// 2. wipe tower is not enabled
-		if (index < wipe_tower_x->values.size())
-			wipe_tower_x->values.erase(wipe_tower_x->values.begin() + index);
-		if (index < wipe_tower_y->values.size())
-			wipe_tower_y->values.erase(wipe_tower_y->values.begin() + index);
-	}
+    if (m_plater) {
+        // In GUI mode
+        // BBS: add wipe tower logic
+        DynamicConfig& proj_cfg = wxGetApp().preset_bundle->project_config;
+        ConfigOptionFloats* wipe_tower_x = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_x");
+        ConfigOptionFloats* wipe_tower_y = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_y");
+        // wipe_tower_x and wip_tower_y may be less than plate count in the following case:
+        // 1. wipe_tower is enabled after creating new plates
+        // 2. wipe tower is not enabled
+        if (index < wipe_tower_x->values.size())
+            wipe_tower_x->values.erase(wipe_tower_x->values.begin() + index);
+        if (index < wipe_tower_y->values.size())
+            wipe_tower_y->values.erase(wipe_tower_y->values.begin() + index);
+    }
 
-	int cols = compute_colum_count(m_plate_list.size() - 1);
-	int old_cols = compute_colum_count(m_plate_list.size());
+    int cols = compute_colum_count(m_plate_list.size() - 1);
+    int old_cols = compute_colum_count(m_plate_list.size());
 
-	m_plate_list.erase(m_plate_list.begin() + index);
-	update_plate_cols();
-	//update this plate
-	//move this plate's instance to the end
-	Vec3d current_origin;
-	current_origin = compute_origin_for_unprintable();
-	plate->set_pos_and_size(current_origin, m_plate_width, m_plate_depth, m_plate_height, true);
+    m_plate_list.erase(m_plate_list.begin() + index);
+    update_plate_cols();
+    //update this plate
+    //move this plate's instance to the end
+    Vec3d current_origin;
+    current_origin = compute_origin_for_unprintable();
+    plate->set_pos_and_size(current_origin, m_plate_width, m_plate_depth, m_plate_height, true);
 
-	//update the plates after it
-	for (unsigned int i = index; i < (unsigned int)m_plate_list.size(); ++i)
-	{
-		PartPlate* plate = m_plate_list[i];
-		assert(plate != NULL);
+    //update the plates after it
+    for (unsigned int i = index; i < (unsigned int)m_plate_list.size(); ++i)
+    {
+        PartPlate* plate = m_plate_list[i];
+        assert(plate != NULL);
 
-		plate->set_index(i);
-		Vec3d origin = compute_origin(i, m_plate_cols);
-		plate->set_pos_and_size(origin, m_plate_width, m_plate_depth, m_plate_height, true);
+        plate->set_index(i);
+        Vec3d origin = compute_origin(i, m_plate_cols);
+        plate->set_pos_and_size(origin, m_plate_width, m_plate_depth, m_plate_height, true);
 
-		//update render shapes
-		Vec2d pos = compute_shape_position(i, m_plate_cols);
-		plate->set_shape(m_shape, m_exclude_areas, pos, m_height_to_lid, m_height_to_rod);
-	}
+        //update render shapes
+        Vec2d pos = compute_shape_position(i, m_plate_cols);
+        // Add logging before calling set_shape inside the loop
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Before calling plate->set_shape from PartPlateList::delete_plate loop. Argument 'm_exclude_areas' size: " << m_exclude_areas.size();
+        if (!m_exclude_areas.empty()) {
+            BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: First point in argument 'm_exclude_areas': (" << m_exclude_areas[0](0) << ", " << m_exclude_areas[0](1) << ")";
+        }
+        plate->set_shape(m_shape, m_exclude_areas, pos, m_height_to_lid, m_height_to_rod);
+    }
 
-	//update current_plate if delete current
-	if (m_current_plate == index && index == 0) {
-		select_plate(0);
-	}
-	else if (m_current_plate >= index) {
-		select_plate(m_current_plate - 1);
-	}
-	else {
-		//delete the plate behind current, just need to update the position of Bed3D
-		Vec2d pos = compute_shape_position(m_current_plate, m_plate_cols);
-		if (m_plater)
-			m_plater->set_bed_position(pos);
-	}
+    //update current_plate if delete current
+    if (m_current_plate == index && index == 0) {
+        select_plate(0);
+    }
+    else if (m_current_plate >= index) {
+        select_plate(m_current_plate - 1);
+    }
+    else {
+        //delete the plate behind current, just need to update the position of Bed3D
+        Vec2d pos = compute_shape_position(m_current_plate, m_plate_cols);
+        if (m_plater)
+            m_plater->set_bed_position(pos);
+    }
 
-	unprintable_plate.set_index(m_plate_list.size());
+    unprintable_plate.set_index(m_plate_list.size());
 
-	if (old_cols != cols)
-	{
-		//update the origin of each plate
-		update_all_plates_pos_and_size();
-		set_shapes(m_shape, m_exclude_areas, m_logo_texture_filename, m_height_to_lid, m_height_to_rod);
-	}
-	else
-	{
-		//update the position of the unprintable plate
-		Vec3d origin2 = compute_origin_for_unprintable();
-		unprintable_plate.set_pos_and_size(origin2, m_plate_width, m_plate_depth, m_plate_height, true);
+    if (old_cols != cols)
+    {
+        //update the origin of each plate
+        update_all_plates_pos_and_size();
+        set_shapes(m_shape, m_exclude_areas, m_logo_texture_filename, m_height_to_lid, m_height_to_rod);
+    }
+    else
+    {
+        //update the position of the unprintable plate
+        Vec3d origin2 = compute_origin_for_unprintable();
+        unprintable_plate.set_pos_and_size(origin2, m_plate_width, m_plate_depth, m_plate_height, true);
 
-		//update bounding_boxes
-		calc_bounding_boxes();
-	}
+        //update bounding_boxes
+        calc_bounding_boxes();
+    }
 
-	plate->move_instances_to(*(m_plate_list[m_plate_list.size()-1]), unprintable_plate);
-	//destroy the print object
-	int print_index;
-	plate->get_print(nullptr, nullptr, &print_index);
-	destroy_print(print_index);
+    plate->move_instances_to(*(m_plate_list[m_plate_list.size()-1]), unprintable_plate);
+    //destroy the print object
+    int print_index;
+    plate->get_print(nullptr, nullptr, &print_index);
+    destroy_print(print_index);
 
-	delete plate;
+    delete plate;
 
     // FIX: context of BackgroundSliceProcess and gcode preview need to be updated before ObjectList::reload_all_plates().
 #if 0
-	if (m_plater != nullptr) {
-		// In GUI mode
-		wxGetApp().obj_list()->reload_all_plates();
-	}
+    if (m_plater != nullptr) {
+        // In GUI mode
+        wxGetApp().obj_list()->reload_all_plates();
+    }
 #endif
-	return ret;
+    return ret;
 }
 
 void PartPlateList::delete_selected_plate()
@@ -4905,30 +5005,42 @@ void PartPlateList::select_plate_view()
 
 bool PartPlateList::set_shapes(const Pointfs& shape, const Pointfs& exclude_areas, const std::string& texture_filename, float height_to_lid, float height_to_rod)
 {
-	const std::lock_guard<std::mutex> local_lock(m_plates_mutex);
-	m_shape = shape;
-	m_exclude_areas = exclude_areas;
-	m_height_to_lid = height_to_lid;
-	m_height_to_rod = height_to_rod;
+    // Log the initial input parameters
+    BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Entering PartPlateList::set_shapes. Argument 'exclude_areas' size: " << exclude_areas.size();
+    if (!exclude_areas.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: First point in argument 'exclude_areas' for PartPlateList::set_shapes: (" << exclude_areas[0](0) << ", " << exclude_areas[0](1) << ")";
+    }
 
-	double stride_x = plate_stride_x();
-	double stride_y = plate_stride_y();
-	for (unsigned int i = 0; i < (unsigned int)m_plate_list.size(); ++i)
-	{
-		PartPlate* plate = m_plate_list[i];
-		assert(plate != NULL);
+    const std::lock_guard<std::mutex> local_lock(m_plates_mutex);
+    m_shape = shape;
+    m_exclude_areas = exclude_areas;
+    m_height_to_lid = height_to_lid;
+    m_height_to_rod = height_to_rod;
 
-		Vec2d pos;
+    double stride_x = plate_stride_x();
+    double stride_y = plate_stride_y();
+    for (unsigned int i = 0; i < (unsigned int)m_plate_list.size(); ++i)
+    {
+        PartPlate* plate = m_plate_list[i];
+        assert(plate != NULL);
 
-		pos = compute_shape_position(i, m_plate_cols);
-		plate->set_shape(shape, exclude_areas, pos, height_to_lid, height_to_rod);
-	}
-	is_load_bedtype_textures = false;//reload textures
-	calc_bounding_boxes();
+        Vec2d pos;
 
-	update_logo_texture_filename(texture_filename);
+        pos = compute_shape_position(i, m_plate_cols);
+        
+        // Log the 'exclude_areas' before calling set_shape inside the loop
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Before calling PartPlate::set_shape for plate index " << i << ". Argument 'exclude_areas' size: " << exclude_areas.size();
+        if (!exclude_areas.empty()) {
+            BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: First point for plate index " << i << ": (" << exclude_areas[0](0) << ", " << exclude_areas[0](1) << ")";
+        }
+        plate->set_shape(shape, exclude_areas, pos, height_to_lid, height_to_rod);
+    }
+    is_load_bedtype_textures = false;//reload textures
+    calc_bounding_boxes();
 
-	return true;
+    update_logo_texture_filename(texture_filename);
+
+    return true;
 }
 
 void PartPlateList::update_logo_texture_filename(const std::string &texture_filename)

@@ -8215,9 +8215,14 @@ bool Plater::priv::show_publish_dlg(bool show)
     return true;
 }
 
-//BBS: add bed exclude area
 void Plater::priv::set_bed_shape(const Pointfs& shape, const Pointfs& exclude_areas, const double printable_height, const std::string& custom_texture, const std::string& custom_model, bool force_as_custom)
 {
+    // Log the initial input 'exclude_areas' to Plater::priv::set_bed_shape
+    BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Entering Plater::priv::set_bed_shape. Argument 'exclude_areas' size: " << exclude_areas.size();
+    if (!exclude_areas.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: First point in argument 'exclude_areas': (" << exclude_areas[0](0) << ", " << exclude_areas[0](1) << ")";
+    }
+
     //Orca: reduce resolution for large bed printer
     BoundingBoxf bed_size = get_extents(shape);
     if (bed_size.size().maxCoeff() <= LARGE_BED_THRESHOLD)
@@ -8249,8 +8254,17 @@ void Plater::priv::set_bed_shape(const Pointfs& shape, const Pointfs& exclude_ar
         Vec3d min = bed.extended_bounding_box().min;
         double z = config->opt_float("printable_height");
 
-        //Pointfs& exclude_areas = config->option<ConfigOptionPoints>("bed_exclude_area")->values;
+        //Pointfs& exclude_areas = config->option<ConfigOptionPoints>("bed_exclude_area")->values; // This line is commented out, so it's not overriding the parameter.
         partplate_list.reset_size(max.x() - min.x() - Bed3D::Axes::DefaultTipRadius, max.y() - min.y() - Bed3D::Axes::DefaultTipRadius, z);
+
+        // Log the 'exclude_areas' just before calling partplate_list.set_shapes
+        // NOTE: This log will capture the argument's size just before it's passed to a potential
+        // wrapper function (partplate_list.set_shapes), which then likely calls PartPlate::set_shape.
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: Before calling partplate_list.set_shapes. Argument 'exclude_areas' size: " << exclude_areas.size();
+        if (!exclude_areas.empty()) {
+            BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: First point in argument 'exclude_areas': (" << exclude_areas[0](0) << ", " << exclude_areas[0](1) << ")";
+        }
+
         partplate_list.set_shapes(shape, exclude_areas, custom_texture, height_to_lid, height_to_rod);
 
         Vec2d new_shape_position = partplate_list.get_current_shape_position();
@@ -8258,6 +8272,7 @@ void Plater::priv::set_bed_shape(const Pointfs& shape, const Pointfs& exclude_ar
             bed.set_shape(shape, printable_height, custom_model, force_as_custom, new_shape_position);
     }
 }
+
 
 bool Plater::priv::can_delete() const
 {
