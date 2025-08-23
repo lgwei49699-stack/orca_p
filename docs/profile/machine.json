@@ -56,7 +56,7 @@
   "inherits": "MyMarlin 0.4 nozzle",
   "printer_model": "Generic Marlin Printer",
   "version": "2.3.0.3",
-  "printable_area": ["0x0", "101x0", "101x101", "0x101"],
+  "printable_area": [[0, 0], [101, 0], [101, 101], [0, 101]],
   "bed_exclude_area": [],
   "bed_mesh_min": "-0,-0",
   "cooling_tube_length": "30",
@@ -65,5 +65,7 @@
   "nozzle_type": "brass",
   "purge_in_prime_tower": "0",
   "thumbnails": "48x48/PNG",
-  "z_hop_types": ["Auto Lift"]
+  "z_hop_types": ["Auto Lift"],
+  "allow_rotations": "1" 
+
 }

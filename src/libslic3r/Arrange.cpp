@@ -66,10 +66,10 @@ namespace arrangement {
 using namespace libnest2d;
 
 // Get the libnest2d types for clipper backend
-using Item         = _Item<ExPolygon>;
-using Box          = _Box<Point>;
-using Circle       = _Circle<Point>;
-using Segment      = _Segment<Point>;
+using Item         = _Item<ExPolygon>;
+using Box          = _Box<Point>;
+using Circle       = _Circle<Point>;
+using Segment      = _Segment<Point>;
 using MultiPolygon = ExPolygons;
 
 // Summon the spatial indexing facilities from boost
@@ -356,31 +356,27 @@ static double fixed_overfit_topright_sliding(const std::tuple<double, Box> &resu
     return score;
 }
 
-
 // A class encapsulating the libnest2d Nester class and extending it with other
 // management and spatial index structures for acceleration.
 template<class TBin>
 class AutoArranger {
 public:
     // Useful type shortcuts...
-    using Placer = typename placers::_NofitPolyPolyPlacer<ExPolygon, TBin>;
+    using Placer = typename placers::_NofitPolyPlacer<ExPolygon, TBin>;
     using Selector = selections::_FirstFitSelection<ExPolygon>;
     using Packer   = _Nester<Placer, Selector>;
     using PConfig  = typename Packer::PlacementConfig;
     using Distance = TCoord<PointImpl>;
     
-    // 明确引入 Packer 内部的 PackGroup 类型
-    // 修正：直接使用 _Nester 的 PackGroup 类型，确保编译器能正确解析
-    using PackGroup = typename Packer::PackGroup; // 这一行保留
 
-    // 现在 lastResult() 方法就可以正确识别 PackGroup 了
-    // 修正：使用 typename 关键字明确指定返回类型是依赖类型
-    inline const PackGroup& lastResult() const // 直接使用 PackGroup 作为返回类型
+    using PackGroup = typename Packer::PackGroup; 
+
+    inline const PackGroup& lastResult() const 
     {
         return m_pck.lastResult();
     }
 
-    std::vector<Item> m_excluded_items_in_each_plate;    // for V4 bed there are excluded regions at bottom left corner
+    std::vector<Item> m_excluded_items_in_each_plate;   // for V4 bed there are excluded regions at bottom left corner
 
 protected:
     Packer    m_pck;
@@ -974,12 +970,12 @@ Radians fit_into_box_rotation(const S &sh, const _Box<TPoint<S>> &box)
 
 template<class BinT> // Arrange for arbitrary bin type
 void _arrange(
-        std::vector<Item> &           shapes,
-        std::vector<Item> &           excludes,
-        const BinT &                  bin,
-        const ArrangeParams           &params,
+        std::vector<Item> &            shapes,
+        std::vector<Item> &            excludes,
+        const BinT &                   bin,
+        const ArrangeParams            &params,
         std::function<void(unsigned,std::string)> progressfn,
-        std::function<bool()>         stopfn)
+        std::function<bool()>          stopfn)
 {
     // Integer ceiling the min distance from the bed perimeters
     coord_t md = params.min_obj_distance;
@@ -990,14 +986,19 @@ void _arrange(
     ArrangeParams mod_params = params;
     mod_params.min_obj_distance = 0;  // items are already inflated
 
-
     bool arrange_success = false;
-
 
     std::vector<Item> items_to_arrange = shapes;
     
     // Log the initial state before the first attempt
     BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: _arrange: Starting first attempt with user-defined rotations.";
+    
+    // 临时调试代码：强制设置第一个模型的旋转角度为 45 度
+    if (!items_to_arrange.empty()) {
+        items_to_arrange[0].rotation(M_PI / 4.0); // 使用M_PI确保定义了PI常量
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: _arrange: FORCING Item " << items_to_arrange[0].name << " initial rotation to 45 degrees for test.";
+    }
+    
     if (params.allow_rotations) {
         for (const auto &itm : items_to_arrange) {
             BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: _arrange: Item " << itm.name << " initial rotation: " << itm.rotation();
@@ -1012,10 +1013,10 @@ void _arrange(
     // If there is something on the plate
     if (!excludes.empty()) arranger_first_try.preload(excludes);
 
-    std::vector<Item> inp_first_try;
-    inp_first_try.reserve(items_to_arrange.size() + excludes.size());
-    for (auto &itm : items_to_arrange) inp_first_try.emplace_back(itm);
-    for (auto &itm : excludes) inp_first_try.emplace_back(itm);
+    std::vector<Item> inp_first_try;
+    inp_first_try.reserve(items_to_arrange.size() + excludes.size());
+    for (auto &itm : items_to_arrange) inp_first_try.emplace_back(itm);
+    for (auto &itm : excludes) inp_first_try.emplace_back(itm);
 
     // Use the minimum bounding box rotation as a starting point.
     // TODO: This only works for convex hull. If we ever switch to concave
@@ -1035,6 +1036,7 @@ void _arrange(
 
 
     arranger_first_try(inp_first_try.begin(), inp_first_try.end());
+
 
     size_t packed_items_count_first_try = 0;
     const auto& result_first_try = arranger_first_try.lastResult(); 
@@ -1065,15 +1067,15 @@ void _arrange(
         if (!excludes.empty()) arranger_second_try.preload(excludes);
         
         std::vector<Item> inp_second_try;
-        inp_second_try.reserve(items_to_arrange.size() + excludes.size());
-        for (auto &itm : items_to_arrange) inp_second_try.emplace_back(itm);
-        for (auto &itm : excludes) inp_second_try.emplace_back(itm);
+        inp_second_try.reserve(items_to_arrange.size() + excludes.size());
+        for (auto &itm : items_to_arrange) inp_second_try.emplace_back(itm);
+        for (auto &itm : excludes) inp_second_try.emplace_back(itm);
 
         arranger_second_try(inp_second_try.begin(), inp_second_try.end());
 
-
+        // 再次检查结果
         size_t packed_items_count_second_try = 0;
-        const auto& result_second_try = arranger_second_try.lastResult(); 
+        const auto& result_second_try = arranger_second_try.lastResult(); // AutoArranger 内部的 Nester 应该有 lastResult()
         for (const auto& bin_items : result_second_try) {
             packed_items_count_second_try += bin_items.size();
         }
@@ -1083,30 +1085,45 @@ void _arrange(
             BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: _arrange: Second arrangement attempt (0-degree) SUCCEEDED. All " << packed_items_count_second_try << " items packed.";
         } else {
             BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: _arrange: Second arrangement attempt (0-degree) FAILED. Packed " << packed_items_count_second_try << " of " << items_to_arrange.size() << " items.";
+            
+            // 第二次尝试失败后添加边界框信息日志
+            if (!items_to_arrange.empty()) {
+                BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: _arrange: Item " << items_to_arrange[0].name << " bounding box: "
+                                        << items_to_arrange[0].boundingBox().minCorner().x() << "," << items_to_arrange[0].boundingBox().minCorner().y() << " to "
+                                        << items_to_arrange[0].boundingBox().maxCorner().x() << "," << items_to_arrange[0].boundingBox().maxCorner().y();
+                auto bin_bb = sl::boundingBox(bin); // 假设 bin 可以转换为 BoundingBox
+                BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: _arrange: Bin bounding box: "
+                                        << bin_bb.minCorner().x() << "," << bin_bb.minCorner().y() << " to "
+                                        << bin_bb.maxCorner().x() << "," << bin_bb.maxCorner().y();
+            }
         }
     }
     
+   
+// 最终修正后的代码块
+if (arrange_success) {
+    for(size_t i = 0; i < items_to_arrange.size(); ++i) {
+        // 先获取值
+        Point tr = items_to_arrange[i].translation();
+        double rot = items_to_arrange[i].rotation();
+        int bin_id = items_to_arrange[i].binId();
+        int item_id = items_to_arrange[i].itemId();
 
-    if (arrange_success) {
+        // 再通过 setter 函数进行设置
+        shapes[i].translation({coord_t(tr.x()), coord_t(tr.y())});
+        shapes[i].rotation(rot);
+        shapes[i].binId(bin_id);
+        shapes[i].itemId(item_id);
 
-        const auto& final_result = arrange_success ? 
-                                   (packed_items_count_first_try == items_to_arrange.size() ? arranger_first_try.lastResult() : arranger_second_try.lastResult()) : 
-                                   arranger_second_try.lastResult(); 
-
-        for(size_t i = 0; i < items_to_arrange.size(); ++i) {
-            Point tr = items_to_arrange[i].translation();
-            shapes[i].translation = {coord_t(tr.x()), coord_t(tr.y())};
-            shapes[i].rotation    = items_to_arrange[i].rotation();
-            shapes[i].bed_idx     = items_to_arrange[i].binId();
-            shapes[i].itemid      = items_to_arrange[i].itemId();  
-            shapes[i].is_applied = 0; 
-            BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: _arrange: Item " << shapes[i].name << " final translation: " << shapes[i].translation.x() << ", " << shapes[i].translation.y() << " rotation: " << shapes[i].rotation;
-        }
-    } else {
-
-        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: _arrange: Both arrangement attempts FAILED. Models will be placed at their original positions or handled by existing fallback logic.";
-
+        // 在日志中，通过 getter 函数获取值并输出
+        BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: _arrange: Item " << shapes[i].name 
+                                << " final translation: " << shapes[i].translation().x() 
+                                << ", " << shapes[i].translation().y() 
+                                << " rotation: " << shapes[i].rotation();
     }
+} else {
+    BOOST_LOG_TRIVIAL(error) << "CALL_SITE_LOG: _arrange: Both arrangement attempts FAILED. Models will be placed at their original positions or handled by existing fallback logic.";
+}
 
 
     for (Item &itm : shapes) itm.inflation(0);
@@ -1115,10 +1132,44 @@ void _arrange(
 }
 
 
-inline Box to_nestbin(const BoundingBox &bb) { return Box{{bb.min(X), bb.min(Y)}, {bb.max(X), bb.max(Y)}};}
-inline Circle to_nestbin(const CircleBed &c) { return Circle({c.center()(0), c.center()(1)}, c.radius()); }
-inline ExPolygon to_nestbin(const Polygon &p) { return ExPolygon{p}; }
-inline Box to_nestbin(const InfiniteBed &bed) { return Box::infinite({bed.center.x(), bed.center.y()}); }
+
+
+// 修正：使用 unscaled<double> 将 Slic3r 内部整数坐标转换为浮点数
+inline Box to_nestbin(const BoundingBox &bb) {
+    return Box{{unscaled<double>(bb.min(X)), unscaled<double>(bb.min(Y))},
+               {unscaled<double>(bb.max(X)), unscaled<double>(bb.max(Y))}};
+}
+
+// 修正：使用 unscaled<double> 将 Slic3r 内部整数坐标转换为浮点数
+inline Circle to_nestbin(const CircleBed &c) {
+    return Circle({unscaled<double>(c.center()(0)), unscaled<double>(c.center()(1))},
+                  unscaled<double>(c.radius())); // 对于半径也进行缩放
+}
+
+// 修正：将 Polygon 的顶点转换为浮点数 ExPolygon
+inline ExPolygon to_nestbin(const Polygon &p) {
+    ExPolygon scaled_expoly;
+    // 转换轮廓点
+    for (const Point& pt : p.points) {
+        scaled_expoly.contour.points.emplace_back(unscaled<double>(pt.x()), unscaled<double>(pt.y()));
+    }
+    // 如果有多边形孔洞，也需要转换
+    // 这里假设 Polygon::holes 存在且结构类似
+    // for (const Polygon& hole : p.holes) {
+    //     Polygon scaled_hole;
+    //     for (const Point& pt : hole.points) {
+    //         scaled_hole.points.emplace_back(unscaled<double>(pt.x()), unscaled<double>(pt.y()));
+    //     }
+    //     scaled_expoly.holes.emplace_back(scaled_hole);
+    // }
+    return scaled_expoly;
+}
+
+// 修正：使用 unscaled<double> 将 Slic3r 内部整数坐标转换为浮点数
+inline Box to_nestbin(const InfiniteBed &bed) {
+    return Box::infinite({unscaled<double>(bed.center.x()), unscaled<double>(bed.center.y())});
+}
+
 
 inline coord_t width(const BoundingBox& box) { return box.max.x() - box.min.x(); }
 inline coord_t height(const BoundingBox& box) { return box.max.y() - box.min.y(); }
