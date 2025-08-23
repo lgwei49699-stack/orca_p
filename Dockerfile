@@ -1,15 +1,20 @@
 FROM docker.io/ubuntu:24.04
-LABEL maintainer "DeftDawg <DeftDawg@gmail.com>"
+LABEL maintainer="DeftDawg <DeftDawg@gmail.com>"
 
-# Disable interactive package configuration
-RUN apt-get update && \
-    echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+# Disable interactive package configuration and add retry mechanism
+RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections && \
+    echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
+    echo 'Acquire::http::Timeout "30";' >> /etc/apt/apt.conf.d/80-retries && \
+    echo 'Acquire::ftp::Timeout "30";' >> /etc/apt/apt.conf.d/80-retries
 
-# Add a deb-src
-RUN echo deb-src http://archive.ubuntu.com/ubuntu \
-    $(cat /etc/*release | grep VERSION_CODENAME | cut -d= -f2) main universe>> /etc/apt/sources.list 
+# Use stable mirrors for better network connectivity
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list && \
+    sed -i 's|http://ports.ubuntu.com/ubuntu-ports|http://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list && \
+    echo "deb http://mirrors.aliyun.com/ubuntu/ $(cat /etc/*release | grep VERSION_CODENAME | cut -d= -f2)-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.aliyun.com/ubuntu/ $(cat /etc/*release | grep VERSION_CODENAME | cut -d= -f2)-security main restricted universe multiverse" >> /etc/apt/sources.list 
 
-RUN apt-get update && apt-get install  -y \
+RUN for i in {1..3}; do apt-get update && break || sleep 15; done && \
+    for i in {1..3}; do apt-get install -y --no-install-recommends \
     autoconf \
     build-essential \
     cmake \
@@ -23,14 +28,12 @@ RUN apt-get update && apt-get install  -y \
     libcairo2-dev \
     libcurl4-openssl-dev \
     libdbus-1-dev \
-    libglew-dev \ 
-    libglu1-mesa-dev \
+    libglew-dev \
     libglu1-mesa-dev \
     libgstreamer1.0-dev \
-    libgstreamerd-3-dev \ 
+    libgstreamerd-3-dev \
     libgstreamer-plugins-base1.0-dev \
     libgstreamer-plugins-good1.0-dev \
-    libgtk-3-dev \
     libgtk-3-dev \
     libsecret-1-dev \
     libsoup2.4-dev \
@@ -44,10 +47,11 @@ RUN apt-get update && apt-get install  -y \
     locales \
     locales-all \
     m4 \
+    ninja-build \
     pkgconf \
     sudo \
     wayland-protocols \
-    wget
+    wget && break || (sleep 15 && false); done
 
 # Change your locale here if you want.  See the output
 # of `locale -a` to pick the correct string formatting.
@@ -58,6 +62,11 @@ RUN locale-gen $LC_ALL
 # the CA cert path on every startup
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
+# Build optimization environment variables
+ENV CMAKE_BUILD_PARALLEL_LEVEL=4
+ENV MAKEFLAGS="-j4"
+ENV NINJA_STATUS="[%f/%t] %e "
+
 COPY ./ OrcaSlicer
 
 WORKDIR OrcaSlicer
@@ -66,14 +75,20 @@ WORKDIR OrcaSlicer
 # Update System dependencies
 RUN ./build_linux.sh -u
 
-# Build dependencies in ./deps
-RUN ./build_linux.sh -dr
+# Build dependencies in ./deps with retry mechanism
+RUN for i in {1..3}; do \
+        echo "Attempt $i to build dependencies..." && \
+        ./build_linux.sh -dr && break || \
+        (echo "Build attempt $i failed, cleaning and retrying..." && \
+         rm -rf deps/build && \
+         sleep 30); \
+    done
 
 # Build slic3r
 RUN ./build_linux.sh -sr
 
 # Build AppImage
-ENV container podman
+ENV container=podman
 RUN ./build_linux.sh -ir
 
 # It's easier to run Orca Slicer as the same username,
