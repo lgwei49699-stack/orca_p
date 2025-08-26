@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-
+export CXXFLAGS="$CXXFLAGS -Wno-error=maybe-uninitialized -Wno-maybe-uninitialized -Wno-notes -Wno-psabi -fno-lto"
+export CFLAGS="$CFLAGS -fno-lto"
+export LDFLAGS="$LDFLAGS -fno-lto"
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+# 降低内存使用和并行度以避免链接失败
+export MAKEFLAGS="-j2"
+export CMAKE_BUILD_PARALLEL_LEVEL=2
 SCRIPT_NAME=$(basename "$0")
 SCRIPT_PATH=$(dirname $(readlink -f ${0}))
 

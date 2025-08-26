@@ -1,20 +1,24 @@
-FROM docker.io/ubuntu:24.04
+FROM ubuntu:24.04
 LABEL maintainer="DeftDawg <DeftDawg@gmail.com>"
 
-# Disable interactive package configuration and add retry mechanism
-RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections && \
-    echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
-    echo 'Acquire::http::Timeout "30";' >> /etc/apt/apt.conf.d/80-retries && \
-    echo 'Acquire::ftp::Timeout "30";' >> /etc/apt/apt.conf.d/80-retries
+# 代理设置已移除，直接使用国内镜像源
 
-# Use stable mirrors for better network connectivity
-RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list && \
-    sed -i 's|http://ports.ubuntu.com/ubuntu-ports|http://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/ubuntu/ $(cat /etc/*release | grep VERSION_CODENAME | cut -d= -f2)-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/ubuntu/ $(cat /etc/*release | grep VERSION_CODENAME | cut -d= -f2)-security main restricted universe multiverse" >> /etc/apt/sources.list 
+# 使用清华大学镜像源，对 ARM64 支持更好
+RUN echo "deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ noble main restricted universe multiverse" > /etc/apt/sources.list && \
+    echo "deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ noble-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ noble-backports main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ noble-security main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb-src http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ noble main restricted universe multiverse" >> /etc/apt/sources.list
 
-RUN for i in {1..3}; do apt-get update && break || sleep 15; done && \
-    for i in {1..3}; do apt-get install -y --no-install-recommends \
+# Disable interactive package configuration
+RUN apt-get update && \
+    echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+
+# Add a deb-src (使用阿里云镜像)
+RUN echo deb-src http://mirrors.aliyun.com/ubuntu \
+    $(cat /etc/*release | grep VERSION_CODENAME | cut -d= -f2) main universe>> /etc/apt/sources.list 
+
+RUN apt-get update && apt-get install  -y \
     autoconf \
     build-essential \
     cmake \
@@ -47,11 +51,10 @@ RUN for i in {1..3}; do apt-get update && break || sleep 15; done && \
     locales \
     locales-all \
     m4 \
-    ninja-build \
     pkgconf \
     sudo \
     wayland-protocols \
-    wget && break || (sleep 15 && false); done
+    wget
 
 # Change your locale here if you want.  See the output
 # of `locale -a` to pick the correct string formatting.
@@ -62,11 +65,6 @@ RUN locale-gen $LC_ALL
 # the CA cert path on every startup
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
-# Build optimization environment variables
-ENV CMAKE_BUILD_PARALLEL_LEVEL=4
-ENV MAKEFLAGS="-j4"
-ENV NINJA_STATUS="[%f/%t] %e "
-
 COPY ./ OrcaSlicer
 
 WORKDIR OrcaSlicer
@@ -75,20 +73,14 @@ WORKDIR OrcaSlicer
 # Update System dependencies
 RUN ./build_linux.sh -u
 
-# Build dependencies in ./deps with retry mechanism
-RUN for i in {1..3}; do \
-        echo "Attempt $i to build dependencies..." && \
-        ./build_linux.sh -dr && break || \
-        (echo "Build attempt $i failed, cleaning and retrying..." && \
-         rm -rf deps/build && \
-         sleep 30); \
-    done
+# Build dependencies in ./deps
+RUN ./build_linux.sh -dr
 
 # Build slic3r
 RUN ./build_linux.sh -sr
 
 # Build AppImage
-ENV container=podman
+ENV container podman
 RUN ./build_linux.sh -ir
 
 # It's easier to run Orca Slicer as the same username,
@@ -113,3 +105,4 @@ RUN if [[ "$UID" != "0" ]]; then \
 # Using an entrypoint instead of CMD because the binary
 # accepts several command line arguments.
 ENTRYPOINT ["/OrcaSlicer/build/package/bin/orca-slicer"]
+
