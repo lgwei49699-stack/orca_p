@@ -39,6 +39,13 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-22.04-deps-
     
+    - name: Fix package manager state
+      shell: bash -e {0}
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --fix-broken
+        sudo apt-get install -y libunwind-dev
+    
     - name: Install system dependencies
       shell: bash -e {0}
       run: |
