@@ -224,7 +224,7 @@ if(NOT TARGET GLEW::glew AND NOT GLEW_USE_STATIC_LIBS)
 
   if(APPLE)
     set_target_properties(GLEW::glew
-                          PROPERTIES INTERFACE_LINK_LIBRARIES OpenGL::GL)
+                          PROPERTIES INTERFACE_LINK_LIBRARIES "-framework OpenGL")
   endif()
 
   if(GLEW_SHARED_LIBRARY_RELEASE)
@@ -259,7 +259,7 @@ elseif(NOT TARGET GLEW::glew_s AND GLEW_USE_STATIC_LIBS)
 
   if(APPLE)
     set_target_properties(GLEW::glew_s
-                          PROPERTIES INTERFACE_LINK_LIBRARIES OpenGL::GL)
+                          PROPERTIES INTERFACE_LINK_LIBRARIES "-framework OpenGL")
   endif()
 
   if(GLEW_STATIC_LIBRARY_RELEASE)
@@ -293,7 +293,7 @@ if(NOT TARGET GLEW::GLEW)
 
   if(APPLE)
     set_target_properties(GLEW::GLEW
-                          PROPERTIES INTERFACE_LINK_LIBRARIES OpenGL::GL)
+                          PROPERTIES INTERFACE_LINK_LIBRARIES "-framework OpenGL")
   endif()
 
   if(TARGET GLEW::glew)
