@@ -646,7 +646,20 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SLIC3R_GUI_SOURCES})
 encoding_check(libslic3r_gui)
 
 find_package(libnoise REQUIRED)
-target_link_libraries(libslic3r_gui libslic3r cereal::cereal imgui imguizmo minilzo GLEW::GLEW OpenGL::GL hidapi ${wxWidgets_LIBRARIES} glfw libcurl OpenSSL::SSL OpenSSL::Crypto noise::noise)
+
+# On macOS, filter out -lGL/-lGLU from wxWidgets libraries and use -framework OpenGL instead
+set(WXWIDGETS_LIBS_FILTERED ${wxWidgets_LIBRARIES})
+if(APPLE)
+    list(FILTER WXWIDGETS_LIBS_FILTERED EXCLUDE REGEX "^-lGL$")
+    list(FILTER WXWIDGETS_LIBS_FILTERED EXCLUDE REGEX "^-lGLU$")
+    list(FILTER WXWIDGETS_LIBS_FILTERED EXCLUDE REGEX "OpenGL")
+    list(FILTER WXWIDGETS_LIBS_FILTERED EXCLUDE REGEX "libGL")
+    list(FILTER WXWIDGETS_LIBS_FILTERED EXCLUDE REGEX "libGLU")
+    # Use -framework OpenGL instead of OpenGL::GL on macOS
+    target_link_libraries(libslic3r_gui libslic3r cereal::cereal imgui imguizmo minilzo GLEW::GLEW hidapi ${WXWIDGETS_LIBS_FILTERED} glfw libcurl OpenSSL::SSL OpenSSL::Crypto noise::noise "-framework OpenGL")
+else()
+    target_link_libraries(libslic3r_gui libslic3r cereal::cereal imgui imguizmo minilzo GLEW::GLEW OpenGL::GL hidapi ${wxWidgets_LIBRARIES} glfw libcurl OpenSSL::SSL OpenSSL::Crypto noise::noise)
+endif()
 
 if (MSVC)
     target_link_libraries(libslic3r_gui Setupapi.lib)
