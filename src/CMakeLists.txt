@@ -72,6 +72,13 @@ if (SLIC3R_GUI)
     # wrong libs for opengl in the link line and it does not link to it by himself.
     # libslic3r_gui will link to opengl anyway, so lets override wx
     list(FILTER wxWidgets_LIBRARIES EXCLUDE REGEX OpenGL)
+    # Also filter out -lGL and -lGLU on macOS, as we use -framework OpenGL instead
+    if(APPLE)
+        list(FILTER wxWidgets_LIBRARIES EXCLUDE REGEX "^-lGL$")
+        list(FILTER wxWidgets_LIBRARIES EXCLUDE REGEX "^-lGLU$")
+        # Remove any GL/GLU libraries that might be in the list
+        list(REMOVE_ITEM wxWidgets_LIBRARIES "-lGL" "-lGLU" "GL" "GLU")
+    endif()
 
 #    list(REMOVE_ITEM wxWidgets_LIBRARIES oleacc)
     message(STATUS "wx libs: ${wxWidgets_LIBRARIES}")

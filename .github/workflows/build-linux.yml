@@ -1,0 +1,134 @@
+name: Build Linux AppImage for x86_64
+
+on:
+  push:
+    branches: 
+      - main
+      - v2.3.1
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-linux-x86_64:
+    # 使用 Ubuntu 22.04 匹配您的服务器环境
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+    
+    - name: Setup build info
+      shell: bash -e {0}
+      run: |
+        echo "Building for Ubuntu 22.04 x86_64"
+        uname -a
+        cat /etc/os-release
+    
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          deps/build
+          deps/DL_CACHE
+        key: ${{ runner.os }}-22.04-deps-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-22.04-deps-
+    
+    - name: Install system dependencies
+      shell: bash -e {0}
+      run: |
+        sudo ./build_linux.sh -u
+    
+    - name: Build dependencies
+      shell: bash -e {0}
+      run: |
+        ./build_linux.sh -d
+    
+    - name: Build OrcaSlicer
+      shell: bash -e {0}
+      run: |
+        ./build_linux.sh -s
+    
+    - name: Build AppImage
+      shell: bash -e {0}
+      run: |
+        ./build_linux.sh -i
+    
+    - name: Get version info
+      id: version
+      shell: bash -e {0}
+      run: |
+        set -o pipefail
+        
+        # 提取版本号
+        VERSION=$(grep 'SoftFever_VERSION' version.inc | sed -n 's/.*"\(.*\)".*/\1/p' | head -n1)
+        if [ -z "$VERSION" ]; then
+          echo "Error: Failed to extract version from version.inc"
+          exit 1
+        fi
+        
+        # 查找 AppImage 文件（避免使用 xargs -r）
+        APPIMAGE_PATH=$(find build -maxdepth 1 -name "OrcaSlicer*.AppImage" -type f | head -n1)
+        if [ -z "$APPIMAGE_PATH" ]; then
+          echo "Error: No AppImage found in build directory"
+          ls -la build/ || true
+          exit 1
+        fi
+        
+        FILENAME=$(basename "$APPIMAGE_PATH")
+        FILEPATH="build/${FILENAME}"
+        
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "filename=${FILENAME}" >> $GITHUB_OUTPUT
+        echo "filepath=${FILEPATH}" >> $GITHUB_OUTPUT
+        echo "Version: ${VERSION}"
+        echo "Filename: ${FILENAME}"
+        echo "Filepath: ${FILEPATH}"
+    
+    - name: Verify AppImage
+      shell: bash -e {0}
+      run: |
+        FILEPATH="${{ steps.version.outputs.filepath }}"
+        
+        if [ ! -f "$FILEPATH" ]; then
+          echo "Error: AppImage file not found at: $FILEPATH"
+          echo "Build directory contents:"
+          ls -la build/ || true
+          exit 1
+        fi
+        
+        echo "✓ AppImage found: $FILEPATH"
+        echo ""
+        echo "File details:"
+        ls -lh "$FILEPATH"
+        echo ""
+        echo "File type:"
+        file "$FILEPATH"
+        echo ""
+        echo "✓ AppImage is ready for deployment to Ubuntu 22.04 x86_64 servers"
+    
+    - name: Upload AppImage as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: OrcaSlicer-Ubuntu22.04-x86_64-${{ steps.version.outputs.version }}
+        path: build/OrcaSlicer*.AppImage
+        if-no-files-found: error
+        retention-days: 30
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: ${{ steps.version.outputs.filepath }}
+        draft: false
+        prerelease: false
+        fail_on_unmatched_files: true
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
