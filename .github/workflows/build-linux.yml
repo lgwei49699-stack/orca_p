@@ -15,8 +15,8 @@ on:
 
 jobs:
   build-linux-x86_64:
-    # 使用 Ubuntu 22.04 匹配您的服务器环境
-    runs-on: ubuntu-22.04
+    # 使用 Ubuntu 24.04 匹配您的服务器环境
+    runs-on: ubuntu-24.04
     
     steps:
     - name: Checkout repository
@@ -28,22 +28,10 @@ jobs:
     - name: Free up disk space
       shell: bash -e {0}
       run: |
-        echo "=== Before cleanup ==="
-        df -h /
-        
-        # 删除不需要的软件和镜像
+        # 快速清理（去掉耗时的操作）
         sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /usr/local/lib/android
         sudo rm -rf /opt/ghc
-        sudo rm -rf /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
-        
-        # 清理 apt 缓存
         sudo apt-get clean
-        
-        echo ""
-        echo "=== After cleanup ==="
-        df -h /
     
     - name: Setup build info
       shell: bash -e {0}
@@ -58,9 +46,17 @@ jobs:
         path: |
           deps/build
           deps/DL_CACHE
-        key: ${{ runner.os }}-22.04-deps-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
+        key: ${{ runner.os }}-24.04-deps-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
         restore-keys: |
-          ${{ runner.os }}-22.04-deps-
+          ${{ runner.os }}-24.04-deps-
+    
+    - name: Cache ccache
+      uses: actions/cache@v3
+      with:
+        path: ~/.ccache
+        key: ${{ runner.os }}-24.04-ccache-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-24.04-ccache-
     
     - name: Fix package manager state
       shell: bash -e {0}
@@ -72,6 +68,8 @@ jobs:
     - name: Install system dependencies
       shell: bash -e {0}
       run: |
+        # 安装 ccache 加速编译
+        sudo apt-get install -y ccache
         sudo ./build_linux.sh -u
     
     - name: Build dependencies
@@ -82,7 +80,20 @@ jobs:
     - name: Build OrcaSlicer
       shell: bash -e {0}
       run: |
+        # 配置 ccache
+        export PATH="/usr/lib/ccache:$PATH"
+        export CCACHE_DIR=~/.ccache
+        export CCACHE_MAXSIZE=2G
+        ccache -z  # 重置统计
+        
+        # 使用多核编译（GitHub Actions 有 2 核）
+        export CMAKE_BUILD_PARALLEL_LEVEL=2
+        
         ./build_linux.sh -s
+        
+        # 显示 ccache 统计
+        echo "=== ccache statistics ==="
+        ccache -s
     
     - name: Build AppImage
       shell: bash -e {0}
