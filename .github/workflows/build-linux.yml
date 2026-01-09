@@ -3,8 +3,7 @@ name: Build Linux AppImage for x86_64
 on:
   push:
     branches: 
-      - main
-      - v2.3.1
+      - feature/add-linux-ci-v2.3.1
     tags:
       - 'v*'
   pull_request:
