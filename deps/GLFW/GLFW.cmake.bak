@@ -8,10 +8,8 @@ endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(_glfw_use_wayland "-DGLFW_USE_WAYLAND=ON")
-    set(_glfw_use_osmesa "-DGLFW_BUILD_OSMESA=ON")
 else()
     set(_glfw_use_wayland "-DGLFW_USE_WAYLAND=FF")
-    set(_glfw_use_osmesa "")
 endif()
 
 orcaslicer_add_cmake_project(GLFW
@@ -24,7 +22,6 @@ orcaslicer_add_cmake_project(GLFW
         -DGLFW_BUILD_EXAMPLES=OFF
 	-DGLFW_BUILD_TESTS=OFF
 	${_glfw_use_wayland}
-	${_glfw_use_osmesa}
 )
 
 if (MSVC)

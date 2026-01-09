@@ -36,7 +36,7 @@ jobs:
     - name: Setup build info
       shell: bash -e {0}
       run: |
-        echo "Building for Ubuntu 22.04 x86_64"
+        echo "Building for Ubuntu 24.04 x86_64"
         uname -a
         cat /etc/os-release
     
@@ -151,12 +151,12 @@ jobs:
         echo "File type:"
         file "$FILEPATH"
         echo ""
-        echo "✓ AppImage is ready for deployment to Ubuntu 22.04 x86_64 servers"
+        echo "✓ AppImage is ready for deployment to Ubuntu 24.04 x86_64 servers"
     
     - name: Upload AppImage as artifact
       uses: actions/upload-artifact@v4
       with:
-        name: OrcaSlicer-Ubuntu22.04-x86_64-${{ steps.version.outputs.version }}
+        name: OrcaSlicer-Ubuntu24.04-x86_64-${{ steps.version.outputs.version }}
         path: build/OrcaSlicer*.AppImage
         if-no-files-found: error
         retention-days: 30
