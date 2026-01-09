@@ -2,15 +2,14 @@ name: Build Linux AppImage for x86_64
 
 on:
   # 自动触发配置（已注释，需要时取消注释）
-  # push:
-  #   branches: 
-  #     - main
-  #     - v2.3.1
-  #   tags:
-  #     - 'v*'
-  # pull_request:
-  #   branches: [ main ]
-  
+  push:
+    branches: 
+      - feature/add-linux-ci-v2.3.1
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+
   # 手动触发
   workflow_dispatch:
 
