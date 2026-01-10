@@ -5357,9 +5357,10 @@ int CLI::run(int argc, char **argv)
 
             glfwSetErrorCallback(glfw_callback);
 #ifdef __linux__
-            // Force GLFW to use OSMesa for headless rendering in CLI mode
-            glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_OSMESA);
-            BOOST_LOG_TRIVIAL(info) << "CLI mode: forcing GLFW to use OSMesa platform";
+            // Disable Wayland and X11 to force OSMesa in headless environment
+            setenv("WAYLAND_DISPLAY", "", 1);
+            setenv("DISPLAY", "", 1);
+            BOOST_LOG_TRIVIAL(info) << "CLI mode: disabled WAYLAND_DISPLAY and DISPLAY to force OSMesa";
 #endif
             int ret = glfwInit();
             if (ret == GLFW_FALSE) {
