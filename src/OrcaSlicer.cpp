@@ -5185,8 +5185,12 @@ int CLI::run(int argc, char **argv)
     }
 
     global_begin_time = (long long)Slic3r::Utils::get_current_time_utc();
-    if (export_to_3mf) {
-        //BBS: export as bbl 3mf
+    
+    // Check if thumbnails are configured for GCode generation
+    bool has_thumbnails_config = !m_print_config.option<ConfigOptionString>("thumbnails")->value.empty();
+    
+    if (export_to_3mf || (has_thumbnails_config && sliced_plate != -1)) {
+        //BBS: export as bbl 3mf (or generate thumbnails for GCode)
         std::vector<ThumbnailData *> thumbnails, no_light_thumbnails, top_thumbnails, pick_thumbnails;
         std::vector<PlateBBoxData*> plate_bboxes;
         PlateDataPtrs plate_data_list;
@@ -5352,6 +5356,11 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << boost::format("opengl version %1%.%2%.%3%")%gl_major %gl_minor %gl_verbos;
 
             glfwSetErrorCallback(glfw_callback);
+#ifdef __linux__
+            // Force GLFW to use OSMesa for headless rendering in CLI mode
+            glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_OSMESA);
+            BOOST_LOG_TRIVIAL(info) << "CLI mode: forcing GLFW to use OSMesa platform";
+#endif
             int ret = glfwInit();
             if (ret == GLFW_FALSE) {
                 int code = glfwGetError(NULL);
