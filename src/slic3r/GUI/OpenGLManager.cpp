@@ -7,6 +7,10 @@
 
 #include "libslic3r/Platform.hpp"
 
+#ifdef __linux__
+// Define GLEW_NO_GLU to avoid GLU-related function pointer types that may not be available with OSMesa
+#define GLEW_NO_GLU
+#endif
 #include <GL/glew.h>
 
 #include <boost/algorithm/string/split.hpp>

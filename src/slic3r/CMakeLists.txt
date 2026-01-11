@@ -668,6 +668,8 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     FIND_LIBRARY(WAYLAND_EGL_LIBRARIES    NAMES wayland-egl)
     FIND_LIBRARY(WAYLAND_CLIENT_LIBRARIES NAMES wayland-client)
     find_package(CURL REQUIRED)
+    # Define GLEW_NO_GLU to avoid GLU-related function pointer types that may not be available with OSMesa
+    target_compile_definitions(libslic3r_gui PRIVATE GLEW_NO_GLU)
     target_link_libraries(libslic3r_gui
         OpenGL::EGL
         ${DBUS_LIBRARIES}

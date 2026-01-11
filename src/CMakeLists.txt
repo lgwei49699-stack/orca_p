@@ -142,10 +142,14 @@ if (APPLE)
 elseif (MSVC)
     # Manifest is provided through OrcaSlicer.rc, don't generate your own.
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /MANIFEST:NO")
-else ()
-    # Boost on Raspberry-Pi does not link to pthreads explicitely.
-    target_link_libraries(OrcaSlicer ${CMAKE_DL_LIBS} -lstdc++ Threads::Threads pangoft2-1.0)
-endif ()
+    else ()
+        # Boost on Raspberry-Pi does not link to pthreads explicitely.
+        target_link_libraries(OrcaSlicer ${CMAKE_DL_LIBS} -lstdc++ Threads::Threads pangoft2-1.0)
+        # Define GLEW_NO_GLU for Linux to avoid GLU-related function pointer types that may not be available with OSMesa
+        if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_compile_definitions(OrcaSlicer PRIVATE GLEW_NO_GLU)
+        endif()
+    endif ()
 
 # Add the Slic3r GUI library, libcurl, OpenGL and GLU libraries.
 if (SLIC3R_GUI)

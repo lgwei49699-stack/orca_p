@@ -83,6 +83,8 @@ using namespace nlohmann;
 #include "slic3r/GUI/Plater.hpp"
 #include <GLFW/glfw3.h>
 #ifdef __linux__
+// Define GLEW_NO_GLU to avoid GLU-related function pointer types that may not be available with OSMesa
+#define GLEW_NO_GLU
 #include <GL/glew.h>
 #endif
 
