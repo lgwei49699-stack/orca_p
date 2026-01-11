@@ -82,6 +82,9 @@ using namespace nlohmann;
 #include "slic3r/GUI/Camera.hpp"
 #include "slic3r/GUI/Plater.hpp"
 #include <GLFW/glfw3.h>
+#ifdef __linux__
+#include <GL/glew.h>
+#endif
 
 #ifdef __WXGTK__
 #include <X11/Xlib.h>
@@ -5394,24 +5397,55 @@ int CLI::run(int argc, char **argv)
                 {
                     const char* error_desc = nullptr;
                     int error_code = glfwGetError(&error_desc);
-                    BOOST_LOG_TRIVIAL(error) << "Failed to create GLFW window, error code: " << error_code;
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: Failed to create GLFW window, error code: " << error_code;
                     if (error_desc) {
                         BOOST_LOG_TRIVIAL(error) << "Error description: " << error_desc;
                     }
-                    BOOST_LOG_TRIVIAL(error) << "Thumbnail generation requires a valid OpenGL context" << std::endl;
+                    BOOST_LOG_TRIVIAL(error) << "Cannot generate thumbnails without OpenGL context!" << std::endl;
+                    glfwTerminate();
+                    goto skip_thumbnail;
                 }
-                else {
-                    glfwMakeContextCurrent(window);
-                    BOOST_LOG_TRIVIAL(info) << "GLFW window created and context activated successfully" << std::endl;
+                
+                glfwMakeContextCurrent(window);
+                BOOST_LOG_TRIVIAL(info) << "GLFW window created and context activated successfully" << std::endl;
+                
+                // Verify OpenGL context is actually valid before GLEW init
+                const char* gl_version = (const char*)glGetString(GL_VERSION);
+                const char* gl_vendor = (const char*)glGetString(GL_VENDOR);
+                const char* gl_renderer = (const char*)glGetString(GL_RENDERER);
+                
+                if (!gl_version) {
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: glGetString(GL_VERSION) returned NULL - OpenGL context is invalid!";
+                    BOOST_LOG_TRIVIAL(error) << "This usually means OSMesa is not properly linked or initialized";
+                    BOOST_LOG_TRIVIAL(error) << "Check if libOSMesa.so is available and linked correctly";
+                    glfwTerminate();
+                    goto skip_thumbnail;
                 }
+                
+                BOOST_LOG_TRIVIAL(info) << "OpenGL context verified - Version: " << gl_version;
+                if (gl_vendor) BOOST_LOG_TRIVIAL(info) << "OpenGL Vendor: " << gl_vendor;
+                if (gl_renderer) BOOST_LOG_TRIVIAL(info) << "OpenGL Renderer: " << gl_renderer;
+                
+                // Ensure context is current before GLEW init
+                glfwMakeContextCurrent(window);
             }
 
             //opengl manager related logic
             {
+                GLFWwindow* current_window = glfwGetCurrentContext();
+                if (!current_window) {
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: No current OpenGL context - cannot initialize GLEW";
+                    glfwTerminate();
+                    goto skip_thumbnail;
+                }
+                
                 Slic3r::GUI::OpenGLManager opengl_mgr;
                 bool opengl_valid = opengl_mgr.init_gl(false);
                 if (!opengl_valid) {
-                    BOOST_LOG_TRIVIAL(error) << "init opengl failed! skip thumbnail generating" << std::endl;
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: GLEW initialization failed - cannot generate thumbnails!" << std::endl;
+                    BOOST_LOG_TRIVIAL(error) << "Please check the detailed error messages above for root cause";
+                    glfwTerminate();
+                    goto skip_thumbnail;
                 }
                 else {
                     BOOST_LOG_TRIVIAL(info) << "glewInit Sucess." << std::endl;
@@ -5689,6 +5723,15 @@ int CLI::run(int argc, char **argv)
             }
             //BBS: release glfw
             glfwTerminate();
+        }
+        
+        skip_thumbnail:
+        // If thumbnail generation failed, thumbnails vectors will be empty
+        // Continue to export 3MF (will be exported without thumbnails)
+        
+        // Continue with 3MF export even if thumbnails failed
+        if (export_to_3mf || (has_thumbnails_config && sliced_plate != -1)) {
+            // Thumbnails may be empty if generation failed, but still export 3MF
         }
         else {
             BOOST_LOG_TRIVIAL(info) << boost::format("Line %1%: use previous thumbnails, no need to regenerate")%__LINE__;

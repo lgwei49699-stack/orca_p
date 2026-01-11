@@ -245,10 +245,20 @@ bool OpenGLManager::init_gl(bool popup_error)
         // GLEW needs glewExperimental for core profile and OSMesa (headless rendering)
         // Must be set before glewInit()
         glewExperimental = GL_TRUE;
+        BOOST_LOG_TRIVIAL(info) << "Set glewExperimental = GL_TRUE for OSMesa support";
 #endif
         GLenum result = glewInit();
         if (result != GLEW_OK) {
-            BOOST_LOG_TRIVIAL(error) << "Unable to init glew library";
+            const char* glew_error = (const char*)glewGetErrorString(result);
+            BOOST_LOG_TRIVIAL(error) << "Unable to init glew library, error code: " << result;
+            if (glew_error) {
+                BOOST_LOG_TRIVIAL(error) << "GLEW error: " << glew_error;
+            }
+            // Check if OpenGL context is valid
+            GLenum gl_error = glGetError();
+            if (gl_error != GL_NO_ERROR) {
+                BOOST_LOG_TRIVIAL(error) << "OpenGL error before GLEW init: " << gl_error;
+            }
             return false;
         }
 	//BOOST_LOG_TRIVIAL(info) << "glewInit Success."<< std::endl;
