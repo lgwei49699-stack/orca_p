@@ -40,6 +40,25 @@ echo -n "[9/9] Generating Linux app..."
         echo "Error: @SLIC3R_APP_CMD@ binary not found in any configuration directory"
         exit 1
     fi
+    
+    # Copy OSMesa library for headless thumbnail generation
+    echo "Copying OSMesa library for CLI thumbnail support..."
+    OSMESA_LIB=$(ldconfig -p | grep 'libOSMesa\.so\.' | awk '{print $NF}' | head -1)
+    if [ -n "$OSMESA_LIB" ] && [ -f "$OSMESA_LIB" ]; then
+        cp -f "$OSMESA_LIB" package/bin/
+        echo "  Copied: $OSMESA_LIB"
+        # Also copy symlink target if it's a symlink
+        if [ -L "$OSMESA_LIB" ]; then
+            OSMESA_REAL=$(readlink -f "$OSMESA_LIB")
+            if [ -f "$OSMESA_REAL" ]; then
+                cp -f "$OSMESA_REAL" package/bin/
+                echo "  Copied: $OSMESA_REAL"
+            fi
+        fi
+    else
+        echo "  Warning: libOSMesa.so not found, CLI thumbnail generation may not work on headless servers"
+    fi
+    
     # remove unneeded po from resources
     ## find package/resources/localization -name "*.po" -type f -delete ## FIXME: DD - do we need this?
 

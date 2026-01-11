@@ -5392,10 +5392,18 @@ int CLI::run(int argc, char **argv)
                 GLFWwindow* window = glfwCreateWindow(640, 480, "base_window", NULL, NULL);
                 if (window == NULL)
                 {
-                    BOOST_LOG_TRIVIAL(error) << "Failed to create GLFW window" << std::endl;
+                    const char* error_desc = nullptr;
+                    int error_code = glfwGetError(&error_desc);
+                    BOOST_LOG_TRIVIAL(error) << "Failed to create GLFW window, error code: " << error_code;
+                    if (error_desc) {
+                        BOOST_LOG_TRIVIAL(error) << "Error description: " << error_desc;
+                    }
+                    BOOST_LOG_TRIVIAL(error) << "Thumbnail generation requires a valid OpenGL context" << std::endl;
                 }
-                else
+                else {
                     glfwMakeContextCurrent(window);
+                    BOOST_LOG_TRIVIAL(info) << "GLFW window created and context activated successfully" << std::endl;
+                }
             }
 
             //opengl manager related logic

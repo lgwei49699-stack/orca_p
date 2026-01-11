@@ -241,6 +241,11 @@ OpenGLManager::~OpenGLManager()
 bool OpenGLManager::init_gl(bool popup_error)
 {
     if (!m_gl_initialized) {
+#ifdef __linux__
+        // GLEW needs glewExperimental for core profile and OSMesa (headless rendering)
+        // Must be set before glewInit()
+        glewExperimental = GL_TRUE;
+#endif
         GLenum result = glewInit();
         if (result != GLEW_OK) {
             BOOST_LOG_TRIVIAL(error) << "Unable to init glew library";
