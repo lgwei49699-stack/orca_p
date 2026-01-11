@@ -46,8 +46,8 @@ jobs:
         path: |
           deps/build
           deps/DL_CACHE
-        key: ${{ runner.os }}-24.04-deps-osmesa-v2-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
-        # 删除 restore-keys 并添加版本号强制重新编译依赖以使用 OSMesa 版 GLFW
+        key: ${{ runner.os }}-24.04-deps-osmesa-v3-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
+        # v3: 修复 GLFW_USE_OSMESA (之前用了错误的 GLFW_BUILD_OSMESA)
     
     - name: Cache ccache
       uses: actions/cache@v3
