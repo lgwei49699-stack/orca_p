@@ -47,8 +47,7 @@ jobs:
           deps/build
           deps/DL_CACHE
         key: ${{ runner.os }}-24.04-deps-osmesa-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-24.04-deps-
+        # 删除 restore-keys 强制重新编译依赖以使用 OSMesa 版 GLFW
     
     - name: Cache ccache
       uses: actions/cache@v3
