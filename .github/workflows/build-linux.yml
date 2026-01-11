@@ -46,7 +46,7 @@ jobs:
         path: |
           deps/build
           deps/DL_CACHE
-        key: ${{ runner.os }}-24.04-deps-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
+        key: ${{ runner.os }}-24.04-deps-osmesa-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
         restore-keys: |
           ${{ runner.os }}-24.04-deps-
     
