@@ -1620,7 +1620,7 @@ int CLI::run(int argc, char **argv)
             }
         }
         catch (std::exception& e) {
-            boost::nowide::cerr << construct_assemble_list << ": " << e.what() << std::endl;
+            boost::nowide::cerr << "construct_assemble_list: " << e.what() << std::endl;
             record_exit_reson(outfile_dir, CLI_DATA_FILE_ERROR, 0, cli_errors[CLI_DATA_FILE_ERROR], sliced_info);
             flush_and_exit(CLI_DATA_FILE_ERROR);
         }
@@ -5900,7 +5900,7 @@ int CLI::run(int argc, char **argv)
             gcode_viewer.render_calibration_thumbnail(*calibration_data, cali_thumbnail_width, cali_thumbnail_height,
                 calibration_params, partplate_list, opengl_mgr);
             //generate_calibration_thumbnail(*calibration_data, thumbnail_width, thumbnail_height, calibration_params);
-            //*plate_bboxes[index] = p->generate_first_layer_bbox();
+            // *plate_bboxes[index] = p->generate_first_layer_bbox();
             calibration_thumbnails.push_back(calibration_data);*/
 
             PlateBBoxData* plate_bbox = new PlateBBoxData();
@@ -6033,6 +6033,7 @@ int CLI::run(int argc, char **argv)
             delete plate_bboxes[i];
     }
 
+skip_thumbnail:
     if (plate_data_src.size() > 0)
     {
         release_PlateData_list(plate_data_src);
