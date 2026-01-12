@@ -669,7 +669,22 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     FIND_LIBRARY(WAYLAND_CLIENT_LIBRARIES NAMES wayland-client)
     find_package(CURL REQUIRED)
     # Define GLEW_NO_GLU to avoid GLU-related function pointer types that may not be available with OSMesa
-    target_compile_definitions(libslic3r_gui PRIVATE GLEW_NO_GLU)
+    # Define OpenGL version macros to ensure GLEW compatibility with OSMesa
+    # These macros must be defined before including GLEW headers
+    if (SLIC3R_STATIC)
+        target_compile_definitions(libslic3r_gui PRIVATE 
+            GLEW_NO_GLU 
+            GLEW_STATIC
+            GL_VERSION_1_2=1
+            GL_ARB_imaging=1
+        )
+    else()
+        target_compile_definitions(libslic3r_gui PRIVATE 
+            GLEW_NO_GLU 
+            GL_VERSION_1_2=1
+            GL_ARB_imaging=1
+        )
+    endif()
     target_link_libraries(libslic3r_gui
         OpenGL::EGL
         ${DBUS_LIBRARIES}

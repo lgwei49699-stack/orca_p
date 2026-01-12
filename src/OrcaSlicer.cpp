@@ -83,6 +83,16 @@ using namespace nlohmann;
 #include "slic3r/GUI/Plater.hpp"
 #include <GLFW/glfw3.h>
 #ifdef __linux__
+// Include OpenGL headers before GLEW to ensure proper type definitions
+#include <GL/gl.h>
+// Define OpenGL version macros before including GLEW to ensure all function pointer types are defined
+// These are needed for GLEW to properly declare all OpenGL extension function pointers
+#ifndef GL_VERSION_1_2
+#define GL_VERSION_1_2 1
+#endif
+#ifndef GL_ARB_imaging
+#define GL_ARB_imaging 1
+#endif
 // Define GLEW_NO_GLU to avoid GLU-related function pointer types that may not be available with OSMesa
 #define GLEW_NO_GLU
 #include <GL/glew.h>

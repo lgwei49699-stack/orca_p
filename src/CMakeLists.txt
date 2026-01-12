@@ -146,8 +146,23 @@ elseif (MSVC)
         # Boost on Raspberry-Pi does not link to pthreads explicitely.
         target_link_libraries(OrcaSlicer ${CMAKE_DL_LIBS} -lstdc++ Threads::Threads pangoft2-1.0)
         # Define GLEW_NO_GLU for Linux to avoid GLU-related function pointer types that may not be available with OSMesa
+        # Define OpenGL version macros to ensure GLEW compatibility with OSMesa
+        # These macros must be defined before including GLEW headers
         if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-            target_compile_definitions(OrcaSlicer PRIVATE GLEW_NO_GLU)
+            if (SLIC3R_STATIC)
+                target_compile_definitions(OrcaSlicer PRIVATE 
+                    GLEW_NO_GLU 
+                    GLEW_STATIC
+                    GL_VERSION_1_2=1
+                    GL_ARB_imaging=1
+                )
+            else()
+                target_compile_definitions(OrcaSlicer PRIVATE 
+                    GLEW_NO_GLU 
+                    GL_VERSION_1_2=1
+                    GL_ARB_imaging=1
+                )
+            endif()
         endif()
     endif ()
 
