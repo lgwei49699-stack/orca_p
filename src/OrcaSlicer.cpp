@@ -82,6 +82,9 @@ using namespace nlohmann;
 #include "slic3r/GUI/Camera.hpp"
 #include "slic3r/GUI/Plater.hpp"
 #include <GLFW/glfw3.h>
+#ifdef __linux__
+#include <dlfcn.h>  // For dlopen to check OSMesa availability
+#endif
 
 #ifdef __WXGTK__
 #include <X11/Xlib.h>
@@ -5189,12 +5192,20 @@ int CLI::run(int argc, char **argv)
     // Check if thumbnails are configured for GCode generation
     bool has_thumbnails_config = !m_print_config.option<ConfigOptionString>("thumbnails")->value.empty();
     
+    BOOST_LOG_TRIVIAL(info) << "=== 3MF Export Check ===";
+    BOOST_LOG_TRIVIAL(info) << "export_to_3mf: " << (export_to_3mf ? "true" : "false");
+    BOOST_LOG_TRIVIAL(info) << "has_thumbnails_config: " << (has_thumbnails_config ? "true" : "false");
+    BOOST_LOG_TRIVIAL(info) << "sliced_plate: " << sliced_plate;
+    BOOST_LOG_TRIVIAL(info) << "Condition result: " << ((export_to_3mf || (has_thumbnails_config && sliced_plate != -1)) ? "ENTER" : "SKIP");
+    
     if (export_to_3mf || (has_thumbnails_config && sliced_plate != -1)) {
+        BOOST_LOG_TRIVIAL(info) << ">>> Entered 3MF export block, generating thumbnails...";
         //BBS: export as bbl 3mf (or generate thumbnails for GCode)
         std::vector<ThumbnailData *> thumbnails, no_light_thumbnails, top_thumbnails, pick_thumbnails;
         std::vector<PlateBBoxData*> plate_bboxes;
         PlateDataPtrs plate_data_list;
         partplate_list.store_to_3mf_structure(plate_data_list);
+        BOOST_LOG_TRIVIAL(info) << "Plate data list size: " << plate_data_list.size();
 
         if (sliced_plate == -1) {
             for (int i = 0; i < plate_data_list.size(); i++) {
@@ -5233,6 +5244,13 @@ int CLI::run(int argc, char **argv)
         bool need_regenerate_no_light_thumbnail = oriented_or_arranged || regenerate_thumbnails;
         bool need_regenerate_top_thumbnail = oriented_or_arranged || regenerate_thumbnails;
         bool need_create_thumbnail_group = false, need_create_no_light_group = false, need_create_top_group = false;
+        
+        BOOST_LOG_TRIVIAL(info) << "=== Thumbnail Regeneration Flags ===";
+        BOOST_LOG_TRIVIAL(info) << "oriented_or_arranged: " << (oriented_or_arranged ? "true" : "false");
+        BOOST_LOG_TRIVIAL(info) << "regenerate_thumbnails: " << (regenerate_thumbnails ? "true" : "false");
+        BOOST_LOG_TRIVIAL(info) << "need_regenerate_thumbnail (initial): " << (need_regenerate_thumbnail ? "true" : "false");
+        BOOST_LOG_TRIVIAL(info) << "need_regenerate_no_light_thumbnail (initial): " << (need_regenerate_no_light_thumbnail ? "true" : "false");
+        BOOST_LOG_TRIVIAL(info) << "need_regenerate_top_thumbnail (initial): " << (need_regenerate_top_thumbnail ? "true" : "false");
 
         // get type and color for platedata
         auto* filament_types = dynamic_cast<const ConfigOptionStrings*>(m_print_config.option("filament_type"));
@@ -5334,8 +5352,15 @@ int CLI::run(int argc, char **argv)
                 }
             }
         }
+        
+        BOOST_LOG_TRIVIAL(info) << "=== Final Thumbnail Decision ===";
+        BOOST_LOG_TRIVIAL(info) << "need_regenerate_thumbnail (final): " << (need_regenerate_thumbnail ? "true" : "false");
+        BOOST_LOG_TRIVIAL(info) << "need_regenerate_no_light_thumbnail (final): " << (need_regenerate_no_light_thumbnail ? "true" : "false");
+        BOOST_LOG_TRIVIAL(info) << "need_regenerate_top_thumbnail (final): " << (need_regenerate_top_thumbnail ? "true" : "false");
+        BOOST_LOG_TRIVIAL(info) << "Will initialize GLFW: " << ((need_regenerate_thumbnail || need_regenerate_no_light_thumbnail || need_regenerate_top_thumbnail) ? "YES" : "NO");
 
         if (need_regenerate_thumbnail || need_regenerate_no_light_thumbnail || need_regenerate_top_thumbnail) {
+            BOOST_LOG_TRIVIAL(info) << ">>> Starting GLFW and OpenGL initialization for thumbnail generation...";
             std::vector<std::string> colors;
             if (filament_color) {
                 colors= filament_color->vserialize();
@@ -5351,70 +5376,157 @@ int CLI::run(int argc, char **argv)
                 colors_out[color_idx] = ColorRGBA(float(rgb_color[0]) / 255.f, float(rgb_color[1]) / 255.f, float(rgb_color[2]) / 255.f, float(rgb_color[3]) / 255.f);
             }
 
+            BOOST_LOG_TRIVIAL(info) << "=== Step 1: GLFW Version Info ===";
             int gl_major, gl_minor, gl_verbos;
             glfwGetVersion(&gl_major, &gl_minor, &gl_verbos);
-            BOOST_LOG_TRIVIAL(info) << boost::format("opengl version %1%.%2%.%3%")%gl_major %gl_minor %gl_verbos;
+            BOOST_LOG_TRIVIAL(info) << boost::format("GLFW compile-time version: %1%.%2%.%3%")%gl_major %gl_minor %gl_verbos;
 
+            BOOST_LOG_TRIVIAL(info) << "=== Step 2: Setting GLFW Error Callback ===";
             glfwSetErrorCallback(glfw_callback);
+            
 #ifdef __linux__
+            BOOST_LOG_TRIVIAL(info) << "=== Step 3: Configuring for OSMesa (headless rendering) ===";
             // Disable Wayland and X11 to force OSMesa in headless environment
             setenv("WAYLAND_DISPLAY", "", 1);
             setenv("DISPLAY", "", 1);
             BOOST_LOG_TRIVIAL(info) << "CLI mode: disabled WAYLAND_DISPLAY and DISPLAY to force OSMesa";
+            BOOST_LOG_TRIVIAL(info) << "Checking OSMesa library availability...";
+            // Try to dlopen OSMesa to verify it's accessible
+            void* osmesa_handle = dlopen("libOSMesa.so", RTLD_NOW | RTLD_GLOBAL);
+            if (!osmesa_handle) {
+                osmesa_handle = dlopen("libOSMesa.so.8", RTLD_NOW | RTLD_GLOBAL);
+            }
+            if (osmesa_handle) {
+                BOOST_LOG_TRIVIAL(info) << "OSMesa library loaded successfully via dlopen";
+                // Don't close it, GLFW will use it
+            } else {
+                BOOST_LOG_TRIVIAL(warning) << "Could not pre-load OSMesa library: " << dlerror();
+                BOOST_LOG_TRIVIAL(warning) << "GLFW will attempt to load it directly...";
+            }
 #endif
+            
+            BOOST_LOG_TRIVIAL(info) << "=== Step 4: Initializing GLFW ===";
             int ret = glfwInit();
             if (ret == GLFW_FALSE) {
-                int code = glfwGetError(NULL);
-                BOOST_LOG_TRIVIAL(error) << "glfwInit return error, code " <<code<< std::endl;
+                const char* error_desc = nullptr;
+                int code = glfwGetError(&error_desc);
+                BOOST_LOG_TRIVIAL(error) << "CRITICAL: glfwInit FAILED with error code: " << code;
+                if (error_desc) {
+                    BOOST_LOG_TRIVIAL(error) << "GLFW Error Description: " << error_desc;
+                }
+                BOOST_LOG_TRIVIAL(error) << "Cannot proceed without GLFW - skipping thumbnail generation";
+                goto skip_thumbnail;
             }
             else {
-                BOOST_LOG_TRIVIAL(info) << "glfwInit Success."<< std::endl;
+                BOOST_LOG_TRIVIAL(info) << "✓ glfwInit SUCCESS";
+                
+                BOOST_LOG_TRIVIAL(info) << "=== Step 5: Setting GLFW Window Hints ===";
                 glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, gl_major);
                 glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, gl_minor);
+                BOOST_LOG_TRIVIAL(info) << boost::format("  OpenGL version: %1%.%2%")%gl_major %gl_minor;
+                
                 glfwWindowHint(GLFW_RED_BITS, 8);
                 glfwWindowHint(GLFW_GREEN_BITS, 8);
                 glfwWindowHint(GLFW_BLUE_BITS, 8);
                 glfwWindowHint(GLFW_ALPHA_BITS, 8);
                 glfwWindowHint(GLFW_VISIBLE, false);
-                //glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-                //glfwDisable(GLFW_AUTO_POLL_EVENTS);
+                BOOST_LOG_TRIVIAL(info) << "  Color bits: R8G8B8A8, Window visible: false";
+                
 #ifdef __WXMAC__
                 glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
                 glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+                BOOST_LOG_TRIVIAL(info) << "  macOS: Core profile with forward compatibility";
 #else
                 glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
+                BOOST_LOG_TRIVIAL(info) << "  Linux: Compatibility profile";
 #endif
 
 #ifdef __linux__
                 glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_OSMESA_CONTEXT_API);
+                BOOST_LOG_TRIVIAL(info) << "  *** FORCING OSMesa context creation API ***";
 #endif
 
+                BOOST_LOG_TRIVIAL(info) << "=== Step 6: Creating GLFW Window (640x480, offscreen) ===";
                 GLFWwindow* window = glfwCreateWindow(640, 480, "base_window", NULL, NULL);
                 if (window == NULL)
                 {
                     const char* error_desc = nullptr;
                     int error_code = glfwGetError(&error_desc);
-                    BOOST_LOG_TRIVIAL(error) << "Failed to create GLFW window, error code: " << error_code;
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: Failed to create GLFW window!";
+                    BOOST_LOG_TRIVIAL(error) << "  Error code: " << error_code;
                     if (error_desc) {
                         BOOST_LOG_TRIVIAL(error) << "Error description: " << error_desc;
                     }
                     BOOST_LOG_TRIVIAL(error) << "Thumbnail generation requires a valid OpenGL context" << std::endl;
                 }
-                else {
-                    glfwMakeContextCurrent(window);
-                    BOOST_LOG_TRIVIAL(info) << "GLFW window created and context activated successfully" << std::endl;
+                
+                BOOST_LOG_TRIVIAL(info) << "✓ GLFW window created successfully";
+                
+                BOOST_LOG_TRIVIAL(info) << "=== Step 7: Making OpenGL Context Current ===";
+                glfwMakeContextCurrent(window);
+                BOOST_LOG_TRIVIAL(info) << "✓ OpenGL context is now current";
+                
+                BOOST_LOG_TRIVIAL(info) << "=== Step 8: Verifying OpenGL Context ===";
+                // Verify OpenGL context is actually valid before GLEW init
+                const char* gl_version = (const char*)glGetString(GL_VERSION);
+                const char* gl_vendor = (const char*)glGetString(GL_VENDOR);
+                const char* gl_renderer = (const char*)glGetString(GL_RENDERER);
+                
+                if (!gl_version) {
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: glGetString(GL_VERSION) returned NULL!";
+                    BOOST_LOG_TRIVIAL(error) << "  This means the OpenGL context is invalid or not properly initialized";
+                    BOOST_LOG_TRIVIAL(error) << "";
+                    BOOST_LOG_TRIVIAL(error) << "Possible causes:";
+                    BOOST_LOG_TRIVIAL(error) << "  1. OSMesa library not loaded correctly";
+                    BOOST_LOG_TRIVIAL(error) << "  2. GLFW failed to create OSMesa context silently";
+                    BOOST_LOG_TRIVIAL(error) << "  3. Incompatible OpenGL/OSMesa versions";
+                    glfwDestroyWindow(window);
+                    glfwTerminate();
+                    goto skip_thumbnail;
                 }
+                
+                BOOST_LOG_TRIVIAL(info) << "✓ OpenGL Context Information:";
+                BOOST_LOG_TRIVIAL(info) << "  Version:  " << gl_version;
+                if (gl_vendor) BOOST_LOG_TRIVIAL(info) << "  Vendor:   " << gl_vendor;
+                if (gl_renderer) BOOST_LOG_TRIVIAL(info) << "  Renderer: " << gl_renderer;
+                
+                // Ensure context is current before GLEW init
+                glfwMakeContextCurrent(window);
             }
 
             //opengl manager related logic
             {
+                BOOST_LOG_TRIVIAL(info) << "=== Step 9: Double-checking Current Context ===";
+                GLFWwindow* current_window = glfwGetCurrentContext();
+                if (!current_window) {
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: No current OpenGL context!";
+                    BOOST_LOG_TRIVIAL(error) << "  Context was lost between creation and initialization";
+                    glfwTerminate();
+                    goto skip_thumbnail;
+                }
+                BOOST_LOG_TRIVIAL(info) << "✓ Current context is valid";
+                
+                BOOST_LOG_TRIVIAL(info) << "=== Step 10: Initializing GLEW ===";
                 Slic3r::GUI::OpenGLManager opengl_mgr;
                 bool opengl_valid = opengl_mgr.init_gl(false);
                 if (!opengl_valid) {
-                    BOOST_LOG_TRIVIAL(error) << "init opengl failed! skip thumbnail generating" << std::endl;
+                    BOOST_LOG_TRIVIAL(error) << "";
+                    BOOST_LOG_TRIVIAL(error) << "========================================";
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: GLEW initialization FAILED!";
+                    BOOST_LOG_TRIVIAL(error) << "========================================";
+                    BOOST_LOG_TRIVIAL(error) << "Please check the GLEW error messages above for details";
+                    BOOST_LOG_TRIVIAL(error) << "This usually indicates:";
+                    BOOST_LOG_TRIVIAL(error) << "  - Incompatible OpenGL function pointers";
+                    BOOST_LOG_TRIVIAL(error) << "  - OSMesa context doesn't support required OpenGL extensions";
+                    BOOST_LOG_TRIVIAL(error) << "  - glewExperimental flag issue";
+                    BOOST_LOG_TRIVIAL(error) << "";
+                    glfwTerminate();
+                    goto skip_thumbnail;
                 }
                 else {
-                    BOOST_LOG_TRIVIAL(info) << "glewInit Sucess." << std::endl;
+                    BOOST_LOG_TRIVIAL(info) << "✓✓✓ GLEW initialized successfully! ✓✓✓";
+                    BOOST_LOG_TRIVIAL(info) << "=== OpenGL/GLEW Setup Complete - Ready to Generate Thumbnails ===";
+                    BOOST_LOG_TRIVIAL(info) << "";
                     GLVolumeCollection glvolume_collection;
                     Model &model = m_models[0];
                     int obj_extruder_id = 1, volume_extruder_id = 1;
