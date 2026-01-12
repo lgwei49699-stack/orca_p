@@ -1038,55 +1038,99 @@ static void load_downward_settings_list_from_config(std::string config_file, std
     }
 }
 
+/**
+ * @brief CLI 主运行函数 - 应用程序的入口点
+ * @param argc 命令行参数数量
+ * @param argv 命令行参数数组
+ * @return 返回状态码：成功返回 0，失败返回对应错误码
+ * 
+ * 此函数负责：
+ * 1. 初始化主线程标识（用于调试和运行时检查）
+ * 2. 配置平台特定的环境（Linux GTK/Wayland 兼容性）
+ * 3. 设置 UTF-8 文件系统支持
+ * 4. 解析和验证命令行参数
+ * 5. 配置临时目录和打印机设置
+ */
 int CLI::run(int argc, char **argv)
 {
-    // Mark the main thread for the debugger and for runtime checks.
+    // ============================================================
+    // 第一步：主线程初始化
+    // ============================================================
+    // 为主线程设置名称，便于调试器识别和运行时检查
     set_current_thread_name("orcaslicer_main");
-    // Save the thread ID of the main thread.
+    // 保存主线程 ID，用于后续线程安全检查
     save_main_thread_id();
 
 #ifdef __WXGTK__
-    // On Linux, wxGTK has no support for Wayland, and the app crashes on
-    // startup if gtk3 is used. This env var has to be set explicitly to
-    // instruct the window manager to fall back to X server mode.
+    // ============================================================
+    // Linux 平台特定配置
+    // ============================================================
+    // 问题背景：wxGTK 不支持 Wayland，在使用 gtk3 时会导致启动崩溃
+    // 解决方案：强制设置环境变量，指示窗口管理器回退到 X server 模式
     ::setenv("GDK_BACKEND", "x11", /* replace */ true);
 
-    // Also on Linux, we need to tell Xlib that we will be using threads,
-    // lest we crash when we fire up GStreamer.
+    // 问题背景：在 Linux 上启动 GStreamer 时需要多线程支持
+    // 解决方案：显式告知 Xlib 将使用多线程，防止崩溃
     XInitThreads();
 #endif
 
-	// Switch boost::filesystem to utf8.
+    // ============================================================
+    // 第二步：文件系统 UTF-8 编码配置
+    // ============================================================
+	// 将 boost::filesystem 切换到 UTF-8 编码模式，确保跨平台文件名兼容性
     try {
         boost::nowide::nowide_filesystem();
     } catch (const std::runtime_error& ex) {
+        // UTF-8 文件系统初始化失败是致命错误，需要终止程序
         std::string caption = std::string(SLIC3R_APP_FULL_NAME) + " Error";
         std::string text = std::string("boost::nowide::nowide_filesystem Failed!\n") + (
         	SLIC3R_APP_FULL_NAME " will now terminate.\n\n") + ex.what();
     #if defined(_WIN32) && defined(SLIC3R_GUI)
+        // Windows GUI 模式下显示图形化错误对话框
         if (m_actions.empty())
-        	// Empty actions means Slicer is executed in the GUI mode. Show a GUI message.
+        	// 空的 actions 表示在 GUI 模式下执行，显示消息框
             MessageBoxA(NULL, text.c_str(), caption.c_str(), MB_OK | MB_ICONERROR);
     #endif
+        // 同时输出到标准错误流（用于命令行和日志记录）
         boost::nowide::cerr << text.c_str() << std::endl;
         return CLI_ENVIRONMENT_ERROR;
     }
 
+    // ============================================================
+    // 第三步：命令行参数解析和验证
+    // ============================================================
     if (!this->setup(argc, argv))
     {
+        // 参数解析失败，输出错误信息并返回无效参数错误码
         boost::nowide::cerr << "setup params error" << std::endl;
         return CLI_INVALID_PARAMS;
     }
     BOOST_LOG_TRIVIAL(info) << "finished setup params, argc="<< argc << std::endl;
+    
+    // ============================================================
+    // 第四步：临时目录配置
+    // ============================================================
+    // 获取系统临时目录并设置为应用程序临时文件存储位置
     std::string temp_path = wxFileName::GetTempDir().utf8_str().data();
     set_temporary_dir(temp_path);
 
+    // ============================================================
+    // 第五步：配置应用和规范化
+    // ============================================================
+    // 应用额外的配置选项到主配置对象
     m_extra_config.apply(m_config, true);
+    // 规范化 FDM（熔融沉积成型）相关配置参数
     m_extra_config.normalize_fdm();
 
+    // 从配置中提取打印机技术类型（FDM 或 SLA）
     PrinterTechnology printer_technology = get_printer_technology(m_config);
 
+    // ============================================================
+    // 历史遗留代码注释
+    // ============================================================
     //BBS: remove GCodeViewer as seperate APP logic
+    // 已移除：GCodeViewer 作为独立应用的逻辑
+    // 原逻辑：在 Unix 系统上通过符号链接名称判断是否以 gcodeviewer 模式启动
     /*bool 							start_as_gcodeviewer =
 #ifdef _WIN32
             false;
@@ -1095,40 +1139,80 @@ int CLI::run(int argc, char **argv)
             boost::algorithm::iends_with(boost::filesystem::path(argv[0]).filename().string(), "gcodeviewer");
 #endif // _WIN32*/
 
+    // ============================================================
+    // 第六步：变量初始化 - 打印床和打印机参数
+    // ============================================================
+    // 控制标志：是否需要迁移旧配置、重新生成缩略图、耗材颜色改变、向下兼容性检查
     bool translate_old = false, regenerate_thumbnails = false, filament_color_changed = false, downward_check = false;
+    
+    // 当前打印机的可打印尺寸（宽度、深度、高度）和床位收缩标志
     int current_printable_width, current_printable_depth, current_printable_height, shrink_to_new_bed = 0;
+    // 旧打印机的可打印尺寸，用于检测打印机变更
     int old_printable_height = 0, old_printable_width = 0, old_printable_depth = 0;
+    // 旧打印机的可打印区域和排除区域（用于碰撞检测）
     Pointfs old_printable_area, old_exclude_area;
+    // Delta 打印机参数：最大半径、到摇杆的高度、到顶盖的高度
     float old_max_radius = 0.f, old_height_to_rod = 0.f, old_height_to_lid = 0.f;
+    // 旧配置的最大和最小层高限制
     std::vector<double> old_max_layer_height, old_min_layer_height;
+    
+    // ============================================================
+    // 配置选项加载 - 从命令行参数中提取各类设置
+    // ============================================================
+    // 输出文件目录
     std::string outfile_dir              =  m_config.opt_string("outputdir", true);
+    // 需要加载的配置文件列表
     const std::vector<std::string>              &load_configs               = m_config.option<ConfigOptionStrings>("load_settings", true)->values;
+    // 最新的配置设置（用于版本兼容性检查）
     const std::vector<std::string>              &uptodate_configs          = m_config.option<ConfigOptionStrings>("uptodate_settings", true)->values;
+    // 最新的耗材设置
     const std::vector<std::string>              &uptodate_filaments          = m_config.option<ConfigOptionStrings>("uptodate_filaments", true)->values;
+    // 向下兼容的设置列表
     std::vector<std::string>                    downward_settings          = m_config.option<ConfigOptionStrings>("downward_settings", true)->values;
+    // 向下兼容的机器列表
     std::vector<std::string> downward_compatible_machines;
+    
     //BBS: always use ForwardCompatibilitySubstitutionRule::Enable
+    // BBS 修改：始终启用前向兼容性替换规则，确保新版本配置可以在旧版本中正常工作
     //const ForwardCompatibilitySubstitutionRule   config_substitution_rule = m_config.option<ConfigOptionEnum<ForwardCompatibilitySubstitutionRule>>("config_compatibility", true)->value;
     const ForwardCompatibilitySubstitutionRule   config_substitution_rule = ForwardCompatibilitySubstitutionRule::Enable;
+    
+    // 需要加载的耗材配置列表
     const std::vector<std::string>              &load_filaments           = m_config.option<ConfigOptionStrings>("load_filaments", true)->values;
+    
     //skip model object logic
+    // 跳过模型对象逻辑：允许在切片时跳过特定的模型对象
     const std::vector<int>                      &skip_objects             = m_config.option<ConfigOptionInts>("skip_objects", true)->values;
-    std::map<int, bool>     skip_maps;
-    bool   need_skip      = (skip_objects.size() > 0)?true:false;
+    std::map<int, bool>     skip_maps;  // 跳过对象的映射表
+    bool   need_skip      = (skip_objects.size() > 0)?true:false;  // 是否有需要跳过的对象
+    
+    // 性能计时变量
     long long global_begin_time = 0, global_current_time;
+    // 切片信息结构体，存储切片结果统计
     sliced_info_t sliced_info;
+    // 记录键值对，用于存储切片过程中的元数据
     std::map<std::string, std::string> record_key_values;
 
+    // ============================================================
+    // 向下兼容性检查选项
+    // ============================================================
+    // 检查是否启用向下兼容性验证（确保旧版本可以打开新版本的项目）
     ConfigOptionBool* downward_check_option = m_config.option<ConfigOptionBool>("downward_check");
     if (downward_check_option)
         downward_check = downward_check_option->value;
 
+    // ============================================================
+    // 第七步：GUI 模式启动逻辑
+    // ============================================================
+    // 判断是否启动 GUI：没有命令行操作 且 不是向下兼容性检查模式
     bool start_gui = m_actions.empty() && !downward_check;
     if (start_gui) {
         BOOST_LOG_TRIVIAL(info) << "no action, start gui directly" << std::endl;
 #ifdef SLIC3R_GUI
     /*#if !defined(_WIN32) && !defined(__APPLE__)
         // likely some linux / unix system
+        // 历史代码：Linux 系统检查 DISPLAY 环境变量
+        // 目的：确保在无图形环境下不启动 GUI
         const char *display = boost::nowide::getenv("DISPLAY");
         // const char *wayland_display = boost::nowide::getenv("WAYLAND_DISPLAY");
         //if (! ((display && *display) || (wayland_display && *wayland_display))) {
@@ -1140,73 +1224,177 @@ int CLI::run(int argc, char **argv)
             return 1;
         }
     #endif // some linux / unix system*/
+        
+        // ============================================================
+        // GUI 初始化参数设置
+        // ============================================================
         Slic3r::GUI::GUI_InitParams params;
-        params.argc = argc;
-        params.argv = argv;
-        params.load_configs = load_configs;
-        params.extra_config = std::move(m_extra_config);
+        params.argc = argc;                              // 传递命令行参数数量
+        params.argv = argv;                              // 传递命令行参数数组
+        params.load_configs = load_configs;              // 传递配置文件列表
+        params.extra_config = std::move(m_extra_config); // 移动额外配置（避免拷贝）
 
-        std::vector<std::string>    gcode_files;
-        std::vector<std::string>    non_gcode_files;
+        // ============================================================
+        // 输入文件分类：区分 GCode 文件和模型文件
+        // ============================================================
+        std::vector<std::string>    gcode_files;      // 存储 GCode 文件路径
+        std::vector<std::string>    non_gcode_files;  // 存储非 GCode 文件路径（STL、3MF 等）
+        
+        // 遍历所有输入文件，根据文件类型进行分类
         for (const auto& filename : m_input_files) {
             if (is_gcode_file(filename))
-                gcode_files.emplace_back(filename);
+                gcode_files.emplace_back(filename);     // GCode 文件放入 gcode_files
             else {
-                non_gcode_files.emplace_back(filename);
+                non_gcode_files.emplace_back(filename);  // 模型文件放入 non_gcode_files
             }
         }
+        
+        // 根据文件类型设置不同的启动模式
         if (non_gcode_files.empty() && !gcode_files.empty()) {
+            // 纯 GCode 模式：只有 GCode 文件，启动 GCode 查看器
             params.input_gcode = true;
             params.input_files  = std::move(gcode_files);
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ", gcode only, gcode_files size = "<<params.input_files.size();
         }
         else {
+            // 正常模式：包含模型文件，启动完整切片器
             params.input_files  = std::move(m_input_files);
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ", normal mode, input_files size = "<<params.input_files.size();
         }
+        
         //BBS: remove GCodeViewer as seperate APP logic
+        // BBS 修改：移除 GCodeViewer 作为独立应用的逻辑，统一整合到主应用中
         //params.start_as_gcodeviewer = start_as_gcodeviewer;
 
+        // ============================================================
+        // 启动 GUI 主循环
+        // ============================================================
         BOOST_LOG_TRIVIAL(info) << "begin to launch OrcaSlicer GUI soon";
         return Slic3r::GUI::GUI_Run(params);
 #else // SLIC3R_GUI
-        // No GUI support. Just print out a help.
+        // ============================================================
+        // 无 GUI 支持的情况（命令行版本）
+        // ============================================================
+        // 打印帮助信息
         this->print_help(false);
-        // If started without a parameter, consider it to be OK, otherwise report an error code (no action etc).
+        // 如果没有参数启动，返回成功（0）；否则返回错误（1）
         return (argc == 0) ? 0 : 1;
 #endif // SLIC3R_GUI
     }
+    // ============================================================
+    // 命令行模式（非 GUI 模式）逻辑分支
+    // ============================================================
     else {
+        // ============================================================
+        // 第八步：日志级别配置
+        // ============================================================
+        // 从命令行参数中读取调试级别（debug 参数）
         const ConfigOptionInt *opt_loglevel = m_config.opt<ConfigOptionInt>("debug");
         if (opt_loglevel) {
+            // 如果指定了调试级别，使用用户设定的值
             set_logging_level(opt_loglevel->value);
         }
         else {
+            // 默认日志级别为 2（info 级别）
             set_logging_level(2);
         }
     }
 
+    // ============================================================
+    // 第九步：性能计时和版本记录
+    // ============================================================
+    // 记录全局开始时间（UTC 时间戳），用于计算总执行时间
     global_begin_time = (long long)Slic3r::Utils::get_current_time_utc();
+    // 输出版本信息到日志（warning 级别确保一定会显示）
     BOOST_LOG_TRIVIAL(warning) << boost::format("cli mode, Current OrcaSlicer Version %1%")%SoftFever_VERSION;
 
+    // ============================================================
+    // 第十步：核心变量初始化 - 打印板和切片相关
+    // ============================================================
     //BBS: add plate data related logic
-    PlateDataPtrs plate_data_src;
-    std::vector<plate_obj_size_info_t> plate_obj_size_infos;
-    int plate_to_slice = 0, filament_count = 0, duplicate_count = 0, real_duplicate_count = 0;
-    bool first_file = true, is_bbl_3mf = false, need_arrange = true, has_thumbnails = false, up_config_to_date = false, normative_check = true, duplicate_single_object = false, use_first_fila_as_default = false, minimum_save = false, enable_timelapse = false;
-    bool allow_rotations = true, skip_modified_gcodes = false, avoid_extrusion_cali_region = false, skip_useless_pick = false, allow_newer_file = false;
-    Semver file_version;
-    std::map<size_t, bool> orients_requirement;
-    std::vector<Preset*> project_presets;
-    std::string new_printer_name, current_printer_name, new_process_name, current_process_name, current_printer_system_name, current_process_system_name, new_process_system_name, new_printer_system_name, printer_model_id, current_printer_model, printer_model;//, printer_inherits, print_inherits;
-    std::vector<std::string> upward_compatible_printers, new_print_compatible_printers, current_print_compatible_printers, current_different_settings;
-    std::vector<std::string> current_filaments_name, current_filaments_system_name, current_inherits_group;
-    DynamicPrintConfig load_process_config, load_machine_config;
-    bool new_process_config_is_system = true, new_printer_config_is_system = true;
-    std::string pipe_name, makerlab_name, makerlab_version, different_process_setting;
+    // BBS 新增：打印板数据相关逻辑
+    PlateDataPtrs plate_data_src;  // 打印板数据指针列表
+    std::vector<plate_obj_size_info_t> plate_obj_size_infos;  // 打印板对象尺寸信息
+    
+    // 整型配置参数
+    int plate_to_slice = 0,         // 需要切片的打印板编号（0 表示所有）
+        filament_count = 0,          // 耗材数量
+        duplicate_count = 0,         // 重复计数
+        real_duplicate_count = 0;    // 实际重复计数
+    
+    // 布尔标志集合 - 文件和配置状态
+    bool first_file = true,                     // 是否是第一个文件
+         is_bbl_3mf = false,                    // 是否是 Bambu Lab 的 3MF 格式
+         need_arrange = true,                   // 是否需要自动排列
+         has_thumbnails = false,                // 是否包含缩略图
+         up_config_to_date = false,             // 配置是否为最新
+         normative_check = true,                // 是否进行规范性检查
+         duplicate_single_object = false,       // 是否复制单个对象
+         use_first_fila_as_default = false,     // 是否使用第一个耗材作为默认
+         minimum_save = false,                  // 是否最小化保存（减少文件大小）
+         enable_timelapse = false;              // 是否启用延时摄影
+    
+    // 布尔标志集合 - 打印选项
+    bool allow_rotations = true,                // 是否允许旋转对象
+         skip_modified_gcodes = false,          // 是否跳过修改过的 GCode
+         avoid_extrusion_cali_region = false,   // 是否避开挤出校准区域
+         skip_useless_pick = false,             // 是否跳过无用的拾取操作
+         allow_newer_file = false;              // 是否允许打开更新版本的文件
+    
+    // 版本和配置相关
+    Semver file_version;                        // 文件版本号（语义化版本）
+    std::map<size_t, bool> orients_requirement; // 方向要求映射
+    std::vector<Preset*> project_presets;       // 项目预设列表
+    
+    // 打印机和工艺配置名称
+    std::string new_printer_name,               // 新打印机名称
+                current_printer_name,            // 当前打印机名称
+                new_process_name,                // 新工艺名称
+                current_process_name,            // 当前工艺名称
+                current_printer_system_name,     // 当前打印机系统名称
+                current_process_system_name,     // 当前工艺系统名称
+                new_process_system_name,         // 新工艺系统名称
+                new_printer_system_name,         // 新打印机系统名称
+                printer_model_id,                // 打印机型号 ID
+                current_printer_model,           // 当前打印机型号
+                printer_model;                   // 打印机型号
+    
+    // 兼容性和配置列表
+    std::vector<std::string> upward_compatible_printers,      // 向上兼容的打印机列表
+                             new_print_compatible_printers,   // 新打印兼容打印机列表
+                             current_print_compatible_printers, // 当前打印兼容打印机列表
+                             current_different_settings;      // 当前不同的设置列表
+    
+    // 耗材相关配置
+    std::vector<std::string> current_filaments_name,          // 当前耗材名称列表
+                             current_filaments_system_name,   // 当前耗材系统名称列表
+                             current_inherits_group;          // 当前继承组列表
+    
+    // 动态配置对象
+    DynamicPrintConfig load_process_config,    // 加载的工艺配置
+                       load_machine_config;    // 加载的机器配置
+    
+    // 配置来源标志
+    bool new_process_config_is_system = true,  // 新工艺配置是否来自系统
+         new_printer_config_is_system = true;  // 新打印机配置是否来自系统
+    
+    // 进程间通信和第三方集成
+    std::string pipe_name,                     // 管道名称（用于进程间通信）
+                makerlab_name,                 // MakerLab 名称
+                makerlab_version,              // MakerLab 版本
+                different_process_setting;     // 不同的工艺设置
+    
+    // ============================================================
+    // 元数据配置读取
+    // ============================================================
+    // 从配置中提取元数据键值对
     const std::vector<std::string>              &metadata_name               = m_config.option<ConfigOptionStrings>("metadata_name", true)->values;
     const std::vector<std::string>              &metadata_value              = m_config.option<ConfigOptionStrings>("metadata_value", true)->values;
 
+    // ============================================================
+    // 元数据有效性验证
+    // ============================================================
+    // 确保元数据的键和值数量一致，否则配置无效
     if (metadata_name.size() != metadata_value.size())
     {
         BOOST_LOG_TRIVIAL(error) << boost::format("metadata_name should be the same size with metadata_value");
@@ -1214,58 +1402,84 @@ int CLI::run(int argc, char **argv)
         flush_and_exit(CLI_INVALID_PARAMS);
     }
 
+    // ============================================================
+    // 第十一步：输入文件处理准备
+    // ============================================================
     // Read input file(s) if any.
     BOOST_LOG_TRIVIAL(info) << "Will start to read model file now, file count :" << m_input_files.size() << "\n";
+    
+    // 读取要切片的打印板编号（0 表示切片所有打印板）
     ConfigOptionInt* slice_option = m_config.option<ConfigOptionInt>("slice");
     if (slice_option)
         plate_to_slice = slice_option->value;
 
+    // ============================================================
+    // 第十二步：布尔选项配置读取
+    // ============================================================
+    // 以下代码从命令行参数中读取各种布尔选项
+    // 每个选项都有对应的命令行参数名称，如果未指定则使用默认值
+    
+    // 规范性检查：验证模型和配置是否符合标准
     ConfigOptionBool* normative_check_option = m_config.option<ConfigOptionBool>("normative_check");
     if (normative_check_option)
         normative_check = normative_check_option->value;
 
+    // 配置是否为最新：用于版本兼容性检查
     ConfigOptionBool* uptodate_option = m_config.option<ConfigOptionBool>("uptodate");
     if (uptodate_option)
         up_config_to_date = uptodate_option->value;
 
+    // 加载默认耗材：是否使用第一个耗材作为默认选择
     ConfigOptionBool* load_defaultfila_option = m_config.option<ConfigOptionBool>("load_defaultfila");
     if (load_defaultfila_option)
         use_first_fila_as_default = load_defaultfila_option->value;
 
+    // 最小化保存：减少输出文件大小（移除不必要的数据）
     ConfigOptionBool* min_save_option = m_config.option<ConfigOptionBool>("min_save");
     if (min_save_option)
         minimum_save = min_save_option->value;
 
+    // 启用延时摄影：打印过程中录制延时视频
     ConfigOptionBool* enable_timelapse_option = m_config.option<ConfigOptionBool>("enable_timelapse");
     if (enable_timelapse_option)
         enable_timelapse = enable_timelapse_option->value;
 
+    // 允许旋转：自动排列时是否允许旋转对象以优化空间
     ConfigOptionBool* allow_rotations_option = m_config.option<ConfigOptionBool>("allow_rotations");
     if (allow_rotations_option)
         allow_rotations = allow_rotations_option->value;
 
+    // 跳过修改过的 GCode：如果 GCode 已手动修改则跳过重新生成
     ConfigOptionBool* skip_modified_gcodes_option = m_config.option<ConfigOptionBool>("skip_modified_gcodes");
     if (skip_modified_gcodes_option)
         skip_modified_gcodes = skip_modified_gcodes_option->value;
 
+    // 跳过无用拾取：多色打印时跳过不必要的换色操作
     ConfigOptionBool* skip_useless_picks_option = m_config.option<ConfigOptionBool>("skip_useless_pick");
     if (skip_useless_picks_option)
         skip_useless_pick = skip_useless_picks_option->value;
 
+    // 允许较新文件：是否允许打开比当前版本更新的项目文件
     ConfigOptionBool* allow_newer_file_option = m_config.option<ConfigOptionBool>("allow_newer_file");
     if (allow_newer_file_option)
         allow_newer_file = allow_newer_file_option->value;
 
+    // 避开挤出校准区域：打印时避开打印床上的校准测试区域
     ConfigOptionBool* avoid_extrusion_cali_region_option = m_config.option<ConfigOptionBool>("avoid_extrusion_cali_region");
     if (avoid_extrusion_cali_region_option)
         avoid_extrusion_cali_region = avoid_extrusion_cali_region_option->value;
 
+    // ============================================================
+    // 第十三步：进程间通信配置（管道）
+    // ============================================================
+    // 管道用于与其他进程（如 GUI 前端或构建服务）进行状态同步
     ConfigOptionString* pipe_option = m_config.option<ConfigOptionString>("pipe");
     if (pipe_option) {
         pipe_name = pipe_option->value;
         if (!pipe_name.empty()) {
             BOOST_LOG_TRIVIAL(info) << boost::format("Will use pipe %1%")%pipe_name;
 #if defined(__linux__) || defined(__LINUX__)
+            // Linux 平台：启动管道通信并发送初始状态
             g_cli_callback_mgr.start(pipe_name);
             PrintBase::SlicingStatus slicing_status{1, "Start to load files"};
             cli_status_callback(slicing_status);
@@ -1273,6 +1487,10 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    // ============================================================
+    // 第十四步：MakerLab 集成配置
+    // ============================================================
+    // MakerLab 是第三方云平台，这些参数用于云端集成
     ConfigOptionString* makerlab_name_option = m_config.option<ConfigOptionString>("makerlab_name");
     if (makerlab_name_option)
         makerlab_name = makerlab_name_option->value;
@@ -1281,42 +1499,71 @@ int CLI::run(int argc, char **argv)
     if (makerlab_version_option)
         makerlab_version = makerlab_version_option->value;
 
+    // ============================================================
+    // 第十五步：跳过对象映射构建
+    // ============================================================
     //skip model object map construct
+    // 构建要跳过对象的映射表（用于批量切片时选择性排除某些对象）
     if (need_skip) {
         BOOST_LOG_TRIVIAL(info) << boost::format("need to skip objects, size %1%:")%skip_objects.size();
         for (int index = 0; index < skip_objects.size(); index++)
         {
+            // 将对象 ID 添加到跳过映射表，false 表示该对象将被跳过
             skip_maps[skip_objects[index]] = false;
             BOOST_LOG_TRIVIAL(info) << boost::format("object %1%, id %2%")%index %skip_objects[index];
         }
     }
 
+    // ============================================================
+    // 第十六步：自定义 GCode 和装配列表加载
+    // ============================================================
+    // 自定义 GCode 文件：允许注入用户自定义的 GCode 片段
     std::string custom_gcode_file;
     ConfigOptionString* custom_gcode_option = m_config.option<ConfigOptionString>("load_custom_gcodes");
     if (custom_gcode_option)
         custom_gcode_file = custom_gcode_option->value;
 
+    // 装配列表：用于多部件打印的组装信息
     std::string load_assemble_list;
     std::vector<assemble_plate_info_t> assemble_plate_info_list;
     ConfigOptionString* load_assemble_list_option = m_config.option<ConfigOptionString>("load_assemble_list");
     if (load_assemble_list_option)
         load_assemble_list = load_assemble_list_option->value;
 
+    // ============================================================
+    // 第十七步：多色打印和耗材配置
+    // ============================================================
+    // 允许单板多色：是否允许在一个打印板上使用多种颜色的耗材
     bool allow_multicolor_oneplate = m_config.option<ConfigOptionBool>("allow_multicolor_oneplate", true)->value;
+    
+    // 加载的耗材 ID 列表：为每个模型指定使用的耗材编号
     const std::vector<int>  loaded_filament_ids  = m_config.option<ConfigOptionInts>("load_filament_ids", true)->values;
+    
+    // 克隆对象列表：指定每个模型要复制的数量
     const std::vector<int>  clone_objects  = m_config.option<ConfigOptionInts>("clone_objects", true)->values;
+    
     //when load objects from stl/obj, the total used filaments set
+    // 加载 STL/OBJ 对象时使用的耗材集合（去重）
     std::set<int> used_filament_set;
+    
+    // 输出所有配置参数到日志，便于调试和问题追踪
     BOOST_LOG_TRIVIAL(info) << boost::format("allow_multicolor_oneplate %1%, allow_rotations %2% skip_modified_gcodes %3% avoid_extrusion_cali_region %4% loaded_filament_ids size %5%, clone_objects size %6%, skip_useless_pick %7%, allow_newer_file %8%")
         %allow_multicolor_oneplate %allow_rotations %skip_modified_gcodes %avoid_extrusion_cali_region %loaded_filament_ids.size() %clone_objects.size() %skip_useless_pick %allow_newer_file;
+    
+    // ============================================================
+    // 第十八步：克隆对象参数验证
+    // ============================================================
+    // 验证克隆对象配置的有效性
     if (clone_objects.size() > 0)
     {
+        // 检查1：克隆对象数量必须与输入文件数量一致（一一对应）
         if (clone_objects.size() != m_input_files.size())
         {
             BOOST_LOG_TRIVIAL(error) << boost::format("clone_objects size %1% should be the same with input files size %2%")%clone_objects.size() %m_input_files.size();
             record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
             flush_and_exit(CLI_INVALID_PARAMS);
         }
+        // 检查2：克隆对象必须与耗材配置一起使用
         else if (load_filaments.size() == 0)
         {
             BOOST_LOG_TRIVIAL(error) << boost::format("clone_objects should be used with load_filaments together");
@@ -1324,14 +1571,21 @@ int CLI::run(int argc, char **argv)
             flush_and_exit(CLI_INVALID_PARAMS);
         }
     }
+    
+    // ============================================================
+    // 第十九步：耗材 ID 参数验证
+    // ============================================================
+    // 验证耗材 ID 配置的有效性
     if (loaded_filament_ids.size() > 0)
     {
+        // 检查1：耗材 ID 数量必须与输入文件数量一致（每个文件指定一个耗材）
         if (loaded_filament_ids.size() != m_input_files.size())
         {
             BOOST_LOG_TRIVIAL(error) << boost::format("loaded_filament_ids size %1% should be the same with input files size %2%")%loaded_filament_ids.size() %m_input_files.size();
             record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
             flush_and_exit(CLI_INVALID_PARAMS);
         }
+        // 检查2：耗材 ID 必须与耗材配置一起使用
         else if (load_filaments.size() == 0)
         {
             BOOST_LOG_TRIVIAL(error) << boost::format("loaded_filament_ids should be used with load_filaments together");
@@ -1340,93 +1594,194 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    // ============================================================
+    // 历史遗留代码：GCode 查看器自动检测
+    // ============================================================
     /*for (const std::string& file : m_input_files)
         if (is_gcode_file(file) && boost::filesystem::exists(file)) {
             start_as_gcodeviewer = true;
             BOOST_LOG_TRIVIAL(info) << "found a gcode file:" << file << ", will start as gcode viewer\n";
             break;
         }*/
+    // 已废弃：原逻辑会自动检测 GCode 文件并切换到查看器模式，现已统一到主应用
+    
+    // ============================================================
+    // 第二十步：模型文件加载主循环准备
+    // ============================================================
+    // 输出关键配置参数到日志
     BOOST_LOG_TRIVIAL(info) << boost::format("plate_to_slice=%1%, normative_check=%2%, use_first_fila_as_default=%3%")%plate_to_slice %normative_check %use_first_fila_as_default;
-    unsigned int input_index = 0;
+    unsigned int input_index = 0;  // 当前处理的输入文件索引
+    
+    // ============================================================
+    // 装配列表互斥性验证
+    // ============================================================
+    // 装配列表模式与直接加载模型文件是互斥的（不能同时使用）
     if (!load_assemble_list.empty() && ((m_input_files.size() > 0) || (m_transforms.size() > 0)))
     {
         BOOST_LOG_TRIVIAL(error) << boost::format("load_assemble_list should not be used with input model files to load and should not be sued with transforms");
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
         flush_and_exit(CLI_INVALID_PARAMS);
     }
+    // ============================================================
+    // 第二十一步：输入文件加载主循环
+    // ============================================================
     if (load_assemble_list.empty()) {
+        // 遍历所有输入文件（3MF、STL、OBJ 等格式）
         for (const std::string& file : m_input_files) {
+            // ============================================================
+            // 文件存在性验证
+            // ============================================================
             if (!boost::filesystem::exists(file)) {
+                // 文件不存在，记录错误并退出
                 boost::nowide::cerr << "No such file: " << file << std::endl;
                 record_exit_reson(outfile_dir, CLI_FILE_NOTFOUND, 0, cli_errors[CLI_FILE_NOTFOUND], sliced_info);
                 flush_and_exit(CLI_FILE_NOTFOUND);
             }
+            
+            // ============================================================
+            // 创建空模型对象，准备加载数据
+            // ============================================================
             Model model;
             //BBS: add plate related logic
+            // BBS 新增：打印板相关逻辑（已集成到加载策略中）
             //bool load_aux = false;
             BOOST_LOG_TRIVIAL(info) << "read model file:" << file << "\n";
+            
             try {
+                // ============================================================
+                // 第二十二步：文件加载和配置解析
+                // ============================================================
                 // When loading an AMF or 3MF, config is imported as well, including the printer technology.
-                DynamicPrintConfig config;
-                ConfigSubstitutionContext config_substitutions(config_substitution_rule);
+                // 加载 AMF 或 3MF 时，配置（包括打印机技术类型）也会一并导入
+                DynamicPrintConfig config;  // 动态配置容器
+                ConfigSubstitutionContext config_substitutions(config_substitution_rule);  // 配置替换上下文
 
                 //FIXME should we check the version here? // | LoadStrategy::CheckVersion ?
-                is_bbl_3mf = false;
+                // TODO: 是否应该在这里检查版本？（LoadStrategy::CheckVersion）
+                
+                // ============================================================
+                // 加载策略设置：根据文件类型选择不同的加载选项
+                // ============================================================
+                is_bbl_3mf = false;  // 标记是否为 Bambu Lab 3MF 格式
                 LoadStrategy strategy;
+                
                 if (boost::algorithm::iends_with(file, ".3mf") && first_file) {
+                    // --------------------------------------------------------
+                    // 3MF 文件作为首文件的特殊处理
+                    // --------------------------------------------------------
+                    // 3MF 文件包含完整的项目配置，不能与克隆/耗材 ID 参数混用
                     if ((clone_objects.size() > 0) || (loaded_filament_ids.size() > 0))
                     {
                         BOOST_LOG_TRIVIAL(error) << boost::format("can not load 3mf when set loaded_filament_ids or clone_objects");
                         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
                         flush_and_exit(CLI_INVALID_PARAMS);
                     }
+                    
+                    // 3MF 完整加载策略：
+                    // - LoadModel: 加载 3D 模型几何数据
+                    // - LoadConfig: 加载配置（打印机、工艺、耗材设置）
+                    // - AddDefaultInstances: 为没有实例的对象添加默认实例
+                    // - LoadAuxiliary: 加载辅助数据（缩略图、元数据、打印板信息等）
                     strategy = LoadStrategy::LoadModel | LoadStrategy::LoadConfig|LoadStrategy::AddDefaultInstances | LoadStrategy::LoadAuxiliary;
                     //load_aux = true;
                 }
                 else {
+                    // --------------------------------------------------------
+                    // STL/OBJ 等普通格式文件的加载策略
+                    // --------------------------------------------------------
+                    // 只加载模型和创建默认实例，不加载配置
                     strategy = LoadStrategy::LoadModel | LoadStrategy::AddDefaultInstances;
                 }
+                
                 // BBS: adjust whebackup
+                // BBS 修改：调整备份策略（历史代码，已废弃）
                 //LoadStrategy strategy = LoadStrategy::LoadModel | LoadStrategy::LoadConfig|LoadStrategy::AddDefaultInstances;
                 //if (load_aux) strategy = strategy | LoadStrategy::LoadAuxiliary;
+                
+                // ============================================================
+                // 执行文件读取（核心加载逻辑）
+                // ============================================================
+                // 参数说明：
+                // - file: 文件路径
+                // - config: 配置输出
+                // - config_substitutions: 配置替换记录
+                // - strategy: 加载策略
+                // - plate_data_src: 打印板数据输出
+                // - project_presets: 项目预设输出
+                // - is_bbl_3mf: BBL 3MF 标志输出
+                // - file_version: 文件版本输出
+                // - plate_to_slice: 要切片的打印板编号
                 model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets, &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice);
+                
+                // ============================================================
+                // 第二十三步：Bambu Lab 3MF 文件特殊处理分支
+                // ============================================================
                 if (is_bbl_3mf)
                 {
+                    // --------------------------------------------------------
+                    // 文件顺序验证
+                    // --------------------------------------------------------
+                    // BBL 3MF 文件必须作为第一个文件（包含完整项目配置）
                     if (!first_file)
                     {
                         BOOST_LOG_TRIVIAL(info) << "The BBL 3mf file should be placed at the first position, filename=" << file << "\n";
                         record_exit_reson(outfile_dir, CLI_FILELIST_INVALID_ORDER, 0, cli_errors[CLI_FILELIST_INVALID_ORDER], sliced_info);
                         flush_and_exit(CLI_FILELIST_INVALID_ORDER);
                     }
+                    
+                    // 输出 3MF 基本信息：版本号和打印板数量
                     BOOST_LOG_TRIVIAL(info) << boost::format("the first file is a 3mf, version %1%, got plate count %2%") %file_version.to_string() %plate_data_src.size();
+                    
+                    // 3MF 已包含对象布局，无需重新排列
                     need_arrange = false;
+                    
+                    // 历史代码：对象方向要求记录（已废弃）
                     /*for (ModelObject* o : model.objects)
                     {
                         orients_requirement.insert(std::pair<size_t, bool>(o->id().id, false));
                         BOOST_LOG_TRIVIAL(info) << "object "<<o->name <<", id :" << o->id().id << ", from bbl 3mf\n";
                     }*/
 
-                    Semver cli_ver = *Semver::parse(SoftFever_VERSION);
+                    // ============================================================
+                    // 版本兼容性检查
+                    // ============================================================
+                    Semver cli_ver = *Semver::parse(SoftFever_VERSION);  // 当前 CLI 版本
+                    
+                    // 检查文件版本是否被当前版本支持
+                    // 规则：主版本号必须相同，次版本号不能高于当前版本（除非允许较新文件）
                     if (!allow_newer_file && ((cli_ver.maj() != file_version.maj()) || (cli_ver.min() < file_version.min()))){
                         BOOST_LOG_TRIVIAL(error) << boost::format("Version Check: File Version %1% not supported by current cli version %2%")%file_version.to_string() %SoftFever_VERSION;
                         record_exit_reson(outfile_dir, CLI_FILE_VERSION_NOT_SUPPORTED, 0, cli_errors[CLI_FILE_VERSION_NOT_SUPPORTED], sliced_info);
                         flush_and_exit(CLI_FILE_VERSION_NOT_SUPPORTED);
                     }
-                    Semver old_version(1, 5, 9), old_version2(1, 5, 9);
+                    
+                    // ============================================================
+                    // 旧版本兼容性处理
+                    // ============================================================
+                    Semver old_version(1, 5, 9), old_version2(1, 5, 9);  // 旧版本基准
+                    
+                    // 检查是否需要配置迁移（1.5.9 之前的版本）
                     if ((file_version < old_version) && !config.empty()) {
-                        translate_old = true;
+                        translate_old = true;  // 标记需要转换旧配置
                         BOOST_LOG_TRIVIAL(info) << boost::format("old 3mf version %1%, need to translate")%file_version.to_string();
                     }
+                    
+                    // 检查是否需要重新生成缩略图（1.5.9 之前的版本）
                     if ((file_version < old_version2) && !config.empty()) {
-                        regenerate_thumbnails = true;
+                        regenerate_thumbnails = true;  // 标记需要重新生成缩略图
                         BOOST_LOG_TRIVIAL(info) << boost::format("old 3mf version %1%, need to regenerate_thumbnails for all")%file_version.to_string();
                     }
 
+                    // ============================================================
+                    // 规范性检查：后处理脚本限制
+                    // ============================================================
                     if (normative_check) {
+                        // 检查是否包含后处理脚本（CLI 模式不支持后处理脚本，存在安全风险）
                         ConfigOptionStrings* postprocess_scripts = config.option<ConfigOptionStrings>("post_process");
                         if (postprocess_scripts) {
                             std::vector<std::string> postprocess_values = postprocess_scripts->values;
                             if (postprocess_values.size() > 0) {
+                                // 发现后处理脚本，拒绝执行
                                 BOOST_LOG_TRIVIAL(error) << boost::format("normative_check: postprocess not supported, array size %1%")%postprocess_values.size();
                                 record_exit_reson(outfile_dir, CLI_POSTPROCESS_NOT_SUPPORTED, 0, cli_errors[CLI_POSTPROCESS_NOT_SUPPORTED], sliced_info);
                                 flush_and_exit(CLI_POSTPROCESS_NOT_SUPPORTED);
@@ -1434,235 +1789,426 @@ int CLI::run(int argc, char **argv)
                         }
                     }
 
+                    // 历史代码：实例位置调试输出（已废弃）
                     /*for (ModelObject *model_object : model.objects)
                         for (ModelInstance *model_instance : model_object->instances)
                         {
                             const Vec3d &instance_offset = model_instance->get_offset();
                             BOOST_LOG_TRIVIAL(info) << boost::format("instance %1% transform {%2%,%3%,%4%} at %5%:%6%")% model_object->name % instance_offset.x() % instance_offset.y() %instance_offset.z() % __FUNCTION__ % __LINE__<< std::endl;
                         }*/
-                    current_printer_name = config.option<ConfigOptionString>("printer_settings_id")->value;
-                    current_process_name = config.option<ConfigOptionString>("print_settings_id")->value;
-                    current_printer_model = config.option<ConfigOptionString>("printer_model", true)->value;
-                    current_filaments_name = config.option<ConfigOptionStrings>("filament_settings_id")->values;
+                    
+                    // ============================================================
+                    // 第二十四步：配置 ID 提取（打印机、工艺、耗材）
+                    // ============================================================
+                    current_printer_name = config.option<ConfigOptionString>("printer_settings_id")->value;      // 打印机预设名称
+                    current_process_name = config.option<ConfigOptionString>("print_settings_id")->value;       // 工艺预设名称
+                    current_printer_model = config.option<ConfigOptionString>("printer_model", true)->value;    // 打印机型号
+                    current_filaments_name = config.option<ConfigOptionStrings>("filament_settings_id")->values; // 耗材预设名称列表
 
                     BOOST_LOG_TRIVIAL(info) << boost::format("current_printer_name %1%, current_process_name %2%")%current_printer_name %current_process_name;
+                    
+                    // ============================================================
+                    // 第二十五步：继承组解析（预设继承关系）
+                    // ============================================================
+                    // inherits_group 存储预设的继承链，结构为：
+                    // [工艺继承, 耗材1继承, 耗材2继承, ..., 打印机继承]
                     ConfigOptionStrings* option_strings = config.option<ConfigOptionStrings>("inherits_group");
                     if (option_strings) {
                         current_inherits_group = option_strings->values;
                         size_t size = current_inherits_group.size();
+                        
+                        // --------------------------------------------------------
+                        // 解析打印机预设继承关系（数组最后一个元素）
+                        // --------------------------------------------------------
                         if (current_inherits_group[size-1].empty()) {
+                            // 空值表示当前预设本身就是系统预设（没有继承）
                             current_printer_system_name = current_printer_name;
                             BOOST_LOG_TRIVIAL(info) << boost::format("inherits of printer is null, should be system preset");
                         }
                         else {
+                            // 非空表示继承自某个系统预设
                             current_printer_system_name = current_inherits_group[size-1];
                             BOOST_LOG_TRIVIAL(info) << boost::format("inherits of printer valid, current_printer_system_name is %1%") %current_printer_system_name;
                         }
 
+                        // --------------------------------------------------------
+                        // 解析工艺预设继承关系（数组第一个元素）
+                        // --------------------------------------------------------
                         if (current_inherits_group[0].empty()) {
+                            // 空值表示当前预设本身就是系统预设
                             current_process_system_name = current_process_name;
                             BOOST_LOG_TRIVIAL(info) << boost::format("inherits of process is null, should be system preset");
                         }
                         else {
+                            // 非空表示继承自某个系统预设
                             current_process_system_name = current_inherits_group[0];
                             BOOST_LOG_TRIVIAL(info) << boost::format("inherits of process valid, current_process_system_name is %1%") %current_process_system_name;
                         }
 
+                        // --------------------------------------------------------
+                        // 解析耗材预设继承关系（中间元素）
+                        // --------------------------------------------------------
+                        // 耗材数量 = 总大小 - 2（减去工艺和打印机）
                         current_filaments_system_name.resize(size - 2);
                         for (int index = 1; index < (size - 1); index++) {
                             if (current_inherits_group[index].empty()) {
+                                // 空值：使用当前耗材名称作为系统名称
                                 current_filaments_system_name[index-1] = current_filaments_name[index-1];
                             }
                             else {
+                                // 非空：使用继承的系统预设名称
                                 current_filaments_system_name[index-1] = current_inherits_group[index];
                             }
                         }
                     }
                     else {
+                        // --------------------------------------------------------
+                        // 无继承组信息：所有当前预设都视为系统预设
+                        // --------------------------------------------------------
                         current_printer_system_name = current_printer_name;
                         current_process_system_name = current_process_name;
                         current_filaments_system_name = current_filaments_name;
                         BOOST_LOG_TRIVIAL(info) << boost::format("no inherits_group: use system name the same as current name");
                     }
-                    filament_count = current_filaments_name.size();
+                    
+                    // ============================================================
+                    // 第二十六步：兼容性和差异信息提取
+                    // ============================================================
+                    filament_count = current_filaments_name.size();  // 记录耗材数量
+                    
+                    // 向上兼容的打印机列表（可以使用此配置的更新型号打印机）
                     upward_compatible_printers = config.option<ConfigOptionStrings>("upward_compatible_machine", true)->values;
+                    
+                    // 工艺配置兼容的打印机列表
                     current_print_compatible_printers  = config.option<ConfigOptionStrings>("print_compatible_printers", true)->values;
+                    
+                    // 相对于系统预设的差异设置列表（用户修改过的参数）
                     current_different_settings = config.option<ConfigOptionStrings>("different_settings_to_system", true)->values;
 
+                    // ============================================================
+                    // 第二十七步：打印床尺寸和物理参数提取
+                    // ============================================================
                     //use Pointfs insteadof Points
+                    // 使用 Pointfs 而非 Points（浮点坐标更精确）
+                    
+                    // 提取打印床可打印区域（通常是矩形的四个顶点）
                     old_printable_area = config.option<ConfigOptionPoints>("printable_area", true)->values;
+                    // 提取打印床排除区域（不能打印的区域，如夹具、传感器位置）
                     old_exclude_area = config.option<ConfigOptionPoints>("bed_exclude_area", true)->values;
+                    
+                    // 计算打印床的宽度和深度（从可打印区域的对角顶点计算）
                     if (old_printable_area.size() >= 4) {
+                        // 宽度 = 右上角 X - 左下角 X
                         old_printable_width = (int)(old_printable_area[2].x() - old_printable_area[0].x());
+                        // 深度 = 右上角 Y - 左下角 Y
                         old_printable_depth = (int)(old_printable_area[2].y() - old_printable_area[0].y());
                     }
+                    // 提取打印高度（Z 轴最大高度）
                     old_printable_height = (int)(config.opt_float("printable_height"));
 
+                    // --------------------------------------------------------
+                    // 挤出头物理间隙参数（用于碰撞检测）
+                    // --------------------------------------------------------
+                    // 挤出头到龙门架横杆的高度间隙（防止撞杆）
                     if (config.option<ConfigOptionFloat>("extruder_clearance_height_to_rod"))
                         old_height_to_rod = config.opt_float("extruder_clearance_height_to_rod");
+                    // 挤出头到顶盖的高度间隙（防止撞顶）
                     if (config.option<ConfigOptionFloat>("extruder_clearance_height_to_lid"))
                         old_height_to_lid = config.opt_float("extruder_clearance_height_to_lid");
+                    // 挤出头的最大半径（XY 平面碰撞检测）
                     if (config.option<ConfigOptionFloat>("extruder_clearance_radius"))
                         old_max_radius = config.opt_float("extruder_clearance_radius");
+                    // 各喷嘴的最大层高限制
                     if (config.option<ConfigOptionFloats>("max_layer_height"))
                         old_max_layer_height = config.option<ConfigOptionFloats>("max_layer_height")->values;
+                    // 各喷嘴的最小层高限制
                     if (config.option<ConfigOptionFloats>("min_layer_height"))
                         old_min_layer_height = config.option<ConfigOptionFloats>("min_layer_height")->values;
+                    
+                    // 输出提取的尺寸信息到日志
                     BOOST_LOG_TRIVIAL(info) << boost::format("old printable size from 3mf: {%1%, %2%, %3%}")%old_printable_width %old_printable_depth %old_printable_height;
                     BOOST_LOG_TRIVIAL(info) << boost::format("old extruder_clearance_height_to_rod %1%, extruder_clearance_height_to_lid %2%, extruder_clearance_radius %3%}")%old_height_to_rod %old_height_to_lid %old_max_radius;
                 }
+                // ============================================================
+                // 第二十八步：非 BBL 3MF 文件处理分支（STL、OBJ 等）
+                // ============================================================
                 else
                 {
+                    // 非 3MF 文件没有预定义布局，需要自动排列
                     need_arrange = true;
-                    int object_extruder_id = 0, clone_count = 1;
+                    
+                    // --------------------------------------------------------
+                    // 初始化对象参数
+                    // --------------------------------------------------------
+                    int object_extruder_id = 0,  // 对象使用的挤出头编号（0 表示使用默认）
+                        clone_count = 1;          // 克隆数量（1 表示不克隆）
+                    
+                    // ============================================================
+                    // 耗材 ID 分配逻辑
+                    // ============================================================
                     if (loaded_filament_ids.size() > input_index) {
                         if (loaded_filament_ids[input_index] > 0) {
+                            // 验证耗材 ID 是否在有效范围内
                             if (loaded_filament_ids[input_index] > load_filaments.size()) {
                                 BOOST_LOG_TRIVIAL(error) << boost::format("invalid filament_id %1% at index %2%, max %3%")%loaded_filament_ids[input_index] % (input_index + 1) %load_filaments.size();
                                 record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
                                 flush_and_exit(CLI_INVALID_PARAMS);
                             }
+                            // 分配耗材 ID 给当前对象
                             object_extruder_id = loaded_filament_ids[input_index];
+                            // 记录使用的耗材（用于后续验证和统计）
                             used_filament_set.emplace(object_extruder_id);
                         }
                     }
 
+                    // ============================================================
+                    // 克隆对象参数解析和验证
+                    // ============================================================
                     if (clone_objects.size() > input_index) {
                         if (clone_objects[input_index] > 0) {
+                            // 验证克隆数量是否超过最大限制
                             if (clone_objects[input_index] > MAX_CLONEABLE_SIZE) {
                                 BOOST_LOG_TRIVIAL(error) << boost::format("invalid clone count %1% at index %2%, max %3%")%clone_objects[input_index] % (input_index + 1) %MAX_CLONEABLE_SIZE;
                                 record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
                                 flush_and_exit(CLI_INVALID_PARAMS);
                             }
+                            // 设置克隆数量
                             clone_count = clone_objects[input_index];
                         }
                     }
 
+                    // ============================================================
+                    // 对象克隆执行
+                    // ============================================================
                     //clone objects process
+                    // 如果需要克隆（数量 > 1），创建多个副本
                     if (clone_count > 1)
                     {
-                        unsigned int object_count = model.objects.size();
+                        unsigned int object_count = model.objects.size();  // 记录原始对象数量
 
+                        // 遍历所有原始对象
                         for (unsigned int obj_index = 0; obj_index < object_count; obj_index++)
                         {
                             ModelObject* object = model.objects[obj_index];
 
+                            // 创建 (clone_count - 1) 个副本（原对象算第一个）
                             for (unsigned int clone_index = 1; clone_index < clone_count; clone_index++)
                             {
+                                // 复制对象（深拷贝）
                                 ModelObject* newObj = model.add_object(*object);
+                                // 为副本命名：原名称_序号
                                 newObj->name = object->name +"_"+ std::to_string(clone_index+1);
                             }
+                            // 为原对象也添加序号后缀，保持命名一致性
                             object->name = object->name +"_"+ std::to_string(1);
                         }
                     }
 
+                    // ============================================================
+                    // 对象配置和位置处理
+                    // ============================================================
                     for (ModelObject* o : model.objects)
                     {
+                        // 如果指定了耗材 ID，设置对象的挤出头配置
                         if (object_extruder_id != 0) {
                             o->config.set_key_value("extruder", new ConfigOptionInt(object_extruder_id));
                         }
 
                         //default not orient for all, if need to orient use the action
+                        // 默认不自动定向所有对象，如需定向请使用专门的 action
                         //orients_requirement.insert(std::pair<size_t, bool>(o->id().id, false));
+                        
                         BOOST_LOG_TRIVIAL(info) << "object "<<o->name <<", id :"  << o->id().id << ", from stl or other 3mf\n";
+                        
+                        // 确保对象放置在打印床上（调整 Z 轴位置，防止悬空或陷入床内）
                         o->ensure_on_bed();
                     }
                 }
-                first_file = false;
+                
+                // ============================================================
+                // 首文件标志复位
+                // ============================================================
+                first_file = false;  // 标记首文件已处理完成
 
+                // ============================================================
+                // 第二十九步：打印机技术类型一致性验证
+                // ============================================================
                 PrinterTechnology other_printer_technology = get_printer_technology(config);
+                
+                // 如果还未确定打印机技术类型，使用当前文件的类型
                 if (printer_technology == ptUnknown) {
                     printer_technology = other_printer_technology;
                 }
+                
+                // 检查技术类型冲突（不能混用 FDM 和 SLA）
                 if ((printer_technology != other_printer_technology) && (other_printer_technology != ptUnknown)) {
                     boost::nowide::cerr << "invalid printer_technology " <<printer_technology<<", from source file "<< file <<std::endl;
                     record_exit_reson(outfile_dir, CLI_INVALID_PRINTER_TECH, 0, cli_errors[CLI_INVALID_PRINTER_TECH], sliced_info);
                     flush_and_exit(CLI_INVALID_PRINTER_TECH);
                 }
+                
+                // ============================================================
+                // 配置替换记录输出（版本兼容性）
+                // ============================================================
+                // 如果有配置项被自动替换（旧版本兼容），输出详细信息
                 if (!config_substitutions.substitutions.empty()) {
                     BOOST_LOG_TRIVIAL(info) << "Found legacy configuration values, substituted when loading " << file << ":\n";
                     for (const ConfigSubstitution &subst : config_substitutions.substitutions)
                         BOOST_LOG_TRIVIAL(info) << "\tkey = \"" << subst.opt_def->opt_key << "\"\t old_value = \"" << subst.old_value << "\tnew_value = \"" << subst.new_value->serialize() << "\"\n";
                 }
 
+                // ============================================================
+                // 第三十步：配置合并
+                // ============================================================
                 // config is applied to m_print_config before the current m_config values.
+                // 将当前文件的配置与已有配置合并（当前文件配置优先级更高）
                 config += std::move(m_print_config);
                 m_print_config = std::move(config);
+                
+                // 文件索引递增，处理下一个文件
                 input_index++;
             }
+            // ============================================================
+            // 文件加载异常处理
+            // ============================================================
             catch (std::exception& e) {
+                // 捕获文件解析或加载过程中的任何异常
                 boost::nowide::cerr << file << ": " << e.what() << std::endl;
                 record_exit_reson(outfile_dir, CLI_DATA_FILE_ERROR, 0, cli_errors[CLI_DATA_FILE_ERROR], sliced_info);
                 flush_and_exit(CLI_DATA_FILE_ERROR);
             }
+            
+            // ============================================================
+            // 空模型检查
+            // ============================================================
+            // 文件加载成功但不包含任何对象，跳过此文件
             if (model.objects.empty()) {
                 boost::nowide::cerr << "Error: file is empty: " << file << std::endl;
-                continue;
+                continue;  // 继续处理下一个文件
             }
+            
+            // ============================================================
+            // 模型保存到列表
+            // ============================================================
+            // 将加载的模型移动到全局模型列表（使用 move 避免拷贝）
             m_models.push_back(std::move(model));
         }
     }
+    // ============================================================
+    // 第三十一步：装配列表模式处理分支
+    // ============================================================
     else {
         //parse the json and assemble object here
+        // 解析 JSON 装配列表并在此处组装对象
+        // 装配列表模式：通过 JSON 配置文件定义多个模型的组合关系
         Model model;
 
+        // --------------------------------------------------------
+        // 加载装配列表配置文件
+        // --------------------------------------------------------
+        // 从 JSON 文件中读取装配信息（包含模型路径、位置、旋转等）
         int ret = load_assemble_plate_list(load_assemble_list, assemble_plate_info_list);
         if (ret) {
+            // 装配列表加载失败，记录错误并退出
             record_exit_reson(outfile_dir, ret, 0, cli_errors[ret], sliced_info);
             flush_and_exit(ret);
         }
 
+        // --------------------------------------------------------
+        // 构建装配模型
+        // --------------------------------------------------------
         try {
+            // 根据装配列表信息，加载各个模型文件并组装到指定位置
+            // 生成打印板数据和最终的组合模型
             ret = construct_assemble_list(assemble_plate_info_list, model, plate_data_src);
             if (ret) {
+                // 装配构建失败，记录错误并退出
                 record_exit_reson(outfile_dir, ret, 0, cli_errors[ret], sliced_info);
                 flush_and_exit(ret);
             }
         }
         catch (std::exception& e) {
+            // 捕获装配过程中的异常（文件不存在、格式错误等）
             boost::nowide::cerr << "construct_assemble_list: " << e.what() << std::endl;
             record_exit_reson(outfile_dir, CLI_DATA_FILE_ERROR, 0, cli_errors[CLI_DATA_FILE_ERROR], sliced_info);
             flush_and_exit(CLI_DATA_FILE_ERROR);
         }
+        
+        // --------------------------------------------------------
+        // 添加默认实例
+        // --------------------------------------------------------
+        // 为所有没有实例的对象添加默认实例（位置、旋转等）
         model.add_default_instances();
+        
+        // 将装配好的模型保存到模型列表
         m_models.push_back(std::move(model));
     }
 
+    // ============================================================
+    // 第三十二步：打印板切片参数有效性验证
+    // ============================================================
+    // 只有 BBL 3MF 文件支持指定打印板切片（包含多打印板数据）
     if (!is_bbl_3mf && plate_to_slice > 0)
     {
+        // 非 BBL 3MF 文件不支持多打印板，重置参数为 0（切片所有）
         BOOST_LOG_TRIVIAL(warning) << boost::format("%1%: not support to slice plate %2%, reset to 0")%__LINE__ %plate_to_slice;
         plate_to_slice = 0;
     }
 
+    // ============================================================
+    // 第三十三步：自定义 GCode 文件加载
+    // ============================================================
     //load custom gcode file
-    std::map<int, CustomGCode::Info> custom_gcodes_map;
+    // 自定义 GCode 允许在切片过程中插入用户定义的 GCode 命令
+    // 例如：换色提示、暂停打印、自定义温度控制等
+    std::map<int, CustomGCode::Info> custom_gcodes_map;  // 打印板 ID -> 自定义 GCode 映射表
+    
     if (!custom_gcode_file.empty()) {
+        // --------------------------------------------------------
+        // JSON 文件加载和解析
+        // --------------------------------------------------------
         // parse the custom gcode json file
         std::string file = custom_gcode_file;
+        
+        // 验证文件是否存在
         if(!boost::filesystem::exists(file)) {
             boost::nowide::cerr << __FUNCTION__ << ": can not find custom_gcode file: " << file << std::endl;
             record_exit_reson(outfile_dir, CLI_FILE_NOTFOUND, 0, cli_errors[CLI_FILE_NOTFOUND], sliced_info);
             flush_and_exit(CLI_FILE_NOTFOUND);
         }
+        
         try {
-            nlohmann::json jj;
-            boost::nowide::ifstream ifs(file);
-            ifs >> jj;
+            // --------------------------------------------------------
+            // 读取和解析 JSON 文件
+            // --------------------------------------------------------
+            nlohmann::json jj;  // JSON 对象
+            boost::nowide::ifstream ifs(file);  // UTF-8 安全的文件流
+            ifs >> jj;  // 解析 JSON
             ifs.close();
 
+            // --------------------------------------------------------
+            // 确定目标打印板 ID
+            // --------------------------------------------------------
             int plate_id = 0;
             if (plate_to_slice == 0)
+                // plate_to_slice = 0 表示所有打印板，使用打印板 0
                 plate_id = 0;
             else
+                // 用户指定了具体打印板编号（从 1 开始），转换为索引（从 0 开始）
                 plate_id = plate_to_slice-1;
 
+            // --------------------------------------------------------
+            // 解析自定义 GCode 信息
+            // --------------------------------------------------------
             CustomGCode::Info info;
-            info.from_json(jj);
+            info.from_json(jj);  // 从 JSON 解析到 Info 对象
 
+            // 将自定义 GCode 存储到对应的打印板
             custom_gcodes_map.emplace(plate_id, info);
             BOOST_LOG_TRIVIAL(info) << boost::format("load custom_gcode from file %1% success, store custom gcodes to plate %2%")%file %(plate_id+1);
         }
         catch (std::exception &ex) {
+            // JSON 解析失败或格式错误
             boost::nowide::cerr << __FUNCTION__<< ":Loading custom-gcode file \"" << file << "\" failed: " << ex.what() << std::endl;
             record_exit_reson(outfile_dir, CLI_CONFIG_FILE_ERROR, 0, cli_errors[CLI_CONFIG_FILE_ERROR], sliced_info);
             flush_and_exit(CLI_CONFIG_FILE_ERROR);
@@ -5385,23 +5931,48 @@ int CLI::run(int argc, char **argv)
             glfwSetErrorCallback(glfw_callback);
             
 #ifdef __linux__
-            BOOST_LOG_TRIVIAL(info) << "=== Step 3: Configuring for OSMesa (headless rendering) ===";
-            // Disable Wayland and X11 to force OSMesa in headless environment
-            setenv("WAYLAND_DISPLAY", "", 1);
-            setenv("DISPLAY", "", 1);
-            BOOST_LOG_TRIVIAL(info) << "CLI mode: disabled WAYLAND_DISPLAY and DISPLAY to force OSMesa";
-            BOOST_LOG_TRIVIAL(info) << "Checking OSMesa library availability...";
-            // Try to dlopen OSMesa to verify it's accessible
-            void* osmesa_handle = dlopen("libOSMesa.so", RTLD_NOW | RTLD_GLOBAL);
-            if (!osmesa_handle) {
-                osmesa_handle = dlopen("libOSMesa.so.8", RTLD_NOW | RTLD_GLOBAL);
-            }
-            if (osmesa_handle) {
-                BOOST_LOG_TRIVIAL(info) << "OSMesa library loaded successfully via dlopen";
-                // Don't close it, GLFW will use it
+            BOOST_LOG_TRIVIAL(info) << "=== Step 3: Detecting Display Environment ===";
+            
+            // Check if we have a display (X11/Xvfb)
+            const char* display = getenv("DISPLAY");
+            const char* wayland_display = getenv("WAYLAND_DISPLAY");
+            
+            if (display && strlen(display) > 0) {
+                BOOST_LOG_TRIVIAL(info) << "Found DISPLAY=" << display << " (X11/Xvfb available)";
+                BOOST_LOG_TRIVIAL(info) << "Will use X11 for rendering (compatible with xvfb-run)";
+                // Keep DISPLAY, disable Wayland to ensure X11 path
+                setenv("WAYLAND_DISPLAY", "", 1);
+            } else if (wayland_display && strlen(wayland_display) > 0) {
+                BOOST_LOG_TRIVIAL(info) << "Found WAYLAND_DISPLAY=" << wayland_display;
+                BOOST_LOG_TRIVIAL(info) << "Disabling Wayland, will try OSMesa for headless rendering";
+                setenv("WAYLAND_DISPLAY", "", 1);
+                setenv("DISPLAY", "", 1);
+                
+                // Try to preload OSMesa library
+                void* osmesa_handle = dlopen("libOSMesa.so", RTLD_NOW | RTLD_GLOBAL);
+                if (!osmesa_handle) {
+                    osmesa_handle = dlopen("libOSMesa.so.8", RTLD_NOW | RTLD_GLOBAL);
+                }
+                if (osmesa_handle) {
+                    BOOST_LOG_TRIVIAL(info) << "OSMesa library loaded successfully";
+                } else {
+                    BOOST_LOG_TRIVIAL(warning) << "Could not pre-load OSMesa: " << dlerror();
+                }
             } else {
-                BOOST_LOG_TRIVIAL(warning) << "Could not pre-load OSMesa library: " << dlerror();
-                BOOST_LOG_TRIVIAL(warning) << "GLFW will attempt to load it directly...";
+                BOOST_LOG_TRIVIAL(info) << "No DISPLAY or WAYLAND_DISPLAY found (true headless)";
+                BOOST_LOG_TRIVIAL(info) << "Will use OSMesa for software rendering";
+                
+                // Try to preload OSMesa library
+                void* osmesa_handle = dlopen("libOSMesa.so", RTLD_NOW | RTLD_GLOBAL);
+                if (!osmesa_handle) {
+                    osmesa_handle = dlopen("libOSMesa.so.8", RTLD_NOW | RTLD_GLOBAL);
+                }
+                if (osmesa_handle) {
+                    BOOST_LOG_TRIVIAL(info) << "OSMesa library loaded successfully";
+                } else {
+                    BOOST_LOG_TRIVIAL(warning) << "Could not pre-load OSMesa: " << dlerror();
+                    BOOST_LOG_TRIVIAL(warning) << "Thumbnail generation may fail";
+                }
             }
 #endif
             
@@ -5442,8 +6013,16 @@ int CLI::run(int argc, char **argv)
 #endif
 
 #ifdef __linux__
-                glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_OSMESA_CONTEXT_API);
-                BOOST_LOG_TRIVIAL(info) << "  *** FORCING OSMesa context creation API ***";
+                // Only use OSMesa if we don't have a display (true headless)
+                const char* display_check = getenv("DISPLAY");
+                if (!display_check || strlen(display_check) == 0) {
+                    glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_OSMESA_CONTEXT_API);
+                    BOOST_LOG_TRIVIAL(info) << "  No DISPLAY - using OSMesa context creation API";
+                } else {
+                    // Use native (GLX) when DISPLAY is available (X11/Xvfb)
+                    glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_NATIVE_CONTEXT_API);
+                    BOOST_LOG_TRIVIAL(info) << "  DISPLAY=" << display_check << " - using Native GLX context API";
+                }
 #endif
 
                 BOOST_LOG_TRIVIAL(info) << "=== Step 6: Creating GLFW Window (640x480, offscreen) ===";

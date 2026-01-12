@@ -7,11 +7,14 @@ else()
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(_glfw_disable_x11 "-DGLFW_BUILD_X11=OFF")
+    # Enable both X11 and OSMesa support for maximum flexibility
+    # X11 is used when DISPLAY is available (xvfb-run, normal X session)
+    # OSMesa is used only in true headless environments
+    set(_glfw_build_x11 "-DGLFW_BUILD_X11=ON")
     set(_glfw_disable_wayland "-DGLFW_BUILD_WAYLAND=OFF")
     set(_glfw_use_osmesa "-DGLFW_USE_OSMESA=ON")
 else()
-    set(_glfw_disable_x11 "")
+    set(_glfw_build_x11 "")
     set(_glfw_disable_wayland "")
     set(_glfw_use_osmesa "")
 endif()
@@ -24,7 +27,7 @@ orcaslicer_add_cmake_project(GLFW
         -DGLFW_BUILD_DOCS=OFF
         -DGLFW_BUILD_EXAMPLES=OFF
         -DGLFW_BUILD_TESTS=OFF
-        ${_glfw_disable_x11}
+        ${_glfw_build_x11}
         ${_glfw_disable_wayland}
         ${_glfw_use_osmesa}
 )
