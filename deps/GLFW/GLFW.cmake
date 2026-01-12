@@ -6,10 +6,8 @@ else()
     set(_build_static ON)
 endif()
 
+# Linux 下启用 X11 和 OSMesa 双支持
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    # Enable both X11 and OSMesa support for maximum flexibility
-    # X11 is used when DISPLAY is available (xvfb-run, normal X session)
-    # OSMesa is used only in true headless environments
     set(_glfw_build_x11 "-DGLFW_BUILD_X11=ON")
     set(_glfw_disable_wayland "-DGLFW_BUILD_WAYLAND=OFF")
     set(_glfw_use_osmesa "-DGLFW_USE_OSMESA=ON")
