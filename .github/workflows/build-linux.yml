@@ -1,10 +1,12 @@
 name: Build Linux AppImage for x86_64
 
 on:
-  # 自动触发配置（已注释，需要时取消注释）
+  # 自动触发配置
   push:
     branches: 
+      - 2.3.5_fix
       - feature/2.3.5_fix
+      - main
     tags:
       - 'v*'
   pull_request:
