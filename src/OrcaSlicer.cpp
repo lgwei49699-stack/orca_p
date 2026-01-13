@@ -2217,27 +2217,36 @@ int CLI::run(int argc, char **argv)
 
     auto load_config_file = [config_substitution_rule](const std::string& file, DynamicPrintConfig& config, std::string& config_type,
                                 std::string& config_name, std::string& filament_id, std::string& config_from) {
+        // ---------- 1. 检查配置文件是否存在 ----------
         if (! boost::filesystem::exists(file)) {
             boost::nowide::cerr << __FUNCTION__<< ": can not find setting file: " << file << std::endl;
             return CLI_FILE_NOTFOUND;
         }
+        // 用于保存配置项替换记录（旧字段 -> 新字段）
+        // 例如："bed_size" -> "printable_area"
         ConfigSubstitutions config_substitutions;
         try {
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< ":load setting file "<< file << ", with rule "<< config_substitution_rule << std::endl;
+            // key_values：用于接收配置文件中的元信息（name/type/from 等）
             std::map<std::string, std::string> key_values;
             std::string reason;
-
+            // ---------- 2. 从 JSON 文件中加载配置 ----------
+            // 如果存在旧配置字段，会根据 substitution rule 进行替换
+            // 解析配置文件内容，并将配置项替换记录保存到 config_substitutions 中
             config_substitutions = config.load_from_json(file, config_substitution_rule, key_values, reason);
+            // JSON 加载失败（格式错误或字段不合法）
             if (!reason.empty()) {
                 BOOST_LOG_TRIVIAL(error) <<__FUNCTION__<<  ":Can not load config from file "<<file<<"\n";
                 return CLI_CONFIG_FILE_ERROR;
             }
-
+            // ---------- 3. 解析配置名称 ----------
             config_name = key_values[BBL_JSON_KEY_NAME];
+            // ---------- 4. 解析配置来源（system / user） ----------
             auto from_iter = key_values.find(BBL_JSON_KEY_FROM);
             if (from_iter != key_values.end()) {
                 config_from = from_iter->second;
             }
+            // 不支持的配置来源，直接报错
             if ((config_from != "system")&&(config_from != "User")&&(config_from != "user")) {
                 boost::nowide::cerr <<__FUNCTION__ << boost::format(":file %1%'s from %2% unsupported") % file % config_from;
                 return CLI_CONFIG_FILE_ERROR;
@@ -6385,7 +6394,6 @@ int CLI::run(int argc, char **argv)
                         }
                     }
                 }
-            }
             //BBS: release glfw
             glfwTerminate();
         }
