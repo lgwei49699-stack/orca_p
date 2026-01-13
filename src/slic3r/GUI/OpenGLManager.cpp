@@ -248,7 +248,14 @@ bool OpenGLManager::init_gl(bool popup_error)
 #endif
         GLenum result = glewInit();
         if (result != GLEW_OK) {
+            const char* error_string = (const char*)glewGetErrorString(result);
             BOOST_LOG_TRIVIAL(error) << "Unable to init glew library";
+            BOOST_LOG_TRIVIAL(error) << "GLEW error code: " << result;
+            BOOST_LOG_TRIVIAL(error) << "GLEW error string: " << (error_string ? error_string : "NULL");
+            
+            // Additional debugging
+            BOOST_LOG_TRIVIAL(error) << "Current GL error: " << glGetError();
+            BOOST_LOG_TRIVIAL(error) << "glewExperimental was set to: GL_TRUE";
             return false;
         }
 	//BOOST_LOG_TRIVIAL(info) << "glewInit Success."<< std::endl;
