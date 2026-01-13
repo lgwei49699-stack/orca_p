@@ -6055,9 +6055,10 @@ int CLI::run(int argc, char **argv)
                     goto skip_thumbnail;
                 }
                 BOOST_LOG_TRIVIAL(info) << "✓ OpenGL context is now current";
-                
-                //opengl manager related logic
-                BOOST_LOG_TRIVIAL(info) << "=== Step 8: Double-checking Current Context ===";
+            }
+
+            //opengl manager related logic
+            {
                 BOOST_LOG_TRIVIAL(info) << "=== Step 8: Double-checking Current Context ===";
                 GLFWwindow* current_window = glfwGetCurrentContext();
                 if (!current_window) {
@@ -6082,7 +6083,6 @@ int CLI::run(int argc, char **argv)
                     BOOST_LOG_TRIVIAL(error) << "  - OSMesa context doesn't support required OpenGL extensions";
                     BOOST_LOG_TRIVIAL(error) << "  - glewExperimental flag issue";
                     BOOST_LOG_TRIVIAL(error) << "";
-                    glfwDestroyWindow(window);
                     glfwTerminate();
                     goto skip_thumbnail;
                 }
@@ -6098,7 +6098,6 @@ int CLI::run(int argc, char **argv)
                 if (!gl_version) {
                     BOOST_LOG_TRIVIAL(error) << "CRITICAL: glGetString(GL_VERSION) returned NULL even after GLEW init!";
                     BOOST_LOG_TRIVIAL(error) << "  This indicates a fundamental OpenGL context problem";
-                    glfwDestroyWindow(window);
                     glfwTerminate();
                     goto skip_thumbnail;
                 }
@@ -6110,7 +6109,7 @@ int CLI::run(int argc, char **argv)
                 BOOST_LOG_TRIVIAL(info) << "";
                 BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL Setup Complete - Ready to Generate Thumbnails ✓✓✓";
                 BOOST_LOG_TRIVIAL(info) << "";
-                GLVolumeCollection glvolume_collection;
+                    GLVolumeCollection glvolume_collection;
                     Model &model = m_models[0];
                     int obj_extruder_id = 1, volume_extruder_id = 1;
                     for (unsigned int obj_idx = 0; obj_idx < (unsigned int)model.objects.size(); ++ obj_idx) {
@@ -6614,9 +6613,11 @@ int CLI::run(int argc, char **argv)
 
         for (int i = 0; i < plate_bboxes.size(); i++)
             delete plate_bboxes[i];
+        
+skip_thumbnail:
+        ; // Empty statement for label
     }
 
-skip_thumbnail:
     if (plate_data_src.size() > 0)
     {
         release_PlateData_list(plate_data_src);
