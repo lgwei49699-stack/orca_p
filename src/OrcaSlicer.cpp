@@ -85,8 +85,6 @@ using namespace nlohmann;
 #ifdef __linux__
 #include <dlfcn.h>  // For dlopen to check OSMesa availability
 #include <GL/glx.h> // For GLX diagnostics
-#define GLFW_EXPOSE_NATIVE_X11
-#include <GLFW/glfw3native.h> // For glfwGetX11Display
 #endif
 
 #ifdef __WXGTK__
@@ -6150,122 +6148,9 @@ int CLI::run(int argc, char **argv)
                 if (display_env && strlen(display_env) > 0) {
                     BOOST_LOG_TRIVIAL(info) << "Running in X11 mode with DISPLAY=" << display_env;
                     
-#if defined(GLFW_EXPOSE_NATIVE_X11) && defined(__linux__)
-                    // Only attempt X11-specific calls if GLFW was built with X11 support
-                    // Note: This may fail if GLFW was built with Wayland support only
-                    Display* x_display = nullptr;
-
-                    // Try to get X11 display, but handle the case where it might not be available
-                    try {
-                        x_display = glfwGetX11Display();
-                    } catch (...) {
-                        x_display = nullptr;
-                    }
-
-                    if (x_display) {
-                        BOOST_LOG_TRIVIAL(info) << "✓ Got X11 Display from GLFW";
-                        
-                        // Query GLX version
-                        int glx_major = 0, glx_minor = 0;
-                        Bool glx_ok = glXQueryVersion(x_display, &glx_major, &glx_minor);
-                        BOOST_LOG_TRIVIAL(info) << "GLX Query Results:";
-                        BOOST_LOG_TRIVIAL(info) << "  glXQueryVersion: " << (glx_ok ? "SUCCESS" : "FAILED");
-                        if (glx_ok) {
-                            BOOST_LOG_TRIVIAL(info) << "  GLX version: " << glx_major << "." << glx_minor;
-                        }
-                        
-                        if (!glx_ok) {
-                            BOOST_LOG_TRIVIAL(error) << "CRITICAL: GLX is not available on this X server!";
-                            BOOST_LOG_TRIVIAL(error) << "  Xvfb must be started with GLX extension enabled";
-                            BOOST_LOG_TRIVIAL(error) << "  Command: xvfb-run -a --server-args='-screen 0 1024x768x24 +extension GLX' your-command";
-                        }
-                        
-                        // Get GLX client info
-                        const char* glx_vendor = glXGetClientString(x_display, GLX_VENDOR);
-                        const char* glx_version = glXGetClientString(x_display, GLX_VERSION);
-                        const char* glx_extensions = glXGetClientString(x_display, GLX_EXTENSIONS);
-                        
-                        BOOST_LOG_TRIVIAL(info) << "GLX Client Info:";
-                        BOOST_LOG_TRIVIAL(info) << "  Vendor: " << (glx_vendor ? glx_vendor : "NULL");
-                        BOOST_LOG_TRIVIAL(info) << "  Version: " << (glx_version ? glx_version : "NULL");
-                        
-                        // Get GLX server info
-                        int screen = DefaultScreen(x_display);
-                        const char* glx_server_vendor = glXQueryServerString(x_display, screen, GLX_VENDOR);
-                        const char* glx_server_version = glXQueryServerString(x_display, screen, GLX_VERSION);
-                        const char* glx_server_extensions = glXQueryServerString(x_display, screen, GLX_EXTENSIONS);
-                        
-                        BOOST_LOG_TRIVIAL(info) << "GLX Server Info (screen " << screen << "):";
-                        BOOST_LOG_TRIVIAL(info) << "  Vendor: " << (glx_server_vendor ? glx_server_vendor : "NULL");
-                        BOOST_LOG_TRIVIAL(info) << "  Version: " << (glx_server_version ? glx_server_version : "NULL");
-                        
-                        if (!glx_server_vendor || !glx_server_version) {
-                            BOOST_LOG_TRIVIAL(error) << "";
-                            BOOST_LOG_TRIVIAL(error) << "CRITICAL: GLX server info is NULL!";
-                            BOOST_LOG_TRIVIAL(error) << "  This means Xvfb's GLX extension is not functioning properly";
-                            BOOST_LOG_TRIVIAL(error) << "";
-                            BOOST_LOG_TRIVIAL(error) << "Diagnostic steps:";
-                            BOOST_LOG_TRIVIAL(error) << "  1. Check if GLX extension is loaded:";
-                            BOOST_LOG_TRIVIAL(error) << "     xdpyinfo -display " << display_env << " | grep GLX";
-                            BOOST_LOG_TRIVIAL(error) << "";
-                            BOOST_LOG_TRIVIAL(error) << "  2. List all X extensions:";
-                            BOOST_LOG_TRIVIAL(error) << "     xdpyinfo -display " << display_env << " -queryExtensions";
-                            BOOST_LOG_TRIVIAL(error) << "";
-                            BOOST_LOG_TRIVIAL(error) << "  3. Test GLX directly:";
-                            BOOST_LOG_TRIVIAL(error) << "     DISPLAY=" << display_env << " glxinfo | head -20";
-                            BOOST_LOG_TRIVIAL(error) << "";
-                            BOOST_LOG_TRIVIAL(error) << "  4. Restart Xvfb with explicit GLX support:";
-                            BOOST_LOG_TRIVIAL(error) << "     Xvfb :99 -screen 0 1024x768x24 +extension GLX +render -noreset &";
-                            BOOST_LOG_TRIVIAL(error) << "";
-                        }
-                        
-                        // Log GLX extensions (truncated)
-                        if (glx_extensions && strlen(glx_extensions) > 0) {
-                            std::string ext_str(glx_extensions);
-                            if (ext_str.length() > 300) {
-                                ext_str = ext_str.substr(0, 300) + "... (truncated)";
-                            }
-                            BOOST_LOG_TRIVIAL(info) << "GLX Client Extensions: " << ext_str;
-                        } else {
-                            BOOST_LOG_TRIVIAL(warning) << "GLX Client Extensions: NONE";
-                        }
-                        
-                        if (glx_server_extensions && strlen(glx_server_extensions) > 0) {
-                            std::string ext_str(glx_server_extensions);
-                            if (ext_str.length() > 300) {
-                                ext_str = ext_str.substr(0, 300) + "... (truncated)";
-                            }
-                            BOOST_LOG_TRIVIAL(info) << "GLX Server Extensions: " << ext_str;
-                        } else {
-                            BOOST_LOG_TRIVIAL(warning) << "GLX Server Extensions: NONE";
-                        }
-                        
-                        // Check if we have a current GLX context
-                        GLXContext glx_ctx = glXGetCurrentContext();
-                        if (glx_ctx) {
-                            Bool is_direct = glXIsDirect(x_display, glx_ctx);
-                            BOOST_LOG_TRIVIAL(info) << "GLX Context Info:";
-                            BOOST_LOG_TRIVIAL(info) << "  Context pointer: " << glx_ctx;
-                            BOOST_LOG_TRIVIAL(info) << "  Direct rendering: " << (is_direct ? "YES (hardware)" : "NO (indirect/software)");
-                            
-                            if (!is_direct) {
-                                BOOST_LOG_TRIVIAL(info) << "  Note: Indirect rendering is normal and expected in Xvfb";
-                                BOOST_LOG_TRIVIAL(info) << "        This should still work if Mesa GLX drivers are installed";
-                            }
-                        } else {
-                            BOOST_LOG_TRIVIAL(warning) << "Could not get current GLX context from glXGetCurrentContext()";
-                            BOOST_LOG_TRIVIAL(warning) << "This might be normal if GLFW is managing the context internally";
-                        }
-                        
-                    } else {
-                        BOOST_LOG_TRIVIAL(warning) << "Cannot get X11 Display from GLFW (may be using Wayland backend)";
-                        BOOST_LOG_TRIVIAL(info) << "Skipping X11-specific GLX diagnostics";
-                    }
-#else
-                    // GLFW was not built with X11 support (possibly Wayland-only build)
-                    BOOST_LOG_TRIVIAL(info) << "GLFW X11 native support not available in this build";
-                    BOOST_LOG_TRIVIAL(info) << "Skipping X11-specific GLX diagnostics (GLFW may be using Wayland)";
-#endif
+                    // Note: GLX diagnostics have been disabled to avoid linking issues
+                    // with GLFW native platform APIs
+                    BOOST_LOG_TRIVIAL(info) << "Skipping X11-specific GLX diagnostics";
                     
                     // Check Mesa and GL environment variables
                     BOOST_LOG_TRIVIAL(info) << "Environment Variables Check:";
