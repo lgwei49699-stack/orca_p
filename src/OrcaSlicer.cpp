@@ -6043,39 +6043,23 @@ int CLI::run(int argc, char **argv)
                 
                 BOOST_LOG_TRIVIAL(info) << "=== Step 7: Making OpenGL Context Current ===";
                 glfwMakeContextCurrent(window);
-                BOOST_LOG_TRIVIAL(info) << "✓ OpenGL context is now current";
                 
-                BOOST_LOG_TRIVIAL(info) << "=== Step 8: Verifying OpenGL Context ===";
-                // Verify OpenGL context is actually valid before GLEW init
-                const char* gl_version = (const char*)glGetString(GL_VERSION);
-                const char* gl_vendor = (const char*)glGetString(GL_VENDOR);
-                const char* gl_renderer = (const char*)glGetString(GL_RENDERER);
-                
-                if (!gl_version) {
-                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: glGetString(GL_VERSION) returned NULL!";
-                    BOOST_LOG_TRIVIAL(error) << "  This means the OpenGL context is invalid or not properly initialized";
-                    BOOST_LOG_TRIVIAL(error) << "";
-                    BOOST_LOG_TRIVIAL(error) << "Possible causes:";
-                    BOOST_LOG_TRIVIAL(error) << "  1. OSMesa library not loaded correctly";
-                    BOOST_LOG_TRIVIAL(error) << "  2. GLFW failed to create OSMesa context silently";
-                    BOOST_LOG_TRIVIAL(error) << "  3. Incompatible OpenGL/OSMesa versions";
+                // Verify the context was actually made current
+                GLFWwindow* current = glfwGetCurrentContext();
+                if (current != window) {
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: glfwMakeContextCurrent failed!";
+                    BOOST_LOG_TRIVIAL(error) << "  Expected window: " << window;
+                    BOOST_LOG_TRIVIAL(error) << "  Current context: " << current;
                     glfwDestroyWindow(window);
                     glfwTerminate();
                     goto skip_thumbnail;
                 }
-                
-                BOOST_LOG_TRIVIAL(info) << "✓ OpenGL Context Information:";
-                BOOST_LOG_TRIVIAL(info) << "  Version:  " << gl_version;
-                if (gl_vendor) BOOST_LOG_TRIVIAL(info) << "  Vendor:   " << gl_vendor;
-                if (gl_renderer) BOOST_LOG_TRIVIAL(info) << "  Renderer: " << gl_renderer;
-                
-                // Ensure context is current before GLEW init
-                glfwMakeContextCurrent(window);
+                BOOST_LOG_TRIVIAL(info) << "✓ OpenGL context is now current";
             }
 
             //opengl manager related logic
             {
-                BOOST_LOG_TRIVIAL(info) << "=== Step 9: Double-checking Current Context ===";
+                BOOST_LOG_TRIVIAL(info) << "=== Step 8: Double-checking Current Context ===";
                 GLFWwindow* current_window = glfwGetCurrentContext();
                 if (!current_window) {
                     BOOST_LOG_TRIVIAL(error) << "CRITICAL: No current OpenGL context!";
@@ -6085,7 +6069,7 @@ int CLI::run(int argc, char **argv)
                 }
                 BOOST_LOG_TRIVIAL(info) << "✓ Current context is valid";
                 
-                BOOST_LOG_TRIVIAL(info) << "=== Step 10: Initializing GLEW ===";
+                BOOST_LOG_TRIVIAL(info) << "=== Step 9: Initializing GLEW (required before glGetString) ===";
                 Slic3r::GUI::OpenGLManager opengl_mgr;
                 bool opengl_valid = opengl_mgr.init_gl(false);
                 if (!opengl_valid) {
@@ -6102,10 +6086,29 @@ int CLI::run(int argc, char **argv)
                     glfwTerminate();
                     goto skip_thumbnail;
                 }
-                else {
-                    BOOST_LOG_TRIVIAL(info) << "✓✓✓ GLEW initialized successfully! ✓✓✓";
-                    BOOST_LOG_TRIVIAL(info) << "=== OpenGL/GLEW Setup Complete - Ready to Generate Thumbnails ===";
-                    BOOST_LOG_TRIVIAL(info) << "";
+                
+                BOOST_LOG_TRIVIAL(info) << "✓ GLEW initialized successfully!";
+                
+                BOOST_LOG_TRIVIAL(info) << "=== Step 10: Verifying OpenGL Context ===";
+                // Now we can safely call glGetString after GLEW init
+                const char* gl_version = (const char*)glGetString(GL_VERSION);
+                const char* gl_vendor = (const char*)glGetString(GL_VENDOR);
+                const char* gl_renderer = (const char*)glGetString(GL_RENDERER);
+                
+                if (!gl_version) {
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: glGetString(GL_VERSION) returned NULL even after GLEW init!";
+                    BOOST_LOG_TRIVIAL(error) << "  This indicates a fundamental OpenGL context problem";
+                    glfwTerminate();
+                    goto skip_thumbnail;
+                }
+                
+                BOOST_LOG_TRIVIAL(info) << "✓ OpenGL Context Information:";
+                BOOST_LOG_TRIVIAL(info) << "  Version:  " << gl_version;
+                if (gl_vendor) BOOST_LOG_TRIVIAL(info) << "  Vendor:   " << gl_vendor;
+                if (gl_renderer) BOOST_LOG_TRIVIAL(info) << "  Renderer: " << gl_renderer;
+                BOOST_LOG_TRIVIAL(info) << "";
+                BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL Setup Complete - Ready to Generate Thumbnails ✓✓✓";
+                BOOST_LOG_TRIVIAL(info) << "";
                     GLVolumeCollection glvolume_collection;
                     Model &model = m_models[0];
                     int obj_extruder_id = 1, volume_extruder_id = 1;

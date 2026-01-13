@@ -75,10 +75,30 @@ jobs:
         sudo apt-get install -y ccache
         sudo ./build_linux.sh -u
     
+    - name: Force clean GLFW cache
+      shell: bash -e {0}
+      run: |
+        echo "清理 GLFW 旧编译产物，强制重新编译..."
+        rm -rf deps/build/dep_GLFW-prefix || true
+        rm -f deps/build/destdir/usr/local/lib/libglfw* || true
+        rm -rf deps/build/destdir/usr/local/include/GLFW || true
+        echo "✓ GLFW 缓存已清理"
+    
     - name: Build dependencies
       shell: bash -e {0}
       run: |
+        echo "开始编译依赖（GLFW 将启用 X11 支持）..."
         ./build_linux.sh -d
+        
+        # 验证 GLFW 是否正确编译
+        echo ""
+        echo "=== 验证 GLFW 编译配置 ==="
+        if [ -f "deps/build/destdir/usr/local/lib/libglfw3.a" ]; then
+          echo "GLFW 库已生成: libglfw3.a"
+        else
+          echo "GLFW 库未找到"
+          exit 1
+        fi
     
     - name: Build OrcaSlicer
       shell: bash -e {0}
