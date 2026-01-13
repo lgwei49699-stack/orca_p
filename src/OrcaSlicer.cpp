@@ -6150,8 +6150,18 @@ int CLI::run(int argc, char **argv)
                 if (display_env && strlen(display_env) > 0) {
                     BOOST_LOG_TRIVIAL(info) << "Running in X11 mode with DISPLAY=" << display_env;
                     
-                    // Get the X11 display from GLFW
-                    Display* x_display = glfwGetX11Display();
+#if defined(GLFW_EXPOSE_NATIVE_X11) && defined(__linux__)
+                    // Only attempt X11-specific calls if GLFW was built with X11 support
+                    // Note: This may fail if GLFW was built with Wayland support only
+                    Display* x_display = nullptr;
+
+                    // Try to get X11 display, but handle the case where it might not be available
+                    try {
+                        x_display = glfwGetX11Display();
+                    } catch (...) {
+                        x_display = nullptr;
+                    }
+
                     if (x_display) {
                         BOOST_LOG_TRIVIAL(info) << "✓ Got X11 Display from GLFW";
                         
@@ -6248,12 +6258,14 @@ int CLI::run(int argc, char **argv)
                         }
                         
                     } else {
-                        BOOST_LOG_TRIVIAL(error) << "";
-                        BOOST_LOG_TRIVIAL(error) << "CRITICAL: Cannot get X11 Display from GLFW!";
-                        BOOST_LOG_TRIVIAL(error) << "  glfwGetX11Display() returned NULL";
-                        BOOST_LOG_TRIVIAL(error) << "  GLFW may not be using X11 backend properly";
-                        BOOST_LOG_TRIVIAL(error) << "";
+                        BOOST_LOG_TRIVIAL(warning) << "Cannot get X11 Display from GLFW (may be using Wayland backend)";
+                        BOOST_LOG_TRIVIAL(info) << "Skipping X11-specific GLX diagnostics";
                     }
+#else
+                    // GLFW was not built with X11 support (possibly Wayland-only build)
+                    BOOST_LOG_TRIVIAL(info) << "GLFW X11 native support not available in this build";
+                    BOOST_LOG_TRIVIAL(info) << "Skipping X11-specific GLX diagnostics (GLFW may be using Wayland)";
+#endif
                     
                     // Check Mesa and GL environment variables
                     BOOST_LOG_TRIVIAL(info) << "Environment Variables Check:";
