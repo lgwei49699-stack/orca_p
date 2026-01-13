@@ -5744,12 +5744,18 @@ int CLI::run(int argc, char **argv)
     BOOST_LOG_TRIVIAL(info) << "sliced_plate: " << sliced_plate;
     BOOST_LOG_TRIVIAL(info) << "Condition result: " << ((export_to_3mf || (has_thumbnails_config && sliced_plate != -1)) ? "ENTER" : "SKIP");
     
+    // Define these variables outside the block so they're accessible in both branches
+    std::vector<ThumbnailData *> thumbnails, no_light_thumbnails, top_thumbnails, pick_thumbnails;
+    std::vector<PlateBBoxData*> plate_bboxes;
+    PlateDataPtrs plate_data_list;
+    bool need_regenerate_thumbnail = false;
+    bool need_regenerate_no_light_thumbnail = false;
+    bool need_regenerate_top_thumbnail = false;
+    bool need_create_thumbnail_group = false, need_create_no_light_group = false, need_create_top_group = false;
+    
     if (export_to_3mf || (has_thumbnails_config && sliced_plate != -1)) {
         BOOST_LOG_TRIVIAL(info) << ">>> Entered 3MF export block, generating thumbnails...";
-        //BBS: export as bbl 3mf (or generate thumbnails for GCode)
-        std::vector<ThumbnailData *> thumbnails, no_light_thumbnails, top_thumbnails, pick_thumbnails;
-        std::vector<PlateBBoxData*> plate_bboxes;
-        PlateDataPtrs plate_data_list;
+        // Store plate data structure (needed by both thumbnail generation and 3MF export)
         partplate_list.store_to_3mf_structure(plate_data_list);
         BOOST_LOG_TRIVIAL(info) << "Plate data list size: " << plate_data_list.size();
 
@@ -5786,10 +5792,9 @@ int CLI::run(int argc, char **argv)
         }
 #endif
 
-        bool need_regenerate_thumbnail = oriented_or_arranged || regenerate_thumbnails;
-        bool need_regenerate_no_light_thumbnail = oriented_or_arranged || regenerate_thumbnails;
-        bool need_regenerate_top_thumbnail = oriented_or_arranged || regenerate_thumbnails;
-        bool need_create_thumbnail_group = false, need_create_no_light_group = false, need_create_top_group = false;
+        need_regenerate_thumbnail = oriented_or_arranged || regenerate_thumbnails;
+        need_regenerate_no_light_thumbnail = oriented_or_arranged || regenerate_thumbnails;
+        need_regenerate_top_thumbnail = oriented_or_arranged || regenerate_thumbnails;
         
         BOOST_LOG_TRIVIAL(info) << "=== Thumbnail Regeneration Flags ===";
         BOOST_LOG_TRIVIAL(info) << "oriented_or_arranged: " << (oriented_or_arranged ? "true" : "false");
