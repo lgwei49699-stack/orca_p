@@ -246,6 +246,88 @@ bool OpenGLManager::init_gl(bool popup_error)
         // Must be set before glewInit()
         glewExperimental = GL_TRUE;
 #endif
+                
+        // Pre-GLEW context validation for debugging
+        BOOST_LOG_TRIVIAL(info) << "About to call glewInit()...";
+        
+        // Check if we can get GL version string before GLEW
+        const GLubyte* pre_version = glGetString(GL_VERSION);
+        const GLubyte* pre_vendor = glGetString(GL_VENDOR);
+        const GLubyte* pre_renderer = glGetString(GL_RENDERER);
+        
+        BOOST_LOG_TRIVIAL(info) << "Pre-glewInit GL info:";
+        BOOST_LOG_TRIVIAL(info) << "  Version:  " << (pre_version ? (const char*)pre_version : "NULL");
+        BOOST_LOG_TRIVIAL(info) << "  Vendor:   " << (pre_vendor ? (const char*)pre_vendor : "NULL");
+        BOOST_LOG_TRIVIAL(info) << "  Renderer: " << (pre_renderer ? (const char*)pre_renderer : "NULL");
+        
+        if (!pre_version) {
+            BOOST_LOG_TRIVIAL(error) << "";
+            BOOST_LOG_TRIVIAL(error) << "========================================";
+            BOOST_LOG_TRIVIAL(error) << "CRITICAL: glGetString(GL_VERSION) returned NULL!";
+            BOOST_LOG_TRIVIAL(error) << "========================================";
+            BOOST_LOG_TRIVIAL(error) << "This means the OpenGL context has no valid GL implementation";
+            BOOST_LOG_TRIVIAL(error) << "glewInit() will fail with error code 1: 'Missing GL version'";
+            BOOST_LOG_TRIVIAL(error) << "";
+            
+#ifdef __linux__
+            // Check environment for additional context (Linux-specific diagnosis)
+            const char* display_env = getenv("DISPLAY");
+            const char* libgl_software = getenv("LIBGL_ALWAYS_SOFTWARE");
+            const char* libgl_debug = getenv("LIBGL_DEBUG");
+            
+            BOOST_LOG_TRIVIAL(error) << "Environment Variables:";
+            BOOST_LOG_TRIVIAL(error) << "  DISPLAY: " << (display_env ? display_env : "not set");
+            BOOST_LOG_TRIVIAL(error) << "  LIBGL_ALWAYS_SOFTWARE: " << (libgl_software ? libgl_software : "not set");
+            BOOST_LOG_TRIVIAL(error) << "  LIBGL_DEBUG: " << (libgl_debug ? libgl_debug : "not set");
+            
+            if (display_env && strstr(display_env, ":")) {
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "=== DIAGNOSIS: Xvfb/X11 Environment Detected ===";
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "Problem: Xvfb is running but GLX is not providing OpenGL";
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "ROOT CAUSE: Missing Mesa GLX libraries";
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "REQUIRED PACKAGES:";
+                BOOST_LOG_TRIVIAL(error) << "  1. libgl1-mesa-dri    - Provides llvmpipe (software OpenGL rasterizer)";
+                BOOST_LOG_TRIVIAL(error) << "  2. libgl1-mesa-glx    - Provides GLX protocol implementation";
+                BOOST_LOG_TRIVIAL(error) << "  3. mesa-utils         - Provides glxinfo/glxgears for testing";
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "STEP 1: Install Mesa packages";
+                BOOST_LOG_TRIVIAL(error) << "  Ubuntu/Debian:";
+                BOOST_LOG_TRIVIAL(error) << "    apt-get update";
+                BOOST_LOG_TRIVIAL(error) << "    apt-get install -y libgl1-mesa-dri libgl1-mesa-glx mesa-utils";
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "  Alpine Linux:";
+                BOOST_LOG_TRIVIAL(error) << "    apk add mesa-dri-gallium mesa-gl mesa-utils";
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "STEP 2: Verify GLX is working";
+                BOOST_LOG_TRIVIAL(error) << "  Test command:";
+                BOOST_LOG_TRIVIAL(error) << "    DISPLAY=" << display_env << " glxinfo | head -20";
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "  Expected output should show:";
+                BOOST_LOG_TRIVIAL(error) << "    - OpenGL vendor: VMware, Inc. (or Mesa)";
+                BOOST_LOG_TRIVIAL(error) << "    - OpenGL renderer: llvmpipe (or softpipe)";
+                BOOST_LOG_TRIVIAL(error) << "    - OpenGL version: 3.x or higher";
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "STEP 3: Check if GLX extension is enabled in Xvfb";
+                BOOST_LOG_TRIVIAL(error) << "  Check command:";
+                BOOST_LOG_TRIVIAL(error) << "    xdpyinfo -display " << display_env << " | grep GLX";
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "  If GLX is missing, restart Xvfb with:";
+                BOOST_LOG_TRIVIAL(error) << "    xvfb-run -a --server-args='-screen 0 1024x768x24 +extension GLX' your-command";
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "STEP 4 (Debug): Enable verbose GL logging";
+                BOOST_LOG_TRIVIAL(error) << "  export LIBGL_DEBUG=verbose";
+                BOOST_LOG_TRIVIAL(error) << "  Then re-run your command to see detailed driver messages";
+                BOOST_LOG_TRIVIAL(error) << "";
+                BOOST_LOG_TRIVIAL(error) << "========================================";
+                BOOST_LOG_TRIVIAL(error) << "";
+            }
+#endif
+        } else {
+            BOOST_LOG_TRIVIAL(info) << "✓ GL context is functional, proceeding with glewInit()";
+        }
         GLenum result = glewInit();
         if (result != GLEW_OK) {
             const char* error_string = (const char*)glewGetErrorString(result);

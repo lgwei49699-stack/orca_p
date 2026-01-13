@@ -84,6 +84,9 @@ using namespace nlohmann;
 #include <GLFW/glfw3.h>
 #ifdef __linux__
 #include <dlfcn.h>  // For dlopen to check OSMesa availability
+#include <GL/glx.h> // For GLX diagnostics
+#define GLFW_EXPOSE_NATIVE_X11
+#include <GLFW/glfw3native.h> // For glfwGetX11Display
 #endif
 
 #ifdef __WXGTK__
@@ -6082,6 +6085,196 @@ int CLI::run(int argc, char **argv)
                     goto skip_thumbnail;
                 }
                 BOOST_LOG_TRIVIAL(info) << "✓ Current context is valid";
+                
+                // Pre-GLEW diagnostics - try to get basic GL info
+                BOOST_LOG_TRIVIAL(info) << "=== Step 8.5: Pre-GLEW Context Verification ===";
+                
+#ifdef __linux__
+                // Try to call basic OpenGL functions before GLEW
+                // Note: These may fail if context is invalid
+                // GL_MAJOR_VERSION and GL_MINOR_VERSION are not available on macOS OpenGL
+                GLint major = 0, minor = 0;
+                glGetIntegerv(GL_MAJOR_VERSION, &major);
+                glGetIntegerv(GL_MINOR_VERSION, &minor);
+                GLenum pre_glew_error = glGetError();
+                
+                BOOST_LOG_TRIVIAL(info) << "Pre-GLEW GL version query:";
+                BOOST_LOG_TRIVIAL(info) << "  Major: " << major << ", Minor: " << minor;
+                BOOST_LOG_TRIVIAL(info) << "  GL Error after version query: " << pre_glew_error;
+                
+                if (pre_glew_error != 0) {
+                    BOOST_LOG_TRIVIAL(warning) << "  glGetIntegerv failed - context may not support modern GL";
+                    BOOST_LOG_TRIVIAL(info) << "  This is expected in older GL contexts, GLEW will handle it";
+                }
+#endif
+                
+                // Try to get vendor/renderer using legacy GL 1.x method (should work even without GLEW)
+                // We'll use function pointers directly which should be available
+                const GLubyte* vendor_raw = glGetString(GL_VENDOR);
+                const GLubyte* renderer_raw = glGetString(GL_RENDERER);
+                const GLubyte* version_raw = glGetString(GL_VERSION);
+                GLenum get_string_error = glGetError();
+                
+                BOOST_LOG_TRIVIAL(info) << "Pre-GLEW glGetString results:";
+                BOOST_LOG_TRIVIAL(info) << "  GL_VENDOR:   " << (vendor_raw ? (const char*)vendor_raw : "NULL");
+                BOOST_LOG_TRIVIAL(info) << "  GL_RENDERER: " << (renderer_raw ? (const char*)renderer_raw : "NULL");
+                BOOST_LOG_TRIVIAL(info) << "  GL_VERSION:  " << (version_raw ? (const char*)version_raw : "NULL");
+                BOOST_LOG_TRIVIAL(info) << "  GL Error after glGetString: " << get_string_error;
+                
+                if (!version_raw) {
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: glGetString(GL_VERSION) returned NULL before GLEW!";
+                    BOOST_LOG_TRIVIAL(error) << "This indicates the OpenGL context is not functional";
+#ifdef __linux__
+                    BOOST_LOG_TRIVIAL(error) << "";
+                    BOOST_LOG_TRIVIAL(error) << "Possible causes in Xvfb environment:";
+                    BOOST_LOG_TRIVIAL(error) << "  1. Missing Mesa GLX libraries (libgl1-mesa-dri, libgl1-mesa-glx)";
+                    BOOST_LOG_TRIVIAL(error) << "  2. Mesa drivers not properly installed";
+                    BOOST_LOG_TRIVIAL(error) << "  3. Xvfb started without GLX extension";
+                    BOOST_LOG_TRIVIAL(error) << "  4. Missing software rasterizer (llvmpipe/swrast)";
+                    BOOST_LOG_TRIVIAL(error) << "";
+                    BOOST_LOG_TRIVIAL(error) << "Suggested fixes:";
+                    BOOST_LOG_TRIVIAL(error) << "  - Install Mesa: apt-get install libgl1-mesa-dri libgl1-mesa-glx";
+                    BOOST_LOG_TRIVIAL(error) << "  - Ensure Xvfb has GLX: xvfb-run --server-args='-screen 0 1024x768x24 +extension GLX'";
+                    BOOST_LOG_TRIVIAL(error) << "  - Or use OSMesa: unset DISPLAY before running";
+                    BOOST_LOG_TRIVIAL(error) << "";
+#endif
+                } else {
+                    BOOST_LOG_TRIVIAL(info) << "✓ GL context appears functional, proceeding with GLEW init";
+                }
+                
+#ifdef __linux__
+                // Additional GLX-specific diagnostics for Xvfb troubleshooting
+                BOOST_LOG_TRIVIAL(info) << "=== Step 8.6: GLX Extension Diagnostics ===";
+                
+                const char* display_env = getenv("DISPLAY");
+                if (display_env && strlen(display_env) > 0) {
+                    BOOST_LOG_TRIVIAL(info) << "Running in X11 mode with DISPLAY=" << display_env;
+                    
+                    // Get the X11 display from GLFW
+                    Display* x_display = glfwGetX11Display();
+                    if (x_display) {
+                        BOOST_LOG_TRIVIAL(info) << "✓ Got X11 Display from GLFW";
+                        
+                        // Query GLX version
+                        int glx_major = 0, glx_minor = 0;
+                        Bool glx_ok = glXQueryVersion(x_display, &glx_major, &glx_minor);
+                        BOOST_LOG_TRIVIAL(info) << "GLX Query Results:";
+                        BOOST_LOG_TRIVIAL(info) << "  glXQueryVersion: " << (glx_ok ? "SUCCESS" : "FAILED");
+                        if (glx_ok) {
+                            BOOST_LOG_TRIVIAL(info) << "  GLX version: " << glx_major << "." << glx_minor;
+                        }
+                        
+                        if (!glx_ok) {
+                            BOOST_LOG_TRIVIAL(error) << "CRITICAL: GLX is not available on this X server!";
+                            BOOST_LOG_TRIVIAL(error) << "  Xvfb must be started with GLX extension enabled";
+                            BOOST_LOG_TRIVIAL(error) << "  Command: xvfb-run -a --server-args='-screen 0 1024x768x24 +extension GLX' your-command";
+                        }
+                        
+                        // Get GLX client info
+                        const char* glx_vendor = glXGetClientString(x_display, GLX_VENDOR);
+                        const char* glx_version = glXGetClientString(x_display, GLX_VERSION);
+                        const char* glx_extensions = glXGetClientString(x_display, GLX_EXTENSIONS);
+                        
+                        BOOST_LOG_TRIVIAL(info) << "GLX Client Info:";
+                        BOOST_LOG_TRIVIAL(info) << "  Vendor: " << (glx_vendor ? glx_vendor : "NULL");
+                        BOOST_LOG_TRIVIAL(info) << "  Version: " << (glx_version ? glx_version : "NULL");
+                        
+                        // Get GLX server info
+                        int screen = DefaultScreen(x_display);
+                        const char* glx_server_vendor = glXQueryServerString(x_display, screen, GLX_VENDOR);
+                        const char* glx_server_version = glXQueryServerString(x_display, screen, GLX_VERSION);
+                        const char* glx_server_extensions = glXQueryServerString(x_display, screen, GLX_EXTENSIONS);
+                        
+                        BOOST_LOG_TRIVIAL(info) << "GLX Server Info (screen " << screen << "):";
+                        BOOST_LOG_TRIVIAL(info) << "  Vendor: " << (glx_server_vendor ? glx_server_vendor : "NULL");
+                        BOOST_LOG_TRIVIAL(info) << "  Version: " << (glx_server_version ? glx_server_version : "NULL");
+                        
+                        if (!glx_server_vendor || !glx_server_version) {
+                            BOOST_LOG_TRIVIAL(error) << "";
+                            BOOST_LOG_TRIVIAL(error) << "CRITICAL: GLX server info is NULL!";
+                            BOOST_LOG_TRIVIAL(error) << "  This means Xvfb's GLX extension is not functioning properly";
+                            BOOST_LOG_TRIVIAL(error) << "";
+                            BOOST_LOG_TRIVIAL(error) << "Diagnostic steps:";
+                            BOOST_LOG_TRIVIAL(error) << "  1. Check if GLX extension is loaded:";
+                            BOOST_LOG_TRIVIAL(error) << "     xdpyinfo -display " << display_env << " | grep GLX";
+                            BOOST_LOG_TRIVIAL(error) << "";
+                            BOOST_LOG_TRIVIAL(error) << "  2. List all X extensions:";
+                            BOOST_LOG_TRIVIAL(error) << "     xdpyinfo -display " << display_env << " -queryExtensions";
+                            BOOST_LOG_TRIVIAL(error) << "";
+                            BOOST_LOG_TRIVIAL(error) << "  3. Test GLX directly:";
+                            BOOST_LOG_TRIVIAL(error) << "     DISPLAY=" << display_env << " glxinfo | head -20";
+                            BOOST_LOG_TRIVIAL(error) << "";
+                            BOOST_LOG_TRIVIAL(error) << "  4. Restart Xvfb with explicit GLX support:";
+                            BOOST_LOG_TRIVIAL(error) << "     Xvfb :99 -screen 0 1024x768x24 +extension GLX +render -noreset &";
+                            BOOST_LOG_TRIVIAL(error) << "";
+                        }
+                        
+                        // Log GLX extensions (truncated)
+                        if (glx_extensions && strlen(glx_extensions) > 0) {
+                            std::string ext_str(glx_extensions);
+                            if (ext_str.length() > 300) {
+                                ext_str = ext_str.substr(0, 300) + "... (truncated)";
+                            }
+                            BOOST_LOG_TRIVIAL(info) << "GLX Client Extensions: " << ext_str;
+                        } else {
+                            BOOST_LOG_TRIVIAL(warning) << "GLX Client Extensions: NONE";
+                        }
+                        
+                        if (glx_server_extensions && strlen(glx_server_extensions) > 0) {
+                            std::string ext_str(glx_server_extensions);
+                            if (ext_str.length() > 300) {
+                                ext_str = ext_str.substr(0, 300) + "... (truncated)";
+                            }
+                            BOOST_LOG_TRIVIAL(info) << "GLX Server Extensions: " << ext_str;
+                        } else {
+                            BOOST_LOG_TRIVIAL(warning) << "GLX Server Extensions: NONE";
+                        }
+                        
+                        // Check if we have a current GLX context
+                        GLXContext glx_ctx = glXGetCurrentContext();
+                        if (glx_ctx) {
+                            Bool is_direct = glXIsDirect(x_display, glx_ctx);
+                            BOOST_LOG_TRIVIAL(info) << "GLX Context Info:";
+                            BOOST_LOG_TRIVIAL(info) << "  Context pointer: " << glx_ctx;
+                            BOOST_LOG_TRIVIAL(info) << "  Direct rendering: " << (is_direct ? "YES (hardware)" : "NO (indirect/software)");
+                            
+                            if (!is_direct) {
+                                BOOST_LOG_TRIVIAL(info) << "  Note: Indirect rendering is normal and expected in Xvfb";
+                                BOOST_LOG_TRIVIAL(info) << "        This should still work if Mesa GLX drivers are installed";
+                            }
+                        } else {
+                            BOOST_LOG_TRIVIAL(warning) << "Could not get current GLX context from glXGetCurrentContext()";
+                            BOOST_LOG_TRIVIAL(warning) << "This might be normal if GLFW is managing the context internally";
+                        }
+                        
+                    } else {
+                        BOOST_LOG_TRIVIAL(error) << "";
+                        BOOST_LOG_TRIVIAL(error) << "CRITICAL: Cannot get X11 Display from GLFW!";
+                        BOOST_LOG_TRIVIAL(error) << "  glfwGetX11Display() returned NULL";
+                        BOOST_LOG_TRIVIAL(error) << "  GLFW may not be using X11 backend properly";
+                        BOOST_LOG_TRIVIAL(error) << "";
+                    }
+                    
+                    // Check Mesa and GL environment variables
+                    BOOST_LOG_TRIVIAL(info) << "Environment Variables Check:";
+                    const char* libgl_debug = getenv("LIBGL_DEBUG");
+                    const char* libgl_always_software = getenv("LIBGL_ALWAYS_SOFTWARE");
+                    const char* mesa_gl_version = getenv("MESA_GL_VERSION_OVERRIDE");
+                    const char* mesa_glsl_version = getenv("MESA_GLSL_VERSION_OVERRIDE");
+                    const char* libgl_always_indirect = getenv("LIBGL_ALWAYS_INDIRECT");
+                    
+                    BOOST_LOG_TRIVIAL(info) << "  LIBGL_DEBUG: " << (libgl_debug ? libgl_debug : "not set");
+                    BOOST_LOG_TRIVIAL(info) << "  LIBGL_ALWAYS_SOFTWARE: " << (libgl_always_software ? libgl_always_software : "not set");
+                    BOOST_LOG_TRIVIAL(info) << "  LIBGL_ALWAYS_INDIRECT: " << (libgl_always_indirect ? libgl_always_indirect : "not set");
+                    BOOST_LOG_TRIVIAL(info) << "  MESA_GL_VERSION_OVERRIDE: " << (mesa_gl_version ? mesa_gl_version : "not set");
+                    BOOST_LOG_TRIVIAL(info) << "  MESA_GLSL_VERSION_OVERRIDE: " << (mesa_glsl_version ? mesa_glsl_version : "not set");
+                    
+                    if (!libgl_debug) {
+                        BOOST_LOG_TRIVIAL(info) << "";
+                        BOOST_LOG_TRIVIAL(info) << "Tip: Set LIBGL_DEBUG=verbose for more GL driver diagnostics";
+                    }
+                }
+#endif
                 
                 BOOST_LOG_TRIVIAL(info) << "=== Step 9: Initializing GLEW (required before glGetString) ===";
                 Slic3r::GUI::OpenGLManager opengl_mgr;
