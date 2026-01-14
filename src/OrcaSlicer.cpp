@@ -5941,9 +5941,16 @@ int CLI::run(int argc, char **argv)
             }
 
             BOOST_LOG_TRIVIAL(info) << "=== Step 1: GLFW Version Info ===";
-            int gl_major, gl_minor, gl_verbos;
-            glfwGetVersion(&gl_major, &gl_minor, &gl_verbos);
-            BOOST_LOG_TRIVIAL(info) << boost::format("GLFW compile-time version: %1%.%2%.%3%")%gl_major %gl_minor %gl_verbos;
+            int glfw_major, glfw_minor, glfw_revision;
+            glfwGetVersion(&glfw_major, &glfw_minor, &glfw_revision);
+            BOOST_LOG_TRIVIAL(info) << boost::format("GLFW compile-time version: %1%.%2%.%3%")%glfw_major %glfw_minor %glfw_revision;
+            
+            // Set desired OpenGL version for thumbnail rendering
+            // Use OpenGL 2.1 for better compatibility with Mesa llvmpipe software renderer
+            // Mesa's llvmpipe has more complete OpenGL 2.1 support than 3.3 in headless environments
+            int gl_major = 2;
+            int gl_minor = 1;
+            BOOST_LOG_TRIVIAL(info) << "Target OpenGL version for thumbnail: " << gl_major << "." << gl_minor << " (for Mesa llvmpipe compatibility)";
 
             BOOST_LOG_TRIVIAL(info) << "=== Step 2: Setting GLFW Error Callback ===";
             glfwSetErrorCallback(glfw_callback);
@@ -5992,12 +5999,20 @@ int CLI::run(int argc, char **argv)
                 BOOST_LOG_TRIVIAL(info) << "  Color bits: R8G8B8A8, Window visible: false";
                 
 #ifdef __WXMAC__
-                glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-                glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-                BOOST_LOG_TRIVIAL(info) << "  macOS: Core profile with forward compatibility";
+                // macOS requires Core Profile for OpenGL 3.2+
+                // But for OpenGL 2.1, we use ANY_PROFILE
+                if (gl_major >= 3 && gl_minor >= 2) {
+                    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+                    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+                    BOOST_LOG_TRIVIAL(info) << "  macOS: Core profile with forward compatibility";
+                } else {
+                    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_ANY_PROFILE);
+                    BOOST_LOG_TRIVIAL(info) << "  macOS: ANY_PROFILE (for OpenGL 2.1)";
+                }
 #else
-                glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
-                BOOST_LOG_TRIVIAL(info) << "  Linux: Compatibility profile";
+                // Linux: OpenGL 2.1 doesn't need profile specification
+                glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_ANY_PROFILE);
+                BOOST_LOG_TRIVIAL(info) << "  Linux: ANY_PROFILE (OpenGL 2.1 compatible)";
 #endif
 
 #ifdef __linux__
@@ -6057,98 +6072,42 @@ int CLI::run(int argc, char **argv)
                 }
                 
                 BOOST_LOG_TRIVIAL(info) << "=== Step 9: Initializing GLEW (with glewExperimental=GL_TRUE) ===";
+                BOOST_LOG_TRIVIAL(info) << "Note: Using OpenGL 2.1 for better Mesa llvmpipe compatibility";
                 Slic3r::GUI::OpenGLManager opengl_mgr;
                 bool opengl_valid = opengl_mgr.init_gl(false);
                 
                 if (!opengl_valid) {
                     BOOST_LOG_TRIVIAL(error) << "";
                     BOOST_LOG_TRIVIAL(error) << "========================================";
-                    BOOST_LOG_TRIVIAL(error) << "GLEW initialization FAILED with OpenGL 3.3!";
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: GLEW initialization FAILED with OpenGL 2.1!";
                     BOOST_LOG_TRIVIAL(error) << "========================================";
-                    BOOST_LOG_TRIVIAL(warning) << "Mesa llvmpipe may not fully support OpenGL 3.3";
-                    BOOST_LOG_TRIVIAL(info) << "";
-                    BOOST_LOG_TRIVIAL(info) << ">>> Attempting fallback: OpenGL 2.1 ...";
-                    
-                    // Destroy current window
+                    BOOST_LOG_TRIVIAL(error) << "";
+                    BOOST_LOG_TRIVIAL(error) << "This indicates a fundamental OpenGL setup problem.";
+                    BOOST_LOG_TRIVIAL(error) << "Possible causes:";
+                    BOOST_LOG_TRIVIAL(error) << "  1. Mesa llvmpipe is not properly installed";
+                    BOOST_LOG_TRIVIAL(error) << "  2. Missing required OpenGL libraries in AppImage";
+                    BOOST_LOG_TRIVIAL(error) << "  3. GLEW cannot load function pointers via glXGetProcAddressARB";
+                    BOOST_LOG_TRIVIAL(error) << "";
+                    BOOST_LOG_TRIVIAL(error) << "Recommended solutions:";
+                    BOOST_LOG_TRIVIAL(error) << "  - Verify system has: mesa-libGL mesa-dri-drivers libGLEW";
+                    BOOST_LOG_TRIVIAL(error) << "  - Test command: LIBGL_ALWAYS_SOFTWARE=1 glxinfo | grep \"OpenGL version\"";
+                    BOOST_LOG_TRIVIAL(error) << "  - Check AppImage includes: libGL.so, libGLU.so, libGLEW.so";
                     glfwDestroyWindow(bg_window);
-                    bg_window = nullptr;
-                    
-                    BOOST_LOG_TRIVIAL(info) << "=== Fallback Step 1: Reset GLFW window hints ===";
-                    glfwDefaultWindowHints();
-                    
-                    // Set OpenGL 2.1 hints
-                    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
-                    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-                    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_ANY_PROFILE);
-                    glfwWindowHint(GLFW_VISIBLE, false);
-                    glfwWindowHint(GLFW_RED_BITS, 8);
-                    glfwWindowHint(GLFW_GREEN_BITS, 8);
-                    glfwWindowHint(GLFW_BLUE_BITS, 8);
-                    glfwWindowHint(GLFW_ALPHA_BITS, 8);
-#ifdef __linux__
-                    glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_NATIVE_CONTEXT_API);
-#endif
-                    
-                    BOOST_LOG_TRIVIAL(info) << "=== Fallback Step 2: Create OpenGL 2.1 window ===";
-                    bg_window = glfwCreateWindow(640, 480, "fallback_window", nullptr, nullptr);
-                    if (!bg_window) {
-                        BOOST_LOG_TRIVIAL(error) << "CRITICAL: Failed to create OpenGL 2.1 fallback window";
-                        glfwTerminate();
-                        goto skip_thumbnail;
-                    }
-                    BOOST_LOG_TRIVIAL(info) << "✓ OpenGL 2.1 window created";
-                    
-                    BOOST_LOG_TRIVIAL(info) << "=== Fallback Step 3: Make context current ===";
-                    glfwMakeContextCurrent(bg_window);
-                    BOOST_LOG_TRIVIAL(info) << "✓ OpenGL 2.1 context is now current";
-                    
-                    // CRITICAL: GLEW can only be initialized ONCE per process
-                    // We need to reset GLEW's internal state (not officially supported, but necessary)
-                    BOOST_LOG_TRIVIAL(info) << "=== Fallback Step 4: Re-initialize GLEW with OpenGL 2.1 ===";
-                    BOOST_LOG_TRIVIAL(warning) << "Note: GLEW typically only initializes once per process";
-                    BOOST_LOG_TRIVIAL(warning) << "This fallback may not work if GLEW state is corrupted";
-                    
-                    // Create new OpenGLManager and try again
-                    Slic3r::GUI::OpenGLManager opengl_mgr_fallback;
-                    opengl_valid = opengl_mgr_fallback.init_gl(false);
-                    
-                    if (!opengl_valid) {
-                        BOOST_LOG_TRIVIAL(error) << "";
-                        BOOST_LOG_TRIVIAL(error) << "========================================";
-                        BOOST_LOG_TRIVIAL(error) << "CRITICAL: OpenGL 2.1 fallback also FAILED!";
-                        BOOST_LOG_TRIVIAL(error) << "========================================";
-                        BOOST_LOG_TRIVIAL(error) << "";
-                        BOOST_LOG_TRIVIAL(error) << "Possible causes:";
-                        BOOST_LOG_TRIVIAL(error) << "  1. GLEW cannot be re-initialized after first failure";
-                        BOOST_LOG_TRIVIAL(error) << "  2. Mesa llvmpipe is not properly installed";
-                        BOOST_LOG_TRIVIAL(error) << "  3. Missing required OpenGL libraries";
-                        BOOST_LOG_TRIVIAL(error) << "";
-                        BOOST_LOG_TRIVIAL(error) << "Recommended solutions:";
-                        BOOST_LOG_TRIVIAL(error) << "  - Install: mesa-libGL mesa-dri-drivers";
-                        BOOST_LOG_TRIVIAL(error) << "  - Verify: LIBGL_ALWAYS_SOFTWARE=1 glxinfo | grep \"OpenGL version\"";
-                        BOOST_LOG_TRIVIAL(error) << "  - Try: Start with OpenGL 2.1 from the beginning (modify gl_major/gl_minor)";
-                        glfwDestroyWindow(bg_window);
-                        glfwTerminate();
-                        goto skip_thumbnail;
-                    }
-                    
-                    BOOST_LOG_TRIVIAL(info) << "";
-                    BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL 2.1 fallback SUCCEEDED! ✓✓✓";
-                    BOOST_LOG_TRIVIAL(info) << "";
+                    glfwTerminate();
+                    goto skip_thumbnail;
                 }
                 
-                BOOST_LOG_TRIVIAL(info) << "✓ GLEW initialized successfully!";
+                BOOST_LOG_TRIVIAL(info) << "✓ GLEW initialized successfully with OpenGL 2.1!";
                 
                 BOOST_LOG_TRIVIAL(info) << "=== Step 10: Verifying OpenGL Context ===";
-                // Now we can safely call glGetString after GLEW init
                 const char* gl_version = (const char*)glGetString(GL_VERSION);
                 const char* gl_vendor = (const char*)glGetString(GL_VENDOR);
                 const char* gl_renderer = (const char*)glGetString(GL_RENDERER);
                 
                 if (!gl_version) {
-                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: glGetString(GL_VERSION) returned NULL even after GLEW init!";
-                    BOOST_LOG_TRIVIAL(error) << "  This indicates a fundamental OpenGL context problem";
-                    if (bg_window) glfwDestroyWindow(bg_window);
+                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: glGetString(GL_VERSION) returned NULL after GLEW init!";
+                    BOOST_LOG_TRIVIAL(error) << "This should not happen if GLEW initialized successfully.";
+                    glfwDestroyWindow(bg_window);
                     glfwTerminate();
                     goto skip_thumbnail;
                 }
@@ -6157,9 +6116,22 @@ int CLI::run(int argc, char **argv)
                 BOOST_LOG_TRIVIAL(info) << "  Version:  " << gl_version;
                 if (gl_vendor) BOOST_LOG_TRIVIAL(info) << "  Vendor:   " << gl_vendor;
                 if (gl_renderer) BOOST_LOG_TRIVIAL(info) << "  Renderer: " << gl_renderer;
+                
+                // Verify OpenGL 2.1 or higher
+                int actual_major = 0, actual_minor = 0;
+                if (sscanf(gl_version, "%d.%d", &actual_major, &actual_minor) == 2) {
+                    if (actual_major < 2 || (actual_major == 2 && actual_minor < 1)) {
+                        BOOST_LOG_TRIVIAL(error) << "OpenGL version too old: " << gl_version << " (need 2.1+)";
+                        glfwDestroyWindow(bg_window);
+                        glfwTerminate();
+                        goto skip_thumbnail;
+                    }
+                    BOOST_LOG_TRIVIAL(info) << "✓ OpenGL version check passed (>= 2.1)";
+                }
+                
                 BOOST_LOG_TRIVIAL(info) << "";
                 BOOST_LOG_TRIVIAL(info) << "========================================";
-                BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL Setup Complete!";
+                BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL " << gl_major << "." << gl_minor << " Setup Complete!";
                 BOOST_LOG_TRIVIAL(info) << "✓✓✓ Ready to Generate Thumbnails";
                 BOOST_LOG_TRIVIAL(info) << "========================================";
                 BOOST_LOG_TRIVIAL(info) << "";
