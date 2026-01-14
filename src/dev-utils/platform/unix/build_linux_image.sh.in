@@ -41,23 +41,47 @@ echo -n "[9/9] Generating Linux app..."
         exit 1
     fi
     
-    # Copy OSMesa library for headless thumbnail generation
-    echo "Copying OSMesa library for CLI thumbnail support..."
-    OSMESA_LIB=$(ldconfig -p | grep 'libOSMesa\.so\.' | awk '{print $NF}' | head -1)
-    if [ -n "$OSMESA_LIB" ] && [ -f "$OSMESA_LIB" ]; then
-        cp -f "$OSMESA_LIB" package/bin/
-        echo "  Copied: $OSMESA_LIB"
-        # Also copy symlink target if it's a symlink
-        if [ -L "$OSMESA_LIB" ]; then
-            OSMESA_REAL=$(readlink -f "$OSMESA_LIB")
-            if [ -f "$OSMESA_REAL" ]; then
-                cp -f "$OSMESA_REAL" package/bin/
-                echo "  Copied: $OSMESA_REAL"
+    # Copy OpenGL/Mesa libraries for thumbnail generation (both X11 and headless)
+    echo "Copying OpenGL/Mesa libraries for CLI thumbnail support..."
+    
+    # Function to copy library and its symlink targets
+    copy_lib() {
+        local lib_pattern="$1"
+        local lib_name="$2"
+        local lib_path=$(ldconfig -p | grep "$lib_pattern" | awk '{print $NF}' | head -1)
+        
+        if [ -n "$lib_path" ] && [ -f "$lib_path" ]; then
+            cp -f "$lib_path" package/bin/
+            echo "  Copied: $lib_path"
+            
+            # Also copy the real file if it's a symlink
+            if [ -L "$lib_path" ]; then
+                local real_path=$(readlink -f "$lib_path")
+                if [ -f "$real_path" ] && [ "$real_path" != "$lib_path" ]; then
+                    cp -f "$real_path" package/bin/
+                    echo "  Copied: $real_path"
+                fi
             fi
+            return 0
+        else
+            echo "  Warning: $lib_name not found"
+            return 1
         fi
-    else
-        echo "  Warning: libOSMesa.so not found, CLI thumbnail generation may not work on headless servers"
-    fi
+    }
+    
+    # Copy core OpenGL libraries (required for X11/GLX rendering)
+    copy_lib 'libGL\.so\.' 'libGL.so'
+    copy_lib 'libGLU\.so\.' 'libGLU.so'
+    copy_lib 'libGLX\.so\.' 'libGLX.so'
+    copy_lib 'libGLdispatch\.so\.' 'libGLdispatch.so'
+    
+    # Copy Mesa GLX implementation
+    copy_lib 'libGLX_mesa\.so\.' 'libGLX_mesa.so'
+    
+    # Copy OSMesa for true headless rendering (fallback)
+    copy_lib 'libOSMesa\.so\.' 'libOSMesa.so'
+    
+    echo "  OpenGL library copying complete"
     
     # remove unneeded po from resources
     ## find package/resources/localization -name "*.po" -type f -delete ## FIXME: DD - do we need this?
