@@ -5945,48 +5945,18 @@ int CLI::run(int argc, char **argv)
             glfwSetErrorCallback(glfw_callback);
             
 #ifdef __linux__
-            BOOST_LOG_TRIVIAL(info) << "=== Step 3: Detecting Display Environment ===";
+            BOOST_LOG_TRIVIAL(info) << "=== Step 3: Configuring Mesa Software Renderer ===";
             
-            // Check if we have a display (X11/Xvfb)
+            // Force Mesa to use software rendering (llvmpipe) instead of trying GPU
+            // This is critical for Xvfb/headless environments
+            setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+            BOOST_LOG_TRIVIAL(info) << "✓ Set LIBGL_ALWAYS_SOFTWARE=1 (force Mesa llvmpipe)";
+            
             const char* display = getenv("DISPLAY");
-            const char* wayland_display = getenv("WAYLAND_DISPLAY");
-            
             if (display && strlen(display) > 0) {
-                BOOST_LOG_TRIVIAL(info) << "Found DISPLAY=" << display << " (X11/Xvfb available)";
-                BOOST_LOG_TRIVIAL(info) << "Will use X11 for rendering (compatible with xvfb-run)";
-                // Keep DISPLAY, disable Wayland to ensure X11 path
-                setenv("WAYLAND_DISPLAY", "", 1);
-            } else if (wayland_display && strlen(wayland_display) > 0) {
-                BOOST_LOG_TRIVIAL(info) << "Found WAYLAND_DISPLAY=" << wayland_display;
-                BOOST_LOG_TRIVIAL(info) << "Disabling Wayland, will try OSMesa for headless rendering";
-                setenv("WAYLAND_DISPLAY", "", 1);
-                setenv("DISPLAY", "", 1);
-                
-                // Try to preload OSMesa library
-                void* osmesa_handle = dlopen("libOSMesa.so", RTLD_NOW | RTLD_GLOBAL);
-                if (!osmesa_handle) {
-                    osmesa_handle = dlopen("libOSMesa.so.8", RTLD_NOW | RTLD_GLOBAL);
-                }
-                if (osmesa_handle) {
-                    BOOST_LOG_TRIVIAL(info) << "OSMesa library loaded successfully";
-                } else {
-                    BOOST_LOG_TRIVIAL(warning) << "Could not pre-load OSMesa: " << dlerror();
-                }
+                BOOST_LOG_TRIVIAL(info) << "Found DISPLAY=" << display << " (will use GLX with software rendering)";
             } else {
-                BOOST_LOG_TRIVIAL(info) << "No DISPLAY or WAYLAND_DISPLAY found (true headless)";
-                BOOST_LOG_TRIVIAL(info) << "Will use OSMesa for software rendering";
-                
-                // Try to preload OSMesa library
-                void* osmesa_handle = dlopen("libOSMesa.so", RTLD_NOW | RTLD_GLOBAL);
-                if (!osmesa_handle) {
-                    osmesa_handle = dlopen("libOSMesa.so.8", RTLD_NOW | RTLD_GLOBAL);
-                }
-                if (osmesa_handle) {
-                    BOOST_LOG_TRIVIAL(info) << "OSMesa library loaded successfully";
-                } else {
-                    BOOST_LOG_TRIVIAL(warning) << "Could not pre-load OSMesa: " << dlerror();
-                    BOOST_LOG_TRIVIAL(warning) << "Thumbnail generation may fail";
-                }
+                BOOST_LOG_TRIVIAL(info) << "No DISPLAY found (true headless)";
             }
 #endif
             
@@ -6027,16 +5997,10 @@ int CLI::run(int argc, char **argv)
 #endif
 
 #ifdef __linux__
-                // Only use OSMesa if we don't have a display (true headless)
-                const char* display_check = getenv("DISPLAY");
-                if (!display_check || strlen(display_check) == 0) {
-                    glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_OSMESA_CONTEXT_API);
-                    BOOST_LOG_TRIVIAL(info) << "  No DISPLAY - using OSMesa context creation API";
-                } else {
-                    // Use native (GLX) when DISPLAY is available (X11/Xvfb)
-                    glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_NATIVE_CONTEXT_API);
-                    BOOST_LOG_TRIVIAL(info) << "  DISPLAY=" << display_check << " - using Native GLX context API";
-                }
+                // Use native GLX with Mesa software rendering (llvmpipe)
+                // LIBGL_ALWAYS_SOFTWARE=1 was set in Step 3
+                glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_NATIVE_CONTEXT_API);
+                BOOST_LOG_TRIVIAL(info) << "  Using GLX with Mesa llvmpipe software renderer";
 #endif
 
                 BOOST_LOG_TRIVIAL(info) << "=== Step 6: Creating GLFW Window (640x480, offscreen) ===";

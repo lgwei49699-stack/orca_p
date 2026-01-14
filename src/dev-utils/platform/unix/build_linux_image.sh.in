@@ -69,6 +69,9 @@ echo -n "[9/9] Generating Linux app..."
         fi
     }
     
+    # Copy GLEW library (required for OpenGL extension loading)
+    copy_lib 'libGLEW\.so\.' 'libGLEW.so'
+    
     # Copy core OpenGL libraries (required for X11/GLX rendering)
     copy_lib 'libGL\.so\.' 'libGL.so'
     copy_lib 'libGLU\.so\.' 'libGLU.so'
