@@ -52,8 +52,9 @@ public:
         // Otherwise HTML formatted for the system info dialog.
         std::string to_string(bool for_github) const;
 
-    private:
         void detect() const;
+
+    private:
     };
 
 #ifdef __APPLE__
