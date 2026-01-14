@@ -4,9 +4,7 @@ on:
   # 自动触发配置
   push:
     branches: 
-      - 2.3.5_fix
-      - feature/2.3.5_fix
-      - main
+      - 2.3.5_thum
     tags:
       - 'v*'
   pull_request:
@@ -65,6 +63,12 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y --fix-broken
         sudo apt-get install -y libunwind-dev libosmesa6-dev
+        # 安装 OpenGL 核心库（修复 GLEW "Missing GL version" 错误）
+        sudo apt-get install -y \
+          libgl1-mesa-dev \
+          libglu1-mesa-dev \
+          mesa-common-dev \
+          libegl1-mesa-dev
         # 安装 X11 开发库用于 GLFW X11 支持
         sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev xvfb
     
