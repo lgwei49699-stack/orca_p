@@ -5921,6 +5921,10 @@ int CLI::run(int argc, char **argv)
 
         if (need_regenerate_thumbnail || need_regenerate_no_light_thumbnail || need_regenerate_top_thumbnail) {
             BOOST_LOG_TRIVIAL(info) << ">>> Starting GLFW and OpenGL initialization for thumbnail generation...";
+            
+            // Declare GLFW window pointer at function scope
+            GLFWwindow* bg_window = nullptr;
+            
             std::vector<std::string> colors;
             if (filament_color) {
                 colors= filament_color->vserialize();
@@ -6004,8 +6008,8 @@ int CLI::run(int argc, char **argv)
 #endif
 
                 BOOST_LOG_TRIVIAL(info) << "=== Step 6: Creating GLFW Window (640x480, offscreen) ===";
-                GLFWwindow* window = glfwCreateWindow(640, 480, "base_window", NULL, NULL);
-                if (window == NULL)
+                bg_window = glfwCreateWindow(640, 480, "base_window", NULL, NULL);
+                if (bg_window == NULL)
                 {
                     const char* error_desc = nullptr;
                     int error_code = glfwGetError(&error_desc);
@@ -6015,54 +6019,122 @@ int CLI::run(int argc, char **argv)
                         BOOST_LOG_TRIVIAL(error) << "Error description: " << error_desc;
                     }
                     BOOST_LOG_TRIVIAL(error) << "Thumbnail generation requires a valid OpenGL context" << std::endl;
+                    glfwTerminate();
+                    goto skip_thumbnail;
                 }
                 
                 BOOST_LOG_TRIVIAL(info) << "✓ GLFW window created successfully";
                 
                 BOOST_LOG_TRIVIAL(info) << "=== Step 7: Making OpenGL Context Current ===";
-                glfwMakeContextCurrent(window);
+                glfwMakeContextCurrent(bg_window);
                 
                 // Verify the context was actually made current
                 GLFWwindow* current = glfwGetCurrentContext();
-                if (current != window) {
+                if (current != bg_window) {
                     BOOST_LOG_TRIVIAL(error) << "CRITICAL: glfwMakeContextCurrent failed!";
-                    BOOST_LOG_TRIVIAL(error) << "  Expected window: " << window;
-                    BOOST_LOG_TRIVIAL(error) << "  Current context: " << current;
-                    glfwDestroyWindow(window);
+                    BOOST_LOG_TRIVIAL(error) << "  Expected window: " << (void*)bg_window;
+                    BOOST_LOG_TRIVIAL(error) << "  Current context: " << (void*)current;
+                    glfwDestroyWindow(bg_window);
                     glfwTerminate();
                     goto skip_thumbnail;
                 }
                 BOOST_LOG_TRIVIAL(info) << "✓ OpenGL context is now current";
-            }
-
-            //opengl manager related logic
-            {
-                BOOST_LOG_TRIVIAL(info) << "=== Step 8: Double-checking Current Context ===";
-                GLFWwindow* current_window = glfwGetCurrentContext();
-                if (!current_window) {
-                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: No current OpenGL context!";
-                    BOOST_LOG_TRIVIAL(error) << "  Context was lost between creation and initialization";
-                    glfwTerminate();
-                    goto skip_thumbnail;
-                }
-                BOOST_LOG_TRIVIAL(info) << "✓ Current context is valid";
                 
-                BOOST_LOG_TRIVIAL(info) << "=== Step 9: Initializing GLEW (required before glGetString) ===";
+                BOOST_LOG_TRIVIAL(info) << "=== Step 8: Pre-GLEW Diagnostics ===";
+                // Try to get basic OpenGL info before GLEW init (may not work, but worth trying)
+                typedef const GLubyte* (*PFNGLGETSTRINGPROC)(GLenum);
+                PFNGLGETSTRINGPROC glGetStringPtr = (PFNGLGETSTRINGPROC)glfwGetProcAddress("glGetString");
+                if (glGetStringPtr) {
+                    const char* pre_glew_version = (const char*)glGetStringPtr(GL_VERSION);
+                    if (pre_glew_version) {
+                        BOOST_LOG_TRIVIAL(info) << "✓ Pre-GLEW GL_VERSION: " << pre_glew_version;
+                    } else {
+                        BOOST_LOG_TRIVIAL(warning) << "⚠ Pre-GLEW glGetString(GL_VERSION) returned NULL";
+                        BOOST_LOG_TRIVIAL(warning) << "  This suggests OpenGL 3.3 context may be incomplete";
+                    }
+                } else {
+                    BOOST_LOG_TRIVIAL(warning) << "Could not get glGetString function pointer";
+                }
+                
+                BOOST_LOG_TRIVIAL(info) << "=== Step 9: Initializing GLEW (with glewExperimental=GL_TRUE) ===";
                 Slic3r::GUI::OpenGLManager opengl_mgr;
                 bool opengl_valid = opengl_mgr.init_gl(false);
+                
                 if (!opengl_valid) {
                     BOOST_LOG_TRIVIAL(error) << "";
                     BOOST_LOG_TRIVIAL(error) << "========================================";
-                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: GLEW initialization FAILED!";
+                    BOOST_LOG_TRIVIAL(error) << "GLEW initialization FAILED with OpenGL 3.3!";
                     BOOST_LOG_TRIVIAL(error) << "========================================";
-                    BOOST_LOG_TRIVIAL(error) << "Please check the GLEW error messages above for details";
-                    BOOST_LOG_TRIVIAL(error) << "This usually indicates:";
-                    BOOST_LOG_TRIVIAL(error) << "  - Incompatible OpenGL function pointers";
-                    BOOST_LOG_TRIVIAL(error) << "  - OSMesa context doesn't support required OpenGL extensions";
-                    BOOST_LOG_TRIVIAL(error) << "  - glewExperimental flag issue";
-                    BOOST_LOG_TRIVIAL(error) << "";
-                    glfwTerminate();
-                    goto skip_thumbnail;
+                    BOOST_LOG_TRIVIAL(warning) << "Mesa llvmpipe may not fully support OpenGL 3.3";
+                    BOOST_LOG_TRIVIAL(info) << "";
+                    BOOST_LOG_TRIVIAL(info) << ">>> Attempting fallback: OpenGL 2.1 ...";
+                    
+                    // Destroy current window
+                    glfwDestroyWindow(bg_window);
+                    bg_window = nullptr;
+                    
+                    BOOST_LOG_TRIVIAL(info) << "=== Fallback Step 1: Reset GLFW window hints ===";
+                    glfwDefaultWindowHints();
+                    
+                    // Set OpenGL 2.1 hints
+                    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
+                    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
+                    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_ANY_PROFILE);
+                    glfwWindowHint(GLFW_VISIBLE, false);
+                    glfwWindowHint(GLFW_RED_BITS, 8);
+                    glfwWindowHint(GLFW_GREEN_BITS, 8);
+                    glfwWindowHint(GLFW_BLUE_BITS, 8);
+                    glfwWindowHint(GLFW_ALPHA_BITS, 8);
+#ifdef __linux__
+                    glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_NATIVE_CONTEXT_API);
+#endif
+                    
+                    BOOST_LOG_TRIVIAL(info) << "=== Fallback Step 2: Create OpenGL 2.1 window ===";
+                    bg_window = glfwCreateWindow(640, 480, "fallback_window", nullptr, nullptr);
+                    if (!bg_window) {
+                        BOOST_LOG_TRIVIAL(error) << "CRITICAL: Failed to create OpenGL 2.1 fallback window";
+                        glfwTerminate();
+                        goto skip_thumbnail;
+                    }
+                    BOOST_LOG_TRIVIAL(info) << "✓ OpenGL 2.1 window created";
+                    
+                    BOOST_LOG_TRIVIAL(info) << "=== Fallback Step 3: Make context current ===";
+                    glfwMakeContextCurrent(bg_window);
+                    BOOST_LOG_TRIVIAL(info) << "✓ OpenGL 2.1 context is now current";
+                    
+                    // CRITICAL: GLEW can only be initialized ONCE per process
+                    // We need to reset GLEW's internal state (not officially supported, but necessary)
+                    BOOST_LOG_TRIVIAL(info) << "=== Fallback Step 4: Re-initialize GLEW with OpenGL 2.1 ===";
+                    BOOST_LOG_TRIVIAL(warning) << "Note: GLEW typically only initializes once per process";
+                    BOOST_LOG_TRIVIAL(warning) << "This fallback may not work if GLEW state is corrupted";
+                    
+                    // Create new OpenGLManager and try again
+                    Slic3r::GUI::OpenGLManager opengl_mgr_fallback;
+                    opengl_valid = opengl_mgr_fallback.init_gl(false);
+                    
+                    if (!opengl_valid) {
+                        BOOST_LOG_TRIVIAL(error) << "";
+                        BOOST_LOG_TRIVIAL(error) << "========================================";
+                        BOOST_LOG_TRIVIAL(error) << "CRITICAL: OpenGL 2.1 fallback also FAILED!";
+                        BOOST_LOG_TRIVIAL(error) << "========================================";
+                        BOOST_LOG_TRIVIAL(error) << "";
+                        BOOST_LOG_TRIVIAL(error) << "Possible causes:";
+                        BOOST_LOG_TRIVIAL(error) << "  1. GLEW cannot be re-initialized after first failure";
+                        BOOST_LOG_TRIVIAL(error) << "  2. Mesa llvmpipe is not properly installed";
+                        BOOST_LOG_TRIVIAL(error) << "  3. Missing required OpenGL libraries";
+                        BOOST_LOG_TRIVIAL(error) << "";
+                        BOOST_LOG_TRIVIAL(error) << "Recommended solutions:";
+                        BOOST_LOG_TRIVIAL(error) << "  - Install: mesa-libGL mesa-dri-drivers";
+                        BOOST_LOG_TRIVIAL(error) << "  - Verify: LIBGL_ALWAYS_SOFTWARE=1 glxinfo | grep \"OpenGL version\"";
+                        BOOST_LOG_TRIVIAL(error) << "  - Try: Start with OpenGL 2.1 from the beginning (modify gl_major/gl_minor)";
+                        glfwDestroyWindow(bg_window);
+                        glfwTerminate();
+                        goto skip_thumbnail;
+                    }
+                    
+                    BOOST_LOG_TRIVIAL(info) << "";
+                    BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL 2.1 fallback SUCCEEDED! ✓✓✓";
+                    BOOST_LOG_TRIVIAL(info) << "";
                 }
                 
                 BOOST_LOG_TRIVIAL(info) << "✓ GLEW initialized successfully!";
@@ -6076,6 +6148,7 @@ int CLI::run(int argc, char **argv)
                 if (!gl_version) {
                     BOOST_LOG_TRIVIAL(error) << "CRITICAL: glGetString(GL_VERSION) returned NULL even after GLEW init!";
                     BOOST_LOG_TRIVIAL(error) << "  This indicates a fundamental OpenGL context problem";
+                    if (bg_window) glfwDestroyWindow(bg_window);
                     glfwTerminate();
                     goto skip_thumbnail;
                 }
@@ -6085,7 +6158,10 @@ int CLI::run(int argc, char **argv)
                 if (gl_vendor) BOOST_LOG_TRIVIAL(info) << "  Vendor:   " << gl_vendor;
                 if (gl_renderer) BOOST_LOG_TRIVIAL(info) << "  Renderer: " << gl_renderer;
                 BOOST_LOG_TRIVIAL(info) << "";
-                BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL Setup Complete - Ready to Generate Thumbnails ✓✓✓";
+                BOOST_LOG_TRIVIAL(info) << "========================================";
+                BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL Setup Complete!";
+                BOOST_LOG_TRIVIAL(info) << "✓✓✓ Ready to Generate Thumbnails";
+                BOOST_LOG_TRIVIAL(info) << "========================================";
                 BOOST_LOG_TRIVIAL(info) << "";
                     GLVolumeCollection glvolume_collection;
                     Model &model = m_models[0];

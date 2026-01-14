@@ -28,10 +28,13 @@ jobs:
     - name: Free up disk space
       shell: bash -e {0}
       run: |
-        # 快速清理（去掉耗时的操作）
+        # 快速清理大文件，释放更多空间
         sudo rm -rf /usr/share/dotnet
         sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/share/boost
+        sudo rm -rf /usr/local/lib/android
         sudo apt-get clean
+        df -h
     
     - name: Setup build info
       shell: bash -e {0}
@@ -41,20 +44,26 @@ jobs:
         cat /etc/os-release
     
     - name: Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           deps/build
           deps/DL_CACHE
-        key: ${{ runner.os }}-24.04-deps-x11-v4-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
-        # v4: 启用 GLFW X11 支持，用于 xvfb-run 缩略图生成
+        # 优化：简化 key，提高缓存命中率
+        key: ${{ runner.os }}-24.04-deps-x11-v5-${{ hashFiles('deps/CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-24.04-deps-x11-v5-
+          ${{ runner.os }}-24.04-deps-x11-
     
     - name: Cache ccache
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.ccache
-        key: ${{ runner.os }}-24.04-ccache-${{ github.sha }}
+        # 优化：使用分支名，提高增量构建的缓存命中率
+        key: ${{ runner.os }}-24.04-ccache-${{ github.ref_name }}-${{ github.sha }}
         restore-keys: |
+          ${{ runner.os }}-24.04-ccache-${{ github.ref_name }}-
+          ${{ runner.os }}-24.04-ccache-main-
           ${{ runner.os }}-24.04-ccache-
     
     - name: Fix package manager state
@@ -79,18 +88,12 @@ jobs:
         sudo apt-get install -y ccache
         sudo ./build_linux.sh -u
     
-    - name: Force clean GLFW cache
-      shell: bash -e {0}
-      run: |
-        echo "清理 GLFW 旧编译产物，强制重新编译..."
-        rm -rf deps/build/dep_GLFW-prefix || true
-        rm -f deps/build/destdir/usr/local/lib/libglfw* || true
-        rm -rf deps/build/destdir/usr/local/include/GLFW || true
-        echo "✓ GLFW 缓存已清理"
-    
     - name: Build dependencies
       shell: bash -e {0}
       run: |
+        # 使用 4 核并行编译依赖
+        export CMAKE_BUILD_PARALLEL_LEVEL=4
+        
         echo "开始编译依赖（GLFW 将启用 X11 支持）..."
         ./build_linux.sh -d
         
@@ -98,25 +101,29 @@ jobs:
         echo ""
         echo "=== 验证 GLFW 编译配置 ==="
         if [ -f "deps/build/destdir/usr/local/lib/libglfw3.a" ]; then
-          echo "GLFW 库已生成: libglfw3.a"
+          echo "✓ GLFW 库已生成: libglfw3.a"
         else
-          echo "GLFW 库未找到"
+          echo "❌ GLFW 库未找到"
           exit 1
         fi
     
     - name: Build OrcaSlicer
       shell: bash -e {0}
       run: |
-        # 配置 ccache
+        # 配置 ccache（优化设置）
         export PATH="/usr/lib/ccache:$PATH"
         export CCACHE_DIR=~/.ccache
-        export CCACHE_MAXSIZE=2G
+        export CCACHE_MAXSIZE=5G           # 增加缓存大小
+        export CCACHE_COMPRESS=1            # 启用压缩
+        export CCACHE_COMPRESSLEVEL=6       # 压缩级别
+        export CCACHE_MAXFILES=0            # 不限制文件数
         ccache -z  # 重置统计
         
-        # 使用多核编译（GitHub Actions 有 2 核）
-        export CMAKE_BUILD_PARALLEL_LEVEL=2
+        # 使用 4 核编译（GitHub Actions 标准 runner 有 4 核）
+        export CMAKE_BUILD_PARALLEL_LEVEL=4
         
-        ./build_linux.sh -s
+        # 禁用预编译头以提高 ccache 命中率（-p 参数）
+        ./build_linux.sh -sp
         
         # 显示 ccache 统计
         echo "=== ccache statistics ==="

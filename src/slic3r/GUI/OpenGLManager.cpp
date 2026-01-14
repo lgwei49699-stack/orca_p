@@ -244,16 +244,25 @@ bool OpenGLManager::init_gl(bool popup_error)
 #ifdef __linux__
         // GLEW needs glewExperimental for core profile and OSMesa (headless rendering)
         // Must be set before glewInit()
+        BOOST_LOG_TRIVIAL(info) << "  Setting glewExperimental = GL_TRUE (required for Linux/Mesa)";
         glewExperimental = GL_TRUE;
 #endif
+        BOOST_LOG_TRIVIAL(info) << "  Calling glewInit()...";
         GLenum result = glewInit();
         if (result != GLEW_OK) {
             const char* error_string = (const char*)glewGetErrorString(result);
             BOOST_LOG_TRIVIAL(error) << "Unable to init glew library";
             BOOST_LOG_TRIVIAL(error) << "GLEW error code: " << result;
             BOOST_LOG_TRIVIAL(error) << "GLEW error string: " << (error_string ? error_string : "NULL");
+            BOOST_LOG_TRIVIAL(error) << "";
+            BOOST_LOG_TRIVIAL(error) << "Common causes on Linux:";
+            BOOST_LOG_TRIVIAL(error) << "  1. OpenGL context version too high (try 2.1 instead of 3.3)";
+            BOOST_LOG_TRIVIAL(error) << "  2. Mesa llvmpipe doesn't support requested OpenGL features";
+            BOOST_LOG_TRIVIAL(error) << "  3. Missing or incompatible OpenGL libraries";
+            BOOST_LOG_TRIVIAL(error) << "  4. Invalid DISPLAY or X server configuration";
             return false;
         }
+        BOOST_LOG_TRIVIAL(info) << "  glewInit() returned GLEW_OK";
 	//BOOST_LOG_TRIVIAL(info) << "glewInit Success."<< std::endl;
         m_gl_initialized = true;
         if (GLEW_EXT_texture_compression_s3tc)
