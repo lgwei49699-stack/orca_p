@@ -94,6 +94,10 @@ public:
 
     bool init_gl(bool popup_error = true);
     wxGLContext* init_glcontext(wxGLCanvas& canvas);
+    
+    // For CLI thumbnail generation: bypass GLEW and use legacy OpenGL 2.1
+    // This is needed because GLEW's glXGetProcAddressARB fails in AppImage environments
+    void init_gl_without_glew();
 
     GLShaderProgram* get_shader(const std::string& shader_name) { return m_shaders_manager.get_shader(shader_name); }
     GLShaderProgram* get_current_shader() { return m_shaders_manager.get_current_shader(); }

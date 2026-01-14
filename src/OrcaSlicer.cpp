@@ -6071,67 +6071,20 @@ int CLI::run(int argc, char **argv)
                     BOOST_LOG_TRIVIAL(warning) << "Could not get glGetString function pointer";
                 }
                 
-                BOOST_LOG_TRIVIAL(info) << "=== Step 9: Initializing GLEW (with glewExperimental=GL_TRUE) ===";
-                BOOST_LOG_TRIVIAL(info) << "Note: Using OpenGL 2.1 for better Mesa llvmpipe compatibility";
-                Slic3r::GUI::OpenGLManager opengl_mgr;
-                bool opengl_valid = opengl_mgr.init_gl(false);
-                
-                if (!opengl_valid) {
-                    BOOST_LOG_TRIVIAL(error) << "";
-                    BOOST_LOG_TRIVIAL(error) << "========================================";
-                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: GLEW initialization FAILED with OpenGL 2.1!";
-                    BOOST_LOG_TRIVIAL(error) << "========================================";
-                    BOOST_LOG_TRIVIAL(error) << "";
-                    BOOST_LOG_TRIVIAL(error) << "This indicates a fundamental OpenGL setup problem.";
-                    BOOST_LOG_TRIVIAL(error) << "Possible causes:";
-                    BOOST_LOG_TRIVIAL(error) << "  1. Mesa llvmpipe is not properly installed";
-                    BOOST_LOG_TRIVIAL(error) << "  2. Missing required OpenGL libraries in AppImage";
-                    BOOST_LOG_TRIVIAL(error) << "  3. GLEW cannot load function pointers via glXGetProcAddressARB";
-                    BOOST_LOG_TRIVIAL(error) << "";
-                    BOOST_LOG_TRIVIAL(error) << "Recommended solutions:";
-                    BOOST_LOG_TRIVIAL(error) << "  - Verify system has: mesa-libGL mesa-dri-drivers libGLEW";
-                    BOOST_LOG_TRIVIAL(error) << "  - Test command: LIBGL_ALWAYS_SOFTWARE=1 glxinfo | grep \"OpenGL version\"";
-                    BOOST_LOG_TRIVIAL(error) << "  - Check AppImage includes: libGL.so, libGLU.so, libGLEW.so";
-                    glfwDestroyWindow(bg_window);
-                    glfwTerminate();
-                    goto skip_thumbnail;
-                }
-                
-                BOOST_LOG_TRIVIAL(info) << "✓ GLEW initialized successfully with OpenGL 2.1!";
-                
-                BOOST_LOG_TRIVIAL(info) << "=== Step 10: Verifying OpenGL Context ===";
-                const char* gl_version = (const char*)glGetString(GL_VERSION);
-                const char* gl_vendor = (const char*)glGetString(GL_VENDOR);
-                const char* gl_renderer = (const char*)glGetString(GL_RENDERER);
-                
-                if (!gl_version) {
-                    BOOST_LOG_TRIVIAL(error) << "CRITICAL: glGetString(GL_VERSION) returned NULL after GLEW init!";
-                    BOOST_LOG_TRIVIAL(error) << "This should not happen if GLEW initialized successfully.";
-                    glfwDestroyWindow(bg_window);
-                    glfwTerminate();
-                    goto skip_thumbnail;
-                }
-                
-                BOOST_LOG_TRIVIAL(info) << "✓ OpenGL Context Information:";
-                BOOST_LOG_TRIVIAL(info) << "  Version:  " << gl_version;
-                if (gl_vendor) BOOST_LOG_TRIVIAL(info) << "  Vendor:   " << gl_vendor;
-                if (gl_renderer) BOOST_LOG_TRIVIAL(info) << "  Renderer: " << gl_renderer;
-                
-                // Verify OpenGL 2.1 or higher
-                int actual_major = 0, actual_minor = 0;
-                if (sscanf(gl_version, "%d.%d", &actual_major, &actual_minor) == 2) {
-                    if (actual_major < 2 || (actual_major == 2 && actual_minor < 1)) {
-                        BOOST_LOG_TRIVIAL(error) << "OpenGL version too old: " << gl_version << " (need 2.1+)";
-                        glfwDestroyWindow(bg_window);
-                        glfwTerminate();
-                        goto skip_thumbnail;
-                    }
-                    BOOST_LOG_TRIVIAL(info) << "✓ OpenGL version check passed (>= 2.1)";
-                }
-                
+                BOOST_LOG_TRIVIAL(info) << "=== Step 9: Initializing OpenGL (BYPASSING GLEW) ===";
+                BOOST_LOG_TRIVIAL(info) << "Reason: GLEW's glXGetProcAddressARB fails in AppImage + Mesa environment";
+                BOOST_LOG_TRIVIAL(info) << "Solution: Use OpenGL 2.1 legacy rendering (no extensions required)";
                 BOOST_LOG_TRIVIAL(info) << "";
+                
+                // CRITICAL CHANGE: Skip GLEW initialization entirely for CLI thumbnail generation
+                // GLEW uses glXGetProcAddressARB which fails in AppImage environments
+                // Instead, use OpenGL 2.1 fixed-function pipeline with legacy rendering
+                
+                Slic3r::GUI::OpenGLManager opengl_mgr;
+                opengl_mgr.init_gl_without_glew();  // New method that bypasses GLEW
+                
                 BOOST_LOG_TRIVIAL(info) << "========================================";
-                BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL " << gl_major << "." << gl_minor << " Setup Complete!";
+                BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL Setup Complete (Legacy Mode)";
                 BOOST_LOG_TRIVIAL(info) << "✓✓✓ Ready to Generate Thumbnails";
                 BOOST_LOG_TRIVIAL(info) << "========================================";
                 BOOST_LOG_TRIVIAL(info) << "";

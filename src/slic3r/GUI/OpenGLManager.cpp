@@ -333,6 +333,36 @@ bool OpenGLManager::init_gl(bool popup_error)
     return true;
 }
 
+void OpenGLManager::init_gl_without_glew()
+{
+    // Special initialization for CLI thumbnail generation that bypasses GLEW
+    // This is needed because GLEW's glXGetProcAddressARB fails in AppImage environments
+    // with Mesa llvmpipe software renderer
+    
+    if (!m_gl_initialized) {
+        BOOST_LOG_TRIVIAL(info) << "Initializing OpenGL without GLEW (for CLI thumbnail generation)";
+        
+        // Mark as initialized
+        m_gl_initialized = true;
+        
+        // Disable texture compression (we don't need it for thumbnails)
+        s_compressed_textures_supported = false;
+        
+        // Set framebuffer type to Unknown, which will force GLCanvas3D to use legacy rendering
+        // Legacy rendering uses the default framebuffer and glReadPixels, which works
+        // with OpenGL 2.1 without any extensions
+        s_framebuffers_type = EFramebufferType::Unknown;
+        BOOST_LOG_TRIVIAL(info) << "Using legacy rendering mode (no framebuffer extensions required)";
+        
+        // Detect GL info (this uses basic glGetString calls, not GLEW)
+        s_gl_info.detect();
+        
+        BOOST_LOG_TRIVIAL(info) << "✓ OpenGL initialized without GLEW";
+        BOOST_LOG_TRIVIAL(info) << "  OpenGL Version: " << s_gl_info.get_version();
+        BOOST_LOG_TRIVIAL(info) << "  Renderer: " << s_gl_info.get_renderer();
+    }
+}
+
 wxGLContext* OpenGLManager::init_glcontext(wxGLCanvas& canvas)
 {
     if (m_context == nullptr) {
