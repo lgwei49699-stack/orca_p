@@ -81,6 +81,8 @@ using namespace nlohmann;
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/Camera.hpp"
 #include "slic3r/GUI/Plater.hpp"
+// IMPORTANT: GLEW must be included before GLFW
+#include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #ifdef __linux__
 #include <dlfcn.h>  // For dlopen to check OSMesa availability
