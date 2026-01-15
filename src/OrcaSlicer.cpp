@@ -6071,20 +6071,42 @@ int CLI::run(int argc, char **argv)
                     BOOST_LOG_TRIVIAL(warning) << "Could not get glGetString function pointer";
                 }
                 
-                BOOST_LOG_TRIVIAL(info) << "=== Step 9: Initializing OpenGL (BYPASSING GLEW) ===";
-                BOOST_LOG_TRIVIAL(info) << "Reason: GLEW's glXGetProcAddressARB fails in AppImage + Mesa environment";
-                BOOST_LOG_TRIVIAL(info) << "Solution: Use OpenGL 2.1 legacy rendering (no extensions required)";
-                BOOST_LOG_TRIVIAL(info) << "";
+                BOOST_LOG_TRIVIAL(info) << "=== Step 9: Initializing GLEW ===";
                 
-                // CRITICAL CHANGE: Skip GLEW initialization entirely for CLI thumbnail generation
-                // GLEW uses glXGetProcAddressARB which fails in AppImage environments
-                // Instead, use OpenGL 2.1 fixed-function pipeline with legacy rendering
+                // On Linux, GLEW needs glewExperimental for core profile and Mesa
+                // This must be set before glewInit()
+#ifdef __linux__
+                BOOST_LOG_TRIVIAL(info) << "  Setting glewExperimental = GL_TRUE (required for Linux/Mesa)";
+                glewExperimental = GL_TRUE;
+#endif
                 
+                BOOST_LOG_TRIVIAL(info) << "  Calling glewInit()...";
+                GLenum glew_result = glewInit();
+                
+                if (glew_result != GLEW_OK) {
+                    const char* error_string = (const char*)glewGetErrorString(glew_result);
+                    BOOST_LOG_TRIVIAL(error) << "Unable to init GLEW library";
+                    BOOST_LOG_TRIVIAL(error) << "GLEW error code: " << glew_result;
+                    BOOST_LOG_TRIVIAL(error) << "GLEW error string: " << (error_string ? error_string : "NULL");
+                    BOOST_LOG_TRIVIAL(error) << "Cannot render thumbnails without GLEW - skipping thumbnail generation";
+                    glfwDestroyWindow(bg_window);
+                    glfwTerminate();
+                    goto skip_thumbnail;
+                }
+                
+                BOOST_LOG_TRIVIAL(info) << "  ✓ glewInit() returned GLEW_OK";
+                
+                // Initialize OpenGL Manager
                 Slic3r::GUI::OpenGLManager opengl_mgr;
-                opengl_mgr.init_gl_without_glew();  // New method that bypasses GLEW
+                if (!opengl_mgr.init_gl(false)) {  // false = don't show error popup in CLI mode
+                    BOOST_LOG_TRIVIAL(error) << "Failed to initialize OpenGL Manager";
+                    glfwDestroyWindow(bg_window);
+                    glfwTerminate();
+                    goto skip_thumbnail;
+                }
                 
                 BOOST_LOG_TRIVIAL(info) << "========================================";
-                BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL Setup Complete (Legacy Mode)";
+                BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL Setup Complete!";
                 BOOST_LOG_TRIVIAL(info) << "✓✓✓ Ready to Generate Thumbnails";
                 BOOST_LOG_TRIVIAL(info) << "========================================";
                 BOOST_LOG_TRIVIAL(info) << "";
@@ -6199,8 +6221,12 @@ int CLI::run(int argc, char **argv)
                                                 break;
                                             }
                                     default:
-                                            BOOST_LOG_TRIVIAL(info) << boost::format("framebuffer_type: unknown");
-                                            break;
+                                            {
+                                                BOOST_LOG_TRIVIAL(warning) << boost::format("framebuffer_type: Unknown - framebuffer extensions not available");
+                                                BOOST_LOG_TRIVIAL(warning) << "Thumbnails may not be generated correctly without framebuffer support";
+                                                // Still try to generate, but it may fail or produce incorrect results
+                                                break;
+                                            }
                                     }
                                     BOOST_LOG_TRIVIAL(info) << boost::format("plate %1%'s thumbnail,finished rendering")%(i+1);
                                 }
@@ -6251,8 +6277,11 @@ int CLI::run(int argc, char **argv)
                                                 break;
                                             }
                                         default:
-                                            BOOST_LOG_TRIVIAL(info) << boost::format("framebuffer_type: unknown");
-                                            break;
+                                            {
+                                                BOOST_LOG_TRIVIAL(warning) << boost::format("framebuffer_type: Unknown - framebuffer extensions not available");
+                                                BOOST_LOG_TRIVIAL(warning) << "No-light thumbnails may not be generated correctly";
+                                                break;
+                                            }
                                     }
                                     plate_data->no_light_thumbnail_file = "valid_no_light";
                                     BOOST_LOG_TRIVIAL(info) << boost::format("plate %1%'s no_light thumbnail,finished rendering")%(i+1);
@@ -6341,8 +6370,11 @@ int CLI::run(int argc, char **argv)
                                                     break;
                                                 }
                                             default:
-                                                BOOST_LOG_TRIVIAL(info) << boost::format("framebuffer_type: unknown");
-                                                break;
+                                                {
+                                                    BOOST_LOG_TRIVIAL(warning) << boost::format("framebuffer_type: Unknown - framebuffer extensions not available");
+                                                    BOOST_LOG_TRIVIAL(warning) << "Top/pick thumbnails may not be generated correctly";
+                                                    break;
+                                                }
                                         }
                                         plate_data->top_file = "valid_top";
                                         plate_data->pick_file = "valid_pick";

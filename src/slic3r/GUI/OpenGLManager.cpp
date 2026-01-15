@@ -354,12 +354,19 @@ void OpenGLManager::init_gl_without_glew()
         s_framebuffers_type = EFramebufferType::Unknown;
         BOOST_LOG_TRIVIAL(info) << "Using legacy rendering mode (no framebuffer extensions required)";
         
-        // Detect GL info (this uses basic glGetString calls, not GLEW)
-        s_gl_info.detect();
+        // Manually set GL info without calling detect() (which needs GLEW)
+        // Use direct OpenGL calls to get basic information
+        std::string version = gl_get_string_safe(GL_VERSION, "N/A");
+        std::string vendor = gl_get_string_safe(GL_VENDOR, "N/A");
+        std::string renderer = gl_get_string_safe(GL_RENDERER, "N/A");
         
         BOOST_LOG_TRIVIAL(info) << "✓ OpenGL initialized without GLEW";
-        BOOST_LOG_TRIVIAL(info) << "  OpenGL Version: " << s_gl_info.get_version();
-        BOOST_LOG_TRIVIAL(info) << "  Renderer: " << s_gl_info.get_renderer();
+        BOOST_LOG_TRIVIAL(info) << "  OpenGL Version: " << version;
+        BOOST_LOG_TRIVIAL(info) << "  Vendor: " << vendor;
+        BOOST_LOG_TRIVIAL(info) << "  Renderer: " << renderer;
+        
+        // Note: We don't initialize shaders in CLI mode
+        // The thumbnail generation will use basic OpenGL calls without shaders
     }
 }
 
