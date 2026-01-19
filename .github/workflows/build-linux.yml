@@ -56,6 +56,7 @@ jobs:
       with:
         key: ${{ runner.os }}-24.04-ccache
         max-size: 2G
+        variant: sccache
     
     - name: Cache dependencies
       uses: actions/cache@v4
@@ -73,18 +74,29 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --fix-broken
-        sudo apt-get install -y libunwind-dev
+        sudo apt-get install -y libunwind-dev ccache
     
     - name: Install system dependencies
       shell: bash -e {0}
       run: |
         sudo ./build_linux.sh -u
     
+    - name: Configure ccache
+      shell: bash -e {0}
+      run: |
+        # 配置 ccache
+        ccache --set-config=max_size=2G
+        ccache --set-config=compression=true
+        ccache --set-config=compression_level=6
+        ccache --zero-stats
+        
+        echo "CCache configured:"
+        ccache --show-config
+    
     - name: Build dependencies
       shell: bash -e {0}
       run: |
-        export CC="ccache gcc"
-        export CXX="ccache g++"
+        # 不在依赖构建阶段使用 ccache，避免与某些库的构建系统冲突
         export MAKEFLAGS="-j$(nproc)"
         
         echo "Building dependencies with $(nproc) parallel jobs..."
@@ -93,11 +105,12 @@ jobs:
     - name: Build OrcaSlicer
       shell: bash -e {0}
       run: |
-        export CC="ccache gcc"
-        export CXX="ccache g++"
+        # 在主程序编译时使用 ccache
+        export PATH="/usr/lib/ccache:$PATH"
         export CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)
+        export CCACHE_DIR="${HOME}/.ccache"
         
-        echo "Building OrcaSlicer with $(nproc) parallel jobs..."
+        echo "Building OrcaSlicer with $(nproc) parallel jobs and ccache..."
         time ./build_linux.sh -s
     
     - name: Build AppImage
