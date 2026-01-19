@@ -3,7 +3,7 @@ name: Build Linux AppImage for x86_64
 on:
   push:
     branches: 
-      - feature/add-linux-ci-v2.3.1
+      - 2.3.1_devloper
     tags:
       - 'v*'
   pull_request:
@@ -12,8 +12,8 @@ on:
 
 jobs:
   build-linux-x86_64:
-    # 使用 Ubuntu 22.04 匹配您的服务器环境
-    runs-on: ubuntu-22.04
+    # 使用 Ubuntu 24.04 匹配服务器环境
+    runs-on: ubuntu-24.04
     
     steps:
     - name: Checkout repository
@@ -45,19 +45,28 @@ jobs:
     - name: Setup build info
       shell: bash -e {0}
       run: |
-        echo "Building for Ubuntu 22.04 x86_64"
+        echo "Building for Ubuntu 24.04 x86_64"
+        echo "CPU cores: $(nproc)"
+        echo "Available memory: $(free -h | grep Mem | awk '{print $2}')"
         uname -a
         cat /etc/os-release
     
+    - name: Setup ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: ${{ runner.os }}-24.04-ccache
+        max-size: 2G
+    
     - name: Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           deps/build
           deps/DL_CACHE
-        key: ${{ runner.os }}-22.04-deps-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
+        key: ${{ runner.os }}-24.04-deps-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
         restore-keys: |
-          ${{ runner.os }}-22.04-deps-
+          ${{ runner.os }}-24.04-deps-
+          ${{ runner.os }}-deps-
     
     - name: Fix package manager state
       shell: bash -e {0}
@@ -74,17 +83,28 @@ jobs:
     - name: Build dependencies
       shell: bash -e {0}
       run: |
+        export CC="ccache gcc"
+        export CXX="ccache g++"
+        export MAKEFLAGS="-j$(nproc)"
+        
+        echo "Building dependencies with $(nproc) parallel jobs..."
         ./build_linux.sh -d
     
     - name: Build OrcaSlicer
       shell: bash -e {0}
       run: |
-        ./build_linux.sh -s
+        export CC="ccache gcc"
+        export CXX="ccache g++"
+        export CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)
+        
+        echo "Building OrcaSlicer with $(nproc) parallel jobs..."
+        time ./build_linux.sh -s
     
     - name: Build AppImage
       shell: bash -e {0}
       run: |
-        ./build_linux.sh -i
+        echo "Creating AppImage..."
+        time ./build_linux.sh -i
     
     - name: Get version info
       id: version
@@ -99,7 +119,7 @@ jobs:
           exit 1
         fi
         
-        # 查找 AppImage 文件（避免使用 xargs -r）
+        # 查找 AppImage 文件
         APPIMAGE_PATH=$(find build -maxdepth 1 -name "OrcaSlicer*.AppImage" -type f | head -n1)
         if [ -z "$APPIMAGE_PATH" ]; then
           echo "Error: No AppImage found in build directory"
@@ -137,15 +157,23 @@ jobs:
         echo "File type:"
         file "$FILEPATH"
         echo ""
-        echo "✓ AppImage is ready for deployment to Ubuntu 22.04 x86_64 servers"
+        echo "✓ AppImage is ready for deployment to Ubuntu 24.04 x86_64 servers"
+        
+        # 显示编译统计
+        if command -v ccache &> /dev/null; then
+          echo ""
+          echo "=== CCache Statistics ==="
+          ccache -s
+        fi
     
     - name: Upload AppImage as artifact
       uses: actions/upload-artifact@v4
       with:
-        name: OrcaSlicer-Ubuntu22.04-x86_64-${{ steps.version.outputs.version }}
+        name: OrcaSlicer-Ubuntu24.04-x86_64-${{ steps.version.outputs.version }}
         path: build/OrcaSlicer*.AppImage
         if-no-files-found: error
         retention-days: 30
+        compression-level: 0  # AppImage 已经压缩，跳过额外压缩以节省时间
     
     - name: Create Release
       uses: softprops/action-gh-release@v1
