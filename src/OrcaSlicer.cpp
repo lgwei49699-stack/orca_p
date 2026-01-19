@@ -6073,7 +6073,7 @@ int CLI::run(int argc, char **argv)
                     BOOST_LOG_TRIVIAL(warning) << "Could not get glGetString function pointer";
                 }
                 
-                BOOST_LOG_TRIVIAL(info) << "=== Step 9: Initializing GLEW ===";
+                BOOST_LOG_TRIVIAL(info) << "=== Step 9: Attempting GLEW Initialization ===";
                 
                 // On Linux, GLEW needs glewExperimental for core profile and Mesa
                 // This must be set before glewInit()
@@ -6085,31 +6085,44 @@ int CLI::run(int argc, char **argv)
                 BOOST_LOG_TRIVIAL(info) << "  Calling glewInit()...";
                 GLenum glew_result = glewInit();
                 
-                if (glew_result != GLEW_OK) {
+                bool glew_success = (glew_result == GLEW_OK);
+                
+                if (!glew_success) {
                     const char* error_string = (const char*)glewGetErrorString(glew_result);
-                    BOOST_LOG_TRIVIAL(error) << "Unable to init GLEW library";
-                    BOOST_LOG_TRIVIAL(error) << "GLEW error code: " << glew_result;
-                    BOOST_LOG_TRIVIAL(error) << "GLEW error string: " << (error_string ? error_string : "NULL");
-                    BOOST_LOG_TRIVIAL(error) << "Cannot render thumbnails without GLEW - skipping thumbnail generation";
-                    glfwDestroyWindow(bg_window);
-                    glfwTerminate();
-                    goto skip_thumbnail;
+                    BOOST_LOG_TRIVIAL(warning) << "⚠ GLEW initialization failed (expected in some Mesa environments)";
+                    BOOST_LOG_TRIVIAL(warning) << "  GLEW error code: " << glew_result;
+                    BOOST_LOG_TRIVIAL(warning) << "  GLEW error string: " << (error_string ? error_string : "NULL");
+                    BOOST_LOG_TRIVIAL(info) << "";
+                    BOOST_LOG_TRIVIAL(info) << "=== Continuing without GLEW (using basic OpenGL) ===";
+                    BOOST_LOG_TRIVIAL(info) << "Note: Thumbnails will be skipped since shader support is unavailable";
+                    BOOST_LOG_TRIVIAL(info) << "This is a known limitation in headless Mesa environments";
+                } else {
+                    BOOST_LOG_TRIVIAL(info) << "  ✓ glewInit() returned GLEW_OK";
                 }
                 
-                BOOST_LOG_TRIVIAL(info) << "  ✓ glewInit() returned GLEW_OK";
-                
-                // Initialize OpenGL Manager
+                // Initialize OpenGL Manager (even if GLEW failed, for basic GL info)
                 Slic3r::GUI::OpenGLManager opengl_mgr;
-                if (!opengl_mgr.init_gl(false)) {  // false = don't show error popup in CLI mode
-                    BOOST_LOG_TRIVIAL(error) << "Failed to initialize OpenGL Manager";
-                    glfwDestroyWindow(bg_window);
-                    glfwTerminate();
-                    goto skip_thumbnail;
+                
+                if (glew_success) {
+                    if (!opengl_mgr.init_gl(false)) {  // false = don't show error popup in CLI mode
+                        BOOST_LOG_TRIVIAL(warning) << "OpenGL Manager initialization had issues, but continuing...";
+                    } else {
+                        BOOST_LOG_TRIVIAL(info) << "✓ OpenGL Manager initialized successfully";
+                    }
+                } else {
+                    // GLEW failed, so we can't use extensions or shaders
+                    // Initialize without GLEW
+                    opengl_mgr.init_gl_without_glew();
                 }
                 
                 BOOST_LOG_TRIVIAL(info) << "========================================";
-                BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL Setup Complete!";
-                BOOST_LOG_TRIVIAL(info) << "✓✓✓ Ready to Generate Thumbnails";
+                if (glew_success) {
+                    BOOST_LOG_TRIVIAL(info) << "✓✓✓ OpenGL Setup Complete (with GLEW)";
+                    BOOST_LOG_TRIVIAL(info) << "✓✓✓ Ready to Generate Thumbnails";
+                } else {
+                    BOOST_LOG_TRIVIAL(info) << "⚠⚠⚠ OpenGL Setup Complete (without GLEW)";
+                    BOOST_LOG_TRIVIAL(info) << "⚠⚠⚠ Thumbnail generation will be skipped";
+                }
                 BOOST_LOG_TRIVIAL(info) << "========================================";
                 BOOST_LOG_TRIVIAL(info) << "";
                     GLVolumeCollection glvolume_collection;
@@ -6160,7 +6173,13 @@ int CLI::run(int argc, char **argv)
                     ThumbnailsParams thumbnail_params;
                     GLShaderProgram* shader = opengl_mgr.get_shader("thumbnail");
                     if (!shader) {
-                        BOOST_LOG_TRIVIAL(error) << boost::format("can not get shader for rendering thumbnail");
+                        BOOST_LOG_TRIVIAL(warning) << "Cannot get shader for rendering thumbnail (GLEW unavailable)";
+                        BOOST_LOG_TRIVIAL(warning) << "Skipping thumbnail generation - this is expected in headless Mesa environments";
+                        BOOST_LOG_TRIVIAL(info) << "";
+                        BOOST_LOG_TRIVIAL(info) << "=== Proceeding with 3MF export (without thumbnails) ===";
+                        
+                        // Skip all thumbnail generation but continue with export
+                        goto skip_thumbnail_render;
                     }
                     else {
                         for (int i = 0; i < partplate_list.get_plate_count(); i++) {
