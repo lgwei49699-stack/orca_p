@@ -5901,6 +5901,13 @@ void PrintConfigDef::init_fff_params()
     def->enum_labels.push_back("ColPic");
     def->set_default_value(new ConfigOptionEnum<GCodeThumbnailsFormat>(GCodeThumbnailsFormat::PNG));
 
+    def = this->add("thumbnail_image", coString);
+    def->label = L("Thumbnail Image");
+    def->tooltip = L("Specify an image file to be embedded as thumbnail in G-code. Supported formats: PNG, JPG.");
+    def->cli = "thumbnail-image";
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionString(""));
+
     def = this->add("use_relative_e_distances", coBool);
     def->label = L("Use relative E distances");
     def->tooltip = L("Relative extrusion is recommended when using \"label_objects\" option. "
@@ -7873,6 +7880,42 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->tooltip = L("Scale the model by a float factor.");
     def->cli_params = "factor";
     def->set_default_value(new ConfigOptionFloat(1.f));
+
+    // 多模型切片相关参数
+    def = this->add("model", coStrings);
+    def->label = L("Model");
+    def->tooltip = L("Specify model files for multi-model slicing.");
+    def->cli = "model";
+    def->cli_params = "model1.stl,model2.stl,...";
+    def->set_default_value(new ConfigOptionStrings());
+
+    def = this->add("model_position", coStrings);
+    def->label = L("Model Position");
+    def->tooltip = L("Specify center position (x,y,z) for each model in millimeters.");
+    def->cli = "model-position";
+    def->cli_params = "x1,y1,z1,x2,y2,z2,...";
+    def->set_default_value(new ConfigOptionStrings());
+
+    def = this->add("model_scale", coStrings);
+    def->label = L("Model Scale");
+    def->tooltip = L("Specify scale factor for each model.");
+    def->cli = "model-scale";
+    def->cli_params = "scale1,scale2,...";
+    def->set_default_value(new ConfigOptionStrings());
+
+    def = this->add("model_rotate", coStrings);
+    def->label = L("Model Rotation");
+    def->tooltip = L("Specify rotation angles (x,y,z) in degrees for each model.");
+    def->cli = "model-rotate";
+    def->cli_params = "rx1,ry1,rz1,rx2,ry2,rz2,...";
+    def->set_default_value(new ConfigOptionStrings());
+
+    def = this->add("model_support", coStrings);
+    def->label = L("Model Support");
+    def->tooltip = L("Specify support settings for each model (0=disabled, 1=enabled).");
+    def->cli = "model-support";
+    def->cli_params = "0,1,0,1,...";
+    def->set_default_value(new ConfigOptionStrings());
 
     /*def = this->add("split", coBool);
     def->label = L("Split");

@@ -1,4 +1,5 @@
 #include "ModelArrange.hpp"
+#include "Arrange.hpp"
 
 #include <libslic3r/Model.hpp>
 #include <libslic3r/Geometry/ConvexHull.hpp>
@@ -160,20 +161,117 @@ ArrangePolygon get_instance_arrange_poly(ModelInstance* instance, const Slic3r::
     auto obj = instance->get_object();
 
     ap.brim_width = 1.0;
-    // For by-layer printing, need to shrink bed a little, so the support won't go outside bed.
-    // We set it to 5mm because that's how much a normal support will grow by default.
-    // normal support 5mm, other support 22mm, no support 0mm
+    
+    // Smart support detection: analyze actual mesh geometry to detect overhangs
     auto supp_type_ptr = obj->get_config_value<ConfigOptionBool>(config, "enable_support");
     auto support_type_ptr = obj->get_config_value<ConfigOptionEnum<SupportType>>(config, "support_type");
-    auto support_type = support_type_ptr->value;
-    auto enable_support = supp_type_ptr->getBool();
-    int support_int = support_type_ptr->getInt();
-
-    if (enable_support && (support_type == stNormalAuto || support_type == stNormal))
-        ap.brim_width = 6.0;
-    else if (enable_support) {
-        ap.brim_width = 24.0; // 2*MAX_BRANCH_RADIUS_FIRST_LAYER
-        ap.has_tree_support = true;
+    auto support_threshold_ptr = obj->get_config_value<ConfigOptionFloat>(config, "support_threshold_angle");
+    
+    bool enable_support = supp_type_ptr && supp_type_ptr->getBool();
+    auto support_type = support_type_ptr ? support_type_ptr->value : stNormalAuto;
+    double support_threshold = support_threshold_ptr ? support_threshold_ptr->value : 30.0;
+    
+    double support_spacing = 0;
+    if (enable_support) {
+        // Fast overhang detection using mesh geometry
+        bool likely_needs_support = false;
+        double estimated_support_extent = 0;
+        
+        // Get model geometry
+        auto bbox = obj->raw_bounding_box();
+        double width = std::max(bbox.size().x(), bbox.size().y());
+        double height = bbox.size().z();
+        
+        // Quick check: very low models (<5mm) almost never need support
+        if (height < 5.0) {
+            likely_needs_support = false;
+            estimated_support_extent = 0;
+        } else {
+            // Analyze mesh for overhangs (fast approximation)
+            TriangleMesh mesh = obj->raw_mesh();
+            auto& facets = mesh.its.indices;
+            auto& vertices = mesh.its.vertices;
+            
+            if (!facets.empty() && !vertices.empty()) {
+                // Count downward-facing triangles (quick overhang indicator)
+                int downward_faces = 0;
+                double max_overhang_extent = 0;
+                
+                // Adaptive sampling: adjust rate based on model complexity
+                size_t sample_stride;
+                if (facets.size() < 1000) {
+                    // Small models: check all faces for accuracy
+                    sample_stride = 1;
+                } else if (facets.size() < 10000) {
+                    // Medium models: 0.2% sampling (1/500)
+                    sample_stride = facets.size() / 500;
+                } else {
+                    // Large models: 1% sampling (1/100)
+                    sample_stride = facets.size() / 100;
+                }
+                sample_stride = std::max<size_t>(1, sample_stride);
+                
+                for (size_t i = 0; i < facets.size(); i += sample_stride) {
+                    auto& f = facets[i];
+                    Vec3f v0 = vertices[f[0]];
+                    Vec3f v1 = vertices[f[1]];
+                    Vec3f v2 = vertices[f[2]];
+                    
+                    // Calculate face normal
+                    Vec3f normal = (v1 - v0).cross(v2 - v0);
+                    if (normal.norm() > 0.001) {
+                        normal.normalize();
+                        
+                        // Check if face is downward-facing (normal.z < 0)
+                        // and steep enough to need support (angle > threshold)
+                        double angle_deg = std::asin(std::abs(normal.z())) * 180.0 / M_PI;
+                        
+                        if (normal.z() < 0 && angle_deg > support_threshold) {
+                            downward_faces++;
+                            
+                            // Estimate overhang extent in XY plane
+                            double extent = std::max({
+                                std::abs(v0.x() - v1.x()), std::abs(v0.y() - v1.y()),
+                                std::abs(v1.x() - v2.x()), std::abs(v1.y() - v2.y()),
+                                std::abs(v2.x() - v0.x()), std::abs(v2.y() - v0.y())
+                            });
+                            max_overhang_extent = std::max(max_overhang_extent, (double)extent);
+                        }
+                    }
+                }
+                
+                // Decision: if >5% of sampled faces are overhangs, model needs support
+                double overhang_ratio = (double)downward_faces / (facets.size() / sample_stride);
+                if (overhang_ratio > 0.05) {
+                    likely_needs_support = true;
+                    estimated_support_extent = max_overhang_extent;
+                }
+            }
+        }
+        
+        // Calculate support spacing based on actual detection
+        if (likely_needs_support) {
+            // Model needs support - use spacing based on estimated extent
+            if (support_type == stNormalAuto || support_type == stNormal) {
+                // Normal support: 6mm default, or estimated extent + safety margin
+                support_spacing = std::max(6.0, estimated_support_extent + 2.0);
+            } else {
+                // Tree support: use estimated extent * 2 (tree branches spread)
+                // Cap at 24mm (MAX_BRANCH_RADIUS)
+                support_spacing = std::min(24.0, std::max(12.0, estimated_support_extent * 2.0));
+                ap.has_tree_support = true;
+            }
+        } else {
+            // Model doesn't need support - use minimal spacing regardless of support type
+            support_spacing = 1.0;  // Minimal safety margin when no actual support needed
+        }
+        
+        // Apply the calculated support spacing
+        ap.brim_width = std::max(ap.brim_width, support_spacing);
+        
+        BOOST_LOG_TRIVIAL(info) << "ModelArrange: '" << obj->name << "' enable_support=" << enable_support 
+                                << ", likely_needs=" << likely_needs_support << ", spacing=" << support_spacing 
+                                << "mm, final_brim_width=" << ap.brim_width << "mm";
     }
 
     auto size = obj->instance_convex_hull_bounding_box(instance).size();

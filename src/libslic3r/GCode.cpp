@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <iostream>
+#include <fstream>
 #include <math.h>
 #include <stdlib.h>
 #include <string>
@@ -1833,6 +1834,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // modifies m_silent_time_estimator_enabled
     DoExport::init_gcode_processor(print.config(), m_processor, m_silent_time_estimator_enabled);
     const bool is_bbl_printers = print.is_BBL_printer();
+    BOOST_LOG_TRIVIAL(info) << "[THUMBNAIL] is_bbl_printers = " << (is_bbl_printers ? "true" : "false");
     m_calib_config.clear();
     // resets analyzer's tracking data
     m_last_height  = 0.f;
@@ -2005,6 +2007,54 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             if (!thumbnails.empty())
                 GCodeThumbnails::export_thumbnails_to_file(
                     thumbnail_cb, print.get_plate_index(), thumbnails, [&file](const char* sz) { file.write(sz); }, [&print]() { print.throw_if_canceled(); });
+        }
+        
+        // Embed thumbnail from image file if specified (works for all printer types)
+        const ConfigOption* thumbnail_opt = print.full_print_config().option("thumbnail_image");
+        if (thumbnail_opt != nullptr) {
+            const ConfigOptionString* thumbnail_str = dynamic_cast<const ConfigOptionString*>(thumbnail_opt);
+            if (thumbnail_str != nullptr && !thumbnail_str->value.empty()) {
+                std::string thumbnail_image_path = thumbnail_str->value;
+                if (boost::filesystem::exists(thumbnail_image_path)) {
+                    try {
+                        std::ifstream img_file(thumbnail_image_path, std::ios::binary);
+                        if (img_file.good()) {
+                            std::vector<unsigned char> img_data((std::istreambuf_iterator<char>(img_file)), 
+                                                               std::istreambuf_iterator<char>());
+                            img_file.close();
+                            
+                            std::string encoded;
+                            encoded.resize(boost::beast::detail::base64::encoded_size(img_data.size()));
+                            encoded.resize(boost::beast::detail::base64::encode((void*)encoded.data(), 
+                                                                                (const void*)img_data.data(), 
+                                                                                img_data.size()));
+                            
+                            int width = 300, height = 300;
+                            file.write("; THUMBNAIL_BLOCK_START\n\n;\n");
+                            file.write_format("; thumbnail begin %dx%d %d\n", width, height, (int)encoded.size());
+                            
+                            static constexpr const size_t max_row_length = 78;
+                            while (encoded.size() > max_row_length) {
+                                file.write("; ");
+                                file.write(encoded.substr(0, max_row_length).c_str());
+                                file.write("\n");
+                                encoded = encoded.substr(max_row_length);
+                            }
+                            
+                            if (encoded.size() > 0) {
+                                file.write("; ");
+                                file.write(encoded.c_str());
+                                file.write("\n");
+                            }
+                            
+                            file.write("; thumbnail end\n");
+                            file.write("; THUMBNAIL_BLOCK_END\n\n");
+                        }
+                    } catch (const std::exception& e) {
+                        BOOST_LOG_TRIVIAL(warning) << "Failed to embed thumbnail: " << e.what();
+                    }
+                }
+            }
         }
     }
 

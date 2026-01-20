@@ -1548,6 +1548,21 @@ void GCodeProcessor::process_gcode_line(const GCodeReader::GCodeLine& line, bool
 /* std::cout << line.raw() << std::endl; */
 
     ++m_line_id;
+    
+    // Skip processing thumbnail blocks to avoid false "Invalid T command" warnings
+    static bool in_thumbnail_block = false;
+    const std::string& raw_line = line.raw();
+    if (raw_line.find("THUMBNAIL_BLOCK_START") != std::string::npos || 
+        raw_line.find("thumbnail begin") != std::string::npos) {
+        in_thumbnail_block = true;
+    }
+    if (in_thumbnail_block) {
+        if (raw_line.find("THUMBNAIL_BLOCK_END") != std::string::npos || 
+            raw_line.find("thumbnail end") != std::string::npos) {
+            in_thumbnail_block = false;
+        }
+        return;
+    }
 
     // update start position
     m_start_position = m_end_position;

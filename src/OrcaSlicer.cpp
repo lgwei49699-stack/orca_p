@@ -23,7 +23,8 @@
 #include <iostream>
 #include <math.h>
 
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
+
 #include <condition_variable>
 #include <mutex>
 #include <boost/thread.hpp>
@@ -166,7 +167,7 @@ typedef struct _sliced_info {
 }sliced_info_t;
 std::vector<PrintBase::SlicingStatus> g_slicing_warnings;
 
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
 #define PIPE_BUFFER_SIZE 512
 
 typedef struct _cli_callback_mgr {
@@ -379,7 +380,7 @@ static PrinterTechnology get_printer_technology(const DynamicConfig &config)
 }
 
 //BBS: add flush and exit
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
 #define flush_and_exit(ret)     { boost::nowide::cout << __FUNCTION__ << " found error, return "<<ret<<", exit..." << std::endl;\
     g_cli_callback_mgr.stop();\
     boost::nowide::cout.flush();\
@@ -400,7 +401,8 @@ static PrinterTechnology get_printer_technology(const DynamicConfig &config)
 
 void record_exit_reson(std::string outputdir, int code, int plate_id, std::string error_message, sliced_info_t& sliced_info, std::map<std::string, std::string> key_values = std::map<std::string, std::string>())
 {
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
+
     std::string result_file;
 
     if (!outputdir.empty())
@@ -1262,7 +1264,7 @@ int CLI::run(int argc, char **argv)
         pipe_name = pipe_option->value;
         if (!pipe_name.empty()) {
             BOOST_LOG_TRIVIAL(info) << boost::format("Will use pipe %1%")%pipe_name;
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
             g_cli_callback_mgr.start(pipe_name);
             PrintBase::SlicingStatus slicing_status{1, "Start to load files"};
             cli_status_callback(slicing_status);
@@ -1595,6 +1597,133 @@ int CLI::run(int argc, char **argv)
             if (model.objects.empty()) {
                 boost::nowide::cerr << "Error: file is empty: " << file << std::endl;
                 continue;
+            }
+            // 处理模型参数 - 支持单模型和多模型
+            auto model_option = m_config.option<ConfigOptionStrings>("model");
+            auto position_option = m_config.option<ConfigOptionStrings>("model_position");
+            auto scale_option = m_config.option<ConfigOptionStrings>("model_scale");
+            auto rotate_option = m_config.option<ConfigOptionStrings>("model_rotate");
+            auto support_option = m_config.option<ConfigOptionStrings>("model_support");
+            
+            // 检查是否有任何模型参数
+            bool has_model_params = (model_option && !model_option->values.empty()) ||
+                                    (position_option && !position_option->values.empty()) ||
+                                    (scale_option && !scale_option->values.empty()) ||
+                                    (rotate_option && !rotate_option->values.empty()) ||
+                                    (support_option && !support_option->values.empty());
+            
+            if (has_model_params) {
+                BOOST_LOG_TRIVIAL(info) << "Processing model parameters for file: " << file;
+                
+                // 获取模型参数
+                const auto& model_files = model_option ? model_option->values : std::vector<std::string>();
+                const auto& model_positions = position_option ? position_option->values : std::vector<std::string>();
+                const auto& model_scales = scale_option ? scale_option->values : std::vector<std::string>();
+                const auto& model_rotates = rotate_option ? rotate_option->values : std::vector<std::string>();
+                const auto& model_supports = support_option ? support_option->values : std::vector<std::string>();
+                
+                // 确定模型索引
+                size_t model_idx = 0;  // 默认索引为0（单模型情况）
+                bool found_model = false;
+                
+                if (!model_files.empty()) {
+                    // 多模型情况：从文件路径中提取文件名进行匹配
+                    std::string filename = boost::filesystem::path(file).filename().string();
+                    auto it = std::find(model_files.begin(), model_files.end(), filename);
+                    if (it != model_files.end()) {
+                        model_idx = std::distance(model_files.begin(), it);
+                        found_model = true;
+                        BOOST_LOG_TRIVIAL(info) << "Found model '" << filename << "' at index " << model_idx;
+                    } else {
+                        BOOST_LOG_TRIVIAL(warning) << "Model '" << filename << "' not found in model parameter list";
+                    }
+                } else {
+                    // 单模型情况：使用索引0
+                    found_model = true;
+                    BOOST_LOG_TRIVIAL(info) << "Single model mode, using index 0";
+                }
+                    
+                if (found_model) {
+                    // 为每个模型实例应用变换 - 按正确顺序：先缩放→再旋转→最后移动
+                    for (ModelObject* obj : model.objects) {
+                        for (ModelInstance* instance : obj->instances) {
+                            // 1. 先应用缩放
+                            if (model_idx < model_scales.size()) {
+                                double scale_factor = std::stod(model_scales[model_idx]);
+                                Vec3d current_scale = instance->get_scaling_factor();
+                                Vec3d new_scale = current_scale * scale_factor;
+                                instance->set_scaling_factor(new_scale);
+                                BOOST_LOG_TRIVIAL(info) << "Applied scale factor: " << new_scale.transpose();
+                            }
+                            
+                            // 2. 再应用旋转
+                            if (model_idx < model_rotates.size()) {
+                                std::string rot_str = model_rotates[model_idx];
+                                // 解析旋转字符串 "x,y,z"
+                                std::vector<std::string> rot_parts;
+                                boost::split(rot_parts, rot_str, boost::is_any_of(","));
+                                if (rot_parts.size() >= 3) {
+                                    Vec3d current_rotation = instance->get_rotation();
+                                    Vec3d new_rotation = current_rotation + Vec3d(
+                                        std::stod(rot_parts[0]) * M_PI / 180.0,  // X轴旋转
+                                        std::stod(rot_parts[1]) * M_PI / 180.0,  // Y轴旋转
+                                        std::stod(rot_parts[2]) * M_PI / 180.0   // Z轴旋转
+                                    );
+                                    instance->set_rotation(new_rotation);
+                                    BOOST_LOG_TRIVIAL(info) << "Applied rotation: " << new_rotation.transpose();
+                                }
+                            }
+                            
+                            // 3. 最后应用位置（模型地面中央位置）
+                            if (model_idx < model_positions.size()) {
+                                std::string pos_str = model_positions[model_idx];
+                                // 解析位置字符串 "x,y,z"
+                                std::vector<std::string> pos_parts;
+                                boost::split(pos_parts, pos_str, boost::is_any_of(","));
+                                if (pos_parts.size() >= 2) {
+                                    // 获取缩放和旋转后的模型边界框
+                                    BoundingBoxf3 bbox = obj->instance_bounding_box(*instance, false);
+                                    // 目标位置是模型地面的中央位置
+                                    Vec3d target_ground_center(
+                                        std::stod(pos_parts[0]), 
+                                        std::stod(pos_parts[1]), 
+                                        0.0  // 固定为打印板表面Z=0
+                                    );
+                                    
+                                    // 计算模型地面中心到目标位置的偏移
+                                    Vec3d current_ground_center(
+                                        bbox.center().x(),
+                                        bbox.center().y(),
+                                        bbox.min.z()  // 当前模型底部Z坐标
+                                    );
+                                    Vec3d offset = target_ground_center - current_ground_center;
+                                    
+                                    // 应用偏移，使模型地面中央移动到指定位置
+                                    Vec3d current_offset = instance->get_offset();
+                                    Vec3d new_offset = current_offset + offset;
+                                    instance->set_offset(new_offset);
+                                    
+                                    BOOST_LOG_TRIVIAL(info) << "Model '" << obj->name << "' moved to ground center position: " << target_ground_center.transpose();
+                                    BOOST_LOG_TRIVIAL(info) << "Applied offset: " << offset.transpose() << ", new offset: " << new_offset.transpose();
+                                }
+                            }
+
+                            // 4. 最后应用支撑设置（对象级配置）
+                            if (model_idx < model_supports.size()) {
+                                std::string support_str = model_supports[model_idx];
+                                try {
+                                    bool enable_support = (support_str == "1");
+                                    obj->config.set("enable_support", enable_support);
+                                    BOOST_LOG_TRIVIAL(info) << "Model '" << obj->name << "' support: " 
+                                        << (enable_support ? "enabled" : "disabled");
+                                } catch (const std::exception& e) {
+                                    BOOST_LOG_TRIVIAL(warning) << "Invalid support format: " << support_str 
+                                        << " (error: " << e.what() << ", using global setting)";
+                                }
+                            }
+                        }
+                    }
+                }
             }
             m_models.push_back(std::move(model));
         }
@@ -3396,7 +3525,7 @@ int CLI::run(int argc, char **argv)
     ArrangeParams arrange_cfg;
 
     BOOST_LOG_TRIVIAL(info) << "will start transforms, commands count " << m_transforms.size() << "\n";
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
     if (g_cli_callback_mgr.is_started()) {
         PrintBase::SlicingStatus slicing_status{2, "Loading files finished"};
         cli_status_callback(slicing_status);
@@ -3681,6 +3810,8 @@ int CLI::run(int argc, char **argv)
             // Models are repaired by default.
             //for (auto &model : m_models)
             //    model.repair();
+        } else if (opt_key == "model" || opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "thumbnail_image") {
+            BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
             boost::nowide::cerr << "error: option not implemented yet: " << opt_key << std::endl;
             record_exit_reson(outfile_dir, CLI_UNSUPPORTED_OPERATION, 0, cli_errors[CLI_UNSUPPORTED_OPERATION], sliced_info);
@@ -4735,7 +4866,7 @@ int CLI::run(int argc, char **argv)
                 flush_and_exit(1);
             }*/
             BOOST_LOG_TRIVIAL(info) << "Need to slice for plate "<<plate_to_slice <<", total plate count "<<partplate_list.get_plate_count()<<" partplates!" << std::endl;
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
             if (g_cli_callback_mgr.is_started()) {
                 PrintBase::SlicingStatus slicing_status{3, "Prepare slicing"};
                 cli_status_callback(slicing_status);
@@ -4806,10 +4937,64 @@ int CLI::run(int argc, char **argv)
                         unsigned int count = model.update_print_volume_state(build_volume);
 
                         if (count == 0) {
-                            BOOST_LOG_TRIVIAL(error) << "plate "<< index+1<< ": Nothing to be sliced, Either the print is empty or no object is fully inside the print volume before apply." << std::endl;
-                            record_exit_reson(outfile_dir, CLI_NO_SUITABLE_OBJECTS, index+1, cli_errors[CLI_NO_SUITABLE_OBJECTS], sliced_info);
-                            flush_and_exit(CLI_NO_SUITABLE_OBJECTS);
-                        }
+                            BOOST_LOG_TRIVIAL(warning) << "plate "<< index+1<< ": count=0, oriented_or_arranged=" << oriented_or_arranged << ", need_arrange=" << need_arrange;
+                            
+                            if (oriented_or_arranged && need_arrange) {
+                                BOOST_LOG_TRIVIAL(warning) << "plate "<< index+1<< ": No objects detected in print volume after arrange. Attempting to center model..." << std::endl;
+   
+                                bool successfully_centered = false;
+                                for (ModelObject* model_object : model.objects) {
+                                    for (ModelInstance* instance : model_object->instances) {
+                                        // 获取实例的边界框（基于所属对象计算）
+                                        BoundingBoxf3 bbox = model_object->instance_bounding_box(*instance, /*dont_translate=*/false);
+                                        // 获取打印床中心
+                                        Vec2d bed_center = build_volume.bed_center();
+   
+                                        // 计算居中偏移量
+                                        Vec3d center_offset;
+                                        center_offset.x() = bed_center.x() - bbox.center().x();
+                                        center_offset.y() = bed_center.y() - bbox.center().y();
+                                        center_offset.z() = -bbox.min.z(); // Z轴放在床面上
+   
+                                        // 应用偏移：读取实例当前变换，累加位移后回写
+                                        {
+                                            auto transf = instance->get_transformation();
+                                            transf.set_offset(transf.get_offset() + center_offset);
+                                            instance->set_transformation(transf);
+                                        }
+                                        successfully_centered = true;
+   
+                                        BOOST_LOG_TRIVIAL(warning) << "plate "<< index+1<< ": Centered model by offset: " << center_offset.transpose() << std::endl;
+                                        
+                                        // 记录模型移动后的具体位置
+                                        Vec3d new_position = instance->get_offset();
+                                        BOOST_LOG_TRIVIAL(warning) << "plate "<< index+1<< ": Model '" << model_object->name << "' instance moved to position: (" 
+                                            << new_position.x() << ", " << new_position.y() << ", " << new_position.z() << ") mm";
+                                    }
+                                }
+   
+                                if (successfully_centered) {
+                                    // 重新检查
+                                    unsigned int new_count = model.update_print_volume_state(build_volume);
+                                    if (new_count > 0) {
+                                        BOOST_LOG_TRIVIAL(warning) << "plate "<< index+1<< ": Successfully centered " << new_count << " objects into print volume." << std::endl;
+                                        count = new_count; // 更新count，继续后续处理
+                                    } else {
+                                        BOOST_LOG_TRIVIAL(error) << "plate "<< index+1<< ": Model is too large for print bed even after centering." << std::endl;
+                                        record_exit_reson(outfile_dir, CLI_NO_SUITABLE_OBJECTS, index+1, "Model too large for print bed", sliced_info);
+                                        flush_and_exit(CLI_NO_SUITABLE_OBJECTS);
+                                    }
+                                } else {
+                                    BOOST_LOG_TRIVIAL(error) << "plate "<< index+1<< ": No objects found to center." << std::endl;
+                                    record_exit_reson(outfile_dir, CLI_NO_SUITABLE_OBJECTS, index+1, "No objects found", sliced_info);
+                                    flush_and_exit(CLI_NO_SUITABLE_OBJECTS);
+                                }
+                            } else {
+                                BOOST_LOG_TRIVIAL(error) << "plate "<< index+1<< ": Nothing to be sliced, Either the print is empty or no object is fully inside the print volume." << std::endl;
+                                record_exit_reson(outfile_dir, CLI_NO_SUITABLE_OBJECTS, index+1, cli_errors[CLI_NO_SUITABLE_OBJECTS], sliced_info);
+                                flush_and_exit(CLI_NO_SUITABLE_OBJECTS);
+                            }
+                        }   
                         else if ((plate_to_slice != 0) || pre_check) {
                             long long triangle_count = 0;
                             int printable_instances = 0;
@@ -4947,7 +5132,7 @@ int CLI::run(int argc, char **argv)
                             try {
                                 std::string outfile_final;
                                 BOOST_LOG_TRIVIAL(info) << "start Print::process for partplate "<<index+1 << std::endl;
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
                                 BOOST_LOG_TRIVIAL(info) << "cli callback mgr started:  "<<g_cli_callback_mgr.m_started << std::endl;
                                 if (g_cli_callback_mgr.is_started()) {
                                     BOOST_LOG_TRIVIAL(info) << "set print's callback to cli_status_callback.";
@@ -5001,7 +5186,7 @@ int CLI::run(int argc, char **argv)
                                     }
                                     else {
                                         BOOST_LOG_TRIVIAL(info) << "plate "<< index+1<< ": load cached data success, go on.";
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
                                         if (g_cli_callback_mgr.is_started()) {
                                             PrintBase::SlicingStatus slicing_status{69, "Cache data loaded"};
                                             cli_status_callback(slicing_status);
@@ -5090,7 +5275,7 @@ int CLI::run(int argc, char **argv)
                                 //run_post_process_scripts(outfile, print->full_print_config());
                                 BOOST_LOG_TRIVIAL(info) << "Slicing result exported to " << outfile << std::endl;
                                 part_plate->update_slice_result_valid_state(true);
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
                                 if (g_cli_callback_mgr.is_started()) {
                                     PrintBase::SlicingStatus slicing_status{100, "Slicing finished"};
                                     cli_status_callback(slicing_status);
@@ -5140,7 +5325,7 @@ int CLI::run(int argc, char **argv)
                         finished = true;
                 }//end for partplate
 
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
                 if (g_cli_callback_mgr.is_started()) {
                     int plate_count = (plate_to_slice== 0)?partplate_list.get_plate_count():1;
                     g_cli_callback_mgr.set_plate_info(0, plate_count);
@@ -5218,7 +5403,7 @@ int CLI::run(int argc, char **argv)
             export_3mf_file = outfile_dir + "/"+export_3mf_file;
         }
 
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
         if (g_cli_callback_mgr.is_started()) {
             PrintBase::SlicingStatus slicing_status{94, "Generate thumbnails"};
             cli_status_callback(slicing_status);
@@ -5850,7 +6035,7 @@ int CLI::run(int argc, char **argv)
         }
 
 
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
         if (g_cli_callback_mgr.is_started()) {
             PrintBase::SlicingStatus slicing_status{97, "Exporting 3mf"};
             cli_status_callback(slicing_status);
@@ -5908,7 +6093,7 @@ int CLI::run(int argc, char **argv)
         release_PlateData_list(plate_data_src);
     }
 
-#if defined(__linux__) || defined(__LINUX__)
+#if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
     if (g_cli_callback_mgr.is_started()) {
         PrintBase::SlicingStatus slicing_status{100, "All done, Success"};
         cli_status_callback(slicing_status);
