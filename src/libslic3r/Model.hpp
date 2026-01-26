@@ -944,7 +944,10 @@ public:
     const Polygon& get_convex_hull_2d(const Transform3d &trafo_instance) const;
     void invalidate_convex_hull_2d()
     {
+        // Clear all three cache layers to force complete recomputation
         m_convex_hull_2d.clear();
+        m_cached_2d_polygon.clear();
+        m_cached_trans_matrix = Transform3d::Identity();
     }
 
     // Get count of errors in the mesh
@@ -1348,7 +1351,15 @@ public:
         set_rotation(Z, rotation);
         set_offset(X, unscale<double>(offs(X)));
         set_offset(Y, unscale<double>(offs(Y)));
+        
+        // CRITICAL FIX: Invalidate all cached geometry after rotation
         this->object->invalidate_bounding_box();
+        // Invalidate 2D convex hull cache in all volumes
+        for (ModelVolume* v : this->object->volumes) {
+            v->invalidate_convex_hull_2d();
+        }
+        // Invalidate instance convex hull cache
+        this->invalidate_convex_hull_2d();
     }
 
     ModelInstanceEPrintVolumeState calc_print_volume_state(const BuildVolume& build_volume) const;

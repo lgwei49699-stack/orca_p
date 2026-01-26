@@ -7715,6 +7715,11 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     def->cli_params = "option";
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("export_model_transforms", coBool);
+    def->label = L("Export Model Transforms");
+    def->tooltip = L("Export model position, rotation and scale information after orient and arrange to result.json");
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("mtcpp", coInt);
     def->label = L("mtcpp");
     def->tooltip = L("max triangle count per plate for slicing.");
@@ -7812,6 +7817,13 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->tooltip = L("Arrange options: 0-disable, 1-enable, others-auto");
     def->cli_params = "option";
     //def->cli = "arrange|a";
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("auto_plate", coInt);
+    def->label = L("Auto Plate Options");
+    def->tooltip = L("Auto plate options: 0-single plate (allow overflow), 1-auto create multiple plates");
+    def->cli = "auto-plate";
+    def->cli_params = "option";
     def->set_default_value(new ConfigOptionInt(0));
 
     def = this->add("repetitions", coInt);

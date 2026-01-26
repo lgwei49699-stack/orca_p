@@ -200,13 +200,13 @@ ArrangePolygon get_instance_arrange_poly(ModelInstance* instance, const Slic3r::
                 // Adaptive sampling: adjust rate based on model complexity
                 size_t sample_stride;
                 if (facets.size() < 1000) {
-                    // Small models: check all faces for accuracy
+                    // Small models: check all faces for accuracy (100%)
                     sample_stride = 1;
                 } else if (facets.size() < 10000) {
-                    // Medium models: 0.2% sampling (1/500)
+                    // Medium models: ~10% sampling (stride = facets/500, e.g. 5000 faces → 500 samples)
                     sample_stride = facets.size() / 500;
                 } else {
-                    // Large models: 1% sampling (1/100)
+                    // Large models: ~1% sampling (stride = facets/100, e.g. 50000 faces → 500 samples)
                     sample_stride = facets.size() / 100;
                 }
                 sample_stride = std::max<size_t>(1, sample_stride);

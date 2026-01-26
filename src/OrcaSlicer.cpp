@@ -1196,6 +1196,8 @@ int CLI::run(int argc, char **argv)
     bool allow_rotations = true, skip_modified_gcodes = false, avoid_extrusion_cali_region = false, skip_useless_pick = false, allow_newer_file = false;
     Semver file_version;
     std::map<size_t, bool> orients_requirement;
+    // record the Euler rotation (radians) applied by auto-orient per object (only when orient acts on ModelObject)
+    std::map<size_t, Vec3d> oriented_euler_map;
     std::vector<Preset*> project_presets;
     std::string new_printer_name, current_printer_name, new_process_name, current_process_name, current_printer_system_name, current_process_system_name, new_process_system_name, new_printer_system_name, printer_model_id, current_printer_model, printer_model;//, printer_inherits, print_inherits;
     std::vector<std::string> upward_compatible_printers, new_print_compatible_printers, current_print_compatible_printers, current_different_settings;
@@ -1205,6 +1207,10 @@ int CLI::run(int argc, char **argv)
     std::string pipe_name, makerlab_name, makerlab_version, different_process_setting;
     const std::vector<std::string>              &metadata_name               = m_config.option<ConfigOptionStrings>("metadata_name", true)->values;
     const std::vector<std::string>              &metadata_value              = m_config.option<ConfigOptionStrings>("metadata_value", true)->values;
+    
+    // Variables for exporting model transforms
+    bool export_transforms = m_config.opt_bool("export_model_transforms");
+    json model_transforms_json = json::array();
 
     if (metadata_name.size() != metadata_value.size())
     {
@@ -3810,6 +3816,12 @@ int CLI::run(int argc, char **argv)
             // Models are repaired by default.
             //for (auto &model : m_models)
             //    model.repair();
+        } else if (opt_key == "export_model_transforms") {
+            // This will be handled after orient and arrange
+            BOOST_LOG_TRIVIAL(info) << "export_model_transforms is enabled, will export model position/rotation/scale to result.json";
+        } else if (opt_key == "auto_plate") {
+            // Will be used during arrange process
+            BOOST_LOG_TRIVIAL(info) << "auto_plate is set to " << m_config.opt_int("auto_plate") << ", will be used during arrange process";
         } else if (opt_key == "model" || opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "thumbnail_image") {
             BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
@@ -3829,7 +3841,25 @@ int CLI::run(int argc, char **argv)
             if (orients_requirement[o->id().id])
             {
                 BOOST_LOG_TRIVIAL(info) << "Before process command, Orient object, name=" << o->name <<",id="<<o->id().id<<std::endl;
-                orientation::orient(o);
+                if (export_transforms) {
+                    Vec3d applied_euler{0,0,0};
+                    orientation::orient_with_euler(o, applied_euler);
+                    oriented_euler_map[o->id().id] = applied_euler;
+                } else {
+                    orientation::orient(o);
+                }
+                // CRITICAL FIX: Invalidate bounding box and convex hull after orient
+                // to ensure arrange uses correct dimensions after rotation
+                o->invalidate_bounding_box();
+                // Also invalidate the 2D convex hull cache in all volumes
+                for (ModelVolume* v : o->volumes) {
+                    v->invalidate_convex_hull_2d();
+                }
+                // And invalidate instance convex hull cache
+                for (ModelInstance* inst : o->instances) {
+                    inst->invalidate_convex_hull_2d();
+                }
+                BOOST_LOG_TRIVIAL(debug) << "Invalidated bounding box and convex hull caches for oriented object: " << o->name;
                 oriented_or_arranged = true;
             }
             else
@@ -4035,7 +4065,9 @@ int CLI::run(int argc, char **argv)
                 arrange_cfg.clearance_height_to_lid = height_to_lid;
                 arrange_cfg.clearance_radius = clearance_radius;
                 arrange_cfg.printable_height = print_height;
-                arrange_cfg.min_obj_distance = 0;
+                // BBS: set minimum object distance to avoid gcode path conflicts
+                // Use 3mm minimum distance between objects to ensure safe printing
+                arrange_cfg.min_obj_distance = scale_(3.0);
                 if (arrange_cfg.is_seq_print) {
                     arrange_cfg.bed_shrink_x = BED_SHRINK_SEQ_PRINT;
                     arrange_cfg.bed_shrink_y = BED_SHRINK_SEQ_PRINT;
@@ -4438,7 +4470,9 @@ int CLI::run(int argc, char **argv)
                 arrange_cfg.clearance_height_to_lid             = height_to_lid;
                 arrange_cfg.clearance_radius                   = clearance_radius;
                 arrange_cfg.printable_height                    = print_height;
-                arrange_cfg.min_obj_distance = 0;
+                // BBS: set minimum object distance to avoid gcode path conflicts
+                // Use 3mm minimum distance between objects to ensure safe printing
+                arrange_cfg.min_obj_distance = scale_(3.0);
                 if (arrange_cfg.is_seq_print) {
                     arrange_cfg.bed_shrink_x = BED_SHRINK_SEQ_PRINT;
                     arrange_cfg.bed_shrink_y = BED_SHRINK_SEQ_PRINT;
@@ -4479,6 +4513,12 @@ int CLI::run(int argc, char **argv)
 
                 //Step-4:postprocess by partplate list&&apply the result
                 int bed_idx_max = 0;
+                // Get auto_plate parameter to control plate creation (define at outer scope)
+                int auto_plate_value = 0;
+                if (m_config.has("auto_plate")) {
+                    auto_plate_value = m_config.opt_int("auto_plate");
+                }
+                
                 if (duplicate_count == 0)
                 {
                     if (plate_to_slice > 0)
@@ -4505,24 +4545,72 @@ int CLI::run(int argc, char **argv)
                         // Apply the arrange result to all selected objects
                         for (ArrangePolygon &ap : selected) {
                             //BBS: partplate postprocess
-                            partplate_list.postprocess_bed_index_for_selected(ap);
+                            if (auto_plate_value == 0) {
+                                // auto_plate=0: force all instances to plate 0 (keep original position to allow overflow)
+                                ap.bed_idx = 0;
+                                BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: forcing " << ap.name << " to bed_idx=0 (position: {" 
+                                    << unscale<double>(ap.translation(X)) << "," << unscale<double>(ap.translation(Y)) << "})";
+                            } else {
+                                // auto_plate=1: allow creating multiple plates, but ensure items stay within bed bounds
+                                // First, get the plate index from postprocess
+                                partplate_list.postprocess_bed_index_for_selected(ap);
+                                
+                                // For auto_plate=1, we need to ensure the position is within bed bounds
+                                // The arrange function may set translation outside bed, we need to normalize it
+                                // by moving it back to bed 0 coordinates if bed_idx > 0
+                                if (ap.bed_idx > 0) {
+                                    // Calculate the stride (plate spacing)
+                                    double stride_x = partplate_list.plate_stride_x();
+                                    double stride_y = partplate_list.plate_stride_y();
+                                    
+                                    // Calculate row and col from bed_idx
+                                    int plate_cols = partplate_list.get_plate_cols();
+                                    int row = ap.bed_idx / plate_cols;
+                                    int col = ap.bed_idx % plate_cols;
+                                    
+                                    // Normalize translation to bed 0 coordinates
+                                    // (postprocess_arrange_polygon will add the offset back)
+                                    ap.translation(X) -= scaled<double>(stride_x * col);
+                                    ap.translation(Y) += scaled<double>(stride_y * row);
+                                    
+                                    BOOST_LOG_TRIVIAL(info) << "auto_plate=1: normalized " << ap.name 
+                                        << " from bed_idx=" << ap.bed_idx 
+                                        << " to plate coords: {" << unscale<double>(ap.translation(X)) 
+                                        << "," << unscale<double>(ap.translation(Y)) << "}";
+                                }
+                            }
 
                             bed_idx_max = std::max(ap.bed_idx, bed_idx_max);
                             BOOST_LOG_TRIVIAL(trace)<< "after arrange: name=" << ap.name << boost::format(",bed_id %1%, trans {%2%,%3%}") % ap.bed_idx % unscale<double>(ap.translation(X)) % unscale<double>(ap.translation(Y)) << "\n";
                         }
                     }
+                    
                     for (ArrangePolygon &ap : locked_aps) {
                         bed_idx_max = std::max(ap.bed_idx, bed_idx_max);
 
-                        partplate_list.postprocess_arrange_polygon(ap, false);
+                        if (auto_plate_value == 0) {
+                            // For auto_plate=0, don't call postprocess_arrange_polygon to preserve arrange positions
+                            ap.bed_idx = 0;  // Force to plate 0 (allow overflow with original positions)
+                            BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: locked " << ap.name << " at position {"
+                                << unscale<double>(ap.translation(X)) << "," << unscale<double>(ap.translation(Y)) << "}";
+                        } else {
+                            partplate_list.postprocess_arrange_polygon(ap, false);
+                        }
 
                         ap.apply();
                     }
 
                     // Apply the arrange result to all selected objects
                     for (ArrangePolygon &ap : selected) {
-                        //BBS: partplate postprocess
-                        partplate_list.postprocess_arrange_polygon(ap, true);
+                        if (auto_plate_value == 0) {
+                            // For auto_plate=0, don't call postprocess_arrange_polygon to preserve arrange positions
+                            ap.bed_idx = 0;  // Force to plate 0 (allow overflow with original positions)
+                            BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: selected " << ap.name << " at position {"
+                                << unscale<double>(ap.translation(X)) << "," << unscale<double>(ap.translation(Y)) << "}";
+                        } else {
+                            //BBS: partplate postprocess
+                            partplate_list.postprocess_arrange_polygon(ap, true);
+                        }
 
                         ap.apply();
                     }
@@ -4533,8 +4621,15 @@ int CLI::run(int argc, char **argv)
                         if (ap.is_virt_object)
                             continue;
 
-                        //BBS: partplate postprocess
-                        partplate_list.postprocess_arrange_polygon(ap, false);
+                        if (auto_plate_value == 0) {
+                            // For auto_plate=0, don't call postprocess_arrange_polygon to preserve arrange positions
+                            ap.bed_idx = 0;  // Force to plate 0 (allow overflow with original positions)
+                            BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: unselected " << ap.name << " at position {"
+                                << unscale<double>(ap.translation(X)) << "," << unscale<double>(ap.translation(Y)) << "}";
+                        } else {
+                            //BBS: partplate postprocess
+                            partplate_list.postprocess_arrange_polygon(ap, false);
+                        }
 
                         ap.apply();
                     }
@@ -4543,8 +4638,15 @@ int CLI::run(int argc, char **argv)
                     // Note ap.apply() moves relatively according to bed_idx, so we need to subtract the orignal bed_idx
                     for (ArrangePolygon& ap : unprintable)
                     {
-                        ap.bed_idx = bed_idx_max + 1;
-                        partplate_list.postprocess_arrange_polygon(ap, true);
+                        if (auto_plate_value == 0) {
+                            // For auto_plate=0, don't call postprocess_arrange_polygon to preserve arrange positions
+                            ap.bed_idx = 0;  // Force to plate 0 (allow overflow with original positions)
+                            BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: unprintable " << ap.name << " at position {"
+                                << unscale<double>(ap.translation(X)) << "," << unscale<double>(ap.translation(Y)) << "}";
+                        } else {
+                            ap.bed_idx = bed_idx_max + 1;
+                            partplate_list.postprocess_arrange_polygon(ap, true);
+                        }
 
                         ap.apply();
                         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(":arrange m_unprintable: name: %4%, bed_id %1%, trans {%2%,%3%}") % ap.bed_idx % unscale<double>(ap.translation(X)) % unscale<double>(ap.translation(Y)) % ap.name;
@@ -4553,8 +4655,37 @@ int CLI::run(int argc, char **argv)
                     //BBS: reload all objects due to arrange
                     if (plate_to_slice > 0)
                         partplate_list.rebuild_plates_after_arrangement(false, true, plate_to_slice-1);
-                    else
-                        partplate_list.rebuild_plates_after_arrangement();
+                    else {
+                        // If auto_plate=0, skip rebuild (which creates new plates) and manually reload all to plate 0
+                        if (auto_plate_value == 0) {
+                            BOOST_LOG_TRIVIAL(info) << "auto_plate=0: skipping rebuild_plates_after_arrangement, manually loading all to plate 0";
+                            // Clear all plate relations
+                            partplate_list.clear(false, false, false, -1);
+                            // Ensure only plate 0 exists
+                            int plate_count = partplate_list.get_plate_count();
+                            for (int i = plate_count - 1; i > 0; i--) {
+                                BOOST_LOG_TRIVIAL(info) << "auto_plate=0: removing extra plate " << i;
+                                partplate_list.delete_plate(i);
+                            }
+                            // Manually add all instances to plate 0 (allow overflow)
+                            Slic3r::GUI::PartPlate* plate0 = partplate_list.get_plate(0);
+                            if (plate0 && !m_models.empty()) {
+                                Model& model = m_models[0];
+                                for (size_t obj_idx = 0; obj_idx < model.objects.size(); obj_idx++) {
+                                    ModelObject* obj = model.objects[obj_idx];
+                                    for (size_t inst_idx = 0; inst_idx < obj->instances.size(); inst_idx++) {
+                                        BoundingBoxf3 bbox = obj->instance_convex_hull_bounding_box(inst_idx);
+                                        plate0->add_instance(obj_idx, inst_idx, false, &bbox);
+                                        BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: forcing obj " << obj_idx << " inst " << inst_idx << " to plate 0 (allow overflow)";
+                                    }
+                                }
+                            }
+                            BOOST_LOG_TRIVIAL(info) << "auto_plate=0: final plate_count=" << partplate_list.get_plate_count();
+                        } else {
+                            // auto_plate=1: normal rebuild with multiple plates
+                            partplate_list.rebuild_plates_after_arrangement();
+                        }
+                    }
                 }
                 else {
                     //only for partplate case
@@ -4743,6 +4874,185 @@ int CLI::run(int argc, char **argv)
             for (auto &o : model.objects)
                 o->ensure_on_bed();
     }
+    
+    // Collect model transforms after orient and arrange
+    if (export_transforms) {
+        BOOST_LOG_TRIVIAL(info) << "Collecting model transform information...";
+        
+        // Helper function to clean up floating point values for JSON output
+        auto clean_value = [](double val) {
+            // Fix negative zero
+            if (val == 0.0) return 0.0;
+            // Round to 6 decimal places to avoid floating point precision issues
+            double rounded = std::round(val * 1000000.0) / 1000000.0;
+            // If very close to zero, return zero
+            if (std::abs(rounded) < 1e-9) return 0.0;
+            // If very close to 1.0, return 1.0 (for scale values)
+            if (std::abs(rounded - 1.0) < 1e-9) return 1.0;
+            return rounded;
+        };
+        
+        // Get auto_plate parameter to determine how to assign plate_index
+        int auto_plate_value = 0;
+        if (m_config.has("auto_plate")) {
+            auto_plate_value = m_config.opt_int("auto_plate");
+        }
+        
+        // Build a map of instance ObjectID to plate_index by iterating through all plates
+        // This ensures we get the correct plate assignment after arrange
+        // Note: contain_instance uses object/instance indices (not ObjectIDs), so we need to use indices
+        std::map<int, int> instance_to_plate;
+        int plate_count = partplate_list.get_plate_count();
+        
+        // partplate_list uses the first model (m_models[0]) for indexing
+        if (!m_models.empty()) {
+            Model& model = m_models[0];
+            for (int plate_idx = 0; plate_idx < plate_count; plate_idx++) {
+                Slic3r::GUI::PartPlate* plate = partplate_list.get_plate(plate_idx);
+                if (plate) {
+                    // Check all instances using object/instance indices
+                    for (size_t obj_idx = 0; obj_idx < model.objects.size(); obj_idx++) {
+                        ModelObject* obj = model.objects[obj_idx];
+                        for (size_t inst_idx = 0; inst_idx < obj->instances.size(); inst_idx++) {
+                            ModelInstance* instance = obj->instances[inst_idx];
+                            if (plate->contain_instance(obj_idx, inst_idx)) {
+                                instance_to_plate[instance->id().id] = plate_idx;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        for (auto& model : m_models) {
+            for (ModelObject* obj : model.objects) {
+                for (ModelInstance* instance : obj->instances) {
+                    json transform;
+                    transform["object_name"] = obj->name;
+                    transform["instance_id"] = instance->id().id;
+                    
+                    // Get position: use bottom center of the instance on the bed
+                    // Bounding box is in world coordinates after orient & arrange
+                    BoundingBoxf3 bbox = obj->instance_bounding_box(*instance, /*dont_translate=*/false);
+                    double center_x = 0.5 * (bbox.min.x() + bbox.max.x());
+                    double center_y = 0.5 * (bbox.min.y() + bbox.max.y());
+                    transform["position"] = {
+                        clean_value(center_x),
+                        clean_value(center_y),
+                        clean_value(bbox.min.z())  // after ensure_on_bed this should be 0
+                    };
+                    
+                    // Get rotation (in degrees) and normalize to [-180, 180]
+                    Vec3d rotation = instance->get_rotation();
+                    auto normalize_angle = [](double rad) {
+                        double deg = rad * 180.0 / M_PI;
+                        // Normalize to [-180, 180]
+                        while (deg > 180.0) deg -= 360.0;
+                        while (deg < -180.0) deg += 360.0;
+                        // If very close to 0, return 0
+                        if (std::abs(deg) < 1e-6) return 0.0;
+                        return deg;
+                    };
+                    
+                    double rot_x = normalize_angle(rotation.x());
+                    double rot_y = normalize_angle(rotation.y());
+                    double rot_z = normalize_angle(rotation.z());
+
+                    // If the object was auto-oriented at mesh level, add that Euler (convert to degrees and normalize)
+                    auto orient_it = oriented_euler_map.find(obj->id().id);
+                    if (orient_it != oriented_euler_map.end()) {
+                        Vec3d orient_euler = orient_it->second; // radians
+                        rot_x += normalize_angle(orient_euler.x());
+                        rot_y += normalize_angle(orient_euler.y());
+                        rot_z += normalize_angle(orient_euler.z());
+                    }
+                    
+                    // 已经把 orient 的欧拉加进来，这里不再做组合简化，直接输出规范到 [-180,180]
+                    while (rot_x > 180.0) rot_x -= 360.0;
+                    while (rot_x < -180.0) rot_x += 360.0;
+                    while (rot_y > 180.0) rot_y -= 360.0;
+                    while (rot_y < -180.0) rot_y += 360.0;
+                    while (rot_z > 180.0) rot_z -= 360.0;
+                    while (rot_z < -180.0) rot_z += 360.0;
+                    if (std::abs(rot_x) < 1e-6) rot_x = 0.0;
+                    if (std::abs(rot_y) < 1e-6) rot_y = 0.0;
+                    if (std::abs(rot_z) < 1e-6) rot_z = 0.0;
+                    
+                    transform["rotation"] = {
+                        clean_value(rot_x),
+                        clean_value(rot_y),
+                        clean_value(rot_z)
+                    };
+                    
+                    // Get scale
+                    Vec3d scale = instance->get_scaling_factor();
+                    transform["scale"] = {
+                        clean_value(scale.x()), 
+                        clean_value(scale.y()), 
+                        clean_value(scale.z())
+                    };
+                    
+                    // Get plate index: first try the map we built, then use find_instance
+                    int plate_idx = -1;
+                    auto it = instance_to_plate.find(instance->id().id);
+                    if (it != instance_to_plate.end()) {
+                        plate_idx = it->second;
+                    } else {
+                        // Fallback to find_instance if not in map
+                        // find_instance uses object/instance indices, need to find them first
+                        if (!m_models.empty()) {
+                            Model& model = m_models[0];
+                            int obj_idx = -1, inst_idx = -1;
+                            for (size_t i = 0; i < model.objects.size(); i++) {
+                                if (model.objects[i]->id().id == obj->id().id) {
+                                    obj_idx = (int)i;
+                                    for (size_t j = 0; j < model.objects[i]->instances.size(); j++) {
+                                        if (model.objects[i]->instances[j]->id().id == instance->id().id) {
+                                            inst_idx = (int)j;
+                                            break;
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                            if (obj_idx >= 0 && inst_idx >= 0) {
+                                plate_idx = partplate_list.find_instance(obj_idx, inst_idx);
+                            }
+                        }
+                    }
+                    
+                    // If still not found, try to determine from position or default to plate 0
+                    if (plate_idx == -1) {
+                        if (auto_plate_value == 1 && oriented_or_arranged) {
+                            // auto_plate=1: should have been assigned to a plate after arrange
+                            // If not found, it might be out of bounds - check all plates by position
+                            for (int i = 0; i < plate_count; i++) {
+                                Slic3r::GUI::PartPlate* plate = partplate_list.get_plate(i);
+                                if (plate && plate->intersect_instance(obj->id().id, instance->id().id)) {
+                                    plate_idx = i;
+                                    break;
+                                }
+                            }
+                        }
+                        // If still not found, default to plate 0 (for auto_plate=0 or unarranged cases)
+                        if (plate_idx == -1) {
+                            plate_idx = 0;
+                        }
+                    }
+                    transform["plate_index"] = plate_idx;
+                    
+                    model_transforms_json.push_back(transform);
+                    
+                    BOOST_LOG_TRIVIAL(info) << "Model: " << obj->name 
+                                            << ", Instance: " << instance->id().id
+                                            << ", Plate: " << plate_idx
+                                            << ", Position: (" << center_x << "," << center_y << "," << bbox.min.z() << ")"
+                                            << ", Rotation (rad): (" << rotation.x() << "," << rotation.y() << "," << rotation.z() << ")"
+                                            << ", Scale: (" << scale.x() << "," << scale.y() << "," << scale.z() << ")";
+                }
+            }
+        }
+    }
 
     // loop through action options
     bool export_to_3mf = false, load_slicedata = false, export_slicedata = false, export_slicedata_error = false;
@@ -4804,6 +5114,10 @@ int CLI::run(int argc, char **argv)
             //already processed before
         } else if (opt_key == "load_defaultfila") {
             //already processed before
+        } else if (opt_key == "auto_plate") {
+            //will be used during arrange process
+        } else if (opt_key == "export_model_transforms") {
+            //will be processed after orient and arrange, before exit
         } else if (opt_key == "mtcpp") {
             max_triangle_count_per_plate = m_config.option<ConfigOptionInt>("mtcpp")->value;
         } else if (opt_key == "mstpp") {
@@ -6118,6 +6432,38 @@ int CLI::run(int argc, char **argv)
     }
     else {
         record_exit_reson(outfile_dir, 0, plate_to_slice, cli_errors[0], sliced_info);
+    }
+    
+    // Write model transforms to result.json if requested
+    if (export_transforms && !model_transforms_json.empty()) {
+        std::string result_file = outfile_dir.empty() ? "result.json" : outfile_dir + "/result.json";
+        try {
+            // Create output directory if it doesn't exist
+            if (!outfile_dir.empty() && !boost::filesystem::exists(outfile_dir)) {
+                boost::filesystem::create_directories(outfile_dir);
+                BOOST_LOG_TRIVIAL(info) << "Created output directory: " << outfile_dir;
+            }
+            
+            // Read existing result.json
+            json j;
+            if (boost::filesystem::exists(result_file)) {
+                boost::nowide::ifstream ifs(result_file);
+                ifs >> j;
+                ifs.close();
+            }
+            
+            // Add model transforms
+            j["model_transforms"] = model_transforms_json;
+            
+            // Write back
+            boost::nowide::ofstream ofs(result_file, std::ios::out | std::ios::trunc);
+            ofs << std::setw(4) << j << std::endl;
+            ofs.close();
+            
+            BOOST_LOG_TRIVIAL(info) << "Model transforms exported to " << result_file;
+        } catch (std::exception& e) {
+            BOOST_LOG_TRIVIAL(error) << "Failed to write model transforms: " << e.what();
+        }
     }
 
     boost::nowide::cout.flush();

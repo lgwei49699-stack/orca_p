@@ -149,10 +149,13 @@ using OrientMeshs = std::vector<OrientMesh>;
  */
 void orient(OrientMeshs &items, const OrientMeshs &excludes, const OrientParams &params = {});
 
-// this function should be deleted, since rotating objects are so complicated that its inherited transformation may be a trouble
 void orient(ModelObject* obj);
 
 void orient(ModelInstance* instance);
+
+// Orient object and return the applied Euler angles (in radians) corresponding to the rotation applied to the mesh.
+// This does not alter the existing behavior; it only exposes the rotation used.
+void orient_with_euler(ModelObject* obj, Vec3d& applied_euler);
 
 }} // namespace Slic3r::orientment
 
