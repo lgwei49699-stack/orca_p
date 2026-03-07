@@ -1196,8 +1196,9 @@ int CLI::run(int argc, char **argv)
     bool allow_rotations = true, skip_modified_gcodes = false, avoid_extrusion_cali_region = false, skip_useless_pick = false, allow_newer_file = false;
     Semver file_version;
     std::map<size_t, bool> orients_requirement;
-    // record the Euler rotation (radians) applied by auto-orient per object (only when orient acts on ModelObject)
-    std::map<size_t, Vec3d> oriented_euler_map;
+    // record the rotation matrix applied by auto-orient per object (only when orient acts on ModelObject)
+    // used later to compose with arrange rotation: R_total = R_arrange * R_orient
+    std::map<size_t, Matrix3d> oriented_rotation_map;
     std::vector<Preset*> project_presets;
     std::string new_printer_name, current_printer_name, new_process_name, current_process_name, current_printer_system_name, current_process_system_name, new_process_system_name, new_printer_system_name, printer_model_id, current_printer_model, printer_model;//, printer_inherits, print_inherits;
     std::vector<std::string> upward_compatible_printers, new_print_compatible_printers, current_print_compatible_printers, current_different_settings;
@@ -3842,9 +3843,9 @@ int CLI::run(int argc, char **argv)
             {
                 BOOST_LOG_TRIVIAL(info) << "Before process command, Orient object, name=" << o->name <<",id="<<o->id().id<<std::endl;
                 if (export_transforms) {
-                    Vec3d applied_euler{0,0,0};
-                    orientation::orient_with_euler(o, applied_euler);
-                    oriented_euler_map[o->id().id] = applied_euler;
+                    Matrix3d R_orient = Matrix3d::Identity();
+                    orientation::orient_with_rotation(o, R_orient);
+                    oriented_rotation_map[o->id().id] = R_orient;
                 } else {
                     orientation::orient(o);
                 }
@@ -4065,9 +4066,7 @@ int CLI::run(int argc, char **argv)
                 arrange_cfg.clearance_height_to_lid = height_to_lid;
                 arrange_cfg.clearance_radius = clearance_radius;
                 arrange_cfg.printable_height = print_height;
-                // BBS: set minimum object distance to avoid gcode path conflicts
-                // Use 3mm minimum distance between objects to ensure safe printing
-                arrange_cfg.min_obj_distance = scale_(3.0);
+                arrange_cfg.min_obj_distance = 0;
                 if (arrange_cfg.is_seq_print) {
                     arrange_cfg.bed_shrink_x = BED_SHRINK_SEQ_PRINT;
                     arrange_cfg.bed_shrink_y = BED_SHRINK_SEQ_PRINT;
@@ -4470,9 +4469,7 @@ int CLI::run(int argc, char **argv)
                 arrange_cfg.clearance_height_to_lid             = height_to_lid;
                 arrange_cfg.clearance_radius                   = clearance_radius;
                 arrange_cfg.printable_height                    = print_height;
-                // BBS: set minimum object distance to avoid gcode path conflicts
-                // Use 3mm minimum distance between objects to ensure safe printing
-                arrange_cfg.min_obj_distance = scale_(3.0);
+                arrange_cfg.min_obj_distance = 0;
                 if (arrange_cfg.is_seq_print) {
                     arrange_cfg.bed_shrink_x = BED_SHRINK_SEQ_PRINT;
                     arrange_cfg.bed_shrink_y = BED_SHRINK_SEQ_PRINT;
@@ -4513,12 +4510,14 @@ int CLI::run(int argc, char **argv)
 
                 //Step-4:postprocess by partplate list&&apply the result
                 int bed_idx_max = 0;
-                // Get auto_plate parameter to control plate creation (define at outer scope)
-                int auto_plate_value = 0;
-                if (m_config.has("auto_plate")) {
-                    auto_plate_value = m_config.opt_int("auto_plate");
-                }
-                
+                // auto_plate: -1=not specified (multi-plate, original behavior)
+                //              0=single plate, allow overflow
+                //              1=multi-plate (same as -1)
+                bool auto_plate_specified = std::find(m_transforms.begin(), m_transforms.end(), "auto_plate") != m_transforms.end();
+                int auto_plate_value = auto_plate_specified ? m_config.opt_int("auto_plate") : -1;
+                bool force_single_plate = (auto_plate_value == 0);
+                BOOST_LOG_TRIVIAL(info) << "auto_plate_value=" << auto_plate_value << " force_single_plate=" << force_single_plate;
+
                 if (duplicate_count == 0)
                 {
                     if (plate_to_slice > 0)
@@ -4542,76 +4541,31 @@ int CLI::run(int argc, char **argv)
                         //clear all the relations before apply the arrangement results
                         partplate_list.clear();
 
-                        // Apply the arrange result to all selected objects
+                        // Determine bed_idx for each selected ap
                         for (ArrangePolygon &ap : selected) {
-                            //BBS: partplate postprocess
-                            if (auto_plate_value == 0) {
-                                // auto_plate=0: force all instances to plate 0 (keep original position to allow overflow)
-                                ap.bed_idx = 0;
-                                BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: forcing " << ap.name << " to bed_idx=0 (position: {" 
-                                    << unscale<double>(ap.translation(X)) << "," << unscale<double>(ap.translation(Y)) << "})";
+                            if (force_single_plate) {
+                                ap.bed_idx = 0;  // 强制单盘，允许溢出
                             } else {
-                                // auto_plate=1: allow creating multiple plates, but ensure items stay within bed bounds
-                                // First, get the plate index from postprocess
+                                //BBS: partplate postprocess
                                 partplate_list.postprocess_bed_index_for_selected(ap);
-                                
-                                // For auto_plate=1, we need to ensure the position is within bed bounds
-                                // The arrange function may set translation outside bed, we need to normalize it
-                                // by moving it back to bed 0 coordinates if bed_idx > 0
-                                if (ap.bed_idx > 0) {
-                                    // Calculate the stride (plate spacing)
-                                    double stride_x = partplate_list.plate_stride_x();
-                                    double stride_y = partplate_list.plate_stride_y();
-                                    
-                                    // Calculate row and col from bed_idx
-                                    int plate_cols = partplate_list.get_plate_cols();
-                                    int row = ap.bed_idx / plate_cols;
-                                    int col = ap.bed_idx % plate_cols;
-                                    
-                                    // Normalize translation to bed 0 coordinates
-                                    // (postprocess_arrange_polygon will add the offset back)
-                                    ap.translation(X) -= scaled<double>(stride_x * col);
-                                    ap.translation(Y) += scaled<double>(stride_y * row);
-                                    
-                                    BOOST_LOG_TRIVIAL(info) << "auto_plate=1: normalized " << ap.name 
-                                        << " from bed_idx=" << ap.bed_idx 
-                                        << " to plate coords: {" << unscale<double>(ap.translation(X)) 
-                                        << "," << unscale<double>(ap.translation(Y)) << "}";
-                                }
                             }
-
                             bed_idx_max = std::max(ap.bed_idx, bed_idx_max);
                             BOOST_LOG_TRIVIAL(trace)<< "after arrange: name=" << ap.name << boost::format(",bed_id %1%, trans {%2%,%3%}") % ap.bed_idx % unscale<double>(ap.translation(X)) % unscale<double>(ap.translation(Y)) << "\n";
                         }
                     }
-                    
+
                     for (ArrangePolygon &ap : locked_aps) {
+                        if (force_single_plate)
+                            ap.bed_idx = 0;
                         bed_idx_max = std::max(ap.bed_idx, bed_idx_max);
-
-                        if (auto_plate_value == 0) {
-                            // For auto_plate=0, don't call postprocess_arrange_polygon to preserve arrange positions
-                            ap.bed_idx = 0;  // Force to plate 0 (allow overflow with original positions)
-                            BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: locked " << ap.name << " at position {"
-                                << unscale<double>(ap.translation(X)) << "," << unscale<double>(ap.translation(Y)) << "}";
-                        } else {
-                            partplate_list.postprocess_arrange_polygon(ap, false);
-                        }
-
+                        partplate_list.postprocess_arrange_polygon(ap, false);
                         ap.apply();
                     }
 
                     // Apply the arrange result to all selected objects
                     for (ArrangePolygon &ap : selected) {
-                        if (auto_plate_value == 0) {
-                            // For auto_plate=0, don't call postprocess_arrange_polygon to preserve arrange positions
-                            ap.bed_idx = 0;  // Force to plate 0 (allow overflow with original positions)
-                            BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: selected " << ap.name << " at position {"
-                                << unscale<double>(ap.translation(X)) << "," << unscale<double>(ap.translation(Y)) << "}";
-                        } else {
-                            //BBS: partplate postprocess
-                            partplate_list.postprocess_arrange_polygon(ap, true);
-                        }
-
+                        //BBS: partplate postprocess
+                        partplate_list.postprocess_arrange_polygon(ap, true);
                         ap.apply();
                     }
 
@@ -4620,17 +4574,8 @@ int CLI::run(int argc, char **argv)
                     {
                         if (ap.is_virt_object)
                             continue;
-
-                        if (auto_plate_value == 0) {
-                            // For auto_plate=0, don't call postprocess_arrange_polygon to preserve arrange positions
-                            ap.bed_idx = 0;  // Force to plate 0 (allow overflow with original positions)
-                            BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: unselected " << ap.name << " at position {"
-                                << unscale<double>(ap.translation(X)) << "," << unscale<double>(ap.translation(Y)) << "}";
-                        } else {
-                            //BBS: partplate postprocess
-                            partplate_list.postprocess_arrange_polygon(ap, false);
-                        }
-
+                        //BBS: partplate postprocess
+                        partplate_list.postprocess_arrange_polygon(ap, false);
                         ap.apply();
                     }
 
@@ -4638,16 +4583,12 @@ int CLI::run(int argc, char **argv)
                     // Note ap.apply() moves relatively according to bed_idx, so we need to subtract the orignal bed_idx
                     for (ArrangePolygon& ap : unprintable)
                     {
-                        if (auto_plate_value == 0) {
-                            // For auto_plate=0, don't call postprocess_arrange_polygon to preserve arrange positions
-                            ap.bed_idx = 0;  // Force to plate 0 (allow overflow with original positions)
-                            BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: unprintable " << ap.name << " at position {"
-                                << unscale<double>(ap.translation(X)) << "," << unscale<double>(ap.translation(Y)) << "}";
+                        if (force_single_plate) {
+                            ap.bed_idx = 0;  // 单盘模式：放 plate 0，允许溢出
                         } else {
                             ap.bed_idx = bed_idx_max + 1;
-                            partplate_list.postprocess_arrange_polygon(ap, true);
                         }
-
+                        partplate_list.postprocess_arrange_polygon(ap, true);
                         ap.apply();
                         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(":arrange m_unprintable: name: %4%, bed_id %1%, trans {%2%,%3%}") % ap.bed_idx % unscale<double>(ap.translation(X)) % unscale<double>(ap.translation(Y)) % ap.name;
                     }
@@ -4655,37 +4596,8 @@ int CLI::run(int argc, char **argv)
                     //BBS: reload all objects due to arrange
                     if (plate_to_slice > 0)
                         partplate_list.rebuild_plates_after_arrangement(false, true, plate_to_slice-1);
-                    else {
-                        // If auto_plate=0, skip rebuild (which creates new plates) and manually reload all to plate 0
-                        if (auto_plate_value == 0) {
-                            BOOST_LOG_TRIVIAL(info) << "auto_plate=0: skipping rebuild_plates_after_arrangement, manually loading all to plate 0";
-                            // Clear all plate relations
-                            partplate_list.clear(false, false, false, -1);
-                            // Ensure only plate 0 exists
-                            int plate_count = partplate_list.get_plate_count();
-                            for (int i = plate_count - 1; i > 0; i--) {
-                                BOOST_LOG_TRIVIAL(info) << "auto_plate=0: removing extra plate " << i;
-                                partplate_list.delete_plate(i);
-                            }
-                            // Manually add all instances to plate 0 (allow overflow)
-                            Slic3r::GUI::PartPlate* plate0 = partplate_list.get_plate(0);
-                            if (plate0 && !m_models.empty()) {
-                                Model& model = m_models[0];
-                                for (size_t obj_idx = 0; obj_idx < model.objects.size(); obj_idx++) {
-                                    ModelObject* obj = model.objects[obj_idx];
-                                    for (size_t inst_idx = 0; inst_idx < obj->instances.size(); inst_idx++) {
-                                        BoundingBoxf3 bbox = obj->instance_convex_hull_bounding_box(inst_idx);
-                                        plate0->add_instance(obj_idx, inst_idx, false, &bbox);
-                                        BOOST_LOG_TRIVIAL(debug) << "auto_plate=0: forcing obj " << obj_idx << " inst " << inst_idx << " to plate 0 (allow overflow)";
-                                    }
-                                }
-                            }
-                            BOOST_LOG_TRIVIAL(info) << "auto_plate=0: final plate_count=" << partplate_list.get_plate_count();
-                        } else {
-                            // auto_plate=1: normal rebuild with multiple plates
-                            partplate_list.rebuild_plates_after_arrangement();
-                        }
-                    }
+                    else
+                        partplate_list.rebuild_plates_after_arrangement();
                 }
                 else {
                     //only for partplate case
@@ -4942,46 +4854,29 @@ int CLI::run(int argc, char **argv)
                         clean_value(bbox.min.z())  // after ensure_on_bed this should be 0
                     };
                     
-                    // Get rotation (in degrees) and normalize to [-180, 180]
-                    Vec3d rotation = instance->get_rotation();
-                    auto normalize_angle = [](double rad) {
-                        double deg = rad * 180.0 / M_PI;
-                        // Normalize to [-180, 180]
-                        while (deg > 180.0) deg -= 360.0;
-                        while (deg < -180.0) deg += 360.0;
-                        // If very close to 0, return 0
-                        if (std::abs(deg) < 1e-6) return 0.0;
-                        return deg;
-                    };
-                    
-                    double rot_x = normalize_angle(rotation.x());
-                    double rot_y = normalize_angle(rotation.y());
-                    double rot_z = normalize_angle(rotation.z());
+                    // Compute total rotation = R_arrange * R_orient
+                    // R_arrange: from instance->get_rotation() (XYZ intrinsic, radians)
+                    //            OrcaSlicer applies as R_z * R_y * R_x (see assemble_transform)
+                    // R_orient:  from oriented_rotation_map (rotation_from_two_vectors result)
+                    // Combining via matrix multiplication avoids Euler angle addition errors.
+                    Vec3d inst_rot = instance->get_rotation();
+                    Matrix3d R_arrange = (Eigen::AngleAxisd(inst_rot.z(), Vec3d::UnitZ())
+                                        * Eigen::AngleAxisd(inst_rot.y(), Vec3d::UnitY())
+                                        * Eigen::AngleAxisd(inst_rot.x(), Vec3d::UnitX())).toRotationMatrix();
 
-                    // If the object was auto-oriented at mesh level, add that Euler (convert to degrees and normalize)
-                    auto orient_it = oriented_euler_map.find(obj->id().id);
-                    if (orient_it != oriented_euler_map.end()) {
-                        Vec3d orient_euler = orient_it->second; // radians
-                        rot_x += normalize_angle(orient_euler.x());
-                        rot_y += normalize_angle(orient_euler.y());
-                        rot_z += normalize_angle(orient_euler.z());
+                    Matrix3d R_total = R_arrange;
+                    auto orient_it = oriented_rotation_map.find(obj->id().id);
+                    if (orient_it != oriented_rotation_map.end()) {
+                        R_total = R_arrange * orient_it->second;  // 先 orient，后 arrange
                     }
-                    
-                    // 已经把 orient 的欧拉加进来，这里不再做组合简化，直接输出规范到 [-180,180]
-                    while (rot_x > 180.0) rot_x -= 360.0;
-                    while (rot_x < -180.0) rot_x += 360.0;
-                    while (rot_y > 180.0) rot_y -= 360.0;
-                    while (rot_y < -180.0) rot_y += 360.0;
-                    while (rot_z > 180.0) rot_z -= 360.0;
-                    while (rot_z < -180.0) rot_z += 360.0;
-                    if (std::abs(rot_x) < 1e-6) rot_x = 0.0;
-                    if (std::abs(rot_y) < 1e-6) rot_y = 0.0;
-                    if (std::abs(rot_z) < 1e-6) rot_z = 0.0;
-                    
+
+                    // extract_euler_angles returns XYZ intrinsic angles (radians)
+                    // Convention: M = R_z(rz)*R_y(ry)*R_x(rx), apply as extrinsic X→Y→Z
+                    Vec3d euler = Geometry::extract_euler_angles(R_total);
                     transform["rotation"] = {
-                        clean_value(rot_x),
-                        clean_value(rot_y),
-                        clean_value(rot_z)
+                        clean_value(euler.x() * 180.0 / M_PI),
+                        clean_value(euler.y() * 180.0 / M_PI),
+                        clean_value(euler.z() * 180.0 / M_PI)
                     };
                     
                     // Get scale
@@ -5047,7 +4942,7 @@ int CLI::run(int argc, char **argv)
                                             << ", Instance: " << instance->id().id
                                             << ", Plate: " << plate_idx
                                             << ", Position: (" << center_x << "," << center_y << "," << bbox.min.z() << ")"
-                                            << ", Rotation (rad): (" << rotation.x() << "," << rotation.y() << "," << rotation.z() << ")"
+                                            << ", Rotation (deg): (" << euler.x()*180.0/M_PI << "," << euler.y()*180.0/M_PI << "," << euler.z()*180.0/M_PI << ")"
                                             << ", Scale: (" << scale.x() << "," << scale.y() << "," << scale.z() << ")";
                 }
             }

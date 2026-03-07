@@ -527,22 +527,19 @@ void orient(ModelObject* obj)
     obj->ensure_on_bed();
 }
 
-void orient_with_euler(ModelObject* obj, Vec3d& applied_euler)
+void orient_with_rotation(ModelObject* obj, Matrix3d& out_rotation_matrix)
 {
     auto m = obj->mesh();
     AutoOrienter orienter(&m);
     Vec3d orientation = orienter.process();
     Vec3d axis;
     double angle;
-    Matrix3d rotation_matrix;
-    Geometry::rotation_from_two_vectors(orientation, { 0,0,1 }, axis, angle, &rotation_matrix);
+    Geometry::rotation_from_two_vectors(orientation, { 0,0,1 }, axis, angle, &out_rotation_matrix);
 
     // apply rotation to mesh (same as orient)
     obj->rotate(angle, axis);
     obj->ensure_on_bed();
-
-    // extract Euler angles from rotation matrix
-    applied_euler = Geometry::extract_euler_angles(rotation_matrix);
+    // out_rotation_matrix holds the full rotation; caller combines with arrange rotation
 }
 
 void orient(ModelInstance* instance)

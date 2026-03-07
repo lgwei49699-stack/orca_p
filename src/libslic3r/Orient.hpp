@@ -153,9 +153,10 @@ void orient(ModelObject* obj);
 
 void orient(ModelInstance* instance);
 
-// Orient object and return the applied Euler angles (in radians) corresponding to the rotation applied to the mesh.
-// This does not alter the existing behavior; it only exposes the rotation used.
-void orient_with_euler(ModelObject* obj, Vec3d& applied_euler);
+// Orient object and return the rotation matrix applied to the mesh.
+// Caller can use Geometry::extract_euler_angles() to convert to Euler angles,
+// or compose with other rotation matrices via R_total = R_arrange * R_orient.
+void orient_with_rotation(ModelObject* obj, Matrix3d& out_rotation_matrix);
 
 }} // namespace Slic3r::orientment
 

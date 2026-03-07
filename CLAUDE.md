@@ -189,69 +189,56 @@ Run individual test suites:
 ### Code Style and Standards
 - **C++17 standard** with selective C++20 features
 - **Naming conventions**: PascalCase for classes, snake_case for functions/variables
-- **Header guards**: Use `#pragma once` 
-- **Memory management**: Prefer smart pointers, RAII patterns
+- **Header guards**: Use `#pragma once`
 - **Thread safety**: Use TBB for parallelization, be mindful of shared state
 
-### Common Development Tasks
-
-#### Adding New Print Settings
-1. Define setting in `PrintConfig.cpp` with proper bounds and defaults
-2. Add UI controls in appropriate GUI components  
+### Adding New Print Settings
+1. Define setting in `src/libslic3r/PrintConfig.cpp` with bounds and defaults
+2. Add UI controls in `src/slic3r/GUI/`
 3. Update serialization in config save/load
-4. Add tooltips and help text for user guidance
-5. Test with different printer profiles
 
-#### Modifying Slicing Algorithms  
-1. Core algorithms live in `libslic3r/` subdirectories
-2. Performance-critical code should be profiled and optimized
-3. Consider multi-threading implications (TBB integration)
-4. Validate changes don't break existing profiles
-5. Add regression tests where appropriate
+### Adding Printer Profiles
+Create JSON in `resources/profiles/[manufacturer].json` following existing structure. Start/end G-code templates go in `resources/printers/`.
 
-#### GUI Development
-1. GUI code resides in `src/slic3r/GUI/` (not visible in current tree)
-2. Use existing wxWidgets patterns and custom controls
-3. Support both light and dark themes
-4. Consider DPI scaling on high-resolution displays
-5. Maintain cross-platform compatibility
+## CLI Mode Architecture
 
-#### Adding Printer Support
-1. Create JSON profile in `resources/profiles/[manufacturer].json`
-2. Add printer-specific start/end G-code templates
-3. Configure build volume, capabilities, and material compatibility
-4. Test thoroughly with actual hardware when possible
-5. Follow existing profile structure and naming conventions
+`src/OrcaSlicer.cpp` contains the full CLI implementation in `CLI::run()`. Key patterns:
 
-### Dependencies and Build System
-- **CMake-based** with separate dependency building phase
-- **Dependencies** built once in `deps/build/`, then linked to main application  
-- **Cross-platform** considerations important for all changes
-- **Resource files** embedded at build time, platform-specific handling
+- `--load-settings` → machine/process JSON configs loaded into `m_extra_config`
+- `--load-filaments` → filament JSONs stored in `load_filaments_config[]` (1-indexed, maps to extruder N)
+- `--load-filament-ids` → per-object extruder assignment (object-level, not face-level)
+- `--slice N` → slice plate N (0 = all plates)
 
-### Performance Considerations
-- **Slicing algorithms** are CPU-intensive, profile before optimizing
-- **Memory usage** can be substantial with complex models
-- **Multi-threading** extensively used via TBB
-- **File I/O** optimized for large 3MF files with embedded textures
-- **Real-time preview** requires efficient mesh processing
+**Important**: `load_config_file` is a **lambda** defined at line ~1872 inside `CLI::run()`. Code before that point must use `DynamicPrintConfig::load_from_json()` directly.
 
-## Important Development Notes
+### OBJ Multi-color CLI Flow
+OBJ face colors come from MTL files. The mapping pipeline:
+1. `load_obj()` → parses MTL → stores per-face `RGBA` in `ObjInfo.face_colors`
+2. `Model::read_from_file()` → calls `ObjImportColorFn` callback if provided
+3. Callback receives `vector<RGBA> input_colors` → fills `filament_ids[]` + `first_extruder_id`
+4. `obj_import_face_color_deal()` → writes `mmu_segmentation_facets` on the mesh volume
+
+`ObjImportColorFn` signature (defined in `src/libslic3r/Format/OBJ.hpp`):
+```cpp
+void(vector<RGBA>& input_colors, bool is_single_color,
+     vector<unsigned char>& filament_ids, unsigned char& first_extruder_id)
+```
+`RGBA` = `std::array<float,4>` (0–1 range). Use `decode_color(hex_string, ColorRGBA&)` to parse hex colors.
+
+In GUI mode, this callback shows `ObjColorDialog` (see `src/slic3r/GUI/Plater.cpp` ~line 4173). In CLI mode, `cli_obj_color_fn` (added at line ~1356) does nearest-neighbor RGB matching against `--load-filaments` colors.
+
+Helper script: `scripts/extract_obj_colors.py` — previews MTL→filament color matching and prints the CLI command.
+
+## Important Notes
 
 ### Codebase Navigation
-- Use search tools extensively - codebase has 500k+ lines
-- Key entry points: `src/OrcaSlicer.cpp` for application startup
-- Core slicing: `libslic3r/Print.cpp` orchestrates the slicing pipeline
-- Configuration: `PrintConfig.cpp` defines all print/printer/material settings
+- Codebase has 500k+ lines — use search tools extensively
+- `src/OrcaSlicer.cpp` — application startup + full CLI implementation
+- `src/libslic3r/Print.cpp` — orchestrates the slicing pipeline
+- `src/libslic3r/PrintConfig.cpp` — all print/printer/material settings
+- `src/slic3r/GUI/Plater.cpp` — main workspace, model loading with GUI callbacks
 
-### Compatibility and Stability
-- **Backward compatibility** maintained for project files and profiles
-- **Cross-platform** support essential (Windows/macOS/Linux)  
-- **File format** changes require careful version handling
-- **Profile migrations** needed when settings change significantly
-
-### Quality and Testing
-- **Regression testing** important due to algorithm complexity
-- **Performance benchmarks** help catch performance regressions
-- **Memory leak** detection important for long-running GUI application
-- **Cross-platform** testing required before releases
+### File Format Notes
+- 3MF files must be the **first** input file in CLI mode when mixed with other formats
+- `bbs_3mf.cpp` is 8900+ lines — the primary serialization format
+- Profile JSON files use `"from": "system"` or `"from": "User"` to distinguish system vs user presets
