@@ -7826,6 +7826,13 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli_params = "option";
     def->set_default_value(new ConfigOptionInt(0));
 
+    def = this->add("arrange_spacing", coFloat);
+    def->label = L("Arrange Spacing");
+    def->tooltip = L("Spacing between objects during arrange (mm). 0 = auto spacing based on brim/support.");
+    def->cli = "arrange-spacing";
+    def->cli_params = "spacing";
+    def->set_default_value(new ConfigOptionFloat(0.f));
+
     def = this->add("repetitions", coInt);
     def->label = L("Repetition count");
     def->tooltip = L("Repetition count of the whole model.");

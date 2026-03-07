@@ -1250,6 +1250,11 @@ int CLI::run(int argc, char **argv)
     if (allow_rotations_option)
         allow_rotations = allow_rotations_option->value;
 
+    float arrange_spacing = 0.f;
+    ConfigOptionFloat* arrange_spacing_option = m_config.option<ConfigOptionFloat>("arrange_spacing");
+    if (arrange_spacing_option)
+        arrange_spacing = arrange_spacing_option->value;
+
     ConfigOptionBool* skip_modified_gcodes_option = m_config.option<ConfigOptionBool>("skip_modified_gcodes");
     if (skip_modified_gcodes_option)
         skip_modified_gcodes = skip_modified_gcodes_option->value;
@@ -3823,6 +3828,8 @@ int CLI::run(int argc, char **argv)
         } else if (opt_key == "auto_plate") {
             // Will be used during arrange process
             BOOST_LOG_TRIVIAL(info) << "auto_plate is set to " << m_config.opt_int("auto_plate") << ", will be used during arrange process";
+        } else if (opt_key == "arrange_spacing") {
+            BOOST_LOG_TRIVIAL(info) << "arrange_spacing = " << m_config.opt_float("arrange_spacing") << " mm";
         } else if (opt_key == "model" || opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "thumbnail_image") {
             BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
@@ -4066,7 +4073,7 @@ int CLI::run(int argc, char **argv)
                 arrange_cfg.clearance_height_to_lid = height_to_lid;
                 arrange_cfg.clearance_radius = clearance_radius;
                 arrange_cfg.printable_height = print_height;
-                arrange_cfg.min_obj_distance = 0;
+                arrange_cfg.min_obj_distance = (arrange_spacing > 0) ? scaled(arrange_spacing) : 0;
                 if (arrange_cfg.is_seq_print) {
                     arrange_cfg.bed_shrink_x = BED_SHRINK_SEQ_PRINT;
                     arrange_cfg.bed_shrink_y = BED_SHRINK_SEQ_PRINT;
@@ -4469,7 +4476,7 @@ int CLI::run(int argc, char **argv)
                 arrange_cfg.clearance_height_to_lid             = height_to_lid;
                 arrange_cfg.clearance_radius                   = clearance_radius;
                 arrange_cfg.printable_height                    = print_height;
-                arrange_cfg.min_obj_distance = 0;
+                arrange_cfg.min_obj_distance = (arrange_spacing > 0) ? scaled(arrange_spacing) : 0;
                 if (arrange_cfg.is_seq_print) {
                     arrange_cfg.bed_shrink_x = BED_SHRINK_SEQ_PRINT;
                     arrange_cfg.bed_shrink_y = BED_SHRINK_SEQ_PRINT;
@@ -5020,6 +5027,8 @@ int CLI::run(int argc, char **argv)
         } else if (opt_key == "load_defaultfila") {
             //already processed before
         } else if (opt_key == "auto_plate") {
+            //will be used during arrange process
+        } else if (opt_key == "arrange_spacing") {
             //will be used during arrange process
         } else if (opt_key == "export_model_transforms") {
             //will be processed after orient and arrange, before exit
