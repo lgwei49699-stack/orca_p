@@ -4502,14 +4502,6 @@ int CLI::run(int argc, char **argv)
                     //boost::nowide::cout << "st=" << st << ", " << str << std::endl;
                 };
 
-                //Step-3:do the arrange
-                BOOST_LOG_TRIVIAL(info) << boost::format("start %1% th arranging...")%arrange_count;
-                arrangement::arrange(selected, unselected, beds, arrange_cfg);
-                arrangement::arrange(unprintable, {}, beds, arrange_cfg);
-                BOOST_LOG_TRIVIAL(info) << boost::format("finished %1% th arranging...")%arrange_count;
-
-                //Step-4:postprocess by partplate list&&apply the result
-                int bed_idx_max = 0;
                 // auto_plate: -1=not specified (multi-plate, original behavior)
                 //              0=single plate, allow overflow
                 //              1=multi-plate (same as -1)
@@ -4517,6 +4509,20 @@ int CLI::run(int argc, char **argv)
                 int auto_plate_value = auto_plate_specified ? m_config.opt_int("auto_plate") : -1;
                 bool force_single_plate = (auto_plate_value == 0);
                 BOOST_LOG_TRIVIAL(info) << "auto_plate_value=" << auto_plate_value << " force_single_plate=" << force_single_plate;
+
+                //Step-3:do the arrange
+                BOOST_LOG_TRIVIAL(info) << boost::format("start %1% th arranging...")%arrange_count;
+                arrangement::arrange(selected, unselected, beds, arrange_cfg);
+                // 单盘模式：把已排好的 selected 作为障碍物传入，避免 unprintable 与其重叠
+                // 多盘模式：空的 unselected（原始行为）
+                if (force_single_plate)
+                    arrangement::arrange(unprintable, selected, beds, arrange_cfg);
+                else
+                    arrangement::arrange(unprintable, {}, beds, arrange_cfg);
+                BOOST_LOG_TRIVIAL(info) << boost::format("finished %1% th arranging...")%arrange_count;
+
+                //Step-4:postprocess by partplate list&&apply the result
+                int bed_idx_max = 0;
 
                 if (duplicate_count == 0)
                 {
@@ -4543,12 +4549,12 @@ int CLI::run(int argc, char **argv)
 
                         // Determine bed_idx for each selected ap
                         for (ArrangePolygon &ap : selected) {
-                            if (force_single_plate) {
-                                ap.bed_idx = 0;  // 强制单盘，允许溢出
-                            } else {
+                            if (!force_single_plate) {
                                 //BBS: partplate postprocess
                                 partplate_list.postprocess_bed_index_for_selected(ap);
                             }
+                            // force_single_plate: leave ap.bed_idx as natural arrange result;
+                            // postprocess_arrange_polygon will apply correct stride offset.
                             bed_idx_max = std::max(ap.bed_idx, bed_idx_max);
                             BOOST_LOG_TRIVIAL(trace)<< "after arrange: name=" << ap.name << boost::format(",bed_id %1%, trans {%2%,%3%}") % ap.bed_idx % unscale<double>(ap.translation(X)) % unscale<double>(ap.translation(Y)) << "\n";
                         }
@@ -4566,6 +4572,9 @@ int CLI::run(int argc, char **argv)
                     for (ArrangePolygon &ap : selected) {
                         //BBS: partplate postprocess
                         partplate_list.postprocess_arrange_polygon(ap, true);
+                        // 单盘模式：stride已被正确应用（非重叠），现在将盘号强制为0
+                        if (force_single_plate)
+                            ap.bed_idx = 0;
                         ap.apply();
                     }
 
@@ -4583,12 +4592,13 @@ int CLI::run(int argc, char **argv)
                     // Note ap.apply() moves relatively according to bed_idx, so we need to subtract the orignal bed_idx
                     for (ArrangePolygon& ap : unprintable)
                     {
-                        if (force_single_plate) {
-                            ap.bed_idx = 0;  // 单盘模式：放 plate 0，允许溢出
-                        } else {
+                        if (!force_single_plate) {
                             ap.bed_idx = bed_idx_max + 1;
                         }
+                        // 单盘模式：保留自然 bed_idx 让 postprocess 应用正确偏移，再强制为 0
                         partplate_list.postprocess_arrange_polygon(ap, true);
+                        if (force_single_plate)
+                            ap.bed_idx = 0;
                         ap.apply();
                         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(":arrange m_unprintable: name: %4%, bed_id %1%, trans {%2%,%3%}") % ap.bed_idx % unscale<double>(ap.translation(X)) % unscale<double>(ap.translation(Y)) % ap.name;
                     }
