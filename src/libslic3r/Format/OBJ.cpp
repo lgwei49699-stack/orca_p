@@ -9,6 +9,19 @@
 
 #include <boost/log/trivial.hpp>
 
+#include "nlohmann/json.hpp"
+#include <boost/filesystem.hpp>
+#include <fstream>
+#include <cmath>
+#include <cstdio>  
+#include <algorithm> 
+
+
+
+using namespace nlohmann;
+namespace fs   = boost::filesystem;
+
+
 #ifdef _WIN32
 #define DIR_SEPARATOR '\\'
 #else
@@ -20,8 +33,149 @@
 #define _L(s) Slic3r::I18N::translate(s)
 
 namespace Slic3r {
+    
+bool load_general_extruder_config(const std::string& config_path, GeneralExtruderConfig& config)
+{
+    try {
+        if (!fs::exists(config_path)) {
+            BOOST_LOG_TRIVIAL(warning) << "General extruder config not found: " << config_path << ", use default config";
+            config.default_extruder_id   = 0;
+            config.default_filament_name = "Generic PLA @System";
+            config.color_match_tolerance = 0.01f;
+            return true;
+        }
 
-bool load_obj(const char *path, TriangleMesh *meshptr, ObjInfo& obj_info, std::string &message)
+        std::ifstream ifs(config_path);
+        if (!ifs.is_open()) {
+            BOOST_LOG_TRIVIAL(error) << "Failed to open extruder config: " << config_path;
+            config.default_extruder_id   = 0;
+            config.default_filament_name = "Generic PLA @System";
+            config.color_match_tolerance = 0.01f;
+            return true;
+        }
+
+        json root;
+        ifs >> root;
+        ifs.close();
+
+        config.default_extruder_id   = static_cast<unsigned char>(root["default_extruder_id"].get<int>());
+        config.default_filament_name = root["default_filament_name"].get<std::string>();
+        if (root.contains("color_match_tolerance")) {
+            config.color_match_tolerance = root["color_match_tolerance"].get<float>();
+        }
+
+        config.extruder_mapping.clear();
+        if (root.contains("extruder_mapping") && root["extruder_mapping"].is_array()) {
+            for (const auto& item : root["extruder_mapping"]) {
+                RGBA ref_color;
+                ref_color[0] = item["reference_color"]["r"].get<float>();
+                ref_color[1] = item["reference_color"]["g"].get<float>();
+                ref_color[2] = item["reference_color"]["b"].get<float>();
+                ref_color[3] = item["reference_color"]["a"].get<float>();
+
+                unsigned char extruder_id = static_cast<unsigned char>(item["extruder_id"].get<int>());
+                config.extruder_mapping.emplace_back(ref_color, extruder_id);
+            }
+        }
+
+        BOOST_LOG_TRIVIAL(info) << "Loaded general extruder config: " << config_path;
+        return true;
+    } catch (const std::exception& e) {
+        BOOST_LOG_TRIVIAL(error) << "Parse extruder config failed: " << e.what() << ", use default config";
+        config.default_extruder_id   = 0;
+        config.default_filament_name = "Generic PLA @System";
+        config.color_match_tolerance = 0.01f;
+        return true;
+    }
+}
+
+std::string rgba_to_html(const RGBA& rgba)
+{
+    int r = static_cast<int>(std::clamp(rgba[0], 0.0f, 1.0f) * 255);
+    int g = static_cast<int>(std::clamp(rgba[1], 0.0f, 1.0f) * 255);
+    int b = static_cast<int>(std::clamp(rgba[2], 0.0f, 1.0f) * 255);
+
+    char buf[8];
+    snprintf(buf, sizeof(buf), "#%02X%02X%02X", r, g, b);
+    return std::string(buf);
+}
+
+std::map<unsigned char, std::string> get_extruder_color_map(const std::vector<RGBA>&          face_colors,
+                                                                   const std::vector<unsigned char>& face_filament_ids)
+{
+    std::map<unsigned char, std::string> color_map;
+
+    for (size_t i = 0; i < face_filament_ids.size(); ++i) {
+        unsigned char extruder_id = face_filament_ids[i];
+        if (color_map.find(extruder_id) == color_map.end()) {
+            color_map[extruder_id] = rgba_to_html(face_colors[i]);
+        }
+    }
+
+    return color_map;
+}
+
+bool match_color(const RGBA& target, const RGBA& ref, float tolerance)
+{
+    return std::abs(target[0] - ref[0]) < tolerance && 
+           std::abs(target[1] - ref[1]) < tolerance &&
+           std::abs(target[2] - ref[2]) < tolerance &&
+           std::abs(target[3] - ref[3]) < tolerance;
+}
+
+void match_face_filament_ids(const std::vector<RGBA>&     face_colors,
+                             const GeneralExtruderConfig& config, 
+                             std::vector<unsigned char>&  face_filament_ids,
+                             unsigned char&               first_extruder_id  
+)
+{
+    first_extruder_id = config.default_extruder_id;
+    face_filament_ids.resize(face_colors.size(), first_extruder_id); 
+
+    for (size_t i = 0; i < face_colors.size(); ++i) {
+        const RGBA& target_color = face_colors[i];
+        for (const auto& [ref_color, extruder_id] : config.extruder_mapping) {
+            if (match_color(target_color, ref_color, config.color_match_tolerance)) {
+                face_filament_ids[i] = extruder_id;
+                //BOOST_LOG_TRIVIAL(debug) << "Face " << i << " color matched extruder ID: " << (int) extruder_id;
+                break;
+            }
+        }
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "Matched " << face_filament_ids.size() << " face extruder IDs (default: " << (int) first_extruder_id << ")";
+}
+
+
+//void match_vertex_filament_ids(const std::vector<RGBA>&     vertex_colors,
+//                               const GeneralExtruderConfig& config,
+//                               std::vector<unsigned char>&  vertex_filament_ids,
+//                               unsigned char&               first_extruder_id)
+//{
+//    first_extruder_id = config.default_extruder_id;
+//    vertex_filament_ids.resize(vertex_colors.size(), first_extruder_id);
+//    for (size_t i = 0; i < vertex_colors.size(); ++i) {
+//        const RGBA& target_color = vertex_colors[i];
+//        for (const auto& [ref_color, extruder_id] : config.extruder_mapping) {
+//            if (match_color(target_color, ref_color, config.color_match_tolerance)) {
+//                vertex_filament_ids[i] = extruder_id;
+//                break;
+//            }
+//        }
+//    }
+//
+//    BOOST_LOG_TRIVIAL(info) << "Matched " << vertex_filament_ids.size() << " vertex extruder IDs (default: " << (int) first_extruder_id
+//                            << ")";
+//}
+
+
+std::string rgba_to_string(const RGBA& color, int precision) { 
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(precision) << color[0] << "," << color[1] << "," << color[2] << "," << color[3];
+    return ss.str();
+}
+
+bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::string& message)
 {
     if (meshptr == nullptr)
         return false;
