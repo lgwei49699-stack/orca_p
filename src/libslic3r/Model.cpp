@@ -223,6 +223,86 @@ Model Model::read_from_step(const std::string&                                  
     return model;
 }
 
+static void update_filament_config_for_cmd(DynamicPrintConfig&                         config,
+                                           size_t                                      num_filaments,
+                                           const std::map<unsigned char, std::string>& extruder_color_map)
+{
+    ConfigOptionStrings* filament_color_opt = config.option<ConfigOptionStrings>("filament_colour");
+    if (!filament_color_opt) {
+        filament_color_opt = new ConfigOptionStrings({"#FFFFFF"});
+        //config.add_option(filament_color_opt);
+        config.set_key_value("filament_colour", filament_color_opt);
+    }
+
+    filament_color_opt->values.resize(num_filaments);
+    for (const auto& [extruder_id, html_color] : extruder_color_map) {
+        size_t index = extruder_id - 1;
+        if (index < num_filaments) {
+            filament_color_opt->values[index] = html_color;
+        }
+    }
+
+    ConfigOptionFloats* flush_vol_vector_opt = config.option<ConfigOptionFloats>("flush_vol_vector");
+    if (!flush_vol_vector_opt) {
+        flush_vol_vector_opt = new ConfigOptionFloats(1, 0.0);
+        config.set_key_value("flush_volumes_vector", flush_vol_vector_opt);
+    }
+
+    //ConfigOptionFloats* filament_diameter_opt = config.option<ConfigOptionFloats>("filament_diameter");
+    //if (!filament_diameter_opt) {
+    //    filament_diameter_opt = new ConfigOptionFloats(num_filaments, 0.0);
+    //    config.set_key_value("filament_diameter", filament_diameter_opt);
+    //}
+
+    size_t target_vec_size = 2 * num_filaments;
+    while (flush_vol_vector_opt->values.size() < target_vec_size) {
+        if (flush_vol_vector_opt->values.empty()) {
+            flush_vol_vector_opt->values.push_back(140.0);
+            flush_vol_vector_opt->values.push_back(140.0);
+        } else {
+            flush_vol_vector_opt->values.push_back(flush_vol_vector_opt->values[0]);
+            flush_vol_vector_opt->values.push_back(flush_vol_vector_opt->values[1]);
+        }
+    }
+    while (flush_vol_vector_opt->values.size() > target_vec_size) {
+        flush_vol_vector_opt->values.pop_back();
+    }
+
+    ConfigOptionFloats* flush_vol_matrix_opt = config.option<ConfigOptionFloats>("flush_volumes_matrix");
+    if (!flush_vol_matrix_opt) {
+        flush_vol_matrix_opt = new ConfigOptionFloats(1, 0.0);
+        config.set_key_value("flush_volumes_matrix", flush_vol_matrix_opt);
+    }
+
+    size_t              old_num_filaments = static_cast<size_t>(sqrt(flush_vol_matrix_opt->values.size() + 1e-6));
+    std::vector<double> new_matrix;
+
+    for (size_t i = 0; i < num_filaments; ++i) {
+        for (size_t j = 0; j < num_filaments; ++j) {
+            if (i == j) {
+                new_matrix.push_back(0.0);
+            } else if (i < old_num_filaments && j < old_num_filaments) {
+                new_matrix.push_back(flush_vol_matrix_opt->values[i * old_num_filaments + j]);
+            } else {
+                double val = flush_vol_vector_opt->values[2 * i] + flush_vol_vector_opt->values[2 * j + 1];
+                new_matrix.push_back(val);
+            }
+        }
+    }
+    flush_vol_matrix_opt->values = new_matrix;
+
+    //config.set_key_value("filament_diameter", filament_diameter_opt);
+}
+
+static void update_model_extruder_count(Model& model, size_t num_filaments)
+{
+    for (ModelObject* mo : model.objects) {
+        for (ModelVolume* mv : mo->volumes) {
+            mv->update_extruder_count(num_filaments);
+        }
+    }
+}
+
 // BBS: add part plate related logic
 // BBS: backup & restore
 // Loading model from a file, it may be a simple geometry file as STL or OBJ, however it may be a project file as well.
@@ -271,6 +351,7 @@ Model Model::read_from_file(const std::string&                                  
         result = load_obj(input_file.c_str(), &model, obj_info, message);
         if (result){
             unsigned char first_extruder_id;
+            bool              has_color_mapping = false;
             if (obj_info.vertex_colors.size() > 0) {
                 std::vector<unsigned char> vertex_filament_ids;
                 if (objFn) { // 1.result is ok and pop up a dialog
@@ -284,7 +365,42 @@ Model Model::read_from_file(const std::string&                                  
                 if (objFn) { // 1.result is ok and pop up a dialog
                     objFn(obj_info.face_colors, obj_info.is_single_mtl, face_filament_ids, first_extruder_id);
                     if (face_filament_ids.size() > 0) {
+
                         result = obj_import_face_color_deal(face_filament_ids, first_extruder_id, &model);
+                    }
+                } else { 
+                    std::map<std::string, unsigned char> color_to_id;
+                    std::map<unsigned char, std::string> filament_id_to_color;
+                    if (result && !obj_info.face_colors.empty()) {
+                        unsigned char next_id = 2;
+                        first_extruder_id     = next_id;
+
+                        for (const auto& color : obj_info.face_colors) {
+                            std::string color_str = rgba_to_html(color);
+
+                            if (color_to_id.find(color_str) == color_to_id.end()) {
+                                color_to_id[color_str]        = next_id;
+                                filament_id_to_color[next_id] = color_str;
+                                next_id++;
+                            }
+
+                            face_filament_ids.push_back(color_to_id[color_str]);
+                        }
+
+                        if (!face_filament_ids.empty()) {
+                            has_color_mapping = true;
+                            result            = obj_import_face_color_deal(face_filament_ids, first_extruder_id, &model);
+                        }
+                    }
+                    if (result && has_color_mapping && config && !obj_info.face_colors.empty()) {
+                        //std::map<unsigned char, std::string> color_map = get_extruder_color_map(obj_info.face_colors, face_filament_ids);
+                       
+                        size_t num_filaments = filament_id_to_color.size() + 1;
+                        update_filament_config_for_cmd(*config, num_filaments, filament_id_to_color);
+                        update_model_extruder_count(model, num_filaments);
+
+                        BOOST_LOG_TRIVIAL(info)
+                            << "OBJ config update: extruders nums =" << num_filaments << ", color nums =" << filament_id_to_color.size();
                     }
                 }
             } /*else if (obj_info.has_uv_png && obj_info.uvs.size() > 0) {
