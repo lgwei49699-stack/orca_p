@@ -2875,6 +2875,10 @@ int CLI::run(int argc, char **argv)
                 {
                     if (opt_key == "compatible_prints" || opt_key == "compatible_printers" || opt_key == "model_id" || opt_key == "dev_model_name" || opt_key == "filament_settings_id")
                         continue;
+                    // 单耗材配置用于多色3MF时，保留各槽位的原有颜色
+                    if ((opt_key == "filament_colour" || opt_key == "default_filament_colour") &&
+                        load_filament_count == 1 && filament_count > 1)
+                        continue;
                     ConfigOption *opt = m_print_config.option(opt_key, true);
                     if (opt == nullptr) {
                         // opt_key does not exist in this ConfigBase and it cannot be created, because it is not defined by this->def().
@@ -2897,6 +2901,45 @@ int CLI::run(int argc, char **argv)
                     different_keys.emplace_back(*iter);
                 different_settings[filament_index] = Slic3r::escape_strings_cstyle(different_keys);
                 BOOST_LOG_TRIVIAL(info) << boost::format("filament %1% new different key size %2%, different_settings %3%")%filament_index %different_keys_set.size() %different_settings[filament_index];
+            }
+        }
+
+        // 如果只指定了1个耗材配置，但3MF有多个耗材槽，将该配置应用到所有剩余槽
+        if (load_filament_count == 1 && filament_count > 1) {
+            DynamicPrintConfig single_config = load_filaments_config[0];  // copy，避免修改原始
+            load_default_gcodes_to_config(single_config, Preset::TYPE_FILAMENT);
+            BOOST_LOG_TRIVIAL(warning) << boost::format("single filament specified but %1% slots found, applying to all slots") % filament_count;
+            for (int slot = 2; slot <= filament_count; slot++) {
+                // filament_settings_id
+                ConfigOptionStrings *opt_filament_settings = static_cast<ConfigOptionStrings *>(m_print_config.option("filament_settings_id", true));
+                ConfigOptionString* filament_name_setting = new ConfigOptionString(load_filaments_name[0]);
+                opt_filament_settings->set_at(filament_name_setting, slot-1, 0);
+
+                // filament_ids
+                ConfigOptionStrings *opt_filament_ids = static_cast<ConfigOptionStrings *>(m_print_config.option("filament_ids", true));
+                ConfigOptionString* filament_id_setting = new ConfigOptionString(load_filaments_id[0]);
+                opt_filament_ids->set_at(filament_id_setting, slot-1, 0);
+
+                // 所有 vector 类型的参数（与 slot 1 逻辑一致，但保留 3MF 原有颜色）
+                for (const t_config_option_key &opt_key : single_config.keys()) {
+                    if (opt_key == "compatible_prints" || opt_key == "compatible_printers" ||
+                        opt_key == "model_id" || opt_key == "dev_model_name" || opt_key == "filament_settings_id" ||
+                        opt_key == "filament_colour" || opt_key == "default_filament_colour")
+                        continue;
+                    const ConfigOption *source_opt = single_config.option(opt_key);
+                    if (source_opt == nullptr || source_opt->is_scalar())
+                        continue;
+                    ConfigOption *opt = m_print_config.option(opt_key, true);
+                    if (opt == nullptr)
+                        continue;
+                    ConfigOptionVectorBase* opt_vec_dst = static_cast<ConfigOptionVectorBase*>(opt);
+                    const ConfigOptionVectorBase* opt_vec_src = static_cast<const ConfigOptionVectorBase*>(source_opt);
+                    opt_vec_dst->set_at(opt_vec_src, slot-1, 0);
+                }
+
+                different_settings[slot] = "";
+                inherits_group[slot] = load_filaments_inherit[0];
+                BOOST_LOG_TRIVIAL(info) << boost::format("applied single filament config to slot %1%") % slot;
             }
         }
     }
