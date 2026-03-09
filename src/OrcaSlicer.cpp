@@ -53,6 +53,7 @@ using namespace nlohmann;
 #include "libslic3r/Model.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/Platform.hpp"
+#include "libslic3r/Exception.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/SLAPrint.hpp"
 #include "libslic3r/TriangleMesh.hpp"
@@ -1255,6 +1256,11 @@ int CLI::run(int argc, char **argv)
     if (arrange_spacing_option)
         arrange_spacing = arrange_spacing_option->value;
 
+    bool force_machine = false;
+    ConfigOptionBool* force_machine_option = m_config.option<ConfigOptionBool>("force_machine");
+    if (force_machine_option)
+        force_machine = force_machine_option->value;
+
     ConfigOptionBool* skip_modified_gcodes_option = m_config.option<ConfigOptionBool>("skip_modified_gcodes");
     if (skip_modified_gcodes_option)
         skip_modified_gcodes = skip_modified_gcodes_option->value;
@@ -2435,9 +2441,15 @@ int CLI::run(int argc, char **argv)
                 }
             }
             if (!process_compatible) {
+                if (force_machine) {
+                    BOOST_LOG_TRIVIAL(warning) << "--force-machine: bypassing CLI_3MF_NEW_MACHINE_NOT_SUPPORTED, printer="
+                        << new_printer_name << " not in upward_compatible list";
+                    process_compatible = true;
+                } else {
                 BOOST_LOG_TRIVIAL(error) <<__FUNCTION__ << boost::format(" %1% : current 3mf file not support the new printer %2%, new_printer_system_name %3%")%__LINE__%new_printer_name %new_printer_system_name;
                 record_exit_reson(outfile_dir, CLI_3MF_NEW_MACHINE_NOT_SUPPORTED, 0, cli_errors[CLI_3MF_NEW_MACHINE_NOT_SUPPORTED], sliced_info);
                 flush_and_exit(CLI_3MF_NEW_MACHINE_NOT_SUPPORTED);
+                }
             }
         }
         /*else {
@@ -2448,9 +2460,14 @@ int CLI::run(int argc, char **argv)
     }
 
     if (!process_compatible) {
+        if (force_machine) {
+            BOOST_LOG_TRIVIAL(warning) << "--force-machine: bypassing CLI_PROCESS_NOT_COMPATIBLE, forcing process compatible";
+            process_compatible = true;
+        } else {
         BOOST_LOG_TRIVIAL(error) <<__FUNCTION__ << boost::format(" %1%: process not compatible with printer.")%__LINE__;
         record_exit_reson(outfile_dir, CLI_PROCESS_NOT_COMPATIBLE, 0, cli_errors[CLI_PROCESS_NOT_COMPATIBLE], sliced_info);
         flush_and_exit(CLI_PROCESS_NOT_COMPATIBLE);
+        }
     }
     sliced_info.upward_machines = upward_compatible_printers;
 
@@ -3117,11 +3134,18 @@ int CLI::run(int argc, char **argv)
 
     std::map<std::string, std::string> validity = m_print_config.validate(true);
     if (!validity.empty()) {
-        boost::nowide::cerr << "Param values in 3mf/config error: "<< std::endl;
-        for (std::map<std::string, std::string>::iterator it=validity.begin(); it!=validity.end(); ++it)
-            boost::nowide::cerr << it->first <<": "<< it->second << std::endl;
-        record_exit_reson(outfile_dir, CLI_INVALID_VALUES_IN_3MF, 0, cli_errors[CLI_INVALID_VALUES_IN_3MF], sliced_info);
-        flush_and_exit(CLI_INVALID_VALUES_IN_3MF);
+        if (allow_newer_file) {
+            // 新版本 3MF 可能含有哨兵值（如 -1=auto, 0=inherit），仅警告不中断
+            BOOST_LOG_TRIVIAL(warning) << "allow-newer-file: ignoring out-of-range params from newer 3mf:";
+            for (auto &kv : validity)
+                BOOST_LOG_TRIVIAL(warning) << "  " << kv.first << ": " << kv.second;
+        } else {
+            boost::nowide::cerr << "Param values in 3mf/config error: "<< std::endl;
+            for (std::map<std::string, std::string>::iterator it=validity.begin(); it!=validity.end(); ++it)
+                boost::nowide::cerr << it->first <<": "<< it->second << std::endl;
+            record_exit_reson(outfile_dir, CLI_INVALID_VALUES_IN_3MF, 0, cli_errors[CLI_INVALID_VALUES_IN_3MF], sliced_info);
+            flush_and_exit(CLI_INVALID_VALUES_IN_3MF);
+        }
     }
 
     auto timelapse_type_opt = m_print_config.option("timelapse_type");
@@ -3830,6 +3854,8 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "auto_plate is set to " << m_config.opt_int("auto_plate") << ", will be used during arrange process";
         } else if (opt_key == "arrange_spacing") {
             BOOST_LOG_TRIVIAL(info) << "arrange_spacing = " << m_config.opt_float("arrange_spacing") << " mm";
+        } else if (opt_key == "force_machine") {
+            BOOST_LOG_TRIVIAL(info) << "force_machine = " << m_config.opt_bool("force_machine");
         } else if (opt_key == "model" || opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "thumbnail_image") {
             BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
@@ -5313,8 +5339,8 @@ int CLI::run(int argc, char **argv)
                         StringObjectException warning;
                         auto err = print->validate(&warning);
                         if (!err.string.empty()) {
-                            if ((STRING_EXCEPT_LAYER_HEIGHT_EXCEEDS_LIMIT == err.type) && no_check) {
-                                BOOST_LOG_TRIVIAL(warning) << "got warnings: "<< err.string << std::endl;
+                            if (((STRING_EXCEPT_LAYER_HEIGHT_EXCEEDS_LIMIT == err.type) && no_check) || allow_newer_file) {
+                                BOOST_LOG_TRIVIAL(warning) << "allow-newer-file/no-check: ignoring validate error: "<< err.string << std::endl;
                             }
                             else {
                                 BOOST_LOG_TRIVIAL(error) << "got error when validate: "<< err.string << std::endl;
@@ -5538,10 +5564,17 @@ int CLI::run(int argc, char **argv)
                                     }
                                 }
                                 sliced_info.sliced_plates.push_back(sliced_plate_info);
+                            } catch (const Slic3r::SlicingErrors &ex) {
+                                BOOST_LOG_TRIVIAL(error) << "found slicing or export error for partplate " << index+1;
+                                for (const auto& err : ex.errors_) {
+                                    BOOST_LOG_TRIVIAL(error) << "  slicing error: " << err.what();
+                                    boost::nowide::cerr << err.what() << std::endl;
+                                }
+                                record_exit_reson(outfile_dir, CLI_SLICING_ERROR, index+1, cli_errors[CLI_SLICING_ERROR], sliced_info);
+                                flush_and_exit(CLI_SLICING_ERROR);
                             } catch (const std::exception &ex) {
                                 BOOST_LOG_TRIVIAL(error) << "found slicing or export error for partplate "<<index+1 << std::endl;
                                 boost::nowide::cerr << ex.what() << std::endl;
-                                //continue;
                                 record_exit_reson(outfile_dir, CLI_SLICING_ERROR, index+1, cli_errors[CLI_SLICING_ERROR], sliced_info);
                                 flush_and_exit(CLI_SLICING_ERROR);
                             }

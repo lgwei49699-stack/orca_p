@@ -7833,6 +7833,12 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli_params = "spacing";
     def->set_default_value(new ConfigOptionFloat(0.f));
 
+    def = this->add("force_machine", coBool);
+    def->label = L("Force Machine");
+    def->tooltip = L("Force replace machine/process/filament from 3mf, bypass compatibility checks.");
+    def->cli = "force-machine";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("repetitions", coInt);
     def->label = L("Repetition count");
     def->tooltip = L("Repetition count of the whole model.");
@@ -8132,6 +8138,7 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def = this->add("allow_newer_file", coBool);
     def->label = L("Allow 3mf with newer version to be sliced");
     def->tooltip = L("Allow 3mf with newer version to be sliced.");
+    def->cli = "allow-newer-file";
     def->cli_params = "option";
     def->set_default_value(new  ConfigOptionBool(false));
 }
