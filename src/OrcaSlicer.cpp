@@ -3897,6 +3897,8 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "auto_plate is set to " << m_config.opt_int("auto_plate") << ", will be used during arrange process";
         } else if (opt_key == "arrange_spacing") {
             BOOST_LOG_TRIVIAL(info) << "arrange_spacing = " << m_config.opt_float("arrange_spacing") << " mm";
+        } else if (opt_key == "split_by_color") {
+            BOOST_LOG_TRIVIAL(info) << "split_by_color = " << m_config.opt_bool("split_by_color") << ", will split multi-extruder objects before arrange";
         } else if (opt_key == "force_machine") {
             BOOST_LOG_TRIVIAL(info) << "force_machine = " << m_config.opt_bool("force_machine");
         } else if (opt_key == "model" || opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "thumbnail_image") {
@@ -3909,6 +3911,95 @@ int CLI::run(int argc, char **argv)
     }
 
     BOOST_LOG_TRIVIAL(info) << "finished model pre-process commands\n";
+
+    // --split-by-color: split multi-extruder objects into single-extruder objects, assign each to a separate plate
+    if (std::find(m_transforms.begin(), m_transforms.end(), "split_by_color") != m_transforms.end() &&
+        m_config.opt_bool("split_by_color")) {
+        BOOST_LOG_TRIVIAL(info) << "split_by_color: begin splitting multi-extruder objects";
+        for (auto& model : m_models) {
+            // Step 1: split objects that have volumes with multiple extruder IDs
+            std::vector<ModelObject*> current_objects(model.objects.begin(), model.objects.end());
+            std::vector<ModelObject*> objects_to_delete;
+
+            for (ModelObject* obj : current_objects) {
+                // group MODEL_PART volumes by extruder_id
+                std::map<int, std::vector<ModelVolume*>> vols_by_ext;
+                for (ModelVolume* vol : obj->volumes) {
+                    if (vol->type() != ModelVolumeType::MODEL_PART) continue;
+                    vols_by_ext[vol->extruder_id()].push_back(vol);
+                }
+                if (vols_by_ext.size() <= 1) {
+                    BOOST_LOG_TRIVIAL(info) << "split_by_color: object '" << obj->name << "' already single-extruder, skip";
+                    continue;
+                }
+                BOOST_LOG_TRIVIAL(info) << boost::format("split_by_color: object '%1%' has %2% extruder groups, splitting")
+                    % obj->name % vols_by_ext.size();
+                for (auto& [ext_id, vols] : vols_by_ext) {
+                    ModelObject* new_obj = model.add_object();
+                    new_obj->name = obj->name + "_ext" + std::to_string(ext_id);
+                    new_obj->config.set_key_value("extruder", new ConfigOptionInt(ext_id));
+                    for (ModelVolume* vol : vols)
+                        new_obj->add_volume(*vol);
+                    for (ModelInstance* inst : obj->instances)
+                        new_obj->add_instance(*inst);
+                    new_obj->ensure_on_bed();
+                    BOOST_LOG_TRIVIAL(info) << boost::format("split_by_color: created object '%1%' for extruder %2%")
+                        % new_obj->name % ext_id;
+                }
+                objects_to_delete.push_back(obj);
+            }
+            for (ModelObject* obj : objects_to_delete)
+                model.delete_object(obj);
+
+            // Step 2: build extruder_id → plate_index mapping (sorted by extruder_id for determinism)
+            std::map<int, int> extruder_to_plate;
+            int next_plate_idx = 0;
+            for (ModelObject* obj : model.objects) {
+                int ext_id = obj->volumes.empty() ? 1 : obj->volumes[0]->extruder_id();
+                if (extruder_to_plate.find(ext_id) == extruder_to_plate.end())
+                    extruder_to_plate[ext_id] = next_plate_idx++;
+            }
+            BOOST_LOG_TRIVIAL(info) << boost::format("split_by_color: %1% extruder groups → %2% plates needed")
+                % extruder_to_plate.size() % next_plate_idx;
+
+            // Step 3: ensure enough plates exist
+            while (partplate_list.get_plate_count() < next_plate_idx)
+                partplate_list.create_plate();
+
+            // Step 4: reload plate assignments and re-assign by extruder_id
+            partplate_list.reload_all_objects();
+            for (int obj_idx = 0; obj_idx < (int)model.objects.size(); obj_idx++) {
+                ModelObject* obj = model.objects[obj_idx];
+                int ext_id = obj->volumes.empty() ? 1 : obj->volumes[0]->extruder_id();
+                int plate_idx = extruder_to_plate[ext_id];
+                for (int inst_idx = 0; inst_idx < (int)obj->instances.size(); inst_idx++) {
+                    partplate_list.add_to_plate(obj_idx, inst_idx, plate_idx);
+                    BOOST_LOG_TRIVIAL(info) << boost::format("split_by_color: obj '%1%' inst %2% → plate %3%")
+                        % obj->name % inst_idx % plate_idx;
+                }
+            }
+        }
+
+        // Step 5: export each split object as a separate STL file to outfile_dir
+        if (!outfile_dir.empty()) {
+            for (auto& model : m_models) {
+                for (ModelObject* obj : model.objects) {
+                    std::string safe_name = obj->name;
+                    // replace characters that are invalid in filenames
+                    for (char& c : safe_name)
+                        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|')
+                            c = '_';
+                    std::string stl_path = outfile_dir + "/" + safe_name + ".stl";
+                    if (Slic3r::store_stl(stl_path.c_str(), obj, true))
+                        BOOST_LOG_TRIVIAL(info) << "split_by_color: exported '" << stl_path << "'";
+                    else
+                        BOOST_LOG_TRIVIAL(warning) << "split_by_color: failed to export '" << stl_path << "'";
+                }
+            }
+        }
+        BOOST_LOG_TRIVIAL(info) << "split_by_color: done";
+    }
+
     bool oriented_or_arranged = false;
     //BBS: add orient and arrange logic here
     for (auto& model : m_models)
@@ -5099,6 +5190,8 @@ int CLI::run(int argc, char **argv)
             //will be used during arrange process
         } else if (opt_key == "arrange_spacing") {
             //will be used during arrange process
+        } else if (opt_key == "split_by_color") {
+            //will be processed after model loading, before orient/arrange
         } else if (opt_key == "export_model_transforms") {
             //will be processed after orient and arrange, before exit
         } else if (opt_key == "mtcpp") {

@@ -7839,6 +7839,12 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli = "force-machine";
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("split_by_color", coBool);
+    def->label = L("Split by Color");
+    def->tooltip = L("Split multi-color objects by extruder into separate objects, each placed on a separate plate.");
+    def->cli = "split-by-color";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("repetitions", coInt);
     def->label = L("Repetition count");
     def->tooltip = L("Repetition count of the whole model.");
