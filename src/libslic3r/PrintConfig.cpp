@@ -7948,6 +7948,13 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli_params = "0,1,0,1,...";
     def->set_default_value(new ConfigOptionStrings());
 
+    def = this->add("model_process", coStrings);
+    def->label = L("Model Process");
+    def->tooltip = L("Per-model process JSON file path. Overrides global process settings for the specified model.");
+    def->cli = "model-process";
+    def->cli_params = "process_json";
+    def->set_default_value(new ConfigOptionStrings());
+
     /*def = this->add("split", coBool);
     def->label = L("Split");
     def->tooltip = L("Detect unconnected parts in the given model(s) and split them into separate objects.");

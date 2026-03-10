@@ -1622,13 +1622,15 @@ int CLI::run(int argc, char **argv)
             auto scale_option = m_config.option<ConfigOptionStrings>("model_scale");
             auto rotate_option = m_config.option<ConfigOptionStrings>("model_rotate");
             auto support_option = m_config.option<ConfigOptionStrings>("model_support");
-            
+            auto process_option = m_config.option<ConfigOptionStrings>("model_process");
+
             // 检查是否有任何模型参数
             bool has_model_params = (model_option && !model_option->values.empty()) ||
                                     (position_option && !position_option->values.empty()) ||
                                     (scale_option && !scale_option->values.empty()) ||
                                     (rotate_option && !rotate_option->values.empty()) ||
-                                    (support_option && !support_option->values.empty());
+                                    (support_option && !support_option->values.empty()) ||
+                                    (process_option && !process_option->values.empty());
             
             if (has_model_params) {
                 BOOST_LOG_TRIVIAL(info) << "Processing model parameters for file: " << file;
@@ -1639,6 +1641,7 @@ int CLI::run(int argc, char **argv)
                 const auto& model_scales = scale_option ? scale_option->values : std::vector<std::string>();
                 const auto& model_rotates = rotate_option ? rotate_option->values : std::vector<std::string>();
                 const auto& model_supports = support_option ? support_option->values : std::vector<std::string>();
+                const auto& model_processes = process_option ? process_option->values : std::vector<std::string>();
                 
                 // 确定模型索引
                 size_t model_idx = 0;  // 默认索引为0（单模型情况）
@@ -1732,12 +1735,30 @@ int CLI::run(int argc, char **argv)
                                 try {
                                     bool enable_support = (support_str == "1");
                                     obj->config.set("enable_support", enable_support);
-                                    BOOST_LOG_TRIVIAL(info) << "Model '" << obj->name << "' support: " 
+                                    BOOST_LOG_TRIVIAL(info) << "Model '" << obj->name << "' support: "
                                         << (enable_support ? "enabled" : "disabled");
                                 } catch (const std::exception& e) {
-                                    BOOST_LOG_TRIVIAL(warning) << "Invalid support format: " << support_str 
+                                    BOOST_LOG_TRIVIAL(warning) << "Invalid support format: " << support_str
                                         << " (error: " << e.what() << ", using global setting)";
                                 }
+                            }
+                        }
+                        // 5. 应用 per-model process JSON（全量覆盖 per-object 参数，在 instance 循环外执行一次）
+                        if (model_idx < model_processes.size() && !model_processes[model_idx].empty()) {
+                            std::string proc_file = model_processes[model_idx];
+                            try {
+                                DynamicPrintConfig proc_config;
+                                std::map<std::string, std::string> proc_key_values;
+                                std::string proc_reason;
+                                proc_config.load_from_json(proc_file, ForwardCompatibilitySubstitutionRule::Enable, proc_key_values, proc_reason);
+                                if (!proc_reason.empty())
+                                    throw std::runtime_error(proc_reason);
+                                obj->config.apply(proc_config, true);
+                                BOOST_LOG_TRIVIAL(info) << "Model '" << obj->name
+                                    << "' applied per-model process: " << proc_file;
+                            } catch (const std::exception& e) {
+                                BOOST_LOG_TRIVIAL(warning) << "Failed to load model-process '" << proc_file
+                                    << "': " << e.what() << " (using global process)";
                             }
                         }
                     }
@@ -3901,7 +3922,7 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "split_by_color = " << m_config.opt_bool("split_by_color") << ", will split multi-extruder objects before arrange";
         } else if (opt_key == "force_machine") {
             BOOST_LOG_TRIVIAL(info) << "force_machine = " << m_config.opt_bool("force_machine");
-        } else if (opt_key == "model" || opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "thumbnail_image") {
+        } else if (opt_key == "model" || opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "model_process" || opt_key == "thumbnail_image") {
             BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
             boost::nowide::cerr << "error: option not implemented yet: " << opt_key << std::endl;
