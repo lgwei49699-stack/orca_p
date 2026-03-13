@@ -5614,9 +5614,9 @@ int CLI::run(int argc, char **argv)
                                 if (printer_technology == ptFFF) {
                                     std::string conflict_result = print_fff->get_conflict_string();
                                     if (!conflict_result.empty()) {
-                                       BOOST_LOG_TRIVIAL(error) << "plate "<< index+1<< ": found slicing result conflict!"<< std::endl;
-                                       record_exit_reson(outfile_dir, CLI_GCODE_PATH_CONFLICTS, index+1, cli_errors[CLI_GCODE_PATH_CONFLICTS], sliced_info);
-                                       flush_and_exit(CLI_GCODE_PATH_CONFLICTS);
+                                       BOOST_LOG_TRIVIAL(warning) << "plate "<< index+1<< ": gcode path conflict detected (warning only): " << conflict_result;
+                                       sliced_plate_info.warning_message = conflict_result;
+                                       // do not exit, consistent with GUI behavior which shows a warning and continues
                                     }
 
                                     //check the warnings
@@ -5636,13 +5636,13 @@ int CLI::run(int argc, char **argv)
                                                     BOOST_LOG_TRIVIAL(warning) << boost::format("plate %1%: found slicing warnings: %2%, no_check=%3%")%(index+1) %status.text %no_check;
                                                     if (!no_check) {
                                                         //only following message will be reported under import mode
-                                                        if (status.message_type == PrintStateBase::SlicingEmptyGcodeLayers
-                                                            || status.message_type == PrintStateBase::SlicingGcodeOverlap)
+                                                        if (status.message_type == PrintStateBase::SlicingEmptyGcodeLayers)
                                                         {
                                                             sliced_info.sliced_plates.push_back(sliced_plate_info);
                                                             record_exit_reson(outfile_dir, CLI_SLICING_ERROR, index+1, cli_errors[CLI_SLICING_ERROR], sliced_info);
                                                             flush_and_exit(CLI_SLICING_ERROR);
                                                         }
+                                                        // SlicingGcodeOverlap: warning only, consistent with GUI behavior
                                                     }
                                                 }
                                             }
