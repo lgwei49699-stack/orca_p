@@ -2965,6 +2965,32 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    // CLI temperature overrides: apply after filament configs are loaded
+    {
+        double cli_nozzle_temp = 0, cli_nozzle_temp_initial = 0;
+        ConfigOptionFloat* opt_temp = m_config.option<ConfigOptionFloat>("cli_nozzle_temperature");
+        if (opt_temp && opt_temp->value > 0)
+            cli_nozzle_temp = opt_temp->value;
+        ConfigOptionFloat* opt_temp_initial = m_config.option<ConfigOptionFloat>("cli_nozzle_temperature_initial_layer");
+        if (opt_temp_initial && opt_temp_initial->value > 0)
+            cli_nozzle_temp_initial = opt_temp_initial->value;
+
+        if (cli_nozzle_temp > 0) {
+            int temp_int = (int)std::round(cli_nozzle_temp);
+            ConfigOptionInts* nozzle_temp = m_print_config.option<ConfigOptionInts>("nozzle_temperature", true);
+            int slot_count = std::max((int)nozzle_temp->values.size(), filament_count);
+            nozzle_temp->values.assign(slot_count, temp_int);
+            BOOST_LOG_TRIVIAL(info) << boost::format("CLI override: nozzle_temperature = %1% (rounded to %2%) for all %3% slots") % cli_nozzle_temp % temp_int % slot_count;
+        }
+        if (cli_nozzle_temp_initial > 0) {
+            int temp_int = (int)std::round(cli_nozzle_temp_initial);
+            ConfigOptionInts* nozzle_temp_initial = m_print_config.option<ConfigOptionInts>("nozzle_temperature_initial_layer", true);
+            int slot_count = std::max((int)nozzle_temp_initial->values.size(), filament_count);
+            nozzle_temp_initial->values.assign(slot_count, temp_int);
+            BOOST_LOG_TRIVIAL(info) << boost::format("CLI override: nozzle_temperature_initial_layer = %1% (rounded to %2%) for all %3% slots") % cli_nozzle_temp_initial % temp_int % slot_count;
+        }
+    }
+
     //compute the flush volume
     ConfigOptionStrings *selected_filament_colors_option = m_extra_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour");
@@ -3922,6 +3948,10 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "split_by_color = " << m_config.opt_bool("split_by_color") << ", will split multi-extruder objects before arrange";
         } else if (opt_key == "force_machine") {
             BOOST_LOG_TRIVIAL(info) << "force_machine = " << m_config.opt_bool("force_machine");
+        } else if (opt_key == "cli_nozzle_temperature") {
+            BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature = " << m_config.opt_float("cli_nozzle_temperature");
+        } else if (opt_key == "cli_nozzle_temperature_initial_layer") {
+            BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature_initial_layer = " << m_config.opt_float("cli_nozzle_temperature_initial_layer");
         } else if (opt_key == "model" || opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "model_process" || opt_key == "thumbnail_image") {
             BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
@@ -5213,6 +5243,10 @@ int CLI::run(int argc, char **argv)
             //will be used during arrange process
         } else if (opt_key == "split_by_color") {
             //will be processed after model loading, before orient/arrange
+        } else if (opt_key == "cli_nozzle_temperature") {
+            //already applied after filament config loading
+        } else if (opt_key == "cli_nozzle_temperature_initial_layer") {
+            //already applied after filament config loading
         } else if (opt_key == "export_model_transforms") {
             //will be processed after orient and arrange, before exit
         } else if (opt_key == "mtcpp") {

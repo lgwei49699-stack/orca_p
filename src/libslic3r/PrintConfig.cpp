@@ -7833,6 +7833,24 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli_params = "spacing";
     def->set_default_value(new ConfigOptionFloat(0.f));
 
+    def = this->add("cli_nozzle_temperature", coFloat);
+    def->label = L("CLI Nozzle Temperature");
+    def->tooltip = L("Override nozzle temperature for all filament slots (layers after initial). Applied after --load-filaments.");
+    def->cli = "nozzle-temperature";
+    def->cli_params = "temperature";
+    def->min = 0;
+    def->max = 500;
+    def->set_default_value(new ConfigOptionFloat(0));
+
+    def = this->add("cli_nozzle_temperature_initial_layer", coFloat);
+    def->label = L("CLI Nozzle Temperature Initial Layer");
+    def->tooltip = L("Override first layer nozzle temperature for all filament slots. Applied after --load-filaments.");
+    def->cli = "nozzle-temperature-initial-layer";
+    def->cli_params = "temperature";
+    def->min = 0;
+    def->max = 500;
+    def->set_default_value(new ConfigOptionFloat(0));
+
     def = this->add("force_machine", coBool);
     def->label = L("Force Machine");
     def->tooltip = L("Force replace machine/process/filament from 3mf, bypass compatibility checks.");
