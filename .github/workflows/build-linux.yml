@@ -4,10 +4,11 @@ on:
   push:
     branches: 
       - 2.3.1_devloper
+      - master
     tags:
       - 'v*'
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
