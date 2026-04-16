@@ -5696,7 +5696,7 @@ int CLI::run(int argc, char **argv)
                                     }
                                     BOOST_LOG_TRIVIAL(info) << "process finished, will export gcode temporily to " << outfile << std::endl;
                                     temp_time = (long long)Slic3r::Utils::get_current_time_utc();
-                                    outfile = print_fff->export_gcode(outfile, gcode_result, nullptr);
+                                    outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true);
                                     time_using_cache = time_using_cache + ((long long)Slic3r::Utils::get_current_time_utc() - temp_time);
                                     BOOST_LOG_TRIVIAL(info) << "export_gcode finished: time_using_cache update to " << time_using_cache << " secs.";
 
@@ -7018,6 +7018,7 @@ extern "C" {
             *a     = 0;
             });
         // Call the UTF8 main.
+        attach_console_on_demand();
         return CLI().run(argc, argv_ptrs.data());
     }
 }

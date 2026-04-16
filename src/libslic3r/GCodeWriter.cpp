@@ -462,7 +462,8 @@ std::string GCodeWriter::toolchange(unsigned int extruder_id)
     // return the toolchange command
     // if we are running a single-extruder setup, just set the extruder and return nothing
     std::ostringstream gcode;
-    if (this->multiple_extruders || (this->config.filament_diameter.values.size() > 1 && !is_bbl_printers())) {
+    if (this->multiple_extruders || m_force_toolchange_for_single_extruder ||
+        (this->config.filament_diameter.values.size() > 1 && !is_bbl_printers())) {
         gcode << this->toolchange_prefix() << extruder_id;
         //BBS
         if (GCodeWriter::full_gcode_comment)

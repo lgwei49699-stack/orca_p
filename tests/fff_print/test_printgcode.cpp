@@ -6,6 +6,8 @@
 #include "test_data.hpp"
 
 #include <algorithm>
+#include <fstream>
+#include <boost/filesystem.hpp>
 #include <boost/regex.hpp>
 
 using namespace Slic3r;
@@ -236,6 +238,41 @@ SCENARIO( "PrintGCode basic functionality", "[PrintGCode]") {
                 THEN("current_extruder is processed in the start gcode and set for second extruder") {
                     REQUIRE(gcode.find("; Extruder 1") != std::string::npos);
                 }
+            }
+        }
+
+        WHEN("CLI export forces a tool selection command for a single-extruder print") {
+            Slic3r::Print print;
+            Slic3r::Model model;
+            Slic3r::Test::init_print({TestMesh::cube_20x20x20}, print, model, {
+                { "layer_height",                    0.2 },
+                { "first_layer_height",              0.2 },
+                { "gcode_comments",                  true },
+                { "start_gcode",                     "" }
+            });
+
+            auto export_gcode = [&print](bool force_toolchange_for_single_extruder) {
+                boost::filesystem::path temp = boost::filesystem::unique_path();
+                GCodeProcessorResult result;
+                print.export_gcode(temp.string(), &result, nullptr, force_toolchange_for_single_extruder);
+                std::ifstream file(temp.string());
+                std::string gcode((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                boost::filesystem::remove(temp);
+                return gcode;
+            };
+
+            print.set_status_silent();
+            print.process();
+
+            const std::string normal_gcode = export_gcode(false);
+            const std::string cli_gcode    = export_gcode(true);
+
+            THEN("default export keeps omitting the initial T0") {
+                REQUIRE(normal_gcode.find("T0 ; change extruder") == std::string::npos);
+            }
+
+            THEN("CLI export emits the initial T0") {
+                REQUIRE(cli_gcode.find("T0 ; change extruder") != std::string::npos);
             }
         }
 
