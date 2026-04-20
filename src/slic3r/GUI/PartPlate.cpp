@@ -2508,7 +2508,6 @@ void PartPlate::generate_logo_polygon(ExPolygon &logo_polygon)
             if (auto preset_bundle = wxGetApp().preset_bundle; preset_bundle)
                 is_bbl_vendor = preset_bundle->is_bbl_vendor();
 		}
-
         //rectangle case
 		for (int i = 0; i < 4; i++)
 		{
