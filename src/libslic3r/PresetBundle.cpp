@@ -2828,6 +2828,9 @@ std::pair<PresetsConfigSubstitutions, size_t> PresetBundle::load_vendor_configs_
                 else if (boost::iequals(it.key(), BBL_JSON_KEY_HOTEND_MODEL)) {
                     model.hotend_model = it.value();
                 }
+                else if (boost::iequals(it.key(), BBL_JSON_KEY_GFD_DEVICE_TYPE)) {
+                    model.gfd_device_type = it.value();
+                }
                 else if (boost::iequals(it.key(), BBL_JSON_KEY_DEFAULT_MATERIALS)) {
                     //get machine list
                     std::string default_materials_field = it.value();
@@ -3027,6 +3030,9 @@ std::pair<PresetsConfigSubstitutions, size_t> PresetBundle::load_vendor_configs_
                 reason = std::string("can not find printer_variant in vendor profile");
                 return reason;
             }
+
+            if (!it_model->gfd_device_type.empty())
+                config.opt_string("gfd_device_type", true) = it_model->gfd_device_type;
         }
         const Preset *preset_existing = presets_collection->find_preset(preset_name, false);
         if (preset_existing != nullptr) {

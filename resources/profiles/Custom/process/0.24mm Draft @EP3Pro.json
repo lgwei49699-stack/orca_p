@@ -1,0 +1,11 @@
+{
+    "type": "process",
+    "name": "0.24mm Draft @EP3Pro",
+    "inherits": "0.24mm Draft @EP3",
+    "from": "system",
+    "setting_id": "GFD_EP3PRO_P_024",
+    "instantiation": "true",
+    "compatible_printers": [
+        "EP3Pro 0.4 nozzle"
+    ]
+}

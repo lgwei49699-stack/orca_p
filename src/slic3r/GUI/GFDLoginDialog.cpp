@@ -139,7 +139,7 @@ void GFDLoginDialog::build()
     username_row->Add(username_label, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(26));
 
     m_username_input = new TextInput(this, wxEmptyString, wxEmptyString, wxEmptyString, wxDefaultPosition,
-                                     wxSize(FromDIP(205), FromDIP(34)), wxTE_PROCESS_ENTER);
+                                     wxSize(FromDIP(210), FromDIP(34)), wxTE_PROCESS_ENTER);
     m_username_input->SetCornerRadius(FromDIP(6));
     username_row->Add(m_username_input, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(12));
     main_sizer->Add(username_row, 0, wxEXPAND);
@@ -151,7 +151,7 @@ void GFDLoginDialog::build()
     password_row->Add(password_label, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(26));
 
     m_password_input = new TextInput(this, wxEmptyString, wxEmptyString, wxEmptyString, wxDefaultPosition,
-                                     wxSize(FromDIP(205), FromDIP(34)), wxTE_PASSWORD | wxTE_PROCESS_ENTER);
+                                     wxSize(FromDIP(210), FromDIP(34)), wxTE_PASSWORD | wxTE_PROCESS_ENTER);
     m_password_input->SetCornerRadius(FromDIP(6));
     password_row->Add(m_password_input, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(12));
     main_sizer->Add(password_row, 0, wxTOP | wxEXPAND, FromDIP(20));

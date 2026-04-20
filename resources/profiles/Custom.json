@@ -13,6 +13,14 @@
             "sub_path": "machine/MyMarlin.json"
         },
         {
+            "name": "EP3",
+            "sub_path": "machine/EP3.json"
+        },
+        {
+            "name": "EP3Pro",
+            "sub_path": "machine/EP3Pro.json"
+        },
+        {
             "name": "Generic RRF Printer",
             "sub_path": "machine/MyRRF.json"
         },
@@ -169,6 +177,22 @@
         {
             "name": "0.56mm Standard @MyToolChanger",
             "sub_path": "process/0.56mm Extra Draft @MyToolChanger.json"
+        },
+        {
+            "name": "0.20mm Standard @EP3",
+            "sub_path": "process/0.20mm Standard @EP3.json"
+        },
+        {
+            "name": "0.20mm Standard @EP3Pro",
+            "sub_path": "process/0.20mm Standard @EP3Pro.json"
+        },
+        {
+            "name": "0.24mm Draft @EP3",
+            "sub_path": "process/0.24mm Draft @EP3.json"
+        },
+        {
+            "name": "0.24mm Draft @EP3Pro",
+            "sub_path": "process/0.24mm Draft @EP3Pro.json"
         }
     ],
     "filament_list": [
@@ -211,6 +235,14 @@
         {
             "name": "Generic TPU @MyToolChanger",
             "sub_path": "filament/Generic TPU @MyToolChanger.json"
+        },
+        {
+            "name": "EP3-PLA悬垂优化 @EP3",
+            "sub_path": "filament/EP3-PLA悬垂优化 @EP3.json"
+        },
+        {
+            "name": "EP3-PLA悬垂优化 @EP3Pro",
+            "sub_path": "filament/EP3-PLA悬垂优化 @EP3Pro.json"
         }
     ],
     "machine_list": [
@@ -269,6 +301,14 @@
         {
             "name": "MyToolChanger 0.8 nozzle",
             "sub_path": "machine/MyToolChanger 0.8 nozzle.json"
+        },
+        {
+            "name": "EP3 0.4 nozzle",
+            "sub_path": "machine/EP3 0.4 nozzle.json"
+        },
+        {
+            "name": "EP3Pro 0.4 nozzle",
+            "sub_path": "machine/EP3Pro 0.4 nozzle.json"
         }
     ]
 }

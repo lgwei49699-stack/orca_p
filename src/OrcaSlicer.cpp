@@ -1125,6 +1125,7 @@ int CLI::run(int argc, char **argv)
 
     bool start_gui = m_actions.empty() && !downward_check;
     if (start_gui) {
+        set_logging_level(4);
         BOOST_LOG_TRIVIAL(info) << "no action, start gui directly" << std::endl;
 #ifdef SLIC3R_GUI
     /*#if !defined(_WIN32) && !defined(__APPLE__)
@@ -7018,7 +7019,7 @@ extern "C" {
             *a     = 0;
             });
         // Call the UTF8 main.
-        attach_console_on_demand();
+        //attach_console_on_demand();
         return CLI().run(argc, argv_ptrs.data());
     }
 }

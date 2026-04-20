@@ -2036,7 +2036,10 @@ void GUI_App::init_app_config()
         }
 #endif // _WIN32
     }
-    set_logging_level(Slic3r::level_string_to_boost(app_config->get("log_severity_level")));
+    unsigned int log_level = Slic3r::level_string_to_boost(app_config->get("log_severity_level"));
+    if (log_level < 3)
+        log_level = 3;
+    set_logging_level(log_level);
 }
 
 // returns true if found newer version and user agreed to use it

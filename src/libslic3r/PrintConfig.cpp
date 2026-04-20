@@ -4101,6 +4101,12 @@ void PrintConfigDef::init_fff_params()
     def->height = 6;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionStrings());
+
+    def = this->add("gfd_device_type", coString);
+    def->label = L("GFD device type");
+    def->tooltip = L("Internal device type for GFD printers.");
+    def->set_default_value(new ConfigOptionString());
+    def->cli = ConfigOptionDef::nocli;
     
     def = this->add("printer_model", coString);
     def->label = L("Printer type");

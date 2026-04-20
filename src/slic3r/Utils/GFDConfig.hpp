@@ -8,6 +8,7 @@
 namespace Slic3r {
 
 class AppConfig;
+class DynamicPrintConfig;
 
 namespace GFD {
 
@@ -67,6 +68,9 @@ public:
     static std::string device_query_url(const AppConfig* config);
     static std::string device_slice_type_url(const AppConfig* config);
     static std::string device_print_cmd_url(const AppConfig* config);
+    static std::string current_device_type(const DynamicPrintConfig& printer_config);
+    static bool        is_gfd_printer(const DynamicPrintConfig& printer_config);
+    static bool        should_show_print_button(const DynamicPrintConfig& printer_config);
 
     static bool        remember_login(const AppConfig* config);
     static std::string cached_username(const AppConfig* config);

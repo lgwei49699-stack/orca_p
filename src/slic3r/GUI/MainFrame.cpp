@@ -39,6 +39,7 @@
 #include "Plater.hpp"
 #include "WebViewDialog.hpp"
 #include "../Utils/Process.hpp"
+#include "../Utils/GFDConfig.hpp"
 #include "format.hpp"
 // BBS
 #include "PartPlate.hpp"
@@ -203,8 +204,11 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
         set_max_recent_count((int)max_recent_count);
 
     //reset log level
-    auto loglevel = wxGetApp().app_config->get("log_severity_level");
-    Slic3r::set_logging_level(Slic3r::level_string_to_boost(loglevel));
+    auto         loglevel = wxGetApp().app_config->get("log_severity_level");
+    unsigned int log_level = Slic3r::level_string_to_boost(loglevel);
+    if (log_level < 3)
+        log_level = 3;
+    Slic3r::set_logging_level(log_level);
 
     // BBS
     m_recent_projects.SetMenuPathStyle(wxFH_PATH_SHOW_ALWAYS);
@@ -990,6 +994,8 @@ void MainFrame::show_option(bool show)
             m_print_btn->Hide();
             m_slice_option_btn->Hide();
             m_print_option_btn->Hide();
+            if (m_gfd_print_btn != nullptr)
+                m_gfd_print_btn->Hide();
             Layout();
         }
     } else {
@@ -998,6 +1004,7 @@ void MainFrame::show_option(bool show)
             m_print_btn->Show();
             m_slice_option_btn->Show();
             m_print_option_btn->Show();
+            update_gfd_print_button();
             Layout();
         }
     }
@@ -1557,7 +1564,6 @@ bool MainFrame::can_reslice() const
 wxBoxSizer* MainFrame::create_side_tools()
 {
     enable_multi_machine = wxGetApp().is_enable_multi_machine();
-    int em = em_unit();
     wxBoxSizer* sizer = new wxBoxSizer(wxHORIZONTAL);
 
     m_slice_select = eSlicePlate;
@@ -1568,6 +1574,7 @@ wxBoxSizer* MainFrame::create_side_tools()
     m_slice_option_btn = new SideButton(this, "", "sidebutton_dropdown", 0, 14);
     m_print_btn = new SideButton(this, _L("Print plate"), "");
     m_print_option_btn = new SideButton(this, "", "sidebutton_dropdown", 0, 14);
+    m_gfd_print_btn = new SideButton(this, _L("Print"), "");
 
     update_side_button_style();
     // m_publish_btn->Hide();
@@ -1578,7 +1585,8 @@ wxBoxSizer* MainFrame::create_side_tools()
     sizer->Add(m_slice_option_btn, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(2));
     sizer->Add(m_slice_btn       , 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(15));
     sizer->Add(m_print_option_btn, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(2));
-    sizer->Add(m_print_btn       , 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(19));
+    sizer->Add(m_print_btn       , 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(15));
+    sizer->Add(m_gfd_print_btn   , 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(19));
 
     sizer->Layout();
 
@@ -1646,6 +1654,19 @@ wxBoxSizer* MainFrame::create_side_tools()
                  wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_MULTI_MACHINE));*/
         });
 
+    m_gfd_print_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event)
+        {
+            m_plater->apply_background_progress();
+            const bool enable_gfd_print = get_enable_gfd_print_status();
+            m_gfd_print_btn->Enable(enable_gfd_print);
+            BOOST_LOG_TRIVIAL(info) << "GFD print button clicked"
+                                    << ", enable=" << enable_gfd_print;
+            if (enable_gfd_print)
+                wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_PLATE));
+            else
+                GUI::show_error(this, _L("请先完成切片后再打印。"));
+        });
+
     m_slice_option_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event)
         {
             SidePopup* p = new SidePopup(this);
@@ -1680,9 +1701,9 @@ wxBoxSizer* MainFrame::create_side_tools()
     m_print_option_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event)
         {
             SidePopup* p = new SidePopup(this);
+            const auto preset_bundle = wxGetApp().preset_bundle;
 
-            if (wxGetApp().preset_bundle
-                && !wxGetApp().preset_bundle->is_bbl_vendor()) {
+            if (preset_bundle && !preset_bundle->is_bbl_vendor()) {
                 // ThirdParty Buttons
                 SideButton* export_gcode_btn = new SideButton(p, _L("Export G-code file"), "");
                 export_gcode_btn->SetCornerRadius(0);
@@ -1849,6 +1870,7 @@ wxBoxSizer* MainFrame::create_side_tools()
     sizer->Add(aux_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, 1 * em / 10);
     */
     sizer->Add(FromDIP(19), 0, 0, 0, 0);
+    update_gfd_print_button();
 
     return sizer;
 }
@@ -1906,6 +1928,9 @@ bool MainFrame::get_enable_print_status()
     PartPlateList &part_plate_list = m_plater->get_partplate_list();
     PartPlate *current_plate = part_plate_list.get_curr_plate();
     bool is_all_plates = wxGetApp().plater()->get_preview_canvas3D()->is_all_plates_selected();
+    const auto* printer_cfg = wxGetApp().preset_bundle ? &wxGetApp().preset_bundle->printers.get_edited_preset().config : nullptr;
+    const auto* printer_model_opt = printer_cfg ? printer_cfg->option<ConfigOptionString>("printer_model") : nullptr;
+    const auto* printer_settings_id_opt = printer_cfg ? printer_cfg->option<ConfigOptionString>("printer_settings_id") : nullptr;
     if (m_print_select == ePrintAll)
     {
         if (!part_plate_list.is_all_slice_results_ready_for_print())
@@ -1915,8 +1940,7 @@ bool MainFrame::get_enable_print_status()
     }
     else if (m_print_select == ePrintPlate)
     {
-        if (!current_plate->is_slice_result_ready_for_print())
-        {
+        if (!current_plate->is_slice_result_ready_for_print()) {
             enable = false;
         }
         enable = enable && !is_all_plates;
@@ -1984,8 +2008,44 @@ bool MainFrame::get_enable_print_status()
         enable = enable && !is_all_plates;
     }
 
+    BOOST_LOG_TRIVIAL(info) << "Print enable status"
+                            << ", print_select=" << static_cast<int>(m_print_select)
+                            << ", printer_model="
+                            << (printer_model_opt ? printer_model_opt->value : std::string("<null>"))
+                            << ", printer_settings_id="
+                            << (printer_settings_id_opt ? printer_settings_id_opt->value : std::string("<null>"))
+                            << ", is_slice_result_valid=" << current_plate->is_slice_result_valid()
+                            << ", is_slice_result_ready_for_print=" << current_plate->is_slice_result_ready_for_print()
+                            << ", has_printable_instances=" << current_plate->has_printable_instances()
+                            << ", is_all_plates=" << is_all_plates
+                            << ", enable=" << enable;
+
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": m_print_select %1%, enable= %2% ")%m_print_select %enable;
 
+    return enable;
+}
+
+bool MainFrame::get_enable_gfd_print_status()
+{
+    if (m_plater == nullptr || wxGetApp().preset_bundle == nullptr)
+        return false;
+
+    const DynamicPrintConfig& printer_cfg = wxGetApp().preset_bundle->printers.get_selected_preset().config;
+    if (!GFD::Config::should_show_print_button(printer_cfg))
+        return false;
+
+    PartPlate* current_plate = m_plater->get_partplate_list().get_curr_plate();
+    if (current_plate == nullptr)
+        return false;
+
+    const bool is_all_plates = m_plater->get_preview_canvas3D()->is_all_plates_selected();
+    const bool enable = current_plate->is_slice_result_valid() && current_plate->has_printable_instances() && !is_all_plates;
+
+    BOOST_LOG_TRIVIAL(info) << "GFD print enable status"
+                            << ", enable=" << enable
+                            << ", is_slice_result_valid=" << current_plate->is_slice_result_valid()
+                            << ", has_printable_instances=" << current_plate->has_printable_instances()
+                            << ", is_all_plates=" << is_all_plates;
     return enable;
 }
 
@@ -2029,6 +2089,12 @@ void MainFrame::update_side_button_style()
     m_print_btn->SetExtraSize(wxSize(FromDIP(38), FromDIP(10)));
     m_print_btn->SetMinSize(wxSize(-1, FromDIP(24)));
 
+    m_gfd_print_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Left, FromDIP(15));
+    m_gfd_print_btn->SetLayoutStyle(1);
+    m_gfd_print_btn->SetCornerRadius(FromDIP(12));
+    m_gfd_print_btn->SetExtraSize(wxSize(FromDIP(38), FromDIP(10)));
+    m_gfd_print_btn->SetMinSize(wxSize(-1, FromDIP(24)));
+
     m_print_option_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Center);
     m_print_option_btn->SetCornerRadius(FromDIP(12));
     m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
@@ -2066,6 +2132,7 @@ void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_sl
     m_slice_btn->Enable(enable_slice);
     m_slice_enable = enable_slice;
     m_print_enable = enable_print;
+    update_gfd_print_button();
 
     if (wxGetApp().mainframe)
         wxGetApp().plater()->update_title_dirty_status();
@@ -2094,6 +2161,7 @@ void MainFrame::on_dpi_changed(const wxRect& suggested_rect)
 
     m_slice_btn->Rescale();
     m_print_btn->Rescale();
+    m_gfd_print_btn->Rescale();
     m_slice_option_btn->Rescale();
     m_print_option_btn->Rescale();
 
@@ -3631,28 +3699,73 @@ void MainFrame::set_print_button_to_default(PrintSelectType select_type)
     if (select_type == PrintSelectType::ePrintPlate) {
         m_print_btn->SetLabel(_L("Print plate"));
         m_print_select = ePrintPlate;
-        if (m_print_enable)
-            m_print_enable = get_enable_print_status();
+        m_print_enable = get_enable_print_status();
         m_print_btn->Enable(m_print_enable);
+        update_gfd_print_button();
         this->Layout();
     } else if (select_type == PrintSelectType::eSendGcode) {
         m_print_btn->SetLabel(_L("Print"));
         m_print_select = eSendGcode;
-        if (m_print_enable)
-            m_print_enable = get_enable_print_status() && can_send_gcode();
+        m_print_enable = get_enable_print_status() && can_send_gcode();
         m_print_btn->Enable(m_print_enable);
+        update_gfd_print_button();
         this->Layout();
     } else if (select_type == PrintSelectType::eExportGcode) {
         m_print_btn->SetLabel(_L("Export G-code file"));
         m_print_select = eExportGcode;
-        if (m_print_enable)
-            m_print_enable = get_enable_print_status() && can_send_gcode();
+        m_print_enable = get_enable_print_status() && can_send_gcode();
         m_print_btn->Enable(m_print_enable);
+        update_gfd_print_button();
         this->Layout();
     } else {
         // unsupport
         return;
     }
+}
+
+void MainFrame::update_gfd_print_button()
+{
+    if (m_gfd_print_btn == nullptr)
+        return;
+
+    const bool was_shown = m_gfd_print_btn->IsShown();
+    const bool can_show_side_tools = m_slice_btn != nullptr && m_slice_btn->IsShown();
+    bool should_show_gfd_print_button = false;
+    bool slice_ready = false;
+    std::string printer_model;
+    std::string gfd_device_type;
+    if (wxGetApp().preset_bundle != nullptr) {
+        const auto& printer_cfg = wxGetApp().preset_bundle->printers.get_selected_preset().config;
+        const auto* printer_model_opt = printer_cfg.option<ConfigOptionString>("printer_model");
+        printer_model = printer_model_opt != nullptr ? printer_model_opt->value : std::string();
+        gfd_device_type = GFD::Config::current_device_type(printer_cfg);
+        should_show_gfd_print_button = !gfd_device_type.empty();
+    }
+
+    if (m_plater != nullptr) {
+        PartPlate* current_plate = m_plater->get_partplate_list().get_curr_plate();
+        const bool is_all_plates = m_plater->get_preview_canvas3D()->is_all_plates_selected();
+        slice_ready = current_plate != nullptr && current_plate->is_slice_result_valid() && current_plate->has_printable_instances() && !is_all_plates;
+    }
+
+    const bool show = can_show_side_tools && should_show_gfd_print_button && slice_ready;
+    if (show) {
+        m_gfd_print_btn->SetLabel(_L("Print"));
+        m_gfd_print_btn->Enable(get_enable_gfd_print_status());
+        m_gfd_print_btn->Show();
+    } else {
+        m_gfd_print_btn->Hide();
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD print button visibility"
+                            << ", can_show_side_tools=" << can_show_side_tools
+                            << ", printer_model=" << printer_model
+                            << ", gfd_device_type=" << (gfd_device_type.empty() ? std::string("<empty>") : gfd_device_type)
+                            << ", slice_ready=" << slice_ready
+                            << ", show=" << show;
+
+    if (was_shown != show)
+        Layout();
 }
 
 void MainFrame::add_to_recent_projects(const wxString& filename)
@@ -3886,6 +3999,8 @@ void MainFrame::update_side_preset_ui()
     //BBS: update the preset
     m_plater->sidebar().update_presets(Preset::TYPE_PRINTER);
     m_plater->sidebar().update_presets(Preset::TYPE_FILAMENT);
+    update_gfd_print_button();
+    Layout();
 
 
     //take off multi machine

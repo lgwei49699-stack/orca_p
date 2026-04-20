@@ -1,13 +1,25 @@
 #include "GFDConfig.hpp"
 
 #include "libslic3r/AppConfig.hpp"
+#include "libslic3r/Preset.hpp"
+#include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/Utils.hpp"
+#include "slic3r/GUI/GUI_App.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <map>
+
+#include <boost/filesystem.hpp>
+#include <boost/nowide/fstream.hpp>
+#include <nlohmann/json.hpp>
 
 namespace Slic3r { namespace GFD {
 
 namespace {
+
+using json = nlohmann::json;
 
 std::string trim_copy(const std::string& value)
 {
@@ -42,6 +54,135 @@ std::string get_value(const AppConfig* config, const char* key, const std::strin
 }
 
 std::string configured_environment(const AppConfig* config) { return get_value(config, Config::KEY_ENVIRONMENT, Config::ENV_PRODUCTION); }
+
+std::string config_string_value(const DynamicPrintConfig& config, const char* key)
+{
+    const auto* opt = config.option<ConfigOptionString>(key);
+    return opt != nullptr ? opt->value : std::string();
+}
+
+std::string resolve_device_type_from_vendor_model(const std::string& printer_model)
+{
+    if (GUI::wxGetApp().preset_bundle == nullptr || printer_model.empty())
+        return {};
+
+    for (const auto& vendor_it : GUI::wxGetApp().preset_bundle->vendors) {
+        const VendorProfile& vendor = vendor_it.second;
+        const auto model_it = std::find_if(vendor.models.begin(), vendor.models.end(),
+                                           [&printer_model](const VendorProfile::PrinterModel& model) {
+                                               return model.id == printer_model || model.name == printer_model || model.model_id == printer_model;
+                                           });
+        if (model_it != vendor.models.end() && !model_it->gfd_device_type.empty())
+            return model_it->gfd_device_type;
+    }
+
+    return {};
+}
+
+std::map<std::string, std::string> load_local_machine_device_types()
+{
+    std::map<std::string, std::string> device_types;
+
+    const boost::filesystem::path profiles_dir = (boost::filesystem::path(resources_dir()) / "profiles").make_preferred();
+    if (!boost::filesystem::exists(profiles_dir))
+        return device_types;
+
+    for (const auto& vendor_entry : boost::filesystem::directory_iterator(profiles_dir)) {
+        const boost::filesystem::path vendor_file = vendor_entry.path();
+        if (!boost::filesystem::is_regular_file(vendor_file) || vendor_file.extension() != ".json")
+            continue;
+
+        try {
+            boost::nowide::ifstream ifs(vendor_file.string());
+            json vendor_json;
+            ifs >> vendor_json;
+
+            const auto machine_models_it = vendor_json.find("machine_model_list");
+            if (machine_models_it == vendor_json.end() || !machine_models_it->is_array())
+                continue;
+
+            const boost::filesystem::path vendor_dir = profiles_dir / vendor_file.stem();
+            for (const auto& item : *machine_models_it) {
+                if (!item.is_object())
+                    continue;
+
+                const std::string list_name = item.value("name", std::string());
+                const std::string sub_path  = item.value("sub_path", std::string());
+                if (sub_path.empty())
+                    continue;
+
+                const boost::filesystem::path machine_model_file = (vendor_dir / sub_path).make_preferred();
+                if (!boost::filesystem::exists(machine_model_file))
+                    continue;
+
+                boost::nowide::ifstream model_ifs(machine_model_file.string());
+                json model_json;
+                model_ifs >> model_json;
+
+                const std::string gfd_device_type = model_json.value("gfd_device_type", std::string());
+                if (gfd_device_type.empty())
+                    continue;
+
+                const std::string model_name = model_json.value("name", std::string());
+                const std::string model_id   = model_json.value("model_id", std::string());
+                if (!list_name.empty())
+                    device_types[list_name] = gfd_device_type;
+                if (!model_name.empty())
+                    device_types[model_name] = gfd_device_type;
+                if (!model_id.empty())
+                    device_types[model_id] = gfd_device_type;
+            }
+        } catch (const std::exception& ex) {
+            BOOST_LOG_TRIVIAL(warning) << "GFD load local machine model config failed"
+                                       << ", file=" << vendor_file.string()
+                                       << ", error=" << ex.what();
+        }
+    }
+
+    return device_types;
+}
+
+std::string resolve_device_type_from_local_config(const std::string& printer_model)
+{
+    if (printer_model.empty())
+        return {};
+
+    static std::string cached_resources_dir;
+    static std::map<std::string, std::string> cached_device_types;
+
+    if (cached_resources_dir != resources_dir() || cached_device_types.empty()) {
+        cached_resources_dir = resources_dir();
+        cached_device_types  = load_local_machine_device_types();
+    }
+
+    const auto it = cached_device_types.find(printer_model);
+    return it != cached_device_types.end() ? it->second : std::string();
+}
+
+std::string resolve_device_type_from_preset(const Preset* preset)
+{
+    if (preset == nullptr)
+        return {};
+
+    std::string gfd_device_type = config_string_value(preset->config, "gfd_device_type");
+    if (!gfd_device_type.empty())
+        return gfd_device_type;
+
+    gfd_device_type = resolve_device_type_from_vendor_model(config_string_value(preset->config, "printer_model"));
+    if (!gfd_device_type.empty())
+        return gfd_device_type;
+
+    gfd_device_type = resolve_device_type_from_local_config(config_string_value(preset->config, "printer_model"));
+    if (!gfd_device_type.empty())
+        return gfd_device_type;
+
+    if (GUI::wxGetApp().preset_bundle == nullptr)
+        return {};
+
+    auto& printers = GUI::wxGetApp().preset_bundle->printers;
+    const Preset* base_preset = printers.get_preset_base(*preset);
+    return base_preset != nullptr ? PresetUtils::system_printer_gfd_device_type(*base_preset) : std::string();
+}
 
 void set_value(AppConfig* config, const char* key, const std::string& value)
 {
@@ -78,6 +219,79 @@ std::string Config::device_slice_type_url(const AppConfig* config)
 std::string Config::device_print_cmd_url(const AppConfig* config)
 {
     return current_environment(config).api_base_url + PATH_DEVICE_PRINT_CMD;
+}
+
+std::string Config::current_device_type(const DynamicPrintConfig& printer_config)
+{
+    const std::string printer_model       = config_string_value(printer_config, "printer_model");
+    const std::string printer_settings_id = config_string_value(printer_config, "printer_settings_id");
+    std::string       gfd_device_type     = config_string_value(printer_config, "gfd_device_type");
+
+    if (!gfd_device_type.empty()) {
+        BOOST_LOG_TRIVIAL(info) << "GFD current_device_type from printer config"
+                                << ", printer_model=" << printer_model
+                                << ", printer_settings_id=" << printer_settings_id
+                                << ", gfd_device_type=" << gfd_device_type;
+        return gfd_device_type;
+    }
+
+    gfd_device_type = resolve_device_type_from_vendor_model(printer_model);
+    if (!gfd_device_type.empty()) {
+        BOOST_LOG_TRIVIAL(info) << "GFD current_device_type resolved from vendor model"
+                                << ", printer_model=" << printer_model
+                                << ", printer_settings_id=" << printer_settings_id
+                                << ", gfd_device_type=" << gfd_device_type;
+        return gfd_device_type;
+    }
+
+    gfd_device_type = resolve_device_type_from_local_config(printer_model);
+    if (!gfd_device_type.empty()) {
+        BOOST_LOG_TRIVIAL(info) << "GFD current_device_type resolved from local machine config"
+                                << ", printer_model=" << printer_model
+                                << ", printer_settings_id=" << printer_settings_id
+                                << ", gfd_device_type=" << gfd_device_type;
+        return gfd_device_type;
+    }
+
+    if (GUI::wxGetApp().preset_bundle != nullptr) {
+        auto& printers = GUI::wxGetApp().preset_bundle->printers;
+
+        const Preset& selected_preset = printers.get_selected_preset();
+        gfd_device_type = resolve_device_type_from_preset(&selected_preset);
+        if (!gfd_device_type.empty()) {
+            BOOST_LOG_TRIVIAL(info) << "GFD current_device_type resolved from selected preset"
+                                    << ", selected_preset=" << selected_preset.name
+                                    << ", printer_model=" << config_string_value(selected_preset.config, "printer_model")
+                                    << ", gfd_device_type=" << gfd_device_type;
+            return gfd_device_type;
+        }
+
+        const Preset& edited_preset = printers.get_edited_preset();
+        gfd_device_type = resolve_device_type_from_preset(&edited_preset);
+        if (!gfd_device_type.empty()) {
+            BOOST_LOG_TRIVIAL(info) << "GFD current_device_type resolved from edited preset"
+                                    << ", edited_preset=" << edited_preset.name
+                                    << ", printer_model=" << config_string_value(edited_preset.config, "printer_model")
+                                    << ", gfd_device_type=" << gfd_device_type;
+            return gfd_device_type;
+        }
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD current_device_type unresolved"
+                            << ", printer_model=" << printer_model
+                            << ", printer_settings_id=" << printer_settings_id
+                            << ", gfd_device_type=<empty>";
+    return {};
+}
+
+bool Config::is_gfd_printer(const DynamicPrintConfig& printer_config) { return !current_device_type(printer_config).empty(); }
+
+bool Config::should_show_print_button(const DynamicPrintConfig& printer_config)
+{
+    if (GUI::wxGetApp().preset_bundle == nullptr)
+        return false;
+
+    return !current_device_type(printer_config).empty();
 }
 
 bool Config::remember_login(const AppConfig* config) { return get_value(config, KEY_LOGIN_REMEMBER, "true") == "true"; }

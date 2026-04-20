@@ -46,7 +46,9 @@
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/log/expressions.hpp>
+#include <boost/log/sinks.hpp>
 #include <boost/log/sinks/text_file_backend.hpp>
+#include <boost/log/sinks/text_ostream_backend.hpp>
 #include <boost/log/utility/setup/file.hpp>
 #include <boost/log/utility/setup/common_attributes.hpp>
 #include <boost/log/sources/severity_logger.hpp>
@@ -160,6 +162,7 @@ unsigned get_logging_level()
 }
 
 boost::shared_ptr<boost::log::sinks::synchronous_sink<boost::log::sinks::text_file_backend>> g_log_sink;
+boost::shared_ptr<boost::log::sinks::synchronous_sink<boost::log::sinks::text_ostream_backend>> g_console_log_sink;
 
 // Force set_logging_level(<=error) after loading of the DLL.
 // This is currently only needed if libslic3r is loaded as a shared library into Perl interpreter
@@ -344,6 +347,16 @@ void set_log_path_and_level(const std::string& file, unsigned int level)
 	}
 	auto full_path = (log_folder / file).make_preferred();
 
+    if (g_log_sink) {
+        logging::core::get()->remove_sink(g_log_sink);
+        g_log_sink.reset();
+    }
+
+    if (g_console_log_sink) {
+        logging::core::get()->remove_sink(g_console_log_sink);
+        g_console_log_sink.reset();
+    }
+
 	g_log_sink = boost::log::add_file_log(
 		keywords::file_name = full_path.string() + ".%N",
 		keywords::rotation_size = 100 * 1024 * 1024,
@@ -357,6 +370,18 @@ void set_log_path_and_level(const std::string& file, unsigned int level)
 		)
 	);
 
+    typedef boost::log::sinks::synchronous_sink<boost::log::sinks::text_ostream_backend> console_sink_t;
+    g_console_log_sink = boost::make_shared<console_sink_t>();
+    g_console_log_sink->locked_backend()->add_stream(boost::shared_ptr<std::ostream>(&std::clog, [](std::ostream*) {}));
+    g_console_log_sink->set_formatter(
+        expr::stream
+        << "[" << expr::attr< logging::trivial::severity_level >("Severity") << "]\t"
+        << expr::format_date_time< boost::posix_time::ptime >("TimeStamp", "%Y-%m-%d %H:%M:%S.%f")
+        << "[Thread " << expr::attr<attrs::current_thread_id::value_type>("ThreadID") << "]"
+        << ":" << expr::smessage
+    );
+    logging::core::get()->add_sink(g_console_log_sink);
+
 	logging::add_common_attributes();
 
 	set_logging_level(level);
@@ -368,6 +393,8 @@ void flush_logs()
 {
 	if (g_log_sink)
 		g_log_sink->flush();
+    if (g_console_log_sink)
+        g_console_log_sink->flush();
 
 	return;
 }
