@@ -65,6 +65,18 @@ namespace UndoRedo {
 
 namespace GUI {
 
+struct GFDCloudConfigInfo
+{
+    std::string id;
+    std::string name;
+    std::string device_type;
+    std::string config_file_url;
+    std::string config_file_name;
+    std::string default_process_conf;
+    std::string info;
+    bool        system_config{false};
+};
+
 class MainFrame;
 class ConfigOptionsGroup;
 class ObjectSettings;
@@ -366,7 +378,14 @@ public:
     void enable_sidebar(bool enabled);
     bool is_sidebar_collapsed() const;
     void collapse_sidebar(bool collapse);
+    bool is_sidebar_visible();
     Sidebar::DockingState get_sidebar_docking_state() const;
+    wxPanel* gfd_config_panel();
+    Button*  gfd_cloud_import_button();
+    Button*  gfd_upload_config_button();
+    Button*  gfd_save_config_button();
+    void     update_gfd_config_panel_position();
+    bool     has_active_imported_cloud_config() const;
 
     void reset_window_layout();
 
@@ -448,6 +467,9 @@ public:
     int send_gcode(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
     void send_gcode_legacy(int plate_idx = -1, Export3mfProgressFn proFn = nullptr, bool use_3mf = false);
     int export_config_3mf(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
+    bool upload_current_config_to_cloud(const std::string& config_name, const std::string& remarks = std::string());
+    bool fetch_cloud_configs(const std::string& device_type, std::vector<GFDCloudConfigInfo>& configs, std::string& error_message);
+    bool import_cloud_config(const GFDCloudConfigInfo& config);
     //BBS jump to nonitor after print job finished
     void send_calibration_job_finished(wxCommandEvent &evt);
     void print_job_finished(wxCommandEvent &evt);

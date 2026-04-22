@@ -3,6 +3,57 @@
 
 #include <wx/dcgraph.h>
 
+#include <algorithm>
+#include <vector>
+
+namespace {
+
+std::vector<wxString> split_button_label_lines(const wxString& text)
+{
+    std::vector<wxString> lines;
+    wxString current;
+    for (const wxUniChar ch : text) {
+        if (ch == '\r')
+            continue;
+        if (ch == '\n') {
+            lines.push_back(current);
+            current.clear();
+        } else {
+            current += ch;
+        }
+    }
+    lines.push_back(current);
+    return lines;
+}
+
+wxSize measure_button_label(wxDC& dc, const wxString& text, int* descent = nullptr, int* external_leading = nullptr)
+{
+    int max_width = 0;
+    int total_height = 0;
+    int max_descent = 0;
+    int max_external_leading = 0;
+
+    for (const wxString& line : split_button_label_lines(text)) {
+        int width = 0;
+        int height = 0;
+        int line_descent = 0;
+        int line_external_leading = 0;
+        dc.GetTextExtent(line.empty() ? wxString(" ") : line, &width, &height, &line_descent, &line_external_leading);
+        max_width = std::max(max_width, width);
+        total_height += height;
+        max_descent = std::max(max_descent, line_descent);
+        max_external_leading = std::max(max_external_leading, line_external_leading);
+    }
+
+    if (descent != nullptr)
+        *descent = max_descent;
+    if (external_leading != nullptr)
+        *external_leading = max_external_leading;
+    return {max_width, total_height};
+}
+
+} // namespace
+
 BEGIN_EVENT_TABLE(Button, StaticBox)
 
 EVT_LEFT_DOWN(Button::mouseDown)
@@ -299,7 +350,8 @@ void Button::render(wxDC& dc)
     }
     auto text = GetLabel();
     if (!text.IsEmpty()) {
-        if (pt.x + textSize.width > size.x)
+        const bool multiline = text.Contains('\n');
+        if (!multiline && pt.x + textSize.width > size.x)
             text = wxControl::Ellipsize(text, dc, wxELLIPSIZE_END, size.x - pt.x);
         pt.y += (rcContent.height - textSize.height) / 2;
         dc.SetTextForeground(text_color.colorForStates(states));
@@ -311,14 +363,27 @@ void Button::render(wxDC& dc)
 #ifdef __WXOSX__
         pt.y -= textSize.x / 2;
 #endif
-        dc.DrawText(text, pt);
+        if (multiline) {
+            int line_y = pt.y;
+            for (const wxString& line : split_button_label_lines(text)) {
+                int line_width = 0;
+                int line_height = 0;
+                dc.GetTextExtent(line.empty() ? wxString(" ") : line, &line_width, &line_height);
+                dc.DrawText(line, {pt.x + (textSize.width - line_width) / 2, line_y});
+                line_y += line_height;
+            }
+        } else {
+            dc.DrawText(text, pt);
+        }
     }
 }
 
 void Button::messureSize()
 {
     wxClientDC dc(this);
-    dc.GetTextExtent(GetLabel(), &textSize.width, &textSize.height, &textSize.x, &textSize.y);
+    const wxSize label_size = measure_button_label(dc, GetLabel(), &textSize.x, &textSize.y);
+    textSize.width = label_size.x;
+    textSize.height = label_size.y;
     wxSize szContent = textSize.GetSize();
     if (this->active_icon.bmp().IsOk()) {
         if (szContent.y > 0) {

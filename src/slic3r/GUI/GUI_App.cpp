@@ -186,6 +186,18 @@ bool gfd_user_login_valid(const AppConfig* config)
     }
 }
 
+bool gfd_can_show_login_ui()
+{
+#if defined(__linux__)
+    wxString display;
+    wxString wayland_display;
+    return (wxGetEnv(wxS("DISPLAY"), &display) && !display.empty()) ||
+           (wxGetEnv(wxS("WAYLAND_DISPLAY"), &wayland_display) && !wayland_display.empty());
+#else
+    return true;
+#endif
+}
+
 } // namespace
 
 void start_ping_test()
@@ -2365,10 +2377,14 @@ bool GUI_App::on_init_inner()
 #endif
 
     if (is_editor()) {
-        BOOST_LOG_TRIVIAL(info) << "GFD login required before loading client.";
-        if (!ShowUserLogin()) {
-            BOOST_LOG_TRIVIAL(info) << "GFD login canceled or failed, quit application before loading client.";
-            return false;
+        if (!gfd_can_show_login_ui()) {
+            BOOST_LOG_TRIVIAL(info) << "Skip GFD login UI because no desktop session is available.";
+        } else {
+            BOOST_LOG_TRIVIAL(info) << "GFD login required before loading client.";
+            if (!ShowUserLogin()) {
+                BOOST_LOG_TRIVIAL(info) << "GFD login canceled or failed, quit application before loading client.";
+                return false;
+            }
         }
     }
 

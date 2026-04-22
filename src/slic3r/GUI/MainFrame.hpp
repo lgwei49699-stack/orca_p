@@ -323,7 +323,9 @@ public:
     // Propagate changed configuration from the Tab to the Plater and save changes to the AppConfig
     void        on_config_changed(DynamicPrintConfig* cfg) const ;
     void        set_print_button_to_default(PrintSelectType select_type);
+    void        bind_gfd_config_buttons();
     void        update_gfd_print_button();
+    void        update_gfd_config_buttons();
 
     bool can_save() const;
     bool can_save_as() const;

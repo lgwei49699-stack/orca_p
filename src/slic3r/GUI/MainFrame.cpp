@@ -61,8 +61,15 @@
 #include "MarkdownTip.hpp"
 #include "NetworkTestDialog.hpp"
 #include "ConfigWizard.hpp"
+#include "Widgets/Button.hpp"
+#include "Widgets/TextInput.hpp"
 #include "Widgets/WebView.hpp"
 #include "DailyTips.hpp"
+#include <wx/stattext.h>
+#include <wx/textctrl.h>
+#include <wx/choice.h>
+#include <wx/listctrl.h>
+#include <wx/scrolwin.h>
 
 #ifdef _WIN32
 #include <dbt.h>
@@ -177,6 +184,486 @@ static const wxString ctrl = _L("Ctrl+");
 static const wxString ctrl_t = ctrl;
 #endif
 static const wxString shift = _L("Shift+");
+
+namespace {
+
+void apply_window_button_style(Button* button, ButtonStyle style)
+{
+    if (button != nullptr)
+        button->SetStyle(style, ButtonType::Window);
+}
+
+void apply_dialog_action_button_style(Button* button, ButtonStyle style, const wxSize& size)
+{
+    if (button == nullptr)
+        return;
+
+    button->SetStyle(style, ButtonType::Choice);
+    button->SetMinSize(size);
+    button->SetSize(size);
+}
+
+struct GFDPrinterState
+{
+    std::string selected_printer_model;
+    std::string selected_device_type;
+    std::string edited_printer_model;
+    std::string edited_device_type;
+    std::string effective_printer_model;
+    std::string effective_device_type;
+};
+
+GFDPrinterState current_gfd_printer_state()
+{
+    GFDPrinterState state;
+    if (wxGetApp().preset_bundle == nullptr)
+        return state;
+
+    auto read_printer_state = [](const DynamicPrintConfig& config, std::string& printer_model, std::string& device_type) {
+        const auto* printer_model_opt = config.option<ConfigOptionString>("printer_model");
+        printer_model = printer_model_opt != nullptr ? printer_model_opt->value : std::string();
+        device_type   = GFD::Config::current_device_type(config);
+    };
+
+    read_printer_state(wxGetApp().preset_bundle->printers.get_selected_preset().config,
+                       state.selected_printer_model,
+                       state.selected_device_type);
+    read_printer_state(wxGetApp().preset_bundle->printers.get_edited_preset().config,
+                       state.edited_printer_model,
+                       state.edited_device_type);
+
+    if (!state.selected_device_type.empty()) {
+        state.effective_printer_model = state.selected_printer_model;
+        state.effective_device_type   = state.selected_device_type;
+    } else {
+        state.effective_printer_model = state.edited_printer_model;
+        state.effective_device_type   = state.edited_device_type;
+    }
+
+    return state;
+}
+
+class GFDUploadConfigDialog : public wxDialog
+{
+public:
+    explicit GFDUploadConfigDialog(wxWindow* parent)
+        : wxDialog(parent, wxID_ANY, _L("上传配置"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX)
+    {
+        build();
+        bind_events();
+        wxGetApp().UpdateDlgDarkUI(this);
+    }
+
+    wxString config_name() const
+    {
+        return m_name_input != nullptr ? m_name_input->GetTextCtrl()->GetValue() : wxEmptyString;
+    }
+
+    wxString remarks() const
+    {
+        return m_remarks_input != nullptr ? m_remarks_input->GetValue() : wxEmptyString;
+    }
+
+private:
+    ::TextInput*  m_name_input{nullptr};
+    wxTextCtrl*   m_remarks_input{nullptr};
+    wxStaticText* m_tip_label{nullptr};
+    Button*       m_cancel_button{nullptr};
+    Button*       m_confirm_button{nullptr};
+
+    void build()
+    {
+        SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+        const wxSize client_size(FromDIP(460), FromDIP(350));
+        SetClientSize(client_size);
+        SetMinClientSize(client_size);
+
+        auto* main_sizer = new wxBoxSizer(wxVERTICAL);
+        main_sizer->AddSpacer(FromDIP(20));
+
+        auto* name_label = new wxStaticText(this, wxID_ANY, _L("配置名称"), wxDefaultPosition, wxDefaultSize, 0);
+        name_label->SetFont(::Label::Body_13);
+        main_sizer->Add(name_label, 0, wxLEFT | wxRIGHT, FromDIP(24));
+        main_sizer->AddSpacer(FromDIP(8));
+
+        auto* name_input_wrap = new wxBoxSizer(wxVERTICAL);
+        m_name_input = new ::TextInput(this, wxEmptyString, wxEmptyString, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(412), FromDIP(38)), wxTE_PROCESS_ENTER);
+        m_name_input->SetCornerRadius(FromDIP(8));
+        m_name_input->SetMinSize(wxSize(FromDIP(412), FromDIP(38)));
+        m_name_input->GetTextCtrl()->SetHint(_L("请输入配置名称"));
+        name_input_wrap->Add(m_name_input, 0, wxEXPAND | wxALL, FromDIP(1));
+        main_sizer->Add(name_input_wrap, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(23));
+
+        main_sizer->AddSpacer(FromDIP(16));
+
+        auto* remarks_label = new wxStaticText(this, wxID_ANY, _L("备注"), wxDefaultPosition, wxDefaultSize, 0);
+        remarks_label->SetFont(::Label::Body_13);
+        main_sizer->Add(remarks_label, 0, wxLEFT | wxRIGHT, FromDIP(24));
+        main_sizer->AddSpacer(FromDIP(8));
+
+        m_remarks_input = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(412), FromDIP(112)), wxTE_MULTILINE | wxBORDER_SIMPLE);
+        m_remarks_input->SetHint(_L("请输入备注"));
+        m_remarks_input->SetMinSize(wxSize(FromDIP(412), FromDIP(112)));
+        m_remarks_input->SetBackgroundColour(*wxWHITE);
+        main_sizer->Add(m_remarks_input, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+
+        main_sizer->AddSpacer(FromDIP(10));
+
+        m_tip_label = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
+        m_tip_label->SetFont(::Label::Body_12);
+        m_tip_label->SetForegroundColour(wxColour(220, 38, 38));
+        main_sizer->Add(m_tip_label, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+        main_sizer->AddSpacer(FromDIP(18));
+
+        auto* button_row = new wxBoxSizer(wxHORIZONTAL);
+        button_row->AddStretchSpacer(1);
+
+        const wxSize action_button_size(FromDIP(76), FromDIP(32));
+        button_row->SetMinSize(wxSize(-1, action_button_size.y));
+
+        m_cancel_button = new Button(this, _L("取消"));
+        apply_dialog_action_button_style(m_cancel_button, ButtonStyle::Regular, action_button_size);
+        button_row->Add(m_cancel_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+
+        m_confirm_button = new Button(this, _L("确定"));
+        apply_dialog_action_button_style(m_confirm_button, ButtonStyle::Confirm, action_button_size);
+        button_row->Add(m_confirm_button, 0, wxALIGN_CENTER_VERTICAL);
+
+        main_sizer->Add(button_row, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, FromDIP(24));
+
+        SetSizer(main_sizer);
+        Layout();
+        CentreOnParent();
+    }
+
+    void bind_events()
+    {
+        m_cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_CANCEL); });
+        m_confirm_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { on_confirm(); });
+        m_name_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent&) { on_confirm(); });
+        m_name_input->GetTextCtrl()->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { clear_tip(); });
+        m_remarks_input->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { clear_tip(); });
+    }
+
+    void clear_tip()
+    {
+        if (m_tip_label != nullptr && !m_tip_label->GetLabel().empty())
+            m_tip_label->SetLabel(wxEmptyString);
+    }
+
+    void on_confirm()
+    {
+        wxString name = config_name();
+        name.Trim(true).Trim(false);
+        if (name.empty()) {
+            m_tip_label->SetLabel(_L("请输入配置名称"));
+            if (m_name_input != nullptr)
+                m_name_input->GetTextCtrl()->SetFocus();
+            return;
+        }
+
+        clear_tip();
+        EndModal(wxID_OK);
+    }
+};
+
+class GFDCloudImportDialog : public wxDialog
+{
+public:
+    GFDCloudImportDialog(wxWindow* parent, Plater* plater)
+        : wxDialog(parent, wxID_ANY, _L("云端导入"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
+        , m_plater(plater)
+    {
+        build();
+        bind_events();
+        load_device_types();
+        wxGetApp().UpdateDlgDarkUI(this);
+        CallAfter([this]() { fetch_configs_for_selected_device(); });
+    }
+
+    void refresh_configs() { fetch_configs_for_selected_device(); }
+
+private:
+    Plater*                         m_plater{nullptr};
+    wxChoice*                       m_device_choice{nullptr};
+    wxScrolledWindow*               m_config_list{nullptr};
+    wxBoxSizer*                     m_config_list_sizer{nullptr};
+    wxStaticText*                   m_tip_label{nullptr};
+    Button*                         m_refresh_button{nullptr};
+    Button*                         m_cancel_button{nullptr};
+    std::vector<GFDCloudConfigInfo> m_configs;
+
+    void build()
+    {
+        SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+        SetMinSize(wxSize(FromDIP(920), FromDIP(560)));
+        SetSize(wxSize(FromDIP(920), FromDIP(560)));
+
+        auto* main_sizer = new wxBoxSizer(wxVERTICAL);
+        main_sizer->AddSpacer(FromDIP(18));
+
+        auto* filter_row = new wxBoxSizer(wxHORIZONTAL);
+        auto* device_label = new wxStaticText(this, wxID_ANY, _L("设备机型"), wxDefaultPosition, wxDefaultSize, 0);
+        device_label->SetFont(::Label::Body_13);
+        filter_row->Add(device_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
+
+        m_device_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(220), FromDIP(30)));
+        filter_row->Add(m_device_choice, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+
+        m_refresh_button = new Button(this, _L("刷新"));
+        apply_window_button_style(m_refresh_button, ButtonStyle::Regular);
+        m_refresh_button->SetMinSize(wxSize(FromDIP(72), FromDIP(30)));
+        filter_row->Add(m_refresh_button, 0, wxALIGN_CENTER_VERTICAL);
+        filter_row->AddStretchSpacer(1);
+        main_sizer->Add(filter_row, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+
+        main_sizer->AddSpacer(FromDIP(14));
+
+        m_config_list = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(872), FromDIP(390)), wxBORDER_SIMPLE | wxVSCROLL);
+        m_config_list->SetScrollRate(0, FromDIP(12));
+        m_config_list->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+        m_config_list_sizer = new wxBoxSizer(wxVERTICAL);
+        m_config_list->SetSizer(m_config_list_sizer);
+        main_sizer->Add(m_config_list, 1, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+
+        main_sizer->AddSpacer(FromDIP(10));
+
+        m_tip_label = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
+        m_tip_label->SetFont(::Label::Body_12);
+        m_tip_label->SetForegroundColour(wxColour(220, 38, 38));
+        main_sizer->Add(m_tip_label, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+
+        auto* button_row = new wxBoxSizer(wxHORIZONTAL);
+        button_row->AddStretchSpacer(1);
+        m_cancel_button = new Button(this, _L("取消"));
+        apply_window_button_style(m_cancel_button, ButtonStyle::Regular);
+        m_cancel_button->SetMinSize(wxSize(FromDIP(76), FromDIP(32)));
+        button_row->Add(m_cancel_button, 0);
+        main_sizer->Add(button_row, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, FromDIP(24));
+
+        SetSizer(main_sizer);
+        Layout();
+        CentreOnParent();
+    }
+
+    void bind_events()
+    {
+        m_cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_CANCEL); });
+        m_refresh_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { fetch_configs_for_selected_device(); });
+        m_device_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { fetch_configs_for_selected_device(); });
+    }
+
+    void load_device_types()
+    {
+        std::vector<std::string> device_types = GFD::Config::local_gfd_device_types();
+        std::string current_device_type;
+        if (wxGetApp().preset_bundle != nullptr)
+            current_device_type = GFD::Config::current_device_type(wxGetApp().preset_bundle->printers.get_selected_preset().config);
+        if (!current_device_type.empty() &&
+            std::find(device_types.begin(), device_types.end(), current_device_type) == device_types.end())
+            device_types.insert(device_types.begin(), current_device_type);
+
+        m_device_choice->Clear();
+        for (const std::string& device_type : device_types)
+            m_device_choice->Append(from_u8(device_type));
+
+        if (!current_device_type.empty())
+            m_device_choice->SetStringSelection(from_u8(current_device_type));
+        else if (!device_types.empty())
+            m_device_choice->SetSelection(0);
+
+        if (m_tip_label != nullptr)
+            m_tip_label->SetLabel(_L("点击刷新获取当前机型的云端配置"));
+    }
+
+    std::string selected_device_type() const
+    {
+        return m_device_choice != nullptr && m_device_choice->GetSelection() != wxNOT_FOUND ?
+                   into_u8(m_device_choice->GetStringSelection()) :
+                   std::string();
+    }
+
+    void fetch_configs_for_selected_device()
+    {
+        m_configs.clear();
+        rebuild_config_rows();
+
+        const std::string device_type = selected_device_type();
+        if (device_type.empty()) {
+            m_tip_label->SetLabel(_L("未找到可用机型"));
+            return;
+        }
+
+        m_tip_label->SetLabel(_L("正在获取云端配置..."));
+        m_refresh_button->Enable(false);
+        Layout();
+
+        std::string error_message;
+        try {
+            if (m_plater == nullptr || !m_plater->fetch_cloud_configs(device_type, m_configs, error_message)) {
+                m_tip_label->SetLabel(from_u8(error_message.empty() ? "获取云端配置失败" : error_message));
+                m_refresh_button->Enable(true);
+                return;
+            }
+        } catch (const std::exception& ex) {
+            BOOST_LOG_TRIVIAL(error) << "GFD cloud import dialog fetch failed"
+                                     << ", device_type=" << device_type
+                                     << ", error=" << ex.what();
+            m_tip_label->SetLabel(from_u8(std::string("获取云端配置失败: ") + ex.what()));
+            m_refresh_button->Enable(true);
+            return;
+        } catch (...) {
+            BOOST_LOG_TRIVIAL(error) << "GFD cloud import dialog fetch failed with unknown exception"
+                                     << ", device_type=" << device_type;
+            m_tip_label->SetLabel(_L("获取云端配置失败"));
+            m_refresh_button->Enable(true);
+            return;
+        }
+
+        rebuild_config_rows();
+
+        if (m_configs.empty())
+            m_tip_label->SetLabel(_L("当前机型暂无云端配置"));
+        else
+            m_tip_label->SetLabel(wxEmptyString);
+
+        m_refresh_button->Enable(true);
+    }
+
+    wxStaticText* create_row_label(wxWindow* parent, const wxString& text, int min_width)
+    {
+        auto* label = new wxStaticText(parent, wxID_ANY, text, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
+        label->SetFont(::Label::Body_12);
+        label->SetMinSize(wxSize(FromDIP(min_width), FromDIP(24)));
+        if (!text.empty())
+            label->SetToolTip(text);
+        return label;
+    }
+
+    void add_row_label(wxPanel* row_panel, wxBoxSizer* row, const wxString& text, int min_width, int proportion, int border = 8)
+    {
+        row->Add(create_row_label(row_panel, text, min_width), proportion, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(border));
+    }
+
+    void apply_link_button_style(Button* button, const wxColour& background)
+    {
+        if (button == nullptr)
+            return;
+        const wxColour green(0, 150, 136);
+        const wxColour hover_bg(232, 247, 245);
+        button->SetFont(::Label::Body_12);
+        button->SetMinSize(wxSize(FromDIP(95), FromDIP(28)));
+        button->SetCornerRadius(0);
+        button->SetBorderWidth(0);
+        button->SetBackgroundColour(background);
+        button->SetBackgroundColor(StateColor(
+            std::pair<wxColour, int>(hover_bg, StateColor::Pressed),
+            std::pair<wxColour, int>(hover_bg, StateColor::Hovered),
+            std::pair<wxColour, int>(background, StateColor::Normal),
+            std::pair<wxColour, int>(background, StateColor::Enabled)
+        ));
+        button->SetBorderColor(StateColor(background));
+        button->SetTextColor(StateColor(
+            std::pair<wxColour, int>(wxColour(120, 120, 120), StateColor::Disabled),
+            std::pair<wxColour, int>(green, StateColor::Hovered),
+            std::pair<wxColour, int>(green, StateColor::Normal)
+        ));
+    }
+
+    void clear_config_rows()
+    {
+        if (m_config_list_sizer == nullptr)
+            return;
+        m_config_list_sizer->Clear(true);
+    }
+
+    void add_header_row()
+    {
+        if (m_config_list_sizer == nullptr)
+            return;
+
+        auto* header_panel = new wxPanel(m_config_list);
+        header_panel->SetBackgroundColour(wxColour(245, 245, 245));
+        auto* row = new wxBoxSizer(wxHORIZONTAL);
+        row->AddSpacer(FromDIP(8));
+        add_row_label(header_panel, row, _L("配置名称"), 120, 2);
+        add_row_label(header_panel, row, _L("机型"), 70, 1);
+        add_row_label(header_panel, row, _L("方案文件"), 230, 4);
+        add_row_label(header_panel, row, _L("备注"), 130, 2);
+        row->Add(create_row_label(header_panel, _L("操作"), 100), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+        header_panel->SetSizer(row);
+        m_config_list_sizer->Add(header_panel, 0, wxEXPAND);
+    }
+
+    void add_config_row(size_t index)
+    {
+        if (m_config_list_sizer == nullptr || index >= m_configs.size())
+            return;
+
+        const GFDCloudConfigInfo& config = m_configs[index];
+        auto* row_panel = new wxPanel(m_config_list);
+        const wxColour row_bg = index % 2 == 0 ? wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW) : wxColour(250, 250, 250);
+        row_panel->SetBackgroundColour(row_bg);
+
+        auto* row = new wxBoxSizer(wxHORIZONTAL);
+        row->AddSpacer(FromDIP(8));
+        add_row_label(row_panel, row, from_u8(config.name), 120, 2);
+        add_row_label(row_panel, row, from_u8(config.device_type), 70, 1);
+        const std::string config_file_display = !config.config_file_url.empty() ? config.config_file_url : config.config_file_name;
+        add_row_label(row_panel, row, from_u8(config_file_display), 230, 4);
+        add_row_label(row_panel, row, from_u8(config.info), 130, 2);
+
+        auto* apply_button = new Button(row_panel, _L("设置此参数"));
+        apply_link_button_style(apply_button, row_bg);
+        apply_button->Bind(wxEVT_BUTTON, [this, index](wxCommandEvent&) { apply_config(index); });
+        row->Add(apply_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+
+        row_panel->SetSizer(row);
+        m_config_list_sizer->Add(row_panel, 0, wxEXPAND);
+    }
+
+    void rebuild_config_rows()
+    {
+        clear_config_rows();
+        add_header_row();
+        for (size_t i = 0; i < m_configs.size(); ++i)
+            add_config_row(i);
+        if (m_config_list != nullptr) {
+            m_config_list->FitInside();
+            m_config_list->Layout();
+            m_config_list->Refresh();
+        }
+        Layout();
+    }
+
+    void apply_config(size_t index)
+    {
+        if (index >= m_configs.size() || m_plater == nullptr) {
+            m_tip_label->SetLabel(_L("请选择要导入的云端配置"));
+            return;
+        }
+
+        const GFDCloudConfigInfo config = m_configs[index];
+        BOOST_LOG_TRIVIAL(info) << "GFD cloud import apply row"
+                                << ", id=" << config.id
+                                << ", name=" << config.name
+                                << ", device_type=" << config.device_type;
+        m_tip_label->SetLabel(_L("正在应用云端配置..."));
+        m_refresh_button->Enable(false);
+        Layout();
+
+        const bool imported = m_plater->import_cloud_config(config);
+        m_refresh_button->Enable(true);
+        if (imported) {
+            m_tip_label->SetLabel(_L("云端配置已应用"));
+            EndModal(wxID_CANCEL);
+        } else {
+            m_tip_label->SetLabel(_L("云端配置应用失败"));
+        }
+    }
+};
+
+} // namespace
 
 MainFrame::MainFrame() :
 DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_STYLE, "mainframe")
@@ -996,6 +1483,8 @@ void MainFrame::show_option(bool show)
             m_print_option_btn->Hide();
             if (m_gfd_print_btn != nullptr)
                 m_gfd_print_btn->Hide();
+            if (m_plater != nullptr && m_plater->gfd_config_panel() != nullptr)
+                m_plater->gfd_config_panel()->Hide();
             Layout();
         }
     } else {
@@ -1005,6 +1494,7 @@ void MainFrame::show_option(bool show)
             m_slice_option_btn->Show();
             m_print_option_btn->Show();
             update_gfd_print_button();
+            update_gfd_config_buttons();
             Layout();
         }
     }
@@ -1141,6 +1631,9 @@ void MainFrame::init_tabpanel() {
             m_plater->on_filaments_change(full_config.option<ConfigOptionStrings>("filament_colour")->values.size());
         }
     }
+
+    bind_gfd_config_buttons();
+    update_gfd_config_buttons();
 }
 
 // SoftFever
@@ -1871,6 +2364,7 @@ wxBoxSizer* MainFrame::create_side_tools()
     */
     sizer->Add(FromDIP(19), 0, 0, 0, 0);
     update_gfd_print_button();
+    update_gfd_config_buttons();
 
     return sizer;
 }
@@ -2133,6 +2627,7 @@ void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_sl
     m_slice_enable = enable_slice;
     m_print_enable = enable_print;
     update_gfd_print_button();
+    update_gfd_config_buttons();
 
     if (wxGetApp().mainframe)
         wxGetApp().plater()->update_title_dirty_status();
@@ -2164,6 +2659,7 @@ void MainFrame::on_dpi_changed(const wxRect& suggested_rect)
     m_gfd_print_btn->Rescale();
     m_slice_option_btn->Rescale();
     m_print_option_btn->Rescale();
+    update_gfd_config_buttons();
 
     // update Plater
     wxGetApp().plater()->msw_rescale();
@@ -3702,6 +4198,7 @@ void MainFrame::set_print_button_to_default(PrintSelectType select_type)
         m_print_enable = get_enable_print_status();
         m_print_btn->Enable(m_print_enable);
         update_gfd_print_button();
+        update_gfd_config_buttons();
         this->Layout();
     } else if (select_type == PrintSelectType::eSendGcode) {
         m_print_btn->SetLabel(_L("Print"));
@@ -3709,6 +4206,7 @@ void MainFrame::set_print_button_to_default(PrintSelectType select_type)
         m_print_enable = get_enable_print_status() && can_send_gcode();
         m_print_btn->Enable(m_print_enable);
         update_gfd_print_button();
+        update_gfd_config_buttons();
         this->Layout();
     } else if (select_type == PrintSelectType::eExportGcode) {
         m_print_btn->SetLabel(_L("Export G-code file"));
@@ -3716,10 +4214,98 @@ void MainFrame::set_print_button_to_default(PrintSelectType select_type)
         m_print_enable = get_enable_print_status() && can_send_gcode();
         m_print_btn->Enable(m_print_enable);
         update_gfd_print_button();
+        update_gfd_config_buttons();
         this->Layout();
     } else {
         // unsupport
         return;
+    }
+}
+
+void MainFrame::bind_gfd_config_buttons()
+{
+    if (m_plater == nullptr)
+        return;
+
+    auto bind_gfd_config_button = [this](Button* button, const char* action, const std::function<void()>& handler) {
+        if (button == nullptr)
+            return;
+        button->Bind(wxEVT_BUTTON, [this, action, handler](wxCommandEvent&) {
+            BOOST_LOG_TRIVIAL(info) << "GFD config action clicked"
+                                    << ", action=" << action;
+            handler();
+        });
+    };
+
+    bind_gfd_config_button(m_plater->gfd_cloud_import_button(), "cloud_import", [this]() {
+        BOOST_LOG_TRIVIAL(info) << "GFD cloud import dialog opening";
+        GFDCloudImportDialog dialog(this, m_plater);
+        BOOST_LOG_TRIVIAL(info) << "GFD cloud import dialog ready";
+        dialog.ShowModal();
+    });
+    bind_gfd_config_button(m_plater->gfd_upload_config_button(), "upload_config", [this]() {
+        GFDUploadConfigDialog dialog(this);
+        if (dialog.ShowModal() != wxID_OK)
+            return;
+
+        const wxString name = dialog.config_name().Trim(true).Trim(false);
+        if (name.empty()) {
+            GUI::show_error(this, _L("请输入配置名称。"));
+            return;
+        }
+
+        const wxString remarks = dialog.remarks().Trim(true).Trim(false);
+        m_plater->upload_current_config_to_cloud(into_u8(name), into_u8(remarks));
+    });
+    bind_gfd_config_button(m_plater->gfd_save_config_button(), "save_config", [this]() {
+        GUI::show_info(this, _L("保存配置功能待接入。"), _L("提示"));
+    });
+}
+
+void MainFrame::update_gfd_config_buttons()
+{
+    if (m_plater == nullptr || m_plater->gfd_config_panel() == nullptr)
+        return;
+
+    wxPanel* panel = m_plater->gfd_config_panel();
+    const bool was_shown = panel->IsShown();
+    bool should_show = false;
+    const GFDPrinterState printer_state = current_gfd_printer_state();
+    should_show = !printer_state.effective_device_type.empty();
+
+    const bool parameter_panel_shown = m_plater->is_sidebar_enabled() && !m_plater->is_sidebar_collapsed() &&
+                                       (m_plater->is_view3D_shown() || m_plater->is_preview_shown());
+    should_show = should_show && parameter_panel_shown;
+    const bool show_save_config = should_show && m_plater->has_active_imported_cloud_config();
+
+    panel->Show(should_show);
+    for (Button* btn : {m_plater->gfd_cloud_import_button(), m_plater->gfd_upload_config_button()})
+        if (btn)
+            btn->Show(should_show);
+    if (m_plater->gfd_save_config_button() != nullptr)
+        m_plater->gfd_save_config_button()->Show(show_save_config);
+
+    if (should_show) {
+        panel->Layout();
+        m_plater->update_gfd_config_panel_position();
+        panel->Raise();
+        panel->Refresh();
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD config buttons visibility"
+                            << ", selected_printer_model=" << printer_state.selected_printer_model
+                            << ", selected_gfd_device_type=" << (printer_state.selected_device_type.empty() ? std::string("<empty>") : printer_state.selected_device_type)
+                            << ", edited_printer_model=" << printer_state.edited_printer_model
+                            << ", edited_gfd_device_type=" << (printer_state.edited_device_type.empty() ? std::string("<empty>") : printer_state.edited_device_type)
+                            << ", effective_printer_model=" << printer_state.effective_printer_model
+                            << ", effective_gfd_device_type=" << (printer_state.effective_device_type.empty() ? std::string("<empty>") : printer_state.effective_device_type)
+                            << ", parameter_panel_shown=" << parameter_panel_shown
+                            << ", show_save_config=" << show_save_config
+                            << ", show=" << should_show;
+
+    if (was_shown != should_show || should_show) {
+        m_plater->Layout();
+        Layout();
     }
 }
 
@@ -3732,15 +4318,8 @@ void MainFrame::update_gfd_print_button()
     const bool can_show_side_tools = m_slice_btn != nullptr && m_slice_btn->IsShown();
     bool should_show_gfd_print_button = false;
     bool slice_ready = false;
-    std::string printer_model;
-    std::string gfd_device_type;
-    if (wxGetApp().preset_bundle != nullptr) {
-        const auto& printer_cfg = wxGetApp().preset_bundle->printers.get_selected_preset().config;
-        const auto* printer_model_opt = printer_cfg.option<ConfigOptionString>("printer_model");
-        printer_model = printer_model_opt != nullptr ? printer_model_opt->value : std::string();
-        gfd_device_type = GFD::Config::current_device_type(printer_cfg);
-        should_show_gfd_print_button = !gfd_device_type.empty();
-    }
+    const GFDPrinterState printer_state = current_gfd_printer_state();
+    should_show_gfd_print_button = !printer_state.effective_device_type.empty();
 
     if (m_plater != nullptr) {
         PartPlate* current_plate = m_plater->get_partplate_list().get_curr_plate();
@@ -3759,8 +4338,12 @@ void MainFrame::update_gfd_print_button()
 
     BOOST_LOG_TRIVIAL(info) << "GFD print button visibility"
                             << ", can_show_side_tools=" << can_show_side_tools
-                            << ", printer_model=" << printer_model
-                            << ", gfd_device_type=" << (gfd_device_type.empty() ? std::string("<empty>") : gfd_device_type)
+                            << ", selected_printer_model=" << printer_state.selected_printer_model
+                            << ", selected_gfd_device_type=" << (printer_state.selected_device_type.empty() ? std::string("<empty>") : printer_state.selected_device_type)
+                            << ", edited_printer_model=" << printer_state.edited_printer_model
+                            << ", edited_gfd_device_type=" << (printer_state.edited_device_type.empty() ? std::string("<empty>") : printer_state.edited_device_type)
+                            << ", effective_printer_model=" << printer_state.effective_printer_model
+                            << ", effective_gfd_device_type=" << (printer_state.effective_device_type.empty() ? std::string("<empty>") : printer_state.effective_device_type)
                             << ", slice_ready=" << slice_ready
                             << ", show=" << show;
 
@@ -4000,6 +4583,7 @@ void MainFrame::update_side_preset_ui()
     m_plater->sidebar().update_presets(Preset::TYPE_PRINTER);
     m_plater->sidebar().update_presets(Preset::TYPE_FILAMENT);
     update_gfd_print_button();
+    update_gfd_config_buttons();
     Layout();
 
 

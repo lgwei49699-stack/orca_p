@@ -2244,8 +2244,23 @@ struct Plater::priv
     AuiMgr                m_aui_mgr;
     wxString              m_default_window_layout;
     wxPanel*              current_panel{nullptr};
+    wxPanel*              main_panel{nullptr};
     std::vector<wxPanel*> panels;
     Sidebar*              sidebar;
+    wxPanel*              gfd_config_panel{nullptr};
+    Button*               gfd_cloud_import_btn{nullptr};
+    Button*               gfd_upload_config_btn{nullptr};
+    Button*               gfd_save_config_btn{nullptr};
+    wxBoxSizer*           gfd_config_sizer{nullptr};
+    struct GFDCloudImportState
+    {
+        std::string cloud_config_id;
+        std::string cloud_config_name;
+        std::string printer_preset;
+        std::string print_preset;
+        std::vector<std::string> filament_presets;
+    };
+    std::vector<GFDCloudImportState> gfd_imported_cloud_configs;
     struct SidebarLayout
     {
         bool is_enabled{false};
@@ -2403,7 +2418,9 @@ struct Plater::priv
     void                  collapse_sidebar(bool collapse);
     void                  update_sidebar(bool force_update = false);
     void                  reset_window_layout();
+    bool                  is_sidebar_visible();
     Sidebar::DockingState get_sidebar_docking_state();
+    void                  update_gfd_config_panel_position();
 
     bool is_view3D_layers_editing_enabled() const
     {
@@ -2638,6 +2655,45 @@ struct Plater::priv
                                            const nlohmann::json& token_data,
                                            std::string&          file_url,
                                            std::string&          error_message) const;
+    fs::path    gfd_temp_config_3mf_path();
+    bool        gfd_extract_project_settings_from_3mf(const std::string& config_3mf_path,
+                                                      std::string&       project_settings_text,
+                                                      std::string&       error_message) const;
+    void        gfd_log_3mf_archive_contents(const std::string& config_3mf_path) const;
+    bool        gfd_save_config_to_server(const std::string& config_name,
+                                          const std::string& remarks,
+                                          const std::string& file_url,
+                                          const std::string& project_settings_text,
+                                          std::string&       body,
+                                          std::string&       error_message) const;
+    bool        gfd_upload_current_config(const std::string& config_name, const std::string& remarks);
+    bool        gfd_fetch_cloud_configs(const std::string& device_type,
+                                        std::vector<GFDCloudConfigInfo>& configs,
+                                        std::string& error_message) const;
+    bool        gfd_download_file_to_temp(const std::string& url,
+                                          const std::string& filename_hint,
+                                          fs::path& output_path,
+                                          std::string& error_message) const;
+    bool        gfd_parse_project_settings_text(const std::string& text,
+                                                DynamicPrintConfig& config,
+                                                std::string& error_message) const;
+    std::string gfd_local_printer_model_for_device_type(const std::string& device_type) const;
+    void        gfd_prepare_imported_config_for_device_type(DynamicPrintConfig& config,
+                                                            const std::string& device_type) const;
+    bool        gfd_apply_project_config_text(const std::string& text,
+                                              const std::string& source_name,
+                                              std::string& error_message,
+                                              const std::string& device_type = std::string());
+    void        gfd_refresh_after_cloud_config_import(const DynamicPrintConfig& imported_config,
+                                                      const std::string& source_name,
+                                                      const std::string& device_type = std::string());
+    bool        gfd_apply_config_3mf(const std::string& path,
+                                     const std::string& source_name,
+                                     std::string& error_message,
+                                     const std::string& device_type = std::string());
+    bool        gfd_import_cloud_config(const GFDCloudConfigInfo& config);
+    void        gfd_record_imported_cloud_config(const GFDCloudConfigInfo& config);
+    bool        gfd_has_active_imported_cloud_config() const;
     bool        gfd_send_print_command(const GFDDeviceInfo& device,
                                        const std::string&  file_url,
                                        std::string&        body,
@@ -2921,6 +2977,7 @@ Plater::priv::priv(Plater* q, MainFrame* main_frame)
     main_frame->m_tabpanel->Bind(wxEVT_NOTEBOOK_PAGE_CHANGING, &priv::on_tab_selection_changing, this);
 
     auto* panel_3d = new wxPanel(q);
+    main_panel = panel_3d;
     view3D         = new View3D(panel_3d, bed, &model, config, &background_process);
     // BBS: use partplater's gcode
     preview = new Preview(panel_3d, bed, &model, config, &background_process, partplate_list.get_current_slice_result(),
@@ -2952,11 +3009,58 @@ Plater::priv::priv(Plater* q, MainFrame* main_frame)
                  wxAuiPaneInfo().Name("sidebar").Left().CloseButton(false).TopDockable(false).BottomDockable(false).Floatable(true).BestSize(
                      wxSize(42 * wxGetApp().em_unit(), 90 * wxGetApp().em_unit())));
 
+    const wxColour gfd_panel_bg("#E7E7E7");
+    gfd_config_panel = new wxPanel(panel_3d, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL);
+    gfd_config_panel->SetBackgroundColour(gfd_panel_bg);
+    gfd_config_sizer = new wxBoxSizer(wxVERTICAL);
+    gfd_config_panel->SetSizer(gfd_config_sizer);
+
+    auto create_gfd_config_button = [this](const char* label) {
+        auto* btn = new Button(gfd_config_panel, wxString::FromUTF8(label));
+        btn->SetStyle(ButtonStyle::Regular, ButtonType::Window);
+        btn->SetMinSize(wxSize(wxWindow::FromDIP(38, gfd_config_panel), wxWindow::FromDIP(92, gfd_config_panel)));
+        btn->SetPaddingSize(wxSize(wxWindow::FromDIP(5, gfd_config_panel), wxWindow::FromDIP(8, gfd_config_panel)));
+        btn->SetCornerRadius(wxWindow::FromDIP(14, gfd_config_panel));
+        btn->SetRoundedCorners(false, true, true, false);
+        const wxColour gfd_button_green("#16A085");
+        const wxColour gfd_button_green_hover("#1ABC9C");
+        const wxColour gfd_button_green_pressed("#11806A");
+        btn->SetBorderColorNormal(gfd_button_green);
+        btn->SetBackgroundColor(StateColor(
+            std::pair(gfd_button_green_pressed, (int) StateColor::Pressed),
+            std::pair(gfd_button_green_hover, (int) StateColor::Hovered),
+            std::pair(gfd_button_green, (int) StateColor::Normal)));
+        btn->SetTextColor(StateColor(
+            std::pair(*wxWHITE, (int) StateColor::Hovered),
+            std::pair(*wxWHITE, (int) StateColor::Normal)));
+        return btn;
+    };
+
+    gfd_cloud_import_btn = create_gfd_config_button("云\n端\n导\n入");
+    gfd_upload_config_btn = create_gfd_config_button("上\n传\n配\n置");
+    gfd_save_config_btn = create_gfd_config_button("保\n存\n配\n置");
+
+    gfd_config_sizer->AddStretchSpacer(1);
+    for (Button* btn : {gfd_cloud_import_btn, gfd_upload_config_btn, gfd_save_config_btn})
+        gfd_config_sizer->Add(btn, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, wxWindow::FromDIP(4, gfd_config_panel));
+    gfd_config_sizer->AddStretchSpacer(1);
+    gfd_config_sizer->Fit(gfd_config_panel);
+    const wxSize gfd_panel_best_size = gfd_config_panel->GetBestSize();
+    gfd_config_panel->SetMinSize(gfd_panel_best_size);
+    gfd_config_panel->SetMaxSize(wxSize(gfd_panel_best_size.x, -1));
+    gfd_config_panel->Hide();
+    gfd_config_panel->Raise();
+
     auto* panel_sizer = new wxBoxSizer(wxHORIZONTAL);
+    panel_sizer->Add(gfd_config_panel, 0, wxEXPAND, 0);
     panel_sizer->Add(view3D, 1, wxEXPAND | wxALL, 0);
     panel_sizer->Add(preview, 1, wxEXPAND | wxALL, 0);
     panel_sizer->Add(assemble_view, 1, wxEXPAND | wxALL, 0);
     panel_3d->SetSizer(panel_sizer);
+    panel_3d->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
+        this->update_gfd_config_panel_position();
+        event.Skip();
+    });
     m_aui_mgr.AddPane(panel_3d, wxAuiPaneInfo().Name("main").CenterPane().PaneBorder(false));
 
     m_default_window_layout = m_aui_mgr.SavePerspective();
@@ -3549,6 +3653,14 @@ void Plater::priv::update_sidebar(bool force_update)
         notification_manager->set_sidebar_collapsed(sidebar.IsShown());
         m_aui_mgr.Update();
     }
+
+    if (wxGetApp().mainframe != nullptr) {
+        wxGetApp().mainframe->update_gfd_config_buttons();
+        wxGetApp().mainframe->CallAfter([] {
+            if (wxGetApp().mainframe != nullptr)
+                wxGetApp().mainframe->update_gfd_config_buttons();
+        });
+    }
 }
 
 void Plater::priv::reset_window_layout()
@@ -3556,6 +3668,12 @@ void Plater::priv::reset_window_layout()
     m_aui_mgr.LoadPerspective(m_default_window_layout, false);
     sidebar_layout.is_collapsed = false;
     update_sidebar(true);
+}
+
+bool Plater::priv::is_sidebar_visible()
+{
+    const auto& sidebar_pane = m_aui_mgr.GetPane(this->sidebar);
+    return sidebar_layout.is_enabled && sidebar_layout.show && !sidebar_layout.is_collapsed && sidebar_pane.IsOk();
 }
 
 Sidebar::DockingState Plater::priv::get_sidebar_docking_state()
@@ -3570,6 +3688,28 @@ Sidebar::DockingState Plater::priv::get_sidebar_docking_state()
     }
 
     return sidebar.dock_direction == wxAUI_DOCK_RIGHT ? Sidebar::Right : Sidebar::Left;
+}
+
+void Plater::priv::update_gfd_config_panel_position()
+{
+    if (gfd_config_panel == nullptr || main_panel == nullptr)
+        return;
+
+    wxSize best_size = gfd_config_panel->GetBestSize();
+    if (best_size.x <= 0 || best_size.y <= 0) {
+        gfd_config_panel->GetSizer()->Fit(gfd_config_panel);
+        best_size = gfd_config_panel->GetBestSize();
+    }
+
+    if (gfd_config_sizer != nullptr) {
+        gfd_config_sizer->Layout();
+        gfd_config_sizer->Fit(gfd_config_panel);
+        best_size = gfd_config_panel->GetBestSize();
+    }
+
+    gfd_config_panel->SetMinSize(best_size);
+    gfd_config_panel->Layout();
+    gfd_config_panel->Refresh();
 }
 
 void Plater::priv::reset_all_gizmos() { view3D->get_canvas3d()->reset_all_gizmos(); }
@@ -6803,6 +6943,8 @@ void Plater::priv::on_select_preset(wxCommandEvent& evt)
     for (auto plate : plate_list) {
         plate->update_slice_result_valid_state(false);
     }
+    if (wxGetApp().mainframe != nullptr)
+        wxGetApp().mainframe->update_gfd_config_buttons();
 }
 
 void Plater::priv::on_slicing_update(SlicingStatusEvent& evt)
@@ -7392,6 +7534,992 @@ std::string Plater::priv::gfd_auth_token() const
     return token;
 }
 
+fs::path Plater::priv::gfd_temp_config_3mf_path()
+{
+    fs::path output_path;
+    try {
+        output_path = fs::path(partplate_list.get_curr_plate()->get_temp_config_3mf_path());
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(error) << "GFD temp config 3MF path resolve failed"
+                                 << ", error=" << ex.what();
+        return {};
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD temp config 3MF path resolved"
+                            << ", full_path=" << output_path.string()
+                            << ", filename=" << output_path.filename().string()
+                            << ", output_dir=" << output_path.parent_path().string();
+    return output_path;
+}
+
+bool Plater::priv::gfd_extract_project_settings_from_3mf(const std::string& config_3mf_path,
+                                                         std::string&       project_settings_text,
+                                                         std::string&       error_message) const
+{
+    if (config_3mf_path.empty() || !fs::exists(config_3mf_path)) {
+        error_message = "配置 3MF 文件不存在";
+        BOOST_LOG_TRIVIAL(error) << "GFD extract config text skipped: config 3MF missing"
+                                 << ", config_3mf_path=" << config_3mf_path;
+        return false;
+    }
+
+    mz_zip_archive archive;
+    mz_zip_zero_struct(&archive);
+    if (!open_zip_reader(&archive, config_3mf_path)) {
+        error_message = "无法打开配置 3MF 文件";
+        BOOST_LOG_TRIVIAL(error) << "GFD extract config text failed: open zip reader failed"
+                                 << ", config_3mf_path=" << config_3mf_path;
+        return false;
+    }
+
+    const char* project_settings_path = "Metadata/project_settings.config";
+    const int   file_index            = mz_zip_reader_locate_file(&archive, project_settings_path, nullptr, 0);
+    if (file_index < 0) {
+        close_zip_reader(&archive);
+        error_message = "3MF 中未找到 project_settings.config";
+        BOOST_LOG_TRIVIAL(error) << "GFD extract config text failed: project settings missing"
+                                 << ", config_3mf_path=" << config_3mf_path;
+        return false;
+    }
+
+    mz_zip_archive_file_stat stat;
+    if (!mz_zip_reader_file_stat(&archive, file_index, &stat)) {
+        close_zip_reader(&archive);
+        error_message = "读取 project_settings.config 信息失败";
+        BOOST_LOG_TRIVIAL(error) << "GFD extract config text failed: file stat failed"
+                                 << ", config_3mf_path=" << config_3mf_path;
+        return false;
+    }
+
+    std::string buffer;
+    buffer.resize(static_cast<size_t>(stat.m_uncomp_size));
+    if (!mz_zip_reader_extract_to_mem(&archive, stat.m_file_index, buffer.data(), static_cast<size_t>(stat.m_uncomp_size), 0)) {
+        close_zip_reader(&archive);
+        error_message = "读取 project_settings.config 内容失败";
+        BOOST_LOG_TRIVIAL(error) << "GFD extract config text failed: extract to memory failed"
+                                 << ", config_3mf_path=" << config_3mf_path;
+        return false;
+    }
+
+    close_zip_reader(&archive);
+    project_settings_text = std::move(buffer);
+    BOOST_LOG_TRIVIAL(info) << "GFD extracted project settings from 3MF"
+                            << ", config_3mf_path=" << config_3mf_path
+                            << ", text_length=" << project_settings_text.size();
+    return true;
+}
+
+void Plater::priv::gfd_log_3mf_archive_contents(const std::string& config_3mf_path) const
+{
+    if (config_3mf_path.empty() || !fs::exists(config_3mf_path)) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD 3MF archive listing skipped: file missing"
+                                   << ", config_3mf_path=" << config_3mf_path;
+        return;
+    }
+
+    mz_zip_archive archive;
+    mz_zip_zero_struct(&archive);
+    if (!open_zip_reader(&archive, config_3mf_path)) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD 3MF archive listing skipped: open zip failed"
+                                   << ", config_3mf_path=" << config_3mf_path;
+        return;
+    }
+
+    const mz_uint file_count = mz_zip_reader_get_num_files(&archive);
+    BOOST_LOG_TRIVIAL(info) << "GFD 3MF archive entries"
+                            << ", config_3mf_path=" << config_3mf_path
+                            << ", file_count=" << file_count;
+
+    bool has_project_settings  = false;
+    bool has_model_settings    = false;
+    bool has_slice_info        = false;
+    int  process_settings_cnt  = 0;
+    int  filament_settings_cnt = 0;
+    int  machine_settings_cnt  = 0;
+
+    for (mz_uint i = 0; i < file_count; ++i) {
+        mz_zip_archive_file_stat stat;
+        if (!mz_zip_reader_file_stat(&archive, i, &stat))
+            continue;
+
+        const std::string entry_name = stat.m_filename != nullptr ? stat.m_filename : "";
+        BOOST_LOG_TRIVIAL(info) << "GFD 3MF archive entry"
+                                << ", index=" << i
+                                << ", name=" << entry_name
+                                << ", uncompressed_size=" << stat.m_uncomp_size
+                                << ", compressed_size=" << stat.m_comp_size
+                                << ", is_dir=" << stat.m_is_directory;
+
+        if (entry_name == "Metadata/project_settings.config")
+            has_project_settings = true;
+        else if (entry_name == "Metadata/model_settings.config")
+            has_model_settings = true;
+        else if (entry_name == "Metadata/slice_info.config")
+            has_slice_info = true;
+        else if (boost::algorithm::starts_with(entry_name, "Metadata/process_settings_"))
+            ++process_settings_cnt;
+        else if (boost::algorithm::starts_with(entry_name, "Metadata/filament_settings_"))
+            ++filament_settings_cnt;
+        else if (boost::algorithm::starts_with(entry_name, "Metadata/machine_settings_"))
+            ++machine_settings_cnt;
+    }
+
+    close_zip_reader(&archive);
+
+    BOOST_LOG_TRIVIAL(info) << "GFD 3MF archive summary"
+                            << ", config_3mf_path=" << config_3mf_path
+                            << ", has_project_settings=" << has_project_settings
+                            << ", has_model_settings=" << has_model_settings
+                            << ", has_slice_info=" << has_slice_info
+                            << ", process_settings_count=" << process_settings_cnt
+                            << ", filament_settings_count=" << filament_settings_cnt
+                            << ", machine_settings_count=" << machine_settings_cnt;
+}
+
+bool Plater::priv::gfd_save_config_to_server(const std::string& config_name,
+                                             const std::string& remarks,
+                                             const std::string& file_url,
+                                             const std::string& project_settings_text,
+                                             std::string&       body,
+                                             std::string&       error_message) const
+{
+    const std::string token = gfd_auth_token();
+    if (token.empty()) {
+        error_message = "登录状态无效，请重新登录";
+        BOOST_LOG_TRIVIAL(warning) << "GFD save config skipped: auth token is empty";
+        return false;
+    }
+
+    const DynamicPrintConfig& printer_config = wxGetApp().preset_bundle->printers.get_selected_preset().config;
+    const std::string         device_type    = GFD::Config::current_device_type(printer_config);
+    if (device_type.empty()) {
+        error_message = "无法识别当前机型对应的设备类型";
+        BOOST_LOG_TRIVIAL(error) << "GFD save config skipped: device type unresolved";
+        return false;
+    }
+
+    nlohmann::json request_json;
+    request_json["name"]               = config_name;
+    request_json["configFileUrl"]      = file_url;
+    request_json["configFileName"]     = fs::path(file_url).filename().string();
+    request_json["deviceType"]         = device_type;
+    request_json["info"]               = remarks;
+    request_json["sliceType"]          = "orca";
+    request_json["defaultProcessConf"] = project_settings_text;
+
+    const std::string request_body = request_json.dump();
+    const std::string request_url  = GFD::Config::config_add_url(wxGetApp().app_config);
+    bool              ok           = false;
+
+    BOOST_LOG_TRIVIAL(info) << "GFD save config request"
+                            << ", url=" << request_url
+                            << ", config_name=" << config_name
+                            << ", device_type=" << device_type
+                            << ", file_url=" << file_url
+                            << ", text_length=" << project_settings_text.size()
+                            << ", body=" << request_body;
+
+    Http::post(request_url)
+        .header("Authorization", token)
+        .header("Biz", "ZXBMan")
+        .header("Content-Type", "application/json")
+        .set_post_body(request_body)
+        .on_complete([&](std::string response_body, unsigned status) {
+            body = std::move(response_body);
+            ok   = true;
+            BOOST_LOG_TRIVIAL(info) << "GFD save config response"
+                                    << ", http_status=" << status
+                                    << ", body=" << body;
+        })
+        .on_error([&](std::string response_body, std::string error, unsigned status) {
+            body          = std::move(response_body);
+            error_message = error.empty() ? body : error;
+            ok            = false;
+            BOOST_LOG_TRIVIAL(error) << "GFD save config request failed"
+                                     << ", http_status=" << status
+                                     << ", error=" << error_message
+                                     << ", body=" << body;
+        })
+        .perform_sync();
+
+    return ok;
+}
+
+bool Plater::priv::gfd_upload_current_config(const std::string& config_name, const std::string& remarks)
+{
+    BOOST_LOG_TRIVIAL(info) << "GFD upload config begin"
+                            << ", config_name=" << config_name
+                            << ", remarks=" << remarks;
+
+    if (!ensure_gfd_login()) {
+        show_error(q, _L("登录状态无效，请重新登录。"));
+        return false;
+    }
+
+    if (config_name.empty()) {
+        show_error(q, _L("请输入配置名称。"));
+        return false;
+    }
+
+    const fs::path config_3mf_path = gfd_temp_config_3mf_path();
+    if (config_3mf_path.empty()) {
+        show_error(q, _L("生成配置 3MF 路径失败。"));
+        return false;
+    }
+
+    const int export_result = q->export_config_3mf(PLATE_CURRENT_IDX, nullptr);
+    if (export_result != 0 || !fs::exists(config_3mf_path)) {
+        BOOST_LOG_TRIVIAL(error) << "GFD upload config failed: export_config_3mf failed"
+                                 << ", result=" << export_result
+                                 << ", config_3mf_path=" << config_3mf_path.string();
+        show_error(q, _L("导出配置 3MF 失败。"));
+        return false;
+    }
+
+    uintmax_t config_3mf_size = 0;
+    try {
+        config_3mf_size = fs::file_size(config_3mf_path);
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD upload config could not read 3MF file size"
+                                   << ", config_3mf_path=" << config_3mf_path.string()
+                                   << ", error=" << ex.what();
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD upload config exported temporary 3MF"
+                            << ", config_3mf_path=" << config_3mf_path.string()
+                            << ", file_size=" << config_3mf_size
+                            << ", exists=" << fs::exists(config_3mf_path);
+    gfd_log_3mf_archive_contents(config_3mf_path.string());
+
+    std::string project_settings_text;
+    std::string error_message;
+    if (!gfd_extract_project_settings_from_3mf(config_3mf_path.string(), project_settings_text, error_message)) {
+        show_error(q, from_u8(error_message));
+        return false;
+    }
+
+    std::string obs_body;
+    if (!gfd_request_obs_token(obs_body, error_message)) {
+        show_error(q, from_u8(error_message.empty() ? "获取 OBS 上传令牌失败" : error_message));
+        return false;
+    }
+
+    nlohmann::json obs_response;
+    try {
+        obs_response = nlohmann::json::parse(obs_body);
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(error) << "GFD upload config failed: parse OBS response failed"
+                                 << ", error=" << ex.what()
+                                 << ", body=" << obs_body;
+        show_error(q, from_u8(std::string("OBS 响应格式无效: ") + ex.what()));
+        return false;
+    }
+
+    if (obs_response.value("msg", std::string()) != "success" || !obs_response.contains("data") || !obs_response["data"].is_object()) {
+        BOOST_LOG_TRIVIAL(error) << "GFD upload config failed: OBS token business failure"
+                                 << ", body=" << obs_body;
+        show_error(q, from_u8(obs_response.value("msg", std::string("获取 OBS 上传令牌失败"))));
+        return false;
+    }
+
+    const auto& obs_data = obs_response["data"];
+    BOOST_LOG_TRIVIAL(info) << "GFD upload config OBS token parsed"
+                            << ", host=" << obs_data.value("host", std::string())
+                            << ", key=" << obs_data.value("key", std::string())
+                            << ", cdn=" << obs_data.value("cdn", std::string())
+                            << ", has_policy=" << obs_data.contains("policy")
+                            << ", has_signature=" << obs_data.contains("signature")
+                            << ", has_accessid=" << obs_data.contains("accessid");
+
+    std::string file_url;
+    if (!gfd_upload_file_with_token(config_3mf_path.string(), obs_data, file_url, error_message)) {
+        show_error(q, from_u8(error_message.empty() ? "配置 3MF 上传失败" : error_message));
+        return false;
+    }
+
+    std::string save_body;
+    if (!gfd_save_config_to_server(config_name, remarks, file_url, project_settings_text, save_body, error_message)) {
+        show_error(q, from_u8(error_message.empty() ? "保存配置失败" : error_message));
+        return false;
+    }
+
+    try {
+        const nlohmann::json response = nlohmann::json::parse(save_body);
+        const bool success = response.value("msg", std::string()) == "success" || response.value("code", -1) == 0;
+        if (!success) {
+            const std::string msg = response.value("msg", std::string("保存配置失败"));
+            BOOST_LOG_TRIVIAL(error) << "GFD save config business failure"
+                                     << ", response=" << save_body;
+            show_error(q, from_u8(msg));
+            return false;
+        }
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(error) << "GFD save config response parse failed"
+                                 << ", error=" << ex.what()
+                                 << ", body=" << save_body;
+        show_error(q, from_u8(std::string("保存配置响应格式无效: ") + ex.what()));
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD upload config finished"
+                            << ", config_name=" << config_name
+                            << ", file_url=" << file_url
+                            << ", config_3mf_path=" << config_3mf_path.string();
+    GUI::show_info(q, _L("上传配置成功。"), _L("提示"));
+    return true;
+}
+
+bool Plater::priv::gfd_fetch_cloud_configs(const std::string& device_type,
+                                           std::vector<GFDCloudConfigInfo>& configs,
+                                           std::string& error_message) const
+{
+    configs.clear();
+    const std::string token = gfd_auth_token();
+    if (token.empty()) {
+        error_message = "登录状态无效，请重新登录";
+        BOOST_LOG_TRIVIAL(warning) << "GFD fetch cloud configs skipped: auth token is empty";
+        return false;
+    }
+
+    const std::string requested_device_type = boost::algorithm::trim_copy(device_type);
+    if (requested_device_type.empty()) {
+        error_message = "请选择机型";
+        return false;
+    }
+
+    const std::string request_url = GFD::Config::device_slice_type_url(wxGetApp().app_config);
+    std::string       body;
+    bool              ok = false;
+
+    BOOST_LOG_TRIVIAL(info) << "GFD fetch cloud configs request"
+                            << ", url=" << request_url
+                            << ", device_type=" << requested_device_type;
+
+    Http::get(request_url)
+        .header("Authorization", token)
+        .header("Biz", "ZXBMan")
+        .on_complete([&](std::string response_body, unsigned status) {
+            body = std::move(response_body);
+            ok   = true;
+            BOOST_LOG_TRIVIAL(info) << "GFD fetch cloud configs response"
+                                    << ", http_status=" << status
+                                    << ", body=" << body;
+        })
+        .on_error([&](std::string response_body, std::string error, unsigned status) {
+            body          = std::move(response_body);
+            error_message = error.empty() ? body : error;
+            ok            = false;
+            BOOST_LOG_TRIVIAL(error) << "GFD fetch cloud configs request failed"
+                                     << ", http_status=" << status
+                                     << ", error=" << error_message
+                                     << ", body=" << body;
+        })
+        .perform_sync();
+
+    if (!ok)
+        return false;
+
+    auto json_string = [](const nlohmann::json& object, const char* key) -> std::string {
+        if (!object.is_object())
+            return {};
+        const auto it = object.find(key);
+        if (it == object.end() || it->is_null())
+            return {};
+        if (it->is_string())
+            return it->get<std::string>();
+        if (it->is_number_integer())
+            return std::to_string(it->get<long long>());
+        if (it->is_number_unsigned())
+            return std::to_string(it->get<unsigned long long>());
+        if (it->is_number_float())
+            return std::to_string(it->get<double>());
+        if (it->is_boolean())
+            return it->get<bool>() ? "1" : "0";
+        return it->dump();
+    };
+
+    auto json_int = [](const nlohmann::json& object, const char* key, int default_value) -> int {
+        if (!object.is_object())
+            return default_value;
+        const auto it = object.find(key);
+        if (it == object.end() || it->is_null())
+            return default_value;
+        if (it->is_number_integer())
+            return it->get<int>();
+        if (it->is_number_unsigned())
+            return static_cast<int>(it->get<unsigned int>());
+        if (it->is_boolean())
+            return it->get<bool>() ? 1 : 0;
+        if (it->is_string()) {
+            try {
+                return std::stoi(it->get<std::string>());
+            } catch (...) {
+                return default_value;
+            }
+        }
+        return default_value;
+    };
+
+    auto json_bool = [&json_int](const nlohmann::json& object, const char* key) -> bool {
+        if (!object.is_object())
+            return false;
+        const auto it = object.find(key);
+        if (it == object.end() || it->is_null())
+            return false;
+        if (it->is_boolean())
+            return it->get<bool>();
+        if (it->is_string()) {
+            std::string value = boost::algorithm::to_lower_copy(boost::algorithm::trim_copy(it->get<std::string>()));
+            return value == "1" || value == "true" || value == "yes";
+        }
+        return json_int(object, key, 0) != 0;
+    };
+
+    nlohmann::json response;
+    try {
+        response = nlohmann::json::parse(body);
+    } catch (const std::exception& ex) {
+        error_message = std::string("配置列表响应格式无效: ") + ex.what();
+        BOOST_LOG_TRIVIAL(error) << "GFD fetch cloud configs parse failed"
+                                 << ", error=" << ex.what()
+                                 << ", body=" << body;
+        return false;
+    }
+
+    const std::string response_msg  = json_string(response, "msg");
+    const int         response_code = json_int(response, "code", -1);
+    const bool        success       = response_msg == "success" || response_code == 0;
+    if (!success) {
+        error_message = response_msg.empty() ? "获取云端配置失败" : response_msg;
+        BOOST_LOG_TRIVIAL(error) << "GFD fetch cloud configs business failure"
+                                 << ", code=" << response_code
+                                 << ", msg=" << response_msg
+                                 << ", response=" << body;
+        return false;
+    }
+
+    if (!response.contains("data") || !response["data"].is_array()) {
+        error_message = "配置列表响应缺少 data";
+        return false;
+    }
+
+    for (const auto& device_item : response["data"]) {
+        if (!device_item.is_object())
+            continue;
+
+        const std::string item_device_type = json_string(device_item, "deviceType");
+        BOOST_LOG_TRIVIAL(info) << "GFD cloud config device item"
+                                << ", device_type=" << item_device_type
+                                << ", matched=" << (requested_device_type.empty() || item_device_type == requested_device_type);
+        if (!requested_device_type.empty() && item_device_type != requested_device_type)
+            continue;
+
+        const auto slice_types_it = device_item.find("sliceTypes");
+        if (slice_types_it == device_item.end() || !slice_types_it->is_array())
+            continue;
+
+        for (const auto& slice_type_item : *slice_types_it) {
+            if (!slice_type_item.is_object())
+                continue;
+            const std::string slice_type = json_string(slice_type_item, "sliceType");
+            if (slice_type != "orca")
+                continue;
+
+            const auto confs_it = slice_type_item.find("sliceConfs");
+            if (confs_it == slice_type_item.end() || !confs_it->is_array())
+                continue;
+
+            for (const auto& conf : *confs_it) {
+                if (!conf.is_object())
+                    continue;
+                GFDCloudConfigInfo info;
+                info.id                   = json_string(conf, "id");
+                info.name                 = json_string(conf, "name");
+                info.device_type          = item_device_type;
+                info.config_file_url      = json_string(conf, "configFileUrl");
+                info.config_file_name     = json_string(conf, "configFileName");
+                info.default_process_conf = json_string(conf, "defaultProcessConf");
+                info.info                 = json_string(conf, "info");
+                info.system_config        = json_bool(conf, "systemConfig");
+                BOOST_LOG_TRIVIAL(info) << "GFD cloud config parsed item"
+                                        << ", id=" << info.id
+                                        << ", name=" << info.name
+                                        << ", device_type=" << info.device_type
+                                        << ", file_url=" << info.config_file_url
+                                        << ", file_name=" << info.config_file_name
+                                        << ", default_process_conf_length=" << info.default_process_conf.size()
+                                        << ", system_config=" << info.system_config;
+                configs.emplace_back(std::move(info));
+            }
+        }
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD fetch cloud configs parsed"
+                            << ", device_type=" << requested_device_type
+                            << ", count=" << configs.size();
+    return true;
+}
+
+bool Plater::priv::gfd_download_file_to_temp(const std::string& url,
+                                             const std::string& filename_hint,
+                                             fs::path& output_path,
+                                             std::string& error_message) const
+{
+    if (url.empty()) {
+        error_message = "配置文件 URL 为空";
+        return false;
+    }
+
+    std::string filename = filename_hint.empty() ? Http::get_filename_from_url(url) : filename_hint;
+    if (filename.empty())
+        filename = "gfd_cloud_config.3mf";
+    output_path = fs::temp_directory_path() / fs::path(Slic3r::fold_utf8_to_ascii(filename));
+    if (output_path.extension().empty())
+        output_path.replace_extension(".3mf");
+
+    const std::string tmp_path = output_path.string() + ".download";
+    bool              ok       = false;
+
+    BOOST_LOG_TRIVIAL(info) << "GFD download cloud config start"
+                            << ", url=" << url
+                            << ", tmp_path=" << tmp_path
+                            << ", output_path=" << output_path.string();
+
+    Http::get(url)
+        .header("Authorization", gfd_auth_token())
+        .header("Biz", "ZXBMan")
+        .on_complete([&](std::string body, unsigned status) {
+            try {
+                boost::nowide::ofstream ofs(tmp_path, std::ios::binary | std::ios::trunc);
+                ofs.write(body.data(), static_cast<std::streamsize>(body.size()));
+                ofs.close();
+                boost::filesystem::rename(tmp_path, output_path);
+                ok = true;
+                BOOST_LOG_TRIVIAL(info) << "GFD download cloud config finished"
+                                        << ", http_status=" << status
+                                        << ", output_path=" << output_path.string()
+                                        << ", file_size=" << body.size();
+            } catch (const std::exception& ex) {
+                error_message = std::string("保存云端配置文件失败: ") + ex.what();
+                ok            = false;
+                BOOST_LOG_TRIVIAL(error) << "GFD download cloud config save failed"
+                                         << ", error=" << ex.what()
+                                         << ", output_path=" << output_path.string();
+            }
+        })
+        .on_error([&](std::string body, std::string error, unsigned status) {
+            error_message = error.empty() ? body : error;
+            ok            = false;
+            BOOST_LOG_TRIVIAL(error) << "GFD download cloud config failed"
+                                     << ", http_status=" << status
+                                     << ", error=" << error_message
+                                     << ", body_size=" << body.size();
+        })
+        .perform_sync();
+
+    return ok;
+}
+
+bool Plater::priv::gfd_parse_project_settings_text(const std::string& text,
+                                                   DynamicPrintConfig& config,
+                                                   std::string& error_message) const
+{
+    if (text.empty()) {
+        error_message = "配置内容为空";
+        return false;
+    }
+
+    fs::path temp_file = fs::temp_directory_path() / fs::path((boost::format("gfd_cloud_project_%1%.config") % get_current_pid()).str());
+    try {
+        boost::nowide::ofstream ofs(temp_file.string(), std::ios::binary | std::ios::trunc);
+        ofs.write(text.data(), static_cast<std::streamsize>(text.size()));
+        ofs.close();
+
+        std::map<std::string, std::string> key_values;
+        std::string                        reason;
+        config.load_from_json(temp_file.string(), ForwardCompatibilitySubstitutionRule::Enable, key_values, reason);
+        Preset::normalize(config);
+    } catch (const std::exception& ex) {
+        error_message = std::string("解析云端配置失败: ") + ex.what();
+        BOOST_LOG_TRIVIAL(error) << "GFD parse project settings text failed"
+                                 << ", temp_file=" << temp_file.string()
+                                 << ", error=" << ex.what();
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD parse project settings text finished"
+                            << ", text_length=" << text.size()
+                            << ", option_count=" << config.keys().size();
+    return true;
+}
+
+std::string Plater::priv::gfd_local_printer_model_for_device_type(const std::string& device_type) const
+{
+    if (device_type.empty() || wxGetApp().preset_bundle == nullptr)
+        return {};
+
+    for (const Preset& preset : wxGetApp().preset_bundle->printers.get_presets()) {
+        const ConfigOptionString* printer_model = preset.config.option<ConfigOptionString>("printer_model");
+        if (printer_model == nullptr || printer_model->value.empty())
+            continue;
+        const std::string preset_device_type = GFD::Config::current_device_type(preset.config);
+        if (preset_device_type == device_type) {
+            BOOST_LOG_TRIVIAL(info) << "GFD matched local printer model for cloud device type"
+                                    << ", device_type=" << device_type
+                                    << ", preset=" << preset.name
+                                    << ", printer_model=" << printer_model->value;
+            return printer_model->value;
+        }
+    }
+
+    BOOST_LOG_TRIVIAL(warning) << "GFD can not match local printer model for cloud device type"
+                               << ", device_type=" << device_type;
+    return {};
+}
+
+void Plater::priv::gfd_prepare_imported_config_for_device_type(DynamicPrintConfig& config,
+                                                               const std::string& device_type) const
+{
+    if (device_type.empty())
+        return;
+
+    auto string_value = [](const DynamicPrintConfig& cfg, const char* key) -> std::string {
+        const ConfigOptionString* opt = cfg.option<ConfigOptionString>(key);
+        return opt != nullptr ? opt->value : std::string();
+    };
+
+    const std::string before_printer_model       = string_value(config, "printer_model");
+    const std::string before_printer_settings_id = string_value(config, "printer_settings_id");
+    const std::string before_gfd_device_type     = string_value(config, "gfd_device_type");
+    const std::string local_printer_model        = gfd_local_printer_model_for_device_type(device_type);
+
+    if (!local_printer_model.empty())
+        config.option<ConfigOptionString>("printer_model", true)->value = local_printer_model;
+    config.option<ConfigOptionString>("gfd_device_type", true)->value = device_type;
+
+    BOOST_LOG_TRIVIAL(info) << "GFD prepared imported cloud config for device type"
+                            << ", cloud_device_type=" << device_type
+                            << ", before_printer_model=" << before_printer_model
+                            << ", before_printer_settings_id=" << before_printer_settings_id
+                            << ", before_gfd_device_type=" << before_gfd_device_type
+                            << ", after_printer_model=" << string_value(config, "printer_model")
+                            << ", after_gfd_device_type=" << string_value(config, "gfd_device_type");
+}
+
+bool Plater::priv::gfd_apply_project_config_text(const std::string& text,
+                                                 const std::string& source_name,
+                                                 std::string& error_message,
+                                                 const std::string& device_type)
+{
+    DynamicPrintConfig config;
+    if (!gfd_parse_project_settings_text(text, config, error_message))
+        return false;
+    gfd_prepare_imported_config_for_device_type(config, device_type);
+
+    std::map<std::string, std::string> validity = config.validate();
+    if (!validity.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD cloud config has invalid values"
+                                   << ", source=" << source_name
+                                   << ", count=" << validity.size();
+        for (const auto& item : validity)
+            BOOST_LOG_TRIVIAL(warning) << "GFD cloud config invalid value"
+                                       << ", key=" << item.first
+                                       << ", reason=" << item.second;
+    }
+
+    if (wxGetApp().preset_bundle == nullptr) {
+        error_message = "PresetBundle 未初始化";
+        return false;
+    }
+
+    DynamicPrintConfig imported_config_snapshot = config;
+    wxGetApp().preset_bundle->load_config_model(source_name.empty() ? "cloud_config" : source_name, std::move(config));
+    gfd_refresh_after_cloud_config_import(imported_config_snapshot, source_name, device_type);
+
+    BOOST_LOG_TRIVIAL(info) << "GFD cloud config applied"
+                            << ", source=" << source_name
+                            << ", filament_count=" << wxGetApp().preset_bundle->filament_presets.size();
+    return true;
+}
+
+void Plater::priv::gfd_refresh_after_cloud_config_import(const DynamicPrintConfig& imported_config,
+                                                         const std::string& source_name,
+                                                         const std::string& device_type)
+{
+    if (wxGetApp().preset_bundle == nullptr)
+        return;
+
+    auto config_string = [](const DynamicPrintConfig& config, const char* key) -> std::string {
+        const ConfigOptionString* opt = config.option<ConfigOptionString>(key);
+        return opt != nullptr ? opt->value : std::string();
+    };
+
+    PresetBundle& preset_bundle = *wxGetApp().preset_bundle;
+    const std::string imported_printer_settings_id = config_string(imported_config, "printer_settings_id");
+    const std::string imported_printer_model       = config_string(imported_config, "printer_model");
+    const std::string imported_gfd_device_type     = config_string(imported_config, "gfd_device_type");
+
+    BOOST_LOG_TRIVIAL(info) << "GFD refresh after cloud config import begin"
+                            << ", source=" << source_name
+                            << ", cloud_device_type=" << device_type
+                            << ", imported_printer_settings_id=" << imported_printer_settings_id
+                            << ", imported_printer_model=" << imported_printer_model
+                            << ", imported_gfd_device_type=" << imported_gfd_device_type;
+
+    if (!device_type.empty()) {
+        std::string matched_preset_name;
+        for (const Preset& preset : preset_bundle.printers.get_presets()) {
+            if (GFD::Config::current_device_type(preset.config) == device_type) {
+                matched_preset_name = preset.name;
+                break;
+            }
+        }
+        if (!matched_preset_name.empty()) {
+            const bool selected = preset_bundle.printers.select_preset_by_name(matched_preset_name, true);
+            BOOST_LOG_TRIVIAL(info) << "GFD cloud config select local printer by cloud device type"
+                                    << ", device_type=" << device_type
+                                    << ", preset=" << matched_preset_name
+                                    << ", selected=" << selected;
+        }
+    } else if (!imported_printer_settings_id.empty()) {
+        const bool selected = preset_bundle.printers.select_preset_by_name(imported_printer_settings_id, true);
+        BOOST_LOG_TRIVIAL(info) << "GFD cloud config select imported printer preset"
+                                << ", printer_settings_id=" << imported_printer_settings_id
+                                << ", selected=" << selected;
+    } else if (!imported_printer_model.empty()) {
+        const Preset* matched_printer = nullptr;
+        for (const Preset& preset : preset_bundle.printers) {
+            const ConfigOptionString* printer_model = preset.config.option<ConfigOptionString>("printer_model");
+            if (printer_model != nullptr && printer_model->value == imported_printer_model) {
+                matched_printer = &preset;
+                break;
+            }
+        }
+        if (matched_printer != nullptr) {
+            const bool selected = preset_bundle.printers.select_preset_by_name(matched_printer->name, true);
+            BOOST_LOG_TRIVIAL(info) << "GFD cloud config select imported printer by model"
+                                    << ", printer_model=" << imported_printer_model
+                                    << ", preset=" << matched_printer->name
+                                    << ", selected=" << selected;
+        }
+    }
+
+    wxGetApp().load_current_presets(false, false);
+    if (q != nullptr)
+        q->on_filaments_change(preset_bundle.filament_presets.size());
+    if (sidebar != nullptr)
+        sidebar->update_all_preset_comboboxes();
+    update_ui_from_settings();
+    if (q != nullptr)
+        q->set_bed_shape();
+
+    if (wxGetApp().mainframe != nullptr) {
+        wxGetApp().mainframe->update_side_preset_ui();
+        wxGetApp().mainframe->update_gfd_config_buttons();
+        wxGetApp().mainframe->update_gfd_print_button();
+    }
+
+    const Preset& selected_printer = preset_bundle.printers.get_selected_preset();
+    const Preset& edited_printer   = preset_bundle.printers.get_edited_preset();
+    BOOST_LOG_TRIVIAL(info) << "GFD refresh after cloud config import finished"
+                            << ", selected_printer=" << selected_printer.name
+                            << ", selected_printer_model=" << config_string(selected_printer.config, "printer_model")
+                            << ", selected_gfd_device_type="
+                            << GFD::Config::current_device_type(selected_printer.config)
+                            << ", edited_printer=" << edited_printer.name
+                            << ", edited_printer_model=" << config_string(edited_printer.config, "printer_model")
+                            << ", edited_gfd_device_type="
+                            << GFD::Config::current_device_type(edited_printer.config);
+}
+
+bool Plater::priv::gfd_apply_config_3mf(const std::string& path,
+                                        const std::string& source_name,
+                                        std::string& error_message,
+                                        const std::string& device_type)
+{
+    if (path.empty() || !fs::exists(path)) {
+        error_message = "云端配置 3MF 文件不存在";
+        return false;
+    }
+
+    DynamicPrintConfig          config_loaded;
+    ConfigSubstitutionContext   config_substitutions{ForwardCompatibilitySubstitutionRule::Enable};
+    En3mfType                   file_type = En3mfType::From_BBS;
+    Semver                      file_version;
+    PlateDataPtrs               plate_data;
+    std::vector<Preset*>        project_presets;
+
+    try {
+        Model::read_from_archive(path, &config_loaded, &config_substitutions, file_type,
+                                 LoadStrategy::LoadConfig | LoadStrategy::CheckVersion,
+                                 &plate_data, &project_presets, &file_version, nullptr);
+    } catch (const std::exception& ex) {
+        for (Preset* preset : project_presets)
+            delete preset;
+        project_presets.clear();
+        release_PlateData_list(plate_data);
+        BOOST_LOG_TRIVIAL(error) << "GFD import cloud config 3MF failed"
+                                 << ", path=" << path
+                                 << ", error=" << ex.what();
+        error_message = std::string("读取云端 3MF 配置失败: ") + ex.what();
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD cloud config 3MF loaded"
+                            << ", path=" << path
+                            << ", project_presets=" << project_presets.size()
+                            << ", config_options=" << config_loaded.keys().size()
+                            << ", file_version=" << file_version.to_string();
+
+    if (!project_presets.empty() && wxGetApp().preset_bundle != nullptr) {
+        PresetsConfigSubstitutions preset_substitutions =
+            wxGetApp().preset_bundle->load_project_embedded_presets(project_presets, ForwardCompatibilitySubstitutionRule::Enable);
+        if (!preset_substitutions.empty())
+            show_substitutions_info(preset_substitutions);
+    }
+
+    for (Preset* preset : project_presets)
+        delete preset;
+    project_presets.clear();
+    release_PlateData_list(plate_data);
+
+    if (config_loaded.empty()) {
+        std::string project_settings_text;
+        if (!gfd_extract_project_settings_from_3mf(path, project_settings_text, error_message))
+            return false;
+        return gfd_apply_project_config_text(project_settings_text, source_name, error_message, device_type);
+    }
+
+    Preset::normalize(config_loaded);
+    gfd_prepare_imported_config_for_device_type(config_loaded, device_type);
+    if (wxGetApp().preset_bundle == nullptr) {
+        error_message = "PresetBundle 未初始化";
+        return false;
+    }
+
+    DynamicPrintConfig imported_config_snapshot = config_loaded;
+    wxGetApp().preset_bundle->load_config_model(source_name.empty() ? path : source_name, std::move(config_loaded), file_version);
+    gfd_refresh_after_cloud_config_import(imported_config_snapshot, source_name, device_type);
+
+    BOOST_LOG_TRIVIAL(info) << "GFD cloud config 3MF applied"
+                            << ", path=" << path
+                            << ", source=" << source_name;
+    return true;
+}
+
+bool Plater::priv::gfd_import_cloud_config(const GFDCloudConfigInfo& config)
+{
+    BOOST_LOG_TRIVIAL(info) << "GFD import cloud config begin"
+                            << ", id=" << config.id
+                            << ", name=" << config.name
+                            << ", device_type=" << config.device_type
+                            << ", file_url=" << config.config_file_url
+                            << ", file_name=" << config.config_file_name
+                            << ", default_process_conf_length=" << config.default_process_conf.size();
+
+    if (!ensure_gfd_login()) {
+        show_error(q, _L("登录状态无效，请重新登录。"));
+        return false;
+    }
+
+    std::string error_message;
+    bool        applied = false;
+    if (!config.config_file_url.empty()) {
+        fs::path downloaded_path;
+        if (!gfd_download_file_to_temp(config.config_file_url, config.config_file_name, downloaded_path, error_message)) {
+            show_error(q, from_u8(error_message.empty() ? "下载云端配置失败" : error_message));
+            return false;
+        }
+        if (boost::algorithm::iends_with(downloaded_path.string(), ".3mf")) {
+            applied = gfd_apply_config_3mf(downloaded_path.string(), config.name, error_message, config.device_type);
+        } else {
+            std::string text;
+            try {
+                load_string_file(downloaded_path, text);
+            } catch (const std::exception& ex) {
+                error_message = std::string("读取云端配置文件失败: ") + ex.what();
+            }
+            if (!text.empty())
+                applied = gfd_apply_project_config_text(text, config.name, error_message, config.device_type);
+        }
+    } else if (!config.default_process_conf.empty()) {
+        applied = gfd_apply_project_config_text(config.default_process_conf, config.name, error_message, config.device_type);
+    } else {
+        error_message = "云端配置没有配置文件，也没有参数文本";
+    }
+
+    if (!applied) {
+        BOOST_LOG_TRIVIAL(error) << "GFD import cloud config failed"
+                                 << ", id=" << config.id
+                                 << ", name=" << config.name
+                                 << ", error=" << error_message;
+        show_error(q, from_u8(error_message.empty() ? "导入云端配置失败" : error_message));
+        return false;
+    }
+
+    gfd_record_imported_cloud_config(config);
+    if (wxGetApp().mainframe != nullptr)
+        wxGetApp().mainframe->update_gfd_config_buttons();
+
+    GUI::show_info(q, _L("云端配置已导入并应用。"), _L("提示"));
+    return true;
+}
+
+void Plater::priv::gfd_record_imported_cloud_config(const GFDCloudConfigInfo& config)
+{
+    if (wxGetApp().preset_bundle == nullptr)
+        return;
+
+    GFDCloudImportState state;
+    state.cloud_config_id  = config.id;
+    state.cloud_config_name = config.name;
+    state.printer_preset    = wxGetApp().preset_bundle->printers.get_selected_preset_name();
+    state.print_preset      = wxGetApp().preset_bundle->prints.get_selected_preset_name();
+    state.filament_presets  = wxGetApp().preset_bundle->filament_presets;
+
+    const auto duplicate = std::find_if(gfd_imported_cloud_configs.begin(), gfd_imported_cloud_configs.end(), [&state](const GFDCloudImportState& existing) {
+        return existing.printer_preset == state.printer_preset &&
+               existing.print_preset == state.print_preset &&
+               existing.filament_presets == state.filament_presets;
+    });
+    if (duplicate != gfd_imported_cloud_configs.end())
+        *duplicate = state;
+    else
+        gfd_imported_cloud_configs.emplace_back(std::move(state));
+
+    BOOST_LOG_TRIVIAL(info) << "GFD recorded imported cloud config state"
+                            << ", cloud_config_id=" << config.id
+                            << ", cloud_config_name=" << config.name
+                            << ", printer_preset=" << wxGetApp().preset_bundle->printers.get_selected_preset_name()
+                            << ", print_preset=" << wxGetApp().preset_bundle->prints.get_selected_preset_name()
+                            << ", filament_count=" << wxGetApp().preset_bundle->filament_presets.size();
+}
+
+bool Plater::priv::gfd_has_active_imported_cloud_config() const
+{
+    if (wxGetApp().preset_bundle == nullptr)
+        return false;
+
+    const std::string current_printer_preset = wxGetApp().preset_bundle->printers.get_selected_preset_name();
+    const std::string current_print_preset   = wxGetApp().preset_bundle->prints.get_selected_preset_name();
+    const std::vector<std::string>& current_filament_presets = wxGetApp().preset_bundle->filament_presets;
+
+    const auto matched = std::find_if(gfd_imported_cloud_configs.begin(), gfd_imported_cloud_configs.end(), [&](const GFDCloudImportState& state) {
+        return state.printer_preset == current_printer_preset &&
+               state.print_preset == current_print_preset &&
+               state.filament_presets == current_filament_presets;
+    });
+
+    const bool has_active = matched != gfd_imported_cloud_configs.end();
+    BOOST_LOG_TRIVIAL(info) << "GFD active imported cloud config state"
+                            << ", has_active=" << has_active
+                            << ", printer_preset=" << current_printer_preset
+                            << ", print_preset=" << current_print_preset
+                            << ", filament_count=" << current_filament_presets.size()
+                            << ", recorded_count=" << gfd_imported_cloud_configs.size();
+    return has_active;
+}
+
 fs::path Plater::priv::gfd_temp_gcode_path()
 {
     fs::path default_output_file = background_process.output_filepath_for_project("");
@@ -7485,7 +8613,7 @@ bool Plater::priv::gfd_request_obs_token(std::string& body, std::string& error_m
         return false;
     }
 
-    const std::string url = GFD::Config::obs_token_url(wxGetApp().app_config) + "?ruleCode=print3dPermanently&suffix=gcode";
+    const std::string url = GFD::Config::obs_token_url(wxGetApp().app_config) + "?ruleCode=print3dPermanently&suffix=3mf";
     bool              ok  = false;
     BOOST_LOG_TRIVIAL(info) << "GFD request OBS token"
                             << ", url=" << url
@@ -11864,7 +12992,22 @@ bool                  Plater::is_sidebar_enabled() const { return p->sidebar_lay
 void                  Plater::enable_sidebar(bool enabled) { p->enable_sidebar(enabled); }
 bool                  Plater::is_sidebar_collapsed() const { return p->sidebar_layout.is_collapsed; }
 void                  Plater::collapse_sidebar(bool collapse) { p->collapse_sidebar(collapse); }
+bool                  Plater::is_sidebar_visible() { return p != nullptr && p->is_sidebar_visible(); }
 Sidebar::DockingState Plater::get_sidebar_docking_state() const { return p->get_sidebar_docking_state(); }
+wxPanel*              Plater::gfd_config_panel() { return p != nullptr ? p->gfd_config_panel : nullptr; }
+Button*               Plater::gfd_cloud_import_button() { return p != nullptr ? p->gfd_cloud_import_btn : nullptr; }
+Button*               Plater::gfd_upload_config_button() { return p != nullptr ? p->gfd_upload_config_btn : nullptr; }
+Button*               Plater::gfd_save_config_button() { return p != nullptr ? p->gfd_save_config_btn : nullptr; }
+void                  Plater::update_gfd_config_panel_position()
+{
+    if (p == nullptr)
+        return;
+    p->update_gfd_config_panel_position();
+}
+bool Plater::has_active_imported_cloud_config() const
+{
+    return p != nullptr && p->gfd_has_active_imported_cloud_config();
+}
 
 void Plater::reset_window_layout() { p->reset_window_layout(); }
 
@@ -12698,6 +13841,71 @@ bool set_by_local_path(SvgFile& svg, const SvgFiles& svgs)
     return false;
 }
 
+Preset* build_project_export_preset(const Preset& source_preset)
+{
+    Preset* cloned = new Preset(source_preset);
+
+    cloned->is_project_embedded = true;
+    cloned->is_external         = true;
+    cloned->is_dirty            = false;
+    cloned->loaded              = true;
+    cloned->is_visible          = true;
+    cloned->is_compatible       = true;
+    return cloned;
+}
+
+void append_project_export_preset(std::vector<Preset*>& presets, Preset* preset)
+{
+    if (preset == nullptr)
+        return;
+
+    const auto duplicate = std::find_if(presets.begin(), presets.end(), [preset](const Preset* existing) {
+        return existing != nullptr && existing->type == preset->type && existing->name == preset->name;
+    });
+    if (duplicate != presets.end()) {
+        delete preset;
+        return;
+    }
+
+    presets.push_back(preset);
+}
+
+std::vector<Preset*> collect_current_project_export_presets(PresetBundle& preset_bundle)
+{
+    std::vector<Preset*> project_presets = preset_bundle.get_current_project_embedded_presets();
+
+    append_project_export_preset(project_presets, build_project_export_preset(preset_bundle.prints.get_edited_preset()));
+    append_project_export_preset(project_presets, build_project_export_preset(preset_bundle.printers.get_edited_preset()));
+
+    for (const std::string& filament_preset_name : preset_bundle.filament_presets) {
+        Preset* filament_preset = preset_bundle.filaments.find_preset(filament_preset_name, false);
+        if (filament_preset == nullptr)
+            continue;
+        append_project_export_preset(project_presets, build_project_export_preset(*filament_preset));
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD collect project export presets"
+                            << ", total=" << project_presets.size();
+    for (const Preset* preset : project_presets) {
+        if (preset == nullptr)
+            continue;
+        BOOST_LOG_TRIVIAL(info) << "GFD project export preset"
+                                << ", type=" << Preset::get_type_string(preset->type)
+                                << ", name=" << preset->name
+                                << ", inherits=" << preset->inherits()
+                                << ", is_project_embedded=" << preset->is_project_embedded;
+    }
+
+    return project_presets;
+}
+
+void free_project_export_presets(std::vector<Preset*>& presets)
+{
+    for (Preset* preset : presets)
+        delete preset;
+    presets.clear();
+}
+
 /// <summary>
 /// Function to secure private data before store to 3mf
 /// </summary>
@@ -12883,7 +14091,7 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
 
     // BBS: backup
     PresetBundle&        preset_bundle   = *wxGetApp().preset_bundle;
-    std::vector<Preset*> project_presets = preset_bundle.get_current_project_embedded_presets();
+    std::vector<Preset*> project_presets = collect_current_project_export_presets(preset_bundle);
 
     StoreParams store_params;
     store_params.path                       = path_u8.c_str();
@@ -12970,12 +14178,7 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
         ret = -1;
     }
 
-    if (project_presets.size() > 0) {
-        for (unsigned int i = 0; i < project_presets.size(); i++) {
-            delete project_presets[i];
-        }
-        project_presets.clear();
-    }
+    free_project_export_presets(project_presets);
 
     release_PlateData_list(plate_data_list);
 
@@ -13431,10 +14634,34 @@ int Plater::export_config_3mf(int plate_idx, Export3mfProgressFn proFn)
         return -1;
     }
 
-    SaveStrategy strategy = SaveStrategy::Silence | SaveStrategy::SkipModel | SaveStrategy::WithSliceInfo | SaveStrategy::SkipAuxiliary;
+    SaveStrategy strategy = SaveStrategy::Silence | SaveStrategy::WithSliceInfo;
+    BOOST_LOG_TRIVIAL(info) << "GFD export config 3MF using full project strategy"
+                            << ", plate_idx=" << plate_idx
+                            << ", strategy=" << static_cast<unsigned int>(strategy);
     result                = export_3mf(p->m_print_job_data._3mf_config_path, strategy, plate_idx, proFn);
 
     return result;
+}
+
+bool Plater::upload_current_config_to_cloud(const std::string& config_name, const std::string& remarks)
+{
+    if (p == nullptr)
+        return false;
+    return p->gfd_upload_current_config(config_name, remarks);
+}
+
+bool Plater::fetch_cloud_configs(const std::string& device_type, std::vector<GFDCloudConfigInfo>& configs, std::string& error_message)
+{
+    if (p == nullptr)
+        return false;
+    return p->gfd_fetch_cloud_configs(device_type, configs, error_message);
+}
+
+bool Plater::import_cloud_config(const GFDCloudConfigInfo& config)
+{
+    if (p == nullptr)
+        return false;
+    return p->gfd_import_cloud_config(config);
 }
 
 // BBS
@@ -14914,7 +16141,14 @@ const Mouse3DController& Plater::get_mouse3d_controller() const { return p->mous
 
 Mouse3DController& Plater::get_mouse3d_controller() { return p->mouse3d_controller; }
 
-NotificationManager* Plater::get_notification_manager() { return p->notification_manager.get(); }
+NotificationManager* Plater::get_notification_manager()
+{
+    if (p == nullptr) {
+        BOOST_LOG_TRIVIAL(error) << "Plater::get_notification_manager called with null priv";
+        return nullptr;
+    }
+    return p->notification_manager.get();
+}
 
 DailyTipsWindow* Plater::get_dailytips() const
 {
@@ -14922,7 +16156,14 @@ DailyTipsWindow* Plater::get_dailytips() const
     return dailytips_win;
 }
 
-const NotificationManager* Plater::get_notification_manager() const { return p->notification_manager.get(); }
+const NotificationManager* Plater::get_notification_manager() const
+{
+    if (p == nullptr) {
+        BOOST_LOG_TRIVIAL(error) << "Plater::get_notification_manager const called with null priv";
+        return nullptr;
+    }
+    return p->notification_manager.get();
+}
 
 void Plater::init_notification_manager() { p->init_notification_manager(); }
 

@@ -2,6 +2,7 @@
 #include "../GUI.hpp"
 #include <wx/dcclient.h>
 #include <wx/dcgraph.h>
+#include <wx/graphics.h>
 
 BEGIN_EVENT_TABLE(StaticBox, wxWindow)
 
@@ -49,6 +50,15 @@ bool StaticBox::Create(wxWindow* parent, wxWindowID id, const wxPoint& pos, cons
 void StaticBox::SetCornerRadius(double radius)
 {
     this->radius = radius;
+    Refresh();
+}
+
+void StaticBox::SetRoundedCorners(bool top_left, bool top_right, bool bottom_right, bool bottom_left)
+{
+    round_top_left = top_left;
+    round_top_right = top_right;
+    round_bottom_right = bottom_right;
+    round_bottom_left = bottom_left;
     Refresh();
 }
 
@@ -196,11 +206,53 @@ void StaticBox::doRender(wxDC& dc)
                 dc.SetBrush(wxBrush(background_color.colorForStates(states)));
             else
                 dc.SetBrush(wxBrush(GetBackgroundColour()));
-            if (radius == 0) {
+            if (radius == 0 || (!round_top_left && !round_top_right && !round_bottom_right && !round_bottom_left)) {
                 dc.DrawRectangle(rc);
             }
             else {
-                dc.DrawRoundedRectangle(rc, radius - border_width);
+                const double effective_radius = std::max(0.0, radius - border_width);
+                wxGraphicsContext* gc = nullptr;
+                if (auto* gcdc = dynamic_cast<wxGCDC*>(&dc))
+                    gc = gcdc->GetGraphicsContext();
+
+                if (gc != nullptr) {
+                    wxGraphicsPath path = gc->CreatePath();
+                    const double x = rc.x;
+                    const double y = rc.y;
+                    const double w = rc.width;
+                    const double h = rc.height;
+                    const double r = std::min(effective_radius, std::min(w, h) / 2.0);
+
+                    path.MoveToPoint(x + (round_top_left ? r : 0.0), y);
+                    path.AddLineToPoint(x + w - (round_top_right ? r : 0.0), y);
+                    if (round_top_right)
+                        path.AddArcToPoint(x + w, y, x + w, y + r, r);
+                    else
+                        path.AddLineToPoint(x + w, y);
+
+                    path.AddLineToPoint(x + w, y + h - (round_bottom_right ? r : 0.0));
+                    if (round_bottom_right)
+                        path.AddArcToPoint(x + w, y + h, x + w - r, y + h, r);
+                    else
+                        path.AddLineToPoint(x + w, y + h);
+
+                    path.AddLineToPoint(x + (round_bottom_left ? r : 0.0), y + h);
+                    if (round_bottom_left)
+                        path.AddArcToPoint(x, y + h, x, y + h - r, r);
+                    else
+                        path.AddLineToPoint(x, y + h);
+
+                    path.AddLineToPoint(x, y + (round_top_left ? r : 0.0));
+                    if (round_top_left)
+                        path.AddArcToPoint(x, y, x + r, y, r);
+                    else
+                        path.AddLineToPoint(x, y);
+
+                    path.CloseSubpath();
+                    gc->DrawPath(path);
+                } else {
+                    dc.DrawRoundedRectangle(rc, effective_radius);
+                }
             }
         }
     }

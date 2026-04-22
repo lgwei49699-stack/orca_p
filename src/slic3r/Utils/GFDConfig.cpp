@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <map>
+#include <set>
 
 #include <boost/filesystem.hpp>
 #include <boost/nowide/fstream.hpp>
@@ -159,6 +160,19 @@ std::string resolve_device_type_from_local_config(const std::string& printer_mod
     return it != cached_device_types.end() ? it->second : std::string();
 }
 
+const std::map<std::string, std::string>& cached_local_machine_device_types()
+{
+    static std::string cached_resources_dir;
+    static std::map<std::string, std::string> cached_device_types;
+
+    if (cached_resources_dir != resources_dir() || cached_device_types.empty()) {
+        cached_resources_dir = resources_dir();
+        cached_device_types  = load_local_machine_device_types();
+    }
+
+    return cached_device_types;
+}
+
 std::string resolve_device_type_from_preset(const Preset* preset)
 {
     if (preset == nullptr)
@@ -285,6 +299,17 @@ std::string Config::current_device_type(const DynamicPrintConfig& printer_config
 }
 
 bool Config::is_gfd_printer(const DynamicPrintConfig& printer_config) { return !current_device_type(printer_config).empty(); }
+
+std::vector<std::string> Config::local_gfd_device_types()
+{
+    std::set<std::string> unique_device_types;
+    for (const auto& kv : cached_local_machine_device_types())
+        if (!kv.second.empty())
+            unique_device_types.insert(kv.second);
+
+    std::vector<std::string> device_types(unique_device_types.begin(), unique_device_types.end());
+    return device_types;
+}
 
 bool Config::should_show_print_button(const DynamicPrintConfig& printer_config)
 {
