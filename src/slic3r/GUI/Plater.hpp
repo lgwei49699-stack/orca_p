@@ -386,6 +386,7 @@ public:
     Button*  gfd_save_config_button();
     void     update_gfd_config_panel_position();
     bool     has_active_imported_cloud_config() const;
+    bool     has_dirty_active_imported_cloud_config() const;
 
     void reset_window_layout();
 
@@ -468,6 +469,7 @@ public:
     void send_gcode_legacy(int plate_idx = -1, Export3mfProgressFn proFn = nullptr, bool use_3mf = false);
     int export_config_3mf(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
     bool upload_current_config_to_cloud(const std::string& config_name, const std::string& remarks = std::string());
+    bool save_active_imported_cloud_config();
     bool fetch_cloud_configs(const std::string& device_type, std::vector<GFDCloudConfigInfo>& configs, std::string& error_message);
     bool import_cloud_config(const GFDCloudConfigInfo& config);
     //BBS jump to nonitor after print job finished

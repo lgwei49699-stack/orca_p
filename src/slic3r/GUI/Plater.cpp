@@ -2172,6 +2172,43 @@ private:
 };
 
 namespace {
+
+fs::path gfd_cloud_process_record_path()
+{
+    return (fs::path(Slic3r::data_dir()) / "user" / "gfd_cloud_process_records.json").make_preferred();
+}
+
+std::string gfd_normalize_cloud_process_name(const std::string& print_preset)
+{
+    return Preset::remove_suffix_modified(print_preset);
+}
+
+std::string gfd_cloud_process_config_key(const std::string& print_preset)
+{
+    return Slic3r::escape_string_cstyle(gfd_normalize_cloud_process_name(print_preset));
+}
+
+std::string gfd_current_cloud_process_name(const PresetBundle* bundle)
+{
+    if (bundle == nullptr)
+        return {};
+
+    const std::string selected_preset = gfd_normalize_cloud_process_name(bundle->prints.get_selected_preset_name());
+    if (!selected_preset.empty())
+        return selected_preset;
+
+    const std::string edited_preset = gfd_normalize_cloud_process_name(bundle->prints.get_edited_preset().name);
+    return edited_preset;
+}
+
+std::string gfd_unique_process_preset_name(PresetCollection& prints, const std::string& base_name)
+{
+    std::string candidate = base_name;
+    for (size_t index = 2; prints.find_preset(candidate, false, true) != nullptr; ++index)
+        candidate = (boost::format("%1%_%2%") % base_name % index).str();
+    return candidate;
+}
+
 bool emboss_svg(Plater& plater, const wxString& svg_file, const Vec2d& mouse_drop_position)
 {
     std::string svg_file_str = into_u8(svg_file);
@@ -2257,10 +2294,12 @@ struct Plater::priv
         std::string cloud_config_id;
         std::string cloud_config_name;
         std::string printer_preset;
+        std::string device_type;
         std::string print_preset;
         std::vector<std::string> filament_presets;
     };
     std::vector<GFDCloudImportState> gfd_imported_cloud_configs;
+    std::string                      gfd_last_imported_cloud_process_preset;
     struct SidebarLayout
     {
         bool is_enabled{false};
@@ -2664,9 +2703,12 @@ struct Plater::priv
                                           const std::string& remarks,
                                           const std::string& file_url,
                                           const std::string& project_settings_text,
+                                          const std::string& save_mode,
+                                          const std::string& cloud_config_id,
                                           std::string&       body,
                                           std::string&       error_message) const;
     bool        gfd_upload_current_config(const std::string& config_name, const std::string& remarks);
+    bool        gfd_save_active_imported_cloud_config();
     bool        gfd_fetch_cloud_configs(const std::string& device_type,
                                         std::vector<GFDCloudConfigInfo>& configs,
                                         std::string& error_message) const;
@@ -2684,6 +2726,9 @@ struct Plater::priv
                                               const std::string& source_name,
                                               std::string& error_message,
                                               const std::string& device_type = std::string());
+    void        gfd_apply_cloud_process_name(const DynamicPrintConfig& imported_config,
+                                             const std::string& source_name,
+                                             const std::string& device_type);
     void        gfd_refresh_after_cloud_config_import(const DynamicPrintConfig& imported_config,
                                                       const std::string& source_name,
                                                       const std::string& device_type = std::string());
@@ -2694,6 +2739,10 @@ struct Plater::priv
     bool        gfd_import_cloud_config(const GFDCloudConfigInfo& config);
     void        gfd_record_imported_cloud_config(const GFDCloudConfigInfo& config);
     bool        gfd_has_active_imported_cloud_config() const;
+    bool        gfd_has_dirty_active_imported_cloud_config() const;
+    bool        gfd_get_active_imported_cloud_config(GFDCloudImportState& state) const;
+    nlohmann::json gfd_load_cloud_process_records() const;
+    void           gfd_save_cloud_process_records(const nlohmann::json& records) const;
     bool        gfd_send_print_command(const GFDDeviceInfo& device,
                                        const std::string&  file_url,
                                        std::string&        body,
@@ -3709,7 +3758,6 @@ void Plater::priv::update_gfd_config_panel_position()
 
     gfd_config_panel->SetMinSize(best_size);
     gfd_config_panel->Layout();
-    gfd_config_panel->Refresh();
 }
 
 void Plater::priv::reset_all_gizmos() { view3D->get_canvas3d()->reset_all_gizmos(); }
@@ -6943,8 +6991,13 @@ void Plater::priv::on_select_preset(wxCommandEvent& evt)
     for (auto plate : plate_list) {
         plate->update_slice_result_valid_state(false);
     }
-    if (wxGetApp().mainframe != nullptr)
+    if (wxGetApp().mainframe != nullptr) {
         wxGetApp().mainframe->update_gfd_config_buttons();
+        wxGetApp().mainframe->CallAfter([] {
+            if (wxGetApp().mainframe != nullptr)
+                wxGetApp().mainframe->update_gfd_config_buttons();
+        });
+    }
 }
 
 void Plater::priv::on_slicing_update(SlicingStatusEvent& evt)
@@ -7680,6 +7733,8 @@ bool Plater::priv::gfd_save_config_to_server(const std::string& config_name,
                                              const std::string& remarks,
                                              const std::string& file_url,
                                              const std::string& project_settings_text,
+                                             const std::string& save_mode,
+                                             const std::string& cloud_config_id,
                                              std::string&       body,
                                              std::string&       error_message) const
 {
@@ -7707,12 +7762,31 @@ bool Plater::priv::gfd_save_config_to_server(const std::string& config_name,
     request_json["sliceType"]          = "orca";
     request_json["defaultProcessConf"] = project_settings_text;
 
+    const bool is_update = save_mode == "update" && !cloud_config_id.empty();
+    if (is_update) {
+        std::string normalized_cloud_config_id = boost::algorithm::trim_copy(cloud_config_id);
+        if (!normalized_cloud_config_id.empty() && std::all_of(normalized_cloud_config_id.begin(), normalized_cloud_config_id.end(), [](unsigned char ch) {
+                return std::isdigit(ch) != 0;
+            })) {
+            try {
+                request_json["id"] = std::stoll(normalized_cloud_config_id);
+            } catch (const std::exception&) {
+                request_json["id"] = normalized_cloud_config_id;
+            }
+        } else {
+            request_json["id"] = normalized_cloud_config_id;
+        }
+    }
+
     const std::string request_body = request_json.dump();
-    const std::string request_url  = GFD::Config::config_add_url(wxGetApp().app_config);
+    const std::string request_url  = is_update ? GFD::Config::config_update_url(wxGetApp().app_config)
+                                               : GFD::Config::config_add_url(wxGetApp().app_config);
     bool              ok           = false;
 
     BOOST_LOG_TRIVIAL(info) << "GFD save config request"
                             << ", url=" << request_url
+                            << ", save_mode=" << save_mode
+                            << ", cloud_config_id=" << cloud_config_id
                             << ", config_name=" << config_name
                             << ", device_type=" << device_type
                             << ", file_url=" << file_url
@@ -7838,7 +7912,7 @@ bool Plater::priv::gfd_upload_current_config(const std::string& config_name, con
     }
 
     std::string save_body;
-    if (!gfd_save_config_to_server(config_name, remarks, file_url, project_settings_text, save_body, error_message)) {
+    if (!gfd_save_config_to_server(config_name, remarks, file_url, project_settings_text, "add", std::string(), save_body, error_message)) {
         show_error(q, from_u8(error_message.empty() ? "保存配置失败" : error_message));
         return false;
     }
@@ -7866,6 +7940,136 @@ bool Plater::priv::gfd_upload_current_config(const std::string& config_name, con
                             << ", file_url=" << file_url
                             << ", config_3mf_path=" << config_3mf_path.string();
     GUI::show_info(q, _L("上传配置成功。"), _L("提示"));
+    return true;
+}
+
+bool Plater::priv::gfd_save_active_imported_cloud_config()
+{
+    BOOST_LOG_TRIVIAL(info) << "GFD save active imported cloud config begin";
+
+    if (!ensure_gfd_login()) {
+        show_error(q, _L("登录状态无效，请重新登录。"));
+        return false;
+    }
+
+    GFDCloudImportState active_state;
+    if (!gfd_get_active_imported_cloud_config(active_state) || active_state.cloud_config_id.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "GFD save active imported cloud config skipped: no active imported cloud config";
+        show_error(q, _L("当前没有可保存的云端导入配置。"));
+        return false;
+    }
+
+    const std::string config_name = !active_state.cloud_config_name.empty() ? active_state.cloud_config_name : _u8L("云端配置");
+    const std::string remarks;
+
+    const fs::path config_3mf_path = gfd_temp_config_3mf_path();
+    if (config_3mf_path.empty()) {
+        show_error(q, _L("生成配置 3MF 路径失败。"));
+        return false;
+    }
+
+    const int export_result = q->export_config_3mf(PLATE_CURRENT_IDX, nullptr);
+    if (export_result != 0 || !fs::exists(config_3mf_path)) {
+        BOOST_LOG_TRIVIAL(error) << "GFD save active imported cloud config failed: export_config_3mf failed"
+                                 << ", result=" << export_result
+                                 << ", config_3mf_path=" << config_3mf_path.string();
+        show_error(q, _L("导出配置 3MF 失败。"));
+        return false;
+    }
+
+    uintmax_t config_3mf_size = 0;
+    try {
+        config_3mf_size = fs::file_size(config_3mf_path);
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD save active imported cloud config could not read 3MF file size"
+                                   << ", config_3mf_path=" << config_3mf_path.string()
+                                   << ", error=" << ex.what();
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD save active imported cloud config exported temporary 3MF"
+                            << ", cloud_config_id=" << active_state.cloud_config_id
+                            << ", cloud_config_name=" << active_state.cloud_config_name
+                            << ", config_3mf_path=" << config_3mf_path.string()
+                            << ", file_size=" << config_3mf_size
+                            << ", exists=" << fs::exists(config_3mf_path);
+    gfd_log_3mf_archive_contents(config_3mf_path.string());
+
+    std::string project_settings_text;
+    std::string error_message;
+    if (!gfd_extract_project_settings_from_3mf(config_3mf_path.string(), project_settings_text, error_message)) {
+        show_error(q, from_u8(error_message));
+        return false;
+    }
+
+    std::string obs_body;
+    if (!gfd_request_obs_token(obs_body, error_message)) {
+        show_error(q, from_u8(error_message.empty() ? "获取 OBS 上传令牌失败" : error_message));
+        return false;
+    }
+
+    nlohmann::json obs_response;
+    try {
+        obs_response = nlohmann::json::parse(obs_body);
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(error) << "GFD save active imported cloud config failed: parse OBS response failed"
+                                 << ", error=" << ex.what()
+                                 << ", body=" << obs_body;
+        show_error(q, from_u8(std::string("OBS 响应格式无效: ") + ex.what()));
+        return false;
+    }
+
+    if (obs_response.value("msg", std::string()) != "success" || !obs_response.contains("data") || !obs_response["data"].is_object()) {
+        BOOST_LOG_TRIVIAL(error) << "GFD save active imported cloud config failed: OBS token business failure"
+                                 << ", body=" << obs_body;
+        show_error(q, from_u8(obs_response.value("msg", std::string("获取 OBS 上传令牌失败"))));
+        return false;
+    }
+
+    const auto& obs_data = obs_response["data"];
+    BOOST_LOG_TRIVIAL(info) << "GFD save active imported cloud config OBS token parsed"
+                            << ", host=" << obs_data.value("host", std::string())
+                            << ", key=" << obs_data.value("key", std::string())
+                            << ", cdn=" << obs_data.value("cdn", std::string())
+                            << ", has_policy=" << obs_data.contains("policy")
+                            << ", has_signature=" << obs_data.contains("signature")
+                            << ", has_accessid=" << obs_data.contains("accessid");
+
+    std::string file_url;
+    if (!gfd_upload_file_with_token(config_3mf_path.string(), obs_data, file_url, error_message)) {
+        show_error(q, from_u8(error_message.empty() ? "配置 3MF 上传失败" : error_message));
+        return false;
+    }
+
+    std::string save_body;
+    if (!gfd_save_config_to_server(config_name, remarks, file_url, project_settings_text, "update", active_state.cloud_config_id, save_body, error_message)) {
+        show_error(q, from_u8(error_message.empty() ? "保存配置失败" : error_message));
+        return false;
+    }
+
+    try {
+        const nlohmann::json response = nlohmann::json::parse(save_body);
+        const bool success = response.value("msg", std::string()) == "success" || response.value("code", -1) == 0;
+        if (!success) {
+            const std::string msg = response.value("msg", std::string("保存配置失败"));
+            BOOST_LOG_TRIVIAL(error) << "GFD save active imported cloud config business failure"
+                                     << ", response=" << save_body;
+            show_error(q, from_u8(msg));
+            return false;
+        }
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(error) << "GFD save active imported cloud config response parse failed"
+                                 << ", error=" << ex.what()
+                                 << ", body=" << save_body;
+        show_error(q, from_u8(std::string("保存配置响应格式无效: ") + ex.what()));
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD save active imported cloud config finished"
+                            << ", cloud_config_id=" << active_state.cloud_config_id
+                            << ", cloud_config_name=" << active_state.cloud_config_name
+                            << ", file_url=" << file_url
+                            << ", config_3mf_path=" << config_3mf_path.string();
+    GUI::show_info(q, _L("保存配置成功。"), _L("提示"));
     return true;
 }
 
@@ -8235,11 +8439,80 @@ bool Plater::priv::gfd_apply_project_config_text(const std::string& text,
     DynamicPrintConfig imported_config_snapshot = config;
     wxGetApp().preset_bundle->load_config_model(source_name.empty() ? "cloud_config" : source_name, std::move(config));
     gfd_refresh_after_cloud_config_import(imported_config_snapshot, source_name, device_type);
+    gfd_apply_cloud_process_name(imported_config_snapshot, source_name, device_type);
 
     BOOST_LOG_TRIVIAL(info) << "GFD cloud config applied"
                             << ", source=" << source_name
                             << ", filament_count=" << wxGetApp().preset_bundle->filament_presets.size();
     return true;
+}
+
+void Plater::priv::gfd_apply_cloud_process_name(const DynamicPrintConfig& imported_config,
+                                                const std::string& source_name,
+                                                const std::string& device_type)
+{
+    gfd_last_imported_cloud_process_preset.clear();
+
+    if (wxGetApp().preset_bundle == nullptr || source_name.empty())
+        return;
+
+    const ConfigOptionString* print_settings_id = imported_config.option<ConfigOptionString>("print_settings_id");
+    const std::string         original_name     = print_settings_id != nullptr ? print_settings_id->value : std::string();
+    if (original_name.empty())
+        return;
+
+    const std::string device_prefix = device_type.empty() ? std::string() : device_type + "_";
+    const std::string source_prefix = source_name + "_";
+    const std::string full_prefix   = device_prefix + source_prefix;
+    std::string       base_target_name;
+    if (!device_prefix.empty() && boost::algorithm::starts_with(original_name, full_prefix))
+        base_target_name = original_name;
+    else if (boost::algorithm::starts_with(original_name, source_prefix))
+        base_target_name = device_prefix + original_name;
+    else
+        base_target_name = full_prefix + original_name;
+
+    PresetBundle&     bundle      = *wxGetApp().preset_bundle;
+    const std::string target_name = gfd_unique_process_preset_name(bundle.prints, base_target_name);
+    const std::string before_name = bundle.prints.get_selected_preset_name();
+    const std::string current_printer_name = bundle.printers.get_selected_preset_name();
+
+    if (!current_printer_name.empty()) {
+        ConfigOptionStrings* compatible_printers = bundle.prints.get_edited_preset().config.option<ConfigOptionStrings>("compatible_printers", true);
+        compatible_printers->values.clear();
+        compatible_printers->values.emplace_back(current_printer_name);
+        bundle.prints.get_edited_preset().config.option<ConfigOptionString>("compatible_printers_condition", true)->value.clear();
+    }
+
+    bundle.prints.save_current_preset(target_name, false, false);
+    if (Preset* saved_preset = bundle.prints.find_preset(target_name, false, true); saved_preset != nullptr) {
+        saved_preset->is_visible    = true;
+        saved_preset->is_compatible = true;
+        saved_preset->is_external   = false;
+    }
+    bundle.prints.select_preset_by_name(target_name, true);
+    bundle.update_compatible(PresetSelectCompatibleType::Never);
+    if (Preset* saved_preset = bundle.prints.find_preset(target_name, false, true); saved_preset != nullptr) {
+        saved_preset->is_visible    = true;
+        saved_preset->is_compatible = true;
+    }
+    bundle.prints.select_preset_by_name(target_name, true);
+    gfd_last_imported_cloud_process_preset = gfd_normalize_cloud_process_name(target_name);
+
+    if (sidebar != nullptr)
+        sidebar->update_all_preset_comboboxes();
+    if (wxGetApp().mainframe != nullptr)
+        wxGetApp().mainframe->update_side_preset_ui();
+
+    BOOST_LOG_TRIVIAL(info) << "GFD cloud process preset renamed"
+                            << ", source=" << source_name
+                            << ", device_type=" << device_type
+                            << ", original_print_settings_id=" << original_name
+                            << ", base_target_print=" << base_target_name
+                            << ", compatible_printer=" << current_printer_name
+                            << ", before_selected_print=" << before_name
+                            << ", target_print=" << target_name
+                            << ", after_selected_print=" << bundle.prints.get_selected_preset_name();
 }
 
 void Plater::priv::gfd_refresh_after_cloud_config_import(const DynamicPrintConfig& imported_config,
@@ -8400,6 +8673,7 @@ bool Plater::priv::gfd_apply_config_3mf(const std::string& path,
     DynamicPrintConfig imported_config_snapshot = config_loaded;
     wxGetApp().preset_bundle->load_config_model(source_name.empty() ? path : source_name, std::move(config_loaded), file_version);
     gfd_refresh_after_cloud_config_import(imported_config_snapshot, source_name, device_type);
+    gfd_apply_cloud_process_name(imported_config_snapshot, source_name, device_type);
 
     BOOST_LOG_TRIVIAL(info) << "GFD cloud config 3MF applied"
                             << ", path=" << path
@@ -8465,59 +8739,175 @@ bool Plater::priv::gfd_import_cloud_config(const GFDCloudConfigInfo& config)
     return true;
 }
 
+nlohmann::json Plater::priv::gfd_load_cloud_process_records() const
+{
+    const fs::path record_path = gfd_cloud_process_record_path();
+    if (!fs::exists(record_path))
+        return nlohmann::json::object();
+
+    try {
+        std::string content;
+        load_string_file(record_path, content);
+        if (content.empty())
+            return nlohmann::json::object();
+        nlohmann::json records = nlohmann::json::parse(content);
+        return records.is_object() ? records : nlohmann::json::object();
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(error) << "GFD load cloud process records failed"
+                                 << ", path=" << record_path.string()
+                                 << ", error=" << ex.what();
+        return nlohmann::json::object();
+    }
+}
+
+void Plater::priv::gfd_save_cloud_process_records(const nlohmann::json& records) const
+{
+    const fs::path record_path = gfd_cloud_process_record_path();
+    try {
+        boost::filesystem::create_directories(record_path.parent_path());
+        save_string_file(record_path, records.dump(2));
+        BOOST_LOG_TRIVIAL(info) << "GFD saved cloud process records"
+                                << ", path=" << record_path.string()
+                                << ", count=" << records.size();
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(error) << "GFD save cloud process records failed"
+                                 << ", path=" << record_path.string()
+                                 << ", error=" << ex.what();
+    }
+}
+
 void Plater::priv::gfd_record_imported_cloud_config(const GFDCloudConfigInfo& config)
 {
     if (wxGetApp().preset_bundle == nullptr)
         return;
 
+    const std::string selected_print_preset = gfd_normalize_cloud_process_name(wxGetApp().preset_bundle->prints.get_selected_preset_name());
+    const std::string edited_print_preset   = gfd_normalize_cloud_process_name(wxGetApp().preset_bundle->prints.get_edited_preset().name);
+    const std::string current_print_preset  = !gfd_last_imported_cloud_process_preset.empty()
+                                                ? gfd_last_imported_cloud_process_preset
+                                                : gfd_current_cloud_process_name(wxGetApp().preset_bundle);
+
     GFDCloudImportState state;
     state.cloud_config_id  = config.id;
     state.cloud_config_name = config.name;
     state.printer_preset    = wxGetApp().preset_bundle->printers.get_selected_preset_name();
-    state.print_preset      = wxGetApp().preset_bundle->prints.get_selected_preset_name();
+    state.device_type       = config.device_type;
+    state.print_preset      = current_print_preset;
     state.filament_presets  = wxGetApp().preset_bundle->filament_presets;
 
     const auto duplicate = std::find_if(gfd_imported_cloud_configs.begin(), gfd_imported_cloud_configs.end(), [&state](const GFDCloudImportState& existing) {
-        return existing.printer_preset == state.printer_preset &&
-               existing.print_preset == state.print_preset &&
-               existing.filament_presets == state.filament_presets;
+        return existing.device_type == state.device_type &&
+               existing.print_preset == state.print_preset;
     });
     if (duplicate != gfd_imported_cloud_configs.end())
         *duplicate = state;
     else
         gfd_imported_cloud_configs.emplace_back(std::move(state));
 
+    nlohmann::json records = gfd_load_cloud_process_records();
+    records[gfd_cloud_process_config_key(current_print_preset)] = {
+        {"device_type", config.device_type},
+        {"cloud_config_id", config.id},
+        {"cloud_config_name", config.name}
+    };
+    gfd_save_cloud_process_records(records);
+
     BOOST_LOG_TRIVIAL(info) << "GFD recorded imported cloud config state"
                             << ", cloud_config_id=" << config.id
                             << ", cloud_config_name=" << config.name
                             << ", printer_preset=" << wxGetApp().preset_bundle->printers.get_selected_preset_name()
-                            << ", print_preset=" << wxGetApp().preset_bundle->prints.get_selected_preset_name()
+                            << ", device_type=" << config.device_type
+                            << ", selected_print_preset=" << selected_print_preset
+                            << ", edited_print_preset=" << edited_print_preset
+                            << ", effective_print_preset=" << current_print_preset
+                            << ", imported_print_preset=" << gfd_last_imported_cloud_process_preset
                             << ", filament_count=" << wxGetApp().preset_bundle->filament_presets.size();
 }
 
 bool Plater::priv::gfd_has_active_imported_cloud_config() const
 {
-    if (wxGetApp().preset_bundle == nullptr)
-        return false;
+    GFDCloudImportState state;
+    const bool has_active = gfd_get_active_imported_cloud_config(state);
+    const std::string current_printer_preset        = wxGetApp().preset_bundle != nullptr ? wxGetApp().preset_bundle->printers.get_selected_preset_name() : std::string();
+    const std::string current_selected_print_preset = wxGetApp().preset_bundle != nullptr ? gfd_normalize_cloud_process_name(wxGetApp().preset_bundle->prints.get_selected_preset_name()) : std::string();
+    const std::string current_edited_print_preset   = wxGetApp().preset_bundle != nullptr ? gfd_normalize_cloud_process_name(wxGetApp().preset_bundle->prints.get_edited_preset().name) : std::string();
+    const std::string current_print_preset          = wxGetApp().preset_bundle != nullptr ? gfd_current_cloud_process_name(wxGetApp().preset_bundle) : std::string();
+    const std::string current_device_type           = wxGetApp().preset_bundle != nullptr ? GFD::Config::current_device_type(wxGetApp().preset_bundle->printers.get_selected_preset().config) : std::string();
+    const std::string matched_record_key            = has_active ? gfd_cloud_process_config_key(current_print_preset) : std::string();
 
-    const std::string current_printer_preset = wxGetApp().preset_bundle->printers.get_selected_preset_name();
-    const std::string current_print_preset   = wxGetApp().preset_bundle->prints.get_selected_preset_name();
-    const std::vector<std::string>& current_filament_presets = wxGetApp().preset_bundle->filament_presets;
-
-    const auto matched = std::find_if(gfd_imported_cloud_configs.begin(), gfd_imported_cloud_configs.end(), [&](const GFDCloudImportState& state) {
-        return state.printer_preset == current_printer_preset &&
-               state.print_preset == current_print_preset &&
-               state.filament_presets == current_filament_presets;
-    });
-
-    const bool has_active = matched != gfd_imported_cloud_configs.end();
     BOOST_LOG_TRIVIAL(info) << "GFD active imported cloud config state"
                             << ", has_active=" << has_active
                             << ", printer_preset=" << current_printer_preset
-                            << ", print_preset=" << current_print_preset
-                            << ", filament_count=" << current_filament_presets.size()
+                            << ", device_type=" << current_device_type
+                            << ", selected_print_preset=" << current_selected_print_preset
+                            << ", edited_print_preset=" << current_edited_print_preset
+                            << ", effective_print_preset=" << current_print_preset
+                            << ", matched_record_key=" << matched_record_key
                             << ", recorded_count=" << gfd_imported_cloud_configs.size();
     return has_active;
+}
+
+bool Plater::priv::gfd_has_dirty_active_imported_cloud_config() const
+{
+    if (wxGetApp().preset_bundle == nullptr)
+        return false;
+
+    GFDCloudImportState active_state;
+    const bool has_active = gfd_get_active_imported_cloud_config(active_state);
+    const bool process_dirty = wxGetApp().preset_bundle->prints.current_is_dirty();
+    const std::vector<std::string> dirty_options = process_dirty ? wxGetApp().preset_bundle->prints.current_dirty_options(false)
+                                                                 : std::vector<std::string>();
+
+    BOOST_LOG_TRIVIAL(info) << "GFD dirty imported cloud config state"
+                            << ", has_active=" << has_active
+                            << ", process_dirty=" << process_dirty
+                            << ", cloud_config_id=" << active_state.cloud_config_id
+                            << ", cloud_config_name=" << active_state.cloud_config_name
+                            << ", print_preset=" << active_state.print_preset
+                            << ", dirty_option_count=" << dirty_options.size()
+                            << ", selected_print_preset=" << gfd_normalize_cloud_process_name(wxGetApp().preset_bundle->prints.get_selected_preset_name())
+                            << ", edited_print_preset=" << gfd_normalize_cloud_process_name(wxGetApp().preset_bundle->prints.get_edited_preset().name);
+
+    return has_active && process_dirty;
+}
+
+bool Plater::priv::gfd_get_active_imported_cloud_config(GFDCloudImportState& state) const
+{
+    if (wxGetApp().preset_bundle == nullptr)
+        return false;
+
+    const std::string current_print_preset = gfd_current_cloud_process_name(wxGetApp().preset_bundle);
+    const std::string current_device_type  = GFD::Config::current_device_type(wxGetApp().preset_bundle->printers.get_selected_preset().config);
+    if (current_print_preset.empty() || current_device_type.empty())
+        return false;
+
+    const auto matched = std::find_if(gfd_imported_cloud_configs.begin(), gfd_imported_cloud_configs.end(), [&](const GFDCloudImportState& existing) {
+        return !existing.device_type.empty() &&
+               existing.device_type == current_device_type &&
+               gfd_normalize_cloud_process_name(existing.print_preset) == current_print_preset;
+    });
+    if (matched != gfd_imported_cloud_configs.end()) {
+        state = *matched;
+        return true;
+    }
+
+    const nlohmann::json records = gfd_load_cloud_process_records();
+    const std::string key = gfd_cloud_process_config_key(current_print_preset);
+    if (!records.contains(key) || !records[key].is_object())
+        return false;
+
+    const nlohmann::json& item = records[key];
+    const std::string persisted_device_type = item.value("device_type", std::string());
+    if (persisted_device_type.empty() || persisted_device_type != current_device_type)
+        return false;
+
+    state.cloud_config_id   = item.value("cloud_config_id", std::string());
+    state.cloud_config_name = item.value("cloud_config_name", std::string());
+    state.device_type       = persisted_device_type;
+    state.printer_preset    = wxGetApp().preset_bundle->printers.get_selected_preset_name();
+    state.print_preset      = current_print_preset;
+    state.filament_presets  = wxGetApp().preset_bundle->filament_presets;
+    return !state.cloud_config_id.empty();
 }
 
 fs::path Plater::priv::gfd_temp_gcode_path()
@@ -13009,6 +13399,11 @@ bool Plater::has_active_imported_cloud_config() const
     return p != nullptr && p->gfd_has_active_imported_cloud_config();
 }
 
+bool Plater::has_dirty_active_imported_cloud_config() const
+{
+    return p != nullptr && p->gfd_has_dirty_active_imported_cloud_config();
+}
+
 void Plater::reset_window_layout() { p->reset_window_layout(); }
 
 // BBS
@@ -14650,6 +15045,13 @@ bool Plater::upload_current_config_to_cloud(const std::string& config_name, cons
     return p->gfd_upload_current_config(config_name, remarks);
 }
 
+bool Plater::save_active_imported_cloud_config()
+{
+    if (p == nullptr)
+        return false;
+    return p->gfd_save_active_imported_cloud_config();
+}
+
 bool Plater::fetch_cloud_configs(const std::string& device_type, std::vector<GFDCloudConfigInfo>& configs, std::string& error_message)
 {
     if (p == nullptr)
@@ -14940,6 +15342,8 @@ void Plater::on_config_change(const DynamicPrintConfig& config)
     if (p->main_frame->is_loaded()) {
         this->p->schedule_background_process();
         update_title_dirty_status();
+        if (wxGetApp().mainframe != nullptr)
+            wxGetApp().mainframe->update_gfd_config_buttons();
     }
 }
 

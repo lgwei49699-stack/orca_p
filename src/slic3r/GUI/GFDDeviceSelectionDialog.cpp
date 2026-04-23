@@ -5,6 +5,7 @@
 #include "I18N.hpp"
 #include "MsgDialog.hpp"
 #include "Widgets/Button.hpp"
+#include "Widgets/Label.hpp"
 #include "format.hpp"
 #include "libslic3r/AppConfig.hpp"
 #include "slic3r/Utils/GFDConfig.hpp"
@@ -17,6 +18,8 @@
 #include <nlohmann/json.hpp>
 
 #include <wx/choice.h>
+#include <wx/dcmemory.h>
+#include <wx/imaglist.h>
 #include <wx/listctrl.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
@@ -130,39 +133,59 @@ void GFDDeviceSelectionDialog::build()
 
     auto* main_sizer = new wxBoxSizer(wxVERTICAL);
 
+    const int control_h    = FromDIP(30);
+    const int field_gap    = FromDIP(10);
+    const int label_gap    = FromDIP(6);
+
     auto* filter_sizer = new wxBoxSizer(wxHORIZONTAL);
     filter_sizer->SetMinSize(wxSize(-1, FromDIP(38)));
-    filter_sizer->Add(new wxStaticText(this, wxID_ANY, _L("设备MAC:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
-    m_mac_input = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(135), FromDIP(30)));
+
+    auto add_labeled = [this, filter_sizer, label_gap, field_gap](const wxString& label, wxWindow* control) {
+        filter_sizer->Add(new wxStaticText(this, wxID_ANY, label), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, label_gap);
+        filter_sizer->Add(control, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, field_gap);
+    };
+
+    m_mac_input = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(180), control_h));
     m_mac_input->SetHint(_L("请输入设备MAC"));
-    filter_sizer->Add(m_mac_input, 0, wxRIGHT, FromDIP(10));
+    add_labeled(_L("设备MAC:"), m_mac_input);
 
-    filter_sizer->Add(new wxStaticText(this, wxID_ANY, _L("使用人:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
-    m_operator_input = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(110), FromDIP(30)));
+    m_operator_input = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(160), control_h));
     m_operator_input->SetHint(_L("请输入使用人"));
-    filter_sizer->Add(m_operator_input, 0, wxRIGHT, FromDIP(10));
+    add_labeled(_L("使用人:"), m_operator_input);
 
-    filter_sizer->Add(new wxStaticText(this, wxID_ANY, _L("设备机型:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
-    m_type_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(145), FromDIP(30)));
+    m_type_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(180), control_h));
     append_choice(m_type_choice, _L("全部"), ALL_VALUE);
-    filter_sizer->Add(m_type_choice, 0, wxRIGHT, FromDIP(10));
+    add_labeled(_L("设备机型:"), m_type_choice);
 
-    filter_sizer->Add(new wxStaticText(this, wxID_ANY, _L("设备状态:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
-    m_status_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(135), FromDIP(30)));
+    m_status_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(160), control_h));
     append_choice(m_status_choice, _L("全部"), ALL_VALUE);
-    filter_sizer->Add(m_status_choice, 0, wxRIGHT, FromDIP(10));
+    add_labeled(_L("设备状态:"), m_status_choice);
 
+    filter_sizer->AddStretchSpacer(1);
     m_search_button = new Button(this, _L("查找"));
     m_search_button->SetMinSize(wxSize(FromDIP(64), FromDIP(30)));
-    filter_sizer->Add(m_search_button, 0, wxRIGHT, FromDIP(8));
+    filter_sizer->Add(m_search_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
 
     m_reset_button = new Button(this, _L("重置"));
     m_reset_button->SetMinSize(wxSize(FromDIP(64), FromDIP(30)));
-    filter_sizer->Add(m_reset_button, 0);
+    filter_sizer->Add(m_reset_button, 0, wxALIGN_CENTER_VERTICAL);
 
     main_sizer->Add(filter_sizer, 0, wxEXPAND | wxALL, FromDIP(16));
 
     m_device_list = new wxListCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT | wxLC_HRULES | wxLC_VRULES | wxBORDER_SIMPLE);
+    m_device_list->SetFont(Label::Body_13);
+
+    auto* row_image_list = new wxImageList(1, FromDIP(34), true);
+    wxBitmap row_bitmap(1, FromDIP(34));
+    {
+        wxMemoryDC dc(row_bitmap);
+        dc.SetBackground(*wxWHITE_BRUSH);
+        dc.Clear();
+        dc.SelectObject(wxNullBitmap);
+    }
+    row_image_list->Add(row_bitmap);
+    m_device_list->AssignImageList(row_image_list, wxIMAGE_LIST_SMALL);
+
     m_device_list->EnableCheckBoxes(true);
     m_device_list->AppendColumn(wxEmptyString, wxLIST_FORMAT_CENTER, FromDIP(42));
     m_device_list->AppendColumn(_L("设备mac"), wxLIST_FORMAT_CENTER, FromDIP(210));
@@ -293,6 +316,7 @@ void GFDDeviceSelectionDialog::refresh_table(bool apply_filters, bool sync_check
             continue;
 
         const long row = m_device_list->InsertItem(m_device_list->GetItemCount(), wxEmptyString);
+        m_device_list->SetItemColumnImage(row, 0, 0);
         m_visible_indices.push_back(i);
         m_device_list->SetItem(row, 1, from_u8(device.mac));
         m_device_list->SetItem(row, 2, from_u8(device.operator_name));

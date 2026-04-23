@@ -5345,6 +5345,8 @@ bool Tab::select_preset(std::string preset_name, bool delete_current /*=false*/,
     if (technology_changed)
         wxGetApp().mainframe->technology_changed();
     BOOST_LOG_TRIVIAL(info) << boost::format("select preset, exit");
+    if (wxGetApp().mainframe != nullptr)
+        wxGetApp().mainframe->update_gfd_config_buttons();
 
     return !canceled;
 }

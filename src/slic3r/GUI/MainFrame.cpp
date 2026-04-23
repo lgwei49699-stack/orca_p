@@ -4258,7 +4258,7 @@ void MainFrame::bind_gfd_config_buttons()
         m_plater->upload_current_config_to_cloud(into_u8(name), into_u8(remarks));
     });
     bind_gfd_config_button(m_plater->gfd_save_config_button(), "save_config", [this]() {
-        GUI::show_info(this, _L("保存配置功能待接入。"), _L("提示"));
+        m_plater->save_active_imported_cloud_config();
     });
 }
 
@@ -4269,6 +4269,7 @@ void MainFrame::update_gfd_config_buttons()
 
     wxPanel* panel = m_plater->gfd_config_panel();
     const bool was_shown = panel->IsShown();
+    const bool was_save_shown = m_plater->gfd_save_config_button() != nullptr && m_plater->gfd_save_config_button()->IsShown();
     bool should_show = false;
     const GFDPrinterState printer_state = current_gfd_printer_state();
     should_show = !printer_state.effective_device_type.empty();
@@ -4276,20 +4277,35 @@ void MainFrame::update_gfd_config_buttons()
     const bool parameter_panel_shown = m_plater->is_sidebar_enabled() && !m_plater->is_sidebar_collapsed() &&
                                        (m_plater->is_view3D_shown() || m_plater->is_preview_shown());
     should_show = should_show && parameter_panel_shown;
-    const bool show_save_config = should_show && m_plater->has_active_imported_cloud_config();
+    const bool show_save_config = should_show && m_plater->has_dirty_active_imported_cloud_config();
 
     panel->Show(should_show);
     for (Button* btn : {m_plater->gfd_cloud_import_button(), m_plater->gfd_upload_config_button()})
         if (btn)
             btn->Show(should_show);
-    if (m_plater->gfd_save_config_button() != nullptr)
-        m_plater->gfd_save_config_button()->Show(show_save_config);
+    if (m_plater->gfd_save_config_button() != nullptr) {
+        m_plater->gfd_save_config_button()->Enable(show_save_config);
+        if (panel->GetSizer() != nullptr)
+            panel->GetSizer()->Show(m_plater->gfd_save_config_button(), show_save_config, true);
+        if (show_save_config)
+            m_plater->gfd_save_config_button()->Show();
+        else
+            m_plater->gfd_save_config_button()->Hide();
+    }
 
-    if (should_show) {
+    const bool state_changed = (was_shown != should_show) || (was_save_shown != show_save_config);
+    if (state_changed && should_show) {
         panel->Layout();
         m_plater->update_gfd_config_panel_position();
         panel->Raise();
         panel->Refresh();
+        if (panel->GetParent() != nullptr) {
+            panel->GetParent()->Layout();
+            panel->GetParent()->Refresh();
+        }
+    } else if (state_changed && panel->GetParent() != nullptr) {
+        panel->GetParent()->Layout();
+        panel->GetParent()->Refresh();
     }
 
     BOOST_LOG_TRIVIAL(info) << "GFD config buttons visibility"
@@ -4301,9 +4317,10 @@ void MainFrame::update_gfd_config_buttons()
                             << ", effective_gfd_device_type=" << (printer_state.effective_device_type.empty() ? std::string("<empty>") : printer_state.effective_device_type)
                             << ", parameter_panel_shown=" << parameter_panel_shown
                             << ", show_save_config=" << show_save_config
+                            << ", save_button_is_shown=" << (m_plater->gfd_save_config_button() != nullptr && m_plater->gfd_save_config_button()->IsShown())
                             << ", show=" << should_show;
 
-    if (was_shown != should_show || should_show) {
+    if (state_changed) {
         m_plater->Layout();
         Layout();
     }
