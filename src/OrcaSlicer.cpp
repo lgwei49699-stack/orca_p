@@ -1635,6 +1635,14 @@ int CLI::run(int argc, char **argv)
             
             if (has_model_params) {
                 BOOST_LOG_TRIVIAL(info) << "Processing model parameters for file: " << file;
+
+                // When auto-orient is explicitly enabled, ignore input instance rotations.
+                // Auto-orient should decide the final resting pose from the raw model geometry,
+                // not from any pre-rotated external pose supplied by the caller.
+                const bool ignore_model_rotation_for_orient =
+                    m_config.has("orient") &&
+                    m_config.option<ConfigOptionInt>("orient") != nullptr &&
+                    m_config.option<ConfigOptionInt>("orient")->value == 1;
                 
                 // 获取模型参数
                 const auto& model_files = model_option ? model_option->values : std::vector<std::string>();
@@ -1680,19 +1688,25 @@ int CLI::run(int argc, char **argv)
                             
                             // 2. 再应用旋转
                             if (model_idx < model_rotates.size()) {
-                                std::string rot_str = model_rotates[model_idx];
-                                // 解析旋转字符串 "x,y,z"
-                                std::vector<std::string> rot_parts;
-                                boost::split(rot_parts, rot_str, boost::is_any_of(","));
-                                if (rot_parts.size() >= 3) {
-                                    Vec3d current_rotation = instance->get_rotation();
-                                    Vec3d new_rotation = current_rotation + Vec3d(
-                                        std::stod(rot_parts[0]) * M_PI / 180.0,  // X轴旋转
-                                        std::stod(rot_parts[1]) * M_PI / 180.0,  // Y轴旋转
-                                        std::stod(rot_parts[2]) * M_PI / 180.0   // Z轴旋转
-                                    );
-                                    instance->set_rotation(new_rotation);
-                                    BOOST_LOG_TRIVIAL(info) << "Applied rotation: " << new_rotation.transpose();
+                                if (ignore_model_rotation_for_orient) {
+                                    BOOST_LOG_TRIVIAL(info)
+                                        << "Ignored input model rotation because orient=1 for object '"
+                                        << obj->name << "'";
+                                } else {
+                                    std::string rot_str = model_rotates[model_idx];
+                                    // 解析旋转字符串 "x,y,z"
+                                    std::vector<std::string> rot_parts;
+                                    boost::split(rot_parts, rot_str, boost::is_any_of(","));
+                                    if (rot_parts.size() >= 3) {
+                                        Vec3d current_rotation = instance->get_rotation();
+                                        Vec3d new_rotation = current_rotation + Vec3d(
+                                            std::stod(rot_parts[0]) * M_PI / 180.0,  // X轴旋转
+                                            std::stod(rot_parts[1]) * M_PI / 180.0,  // Y轴旋转
+                                            std::stod(rot_parts[2]) * M_PI / 180.0   // Z轴旋转
+                                        );
+                                        instance->set_rotation(new_rotation);
+                                        BOOST_LOG_TRIVIAL(info) << "Applied rotation: " << new_rotation.transpose();
+                                    }
                                 }
                             }
                             
