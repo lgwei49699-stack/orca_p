@@ -111,7 +111,7 @@ wxWindow* login_parent_window()
 } // namespace
 
 GFDLoginDialog::GFDLoginDialog()
-    : wxDialog(login_parent_window(), wxID_ANY, _L("功夫豆Cura - 登录"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX)
+    : wxDialog(login_parent_window(), wxID_ANY, _L("功夫豆Orca - 登录"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX)
 {
     build();
     bind_events();

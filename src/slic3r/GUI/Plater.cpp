@@ -2689,7 +2689,7 @@ struct Plater::priv
     void        show_gfd_device_selection_dialog();
     bool        ensure_gfd_login();
     std::string gfd_auth_token() const;
-    bool        gfd_request_obs_token(std::string& body, std::string& error_message) const;
+    bool        gfd_request_obs_token(const std::string& suffix, std::string& body, std::string& error_message) const;
     bool        gfd_upload_file_with_token(const std::string& file_path,
                                            const nlohmann::json& token_data,
                                            std::string&          file_url,
@@ -7873,7 +7873,7 @@ bool Plater::priv::gfd_upload_current_config(const std::string& config_name, con
     }
 
     std::string obs_body;
-    if (!gfd_request_obs_token(obs_body, error_message)) {
+    if (!gfd_request_obs_token("3mf", obs_body, error_message)) {
         show_error(q, from_u8(error_message.empty() ? "获取 OBS 上传令牌失败" : error_message));
         return false;
     }
@@ -8002,7 +8002,7 @@ bool Plater::priv::gfd_save_active_imported_cloud_config()
     }
 
     std::string obs_body;
-    if (!gfd_request_obs_token(obs_body, error_message)) {
+    if (!gfd_request_obs_token("3mf", obs_body, error_message)) {
         show_error(q, from_u8(error_message.empty() ? "获取 OBS 上传令牌失败" : error_message));
         return false;
     }
@@ -8994,7 +8994,7 @@ void Plater::priv::start_gfd_print_export()
     }
 }
 
-bool Plater::priv::gfd_request_obs_token(std::string& body, std::string& error_message) const
+bool Plater::priv::gfd_request_obs_token(const std::string& suffix, std::string& body, std::string& error_message) const
 {
     const std::string token = gfd_auth_token();
     if (token.empty()) {
@@ -9003,10 +9003,12 @@ bool Plater::priv::gfd_request_obs_token(std::string& body, std::string& error_m
         return false;
     }
 
-    const std::string url = GFD::Config::obs_token_url(wxGetApp().app_config) + "?ruleCode=print3dPermanently&suffix=3mf";
+    const std::string requested_suffix = suffix.empty() ? "3mf" : suffix;
+    const std::string url = GFD::Config::obs_token_url(wxGetApp().app_config) + "?ruleCode=print3dPermanently&suffix=" + requested_suffix;
     bool              ok  = false;
     BOOST_LOG_TRIVIAL(info) << "GFD request OBS token"
                             << ", url=" << url
+                            << ", suffix=" << requested_suffix
                             << ", auth_token_length=" << token.size();
     Http::get(url)
         .header("Authorization", token)
@@ -9201,7 +9203,7 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
 
     std::string obs_body;
     std::string error_message;
-    if (!gfd_request_obs_token(obs_body, error_message)) {
+    if (!gfd_request_obs_token("gcode", obs_body, error_message)) {
         show_error(q, from_u8(error_message.empty() ? "获取 OBS 上传令牌失败" : error_message));
         return false;
     }
