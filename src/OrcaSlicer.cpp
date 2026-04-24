@@ -5070,18 +5070,13 @@ int CLI::run(int argc, char **argv)
                     json transform;
                     transform["object_name"] = obj->name;
                     transform["instance_id"] = instance->id().id;
-                    
-                    // Get position: use bottom center of the instance on the bed
-                    // Bounding box is in world coordinates after orient & arrange
+
+                    // Get position: use bottom center of the instance on the bed.
+                    // Bounding box is in world coordinates after orient & arrange.
                     BoundingBoxf3 bbox = obj->instance_bounding_box(*instance, /*dont_translate=*/false);
                     double center_x = 0.5 * (bbox.min.x() + bbox.max.x());
                     double center_y = 0.5 * (bbox.min.y() + bbox.max.y());
-                    transform["position"] = {
-                        clean_value(center_x),
-                        clean_value(center_y),
-                        clean_value(bbox.min.z())  // after ensure_on_bed this should be 0
-                    };
-                    
+
                     // Compute total rotation = R_arrange * R_orient
                     // R_arrange: from instance->get_rotation() (XYZ intrinsic, radians)
                     //            OrcaSlicer applies as R_z * R_y * R_x (see assemble_transform)
@@ -5163,13 +5158,31 @@ int CLI::run(int argc, char **argv)
                         }
                     }
                     transform["plate_index"] = plate_idx;
+
+                    // Export plate-local XY coordinates when auto-plate is enabled.
+                    // This keeps single-plate exports unchanged while avoiding multi-plate
+                    // consumers mistaking world coordinates for plate-local coordinates.
+                    double export_x = center_x;
+                    double export_y = center_y;
+                    if (auto_plate_value == 1 && plate_idx >= 0 && plate_idx < plate_count) {
+                        if (Slic3r::GUI::PartPlate* plate = partplate_list.get_plate(plate_idx)) {
+                            const Vec3d plate_origin = plate->get_origin();
+                            export_x -= plate_origin.x();
+                            export_y -= plate_origin.y();
+                        }
+                    }
+                    transform["position"] = {
+                        clean_value(export_x),
+                        clean_value(export_y),
+                        clean_value(bbox.min.z())  // after ensure_on_bed this should be 0
+                    };
                     
                     model_transforms_json.push_back(transform);
                     
                     BOOST_LOG_TRIVIAL(info) << "Model: " << obj->name 
                                             << ", Instance: " << instance->id().id
                                             << ", Plate: " << plate_idx
-                                            << ", Position: (" << center_x << "," << center_y << "," << bbox.min.z() << ")"
+                                            << ", Position: (" << export_x << "," << export_y << "," << bbox.min.z() << ")"
                                             << ", Rotation (deg): (" << euler.x()*180.0/M_PI << "," << euler.y()*180.0/M_PI << "," << euler.z()*180.0/M_PI << ")"
                                             << ", Scale: (" << scale.x() << "," << scale.y() << "," << scale.z() << ")";
                 }
