@@ -47,6 +47,8 @@ private:
     void toggle_row_checked(long row);
     void sync_checked_keys_from_table();
     void update_table_column_widths();
+    void set_tip_message(const wxString& message, bool is_error = false);
+    void set_loading_state(bool loading);
 
     std::string build_query_url() const;
     bool        request_devices(std::string& body, std::string& error_message) const;
@@ -71,12 +73,14 @@ private:
     std::vector<GFDDeviceInfo> m_selected_devices;
     std::set<std::string>      m_checked_device_keys;
     bool                       m_suppress_filter_events{false};
+    bool                       m_loading{false};
 
     wxTextCtrl* m_mac_input{nullptr};
     wxTextCtrl* m_operator_input{nullptr};
     wxChoice*   m_type_choice{nullptr};
     wxChoice*   m_status_choice{nullptr};
     wxListCtrl* m_device_list{nullptr};
+    wxStaticText* m_tip_label{nullptr};
     Button*     m_search_button{nullptr};
     Button*     m_reset_button{nullptr};
     Button*     m_confirm_button{nullptr};

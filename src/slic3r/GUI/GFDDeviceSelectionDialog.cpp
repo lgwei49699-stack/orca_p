@@ -106,6 +106,61 @@ wxString device_status_text(const GFDDeviceInfo& device)
 
 std::string device_key(const GFDDeviceInfo& device) { return !device.device_id.empty() ? device.device_id : device.mac; }
 
+void apply_flat_filter_button_style(Button* button, bool primary)
+{
+    if (button == nullptr)
+        return;
+
+    const wxColour green(0, 150, 136);
+    const wxColour green_hover(38, 166, 154);
+    const wxColour grey_bg(239, 239, 239);
+    const wxColour grey_hover(228, 228, 228);
+    const wxColour grey_text(98, 98, 98);
+    const wxColour white_text("#FFFFFE");
+
+    button->SetFont(Label::Body_14);
+    button->SetMinSize(button->FromDIP(wxSize(72, 30)));
+    button->SetRoundedCorners(true, true, true, true);
+    button->SetCornerRadius(button->FromDIP(15));
+    button->SetBorderWidth(0);
+    button->SetBackgroundColour(StaticBox::GetParentBackgroundColor(button->GetParent()));
+    button->SetBackgroundColor(StateColor(
+        std::pair<wxColour, int>(wxColour(240, 240, 241), StateColor::Disabled),
+        std::pair<wxColour, int>(primary ? green : grey_bg, StateColor::Pressed),
+        std::pair<wxColour, int>(primary ? green_hover : grey_hover, StateColor::Hovered),
+        std::pair<wxColour, int>(primary ? green : grey_bg, StateColor::Normal),
+        std::pair<wxColour, int>(primary ? green : grey_bg, StateColor::Enabled)
+    ));
+    button->SetBorderColor(StateColor(
+        std::pair<wxColour, int>(wxColour(240, 240, 241), StateColor::Disabled),
+        std::pair<wxColour, int>(primary ? green : grey_bg, StateColor::Normal),
+        std::pair<wxColour, int>(primary ? green : grey_bg, StateColor::Focused)
+    ));
+    button->SetTextColor(StateColor(
+        std::pair<wxColour, int>(wxColour(160, 160, 160), StateColor::Disabled),
+        std::pair<wxColour, int>(primary ? white_text : grey_text, StateColor::Hovered),
+        std::pair<wxColour, int>(primary ? white_text : grey_text, StateColor::Normal)
+    ));
+}
+
+void apply_flat_filter_input_style(wxTextCtrl* input)
+{
+    if (input == nullptr)
+        return;
+
+    input->SetWindowStyleFlag((input->GetWindowStyleFlag() & ~wxBORDER_MASK) | wxBORDER_NONE);
+    input->SetBackgroundColour(*wxWHITE);
+}
+
+void apply_flat_filter_choice_style(wxChoice* choice)
+{
+    if (choice == nullptr)
+        return;
+
+    choice->SetWindowStyleFlag((choice->GetWindowStyleFlag() & ~wxBORDER_MASK) | wxBORDER_NONE);
+    choice->SetBackgroundColour(*wxWHITE);
+}
+
 } // namespace
 
 GFDDeviceSelectionDialog::GFDDeviceSelectionDialog(wxWindow* parent, std::string gcode_path, std::string default_device_type)
@@ -118,10 +173,13 @@ GFDDeviceSelectionDialog::GFDDeviceSelectionDialog(wxWindow* parent, std::string
     , m_gcode_path(std::move(gcode_path))
     , m_default_device_type(std::move(default_device_type))
 {
+    SetDoubleBuffered(true);
     build();
     bind_events();
     wxGetApp().UpdateDlgDarkUI(this);
-    load_devices(false);
+    set_tip_message(_L("正在加载打印设备，请稍候..."));
+    set_loading_state(true);
+    CallAfter([this]() { load_devices(false); });
 }
 
 GFDDeviceSelectionDialog::~GFDDeviceSelectionDialog() = default;
@@ -146,28 +204,32 @@ void GFDDeviceSelectionDialog::build()
     };
 
     m_mac_input = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(180), control_h));
+    apply_flat_filter_input_style(m_mac_input);
     m_mac_input->SetHint(_L("请输入设备MAC"));
     add_labeled(_L("设备MAC:"), m_mac_input);
 
     m_operator_input = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(160), control_h));
+    apply_flat_filter_input_style(m_operator_input);
     m_operator_input->SetHint(_L("请输入使用人"));
     add_labeled(_L("使用人:"), m_operator_input);
 
     m_type_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(180), control_h));
+    apply_flat_filter_choice_style(m_type_choice);
     append_choice(m_type_choice, _L("全部"), ALL_VALUE);
     add_labeled(_L("设备机型:"), m_type_choice);
 
     m_status_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(160), control_h));
+    apply_flat_filter_choice_style(m_status_choice);
     append_choice(m_status_choice, _L("全部"), ALL_VALUE);
     add_labeled(_L("设备状态:"), m_status_choice);
 
     filter_sizer->AddStretchSpacer(1);
     m_search_button = new Button(this, _L("查找"));
-    m_search_button->SetMinSize(wxSize(FromDIP(64), FromDIP(30)));
+    apply_flat_filter_button_style(m_search_button, true);
     filter_sizer->Add(m_search_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
 
     m_reset_button = new Button(this, _L("重置"));
-    m_reset_button->SetMinSize(wxSize(FromDIP(64), FromDIP(30)));
+    apply_flat_filter_button_style(m_reset_button, false);
     filter_sizer->Add(m_reset_button, 0, wxALIGN_CENTER_VERTICAL);
 
     main_sizer->Add(filter_sizer, 0, wxEXPAND | wxALL, FromDIP(16));
@@ -195,6 +257,10 @@ void GFDDeviceSelectionDialog::build()
     m_device_list->AppendColumn(_L("固件版本号"), wxLIST_FORMAT_CENTER, FromDIP(180));
     main_sizer->Add(m_device_list, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(16));
 
+    m_tip_label = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
+    m_tip_label->SetFont(Label::Body_13);
+    main_sizer->Add(m_tip_label, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(10));
+
     if (!m_gcode_path.empty()) {
         auto* gcode_text = new wxStaticText(this, wxID_ANY, format_wxstr(_L("G-code 文件: %1%"), from_u8(m_gcode_path)));
         main_sizer->Add(gcode_text, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(16));
@@ -204,7 +270,7 @@ void GFDDeviceSelectionDialog::build()
     button_sizer->AddStretchSpacer(1);
 
     m_confirm_button = new Button(this, _L("确认"));
-    m_confirm_button->SetMinSize(wxSize(FromDIP(70), FromDIP(30)));
+    apply_flat_filter_button_style(m_confirm_button, true);
     m_confirm_button->Disable();
     button_sizer->Add(m_confirm_button, 0);
     main_sizer->Add(button_sizer, 0, wxEXPAND | wxALL, FromDIP(16));
@@ -248,17 +314,23 @@ void GFDDeviceSelectionDialog::bind_events()
 
 void GFDDeviceSelectionDialog::load_devices(bool keep_current_filters)
 {
+    set_tip_message(keep_current_filters ? _L("正在查找打印设备，请稍候...") : _L("正在加载打印设备，请稍候..."));
+    set_loading_state(true);
     sync_checked_keys_from_table();
 
     std::string body;
     std::string error_message;
     if (!request_devices(body, error_message)) {
+        set_tip_message(from_u8(error_message.empty() ? "查询设备失败，请检查网络后重试。" : error_message), true);
+        set_loading_state(false);
         show_error(this, from_u8(error_message.empty() ? "查询设备失败" : error_message));
         return;
     }
 
     std::vector<GFDDeviceInfo> devices;
     if (!parse_devices(body, devices, error_message)) {
+        set_tip_message(from_u8(error_message.empty() ? "解析设备数据失败，请稍后重试。" : error_message), true);
+        set_loading_state(false);
         show_error(this, from_u8(error_message.empty() ? "解析设备数据失败" : error_message));
         return;
     }
@@ -268,6 +340,12 @@ void GFDDeviceSelectionDialog::load_devices(bool keep_current_filters)
 
     refresh_filter_choices(keep_current_filters ? current_type_filter() : m_default_device_type, current_status_filter());
     refresh_table(true, false);
+
+    if (m_device_list != nullptr && m_device_list->GetItemCount() > 0)
+        set_tip_message(format_wxstr(_L("已加载 %1% 台设备，可勾选、选中后确认，或双击行快速选择。"), m_device_list->GetItemCount()));
+    else
+        set_tip_message(_L("未查询到设备，可调整筛选条件后点击查找重试。"));
+    set_loading_state(false);
 }
 
 void GFDDeviceSelectionDialog::refresh_filter_choices(const std::string& selected_type, const std::string& selected_status)
@@ -392,6 +470,11 @@ void GFDDeviceSelectionDialog::accept_selection()
 
 void GFDDeviceSelectionDialog::update_confirm_button_state()
 {
+    if (m_loading) {
+        m_confirm_button->Disable();
+        return;
+    }
+
     bool has_offline = false;
     const auto checked = checked_devices(true, &has_offline);
     bool selected_has_offline = false;
@@ -459,6 +542,38 @@ void GFDDeviceSelectionDialog::update_table_column_widths()
     m_device_list->SetColumnWidth(3, type_width);
     m_device_list->SetColumnWidth(4, status_width);
     m_device_list->SetColumnWidth(5, version_width);
+}
+
+void GFDDeviceSelectionDialog::set_tip_message(const wxString& message, bool is_error)
+{
+    if (m_tip_label == nullptr)
+        return;
+
+    m_tip_label->SetLabel(message);
+    m_tip_label->SetForegroundColour(is_error ? wxColour(220, 38, 38) : wxGetApp().get_label_clr_default());
+    Layout();
+}
+
+void GFDDeviceSelectionDialog::set_loading_state(bool loading)
+{
+    m_loading = loading;
+
+    if (m_search_button != nullptr)
+        m_search_button->Enable(!loading);
+    if (m_reset_button != nullptr)
+        m_reset_button->Enable(!loading);
+    if (m_mac_input != nullptr)
+        m_mac_input->Enable(!loading);
+    if (m_operator_input != nullptr)
+        m_operator_input->Enable(!loading);
+    if (m_type_choice != nullptr)
+        m_type_choice->Enable(!loading);
+    if (m_status_choice != nullptr)
+        m_status_choice->Enable(!loading);
+    if (m_device_list != nullptr)
+        m_device_list->Enable(!loading);
+
+    update_confirm_button_state();
 }
 
 std::string GFDDeviceSelectionDialog::build_query_url() const

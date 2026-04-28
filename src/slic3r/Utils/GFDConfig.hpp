@@ -69,6 +69,7 @@ public:
     static std::string device_query_url(const AppConfig* config);
     static std::string device_slice_type_url(const AppConfig* config);
     static std::string device_print_cmd_url(const AppConfig* config);
+    static std::string explicit_device_type(const DynamicPrintConfig& printer_config);
     static std::string current_device_type(const DynamicPrintConfig& printer_config);
     static std::vector<std::string> local_gfd_device_types();
     static bool        is_gfd_printer(const DynamicPrintConfig& printer_config);

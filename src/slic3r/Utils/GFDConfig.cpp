@@ -235,7 +235,7 @@ std::string Config::device_print_cmd_url(const AppConfig* config)
     return current_environment(config).api_base_url + PATH_DEVICE_PRINT_CMD;
 }
 
-std::string Config::current_device_type(const DynamicPrintConfig& printer_config)
+std::string Config::explicit_device_type(const DynamicPrintConfig& printer_config)
 {
     const std::string printer_model       = config_string_value(printer_config, "printer_model");
     const std::string printer_settings_id = config_string_value(printer_config, "printer_settings_id");
@@ -266,6 +266,21 @@ std::string Config::current_device_type(const DynamicPrintConfig& printer_config
                                 << ", gfd_device_type=" << gfd_device_type;
         return gfd_device_type;
     }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD explicit_device_type unresolved"
+                            << ", printer_model=" << printer_model
+                            << ", printer_settings_id=" << printer_settings_id
+                            << ", gfd_device_type=<empty>";
+    return {};
+}
+
+std::string Config::current_device_type(const DynamicPrintConfig& printer_config)
+{
+    const std::string printer_model       = config_string_value(printer_config, "printer_model");
+    const std::string printer_settings_id = config_string_value(printer_config, "printer_settings_id");
+    std::string       gfd_device_type     = explicit_device_type(printer_config);
+    if (!gfd_device_type.empty())
+        return gfd_device_type;
 
     if (GUI::wxGetApp().preset_bundle != nullptr) {
         auto& printers = GUI::wxGetApp().preset_bundle->printers;

@@ -222,7 +222,7 @@ GFDPrinterState current_gfd_printer_state()
     auto read_printer_state = [](const DynamicPrintConfig& config, std::string& printer_model, std::string& device_type) {
         const auto* printer_model_opt = config.option<ConfigOptionString>("printer_model");
         printer_model = printer_model_opt != nullptr ? printer_model_opt->value : std::string();
-        device_type   = GFD::Config::current_device_type(config);
+        device_type   = GFD::Config::explicit_device_type(config);
     };
 
     read_printer_state(wxGetApp().preset_bundle->printers.get_selected_preset().config,
@@ -374,11 +374,15 @@ public:
         : wxDialog(parent, wxID_ANY, _L("云端导入"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
         , m_plater(plater)
     {
+        SetDoubleBuffered(true);
         build();
         bind_events();
         load_device_types();
         wxGetApp().UpdateDlgDarkUI(this);
-        CallAfter([this]() { fetch_configs_for_selected_device(); });
+        Freeze();
+        fetch_configs_for_selected_device();
+        Layout();
+        Thaw();
     }
 
     void refresh_configs() { fetch_configs_for_selected_device(); }
@@ -404,7 +408,7 @@ private:
 
         auto* filter_row = new wxBoxSizer(wxHORIZONTAL);
         auto* device_label = new wxStaticText(this, wxID_ANY, _L("设备机型"), wxDefaultPosition, wxDefaultSize, 0);
-        device_label->SetFont(::Label::Body_13);
+        device_label->SetFont(::Label::Body_14);
         filter_row->Add(device_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
 
         m_device_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(220), FromDIP(30)));
@@ -420,6 +424,7 @@ private:
         main_sizer->AddSpacer(FromDIP(14));
 
         m_config_list = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(872), FromDIP(390)), wxBORDER_SIMPLE | wxVSCROLL);
+        m_config_list->SetDoubleBuffered(true);
         m_config_list->SetScrollRate(0, FromDIP(12));
         m_config_list->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
         m_config_list_sizer = new wxBoxSizer(wxVERTICAL);
@@ -429,7 +434,7 @@ private:
         main_sizer->AddSpacer(FromDIP(10));
 
         m_tip_label = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
-        m_tip_label->SetFont(::Label::Body_12);
+        m_tip_label->SetFont(::Label::Body_13);
         m_tip_label->SetForegroundColour(wxColour(220, 38, 38));
         main_sizer->Add(m_tip_label, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
 
@@ -533,8 +538,8 @@ private:
     wxStaticText* create_row_label(wxWindow* parent, const wxString& text, int min_width)
     {
         auto* label = new wxStaticText(parent, wxID_ANY, text, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
-        label->SetFont(::Label::Body_12);
-        label->SetMinSize(wxSize(FromDIP(min_width), FromDIP(24)));
+        label->SetFont(::Label::Body_14);
+        label->SetMinSize(wxSize(FromDIP(min_width), -1));
         if (!text.empty())
             label->SetToolTip(text);
         return label;
@@ -551,8 +556,8 @@ private:
             return;
         const wxColour green(0, 150, 136);
         const wxColour hover_bg(232, 247, 245);
-        button->SetFont(::Label::Body_12);
-        button->SetMinSize(wxSize(FromDIP(95), FromDIP(28)));
+        button->SetFont(::Label::Body_14);
+        button->SetMinSize(wxSize(FromDIP(108), FromDIP(30)));
         button->SetCornerRadius(0);
         button->SetBorderWidth(0);
         button->SetBackgroundColour(background);
@@ -584,6 +589,7 @@ private:
 
         auto* header_panel = new wxPanel(m_config_list);
         header_panel->SetBackgroundColour(wxColour(245, 245, 245));
+        header_panel->SetMinSize(wxSize(-1, FromDIP(38)));
         auto* row = new wxBoxSizer(wxHORIZONTAL);
         row->AddSpacer(FromDIP(8));
         add_row_label(header_panel, row, _L("配置名称"), 120, 2);
@@ -604,6 +610,7 @@ private:
         auto* row_panel = new wxPanel(m_config_list);
         const wxColour row_bg = index % 2 == 0 ? wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW) : wxColour(250, 250, 250);
         row_panel->SetBackgroundColour(row_bg);
+        row_panel->SetMinSize(wxSize(-1, FromDIP(44)));
 
         auto* row = new wxBoxSizer(wxHORIZONTAL);
         row->AddSpacer(FromDIP(8));
@@ -624,6 +631,8 @@ private:
 
     void rebuild_config_rows()
     {
+        if (m_config_list != nullptr)
+            m_config_list->Freeze();
         clear_config_rows();
         add_header_row();
         for (size_t i = 0; i < m_configs.size(); ++i)
@@ -632,6 +641,7 @@ private:
             m_config_list->FitInside();
             m_config_list->Layout();
             m_config_list->Refresh();
+            m_config_list->Thaw();
         }
         Layout();
     }
