@@ -1288,8 +1288,8 @@ void Sidebar::update_all_preset_comboboxes()
             const auto host_type = cfg.option<ConfigOptionEnum<PrintHostType>>("host_type")->value;
             if (cfg.has("printhost_apikey") && (host_type != htSimplyPrint))
                 apikey = cfg.opt_string("printhost_apikey");
-            print_btn_type = preset_bundle.is_bbl_vendor() ? MainFrame::PrintSelectType::ePrintPlate :
-                                                             MainFrame::PrintSelectType::eSendGcode;
+            print_btn_type = (preset_bundle.is_bbl_vendor() || is_gfd_printer) ? MainFrame::PrintSelectType::ePrintPlate :
+                                                                                  MainFrame::PrintSelectType::eSendGcode;
         }
 
         p_mainframe->load_printer_url(url, apikey);
@@ -9139,7 +9139,7 @@ void Plater::priv::start_gfd_print_export()
     }
 
     if (q->only_gcode_mode()) {
-        if (!current_plate->is_slice_result_valid() || !current_plate->is_valid_gcode_file()) {
+        if (!current_plate->is_valid_gcode_file()) {
             BOOST_LOG_TRIVIAL(warning) << "GFD start print export skipped: imported gcode is invalid"
                                        << ", slice_result_valid=" << current_plate->is_slice_result_valid()
                                        << ", gcode_valid=" << current_plate->is_valid_gcode_file();

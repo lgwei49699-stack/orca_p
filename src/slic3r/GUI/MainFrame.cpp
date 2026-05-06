@@ -2206,7 +2206,10 @@ wxBoxSizer* MainFrame::create_side_tools()
             SidePopup* p = new SidePopup(this);
             const auto preset_bundle = wxGetApp().preset_bundle;
 
-            if (preset_bundle && !preset_bundle->is_bbl_vendor()) {
+            const bool is_gfd_printer = preset_bundle &&
+                                        GFD::Config::is_gfd_printer(preset_bundle->printers.get_edited_preset().config);
+
+            if (preset_bundle && !preset_bundle->is_bbl_vendor() && !is_gfd_printer) {
                 // ThirdParty Buttons
                 SideButton* export_gcode_btn = new SideButton(p, _L("Export G-code file"), "");
                 export_gcode_btn->SetCornerRadius(0);
@@ -2534,8 +2537,8 @@ bool MainFrame::get_enable_gfd_print_status()
     if (m_plater == nullptr || wxGetApp().preset_bundle == nullptr)
         return false;
 
-    const DynamicPrintConfig& printer_cfg = wxGetApp().preset_bundle->printers.get_selected_preset().config;
-    if (!GFD::Config::should_show_print_button(printer_cfg))
+    const GFDPrinterState printer_state = current_gfd_printer_state();
+    if (printer_state.effective_device_type.empty())
         return false;
 
     PartPlate* current_plate = m_plater->get_partplate_list().get_curr_plate();
@@ -2549,6 +2552,9 @@ bool MainFrame::get_enable_gfd_print_status()
 
     BOOST_LOG_TRIVIAL(info) << "GFD print enable status"
                             << ", enable=" << enable
+                            << ", effective_printer_model=" << printer_state.effective_printer_model
+                            << ", effective_gfd_device_type="
+                            << (printer_state.effective_device_type.empty() ? std::string("<empty>") : printer_state.effective_device_type)
                             << ", is_slice_result_valid=" << current_plate->is_slice_result_valid()
                             << ", has_printable_instances=" << current_plate->has_printable_instances()
                             << ", has_valid_gcode=" << has_valid_gcode
