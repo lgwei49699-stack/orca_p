@@ -2543,12 +2543,15 @@ bool MainFrame::get_enable_gfd_print_status()
         return false;
 
     const bool is_all_plates = m_plater->get_preview_canvas3D()->is_all_plates_selected();
-    const bool enable = current_plate->is_slice_result_valid() && current_plate->has_printable_instances() && !is_all_plates;
+    const bool has_valid_gcode = current_plate->is_valid_gcode_file();
+    const bool enable = current_plate->is_slice_result_valid() && !is_all_plates &&
+                        (current_plate->has_printable_instances() || has_valid_gcode);
 
     BOOST_LOG_TRIVIAL(info) << "GFD print enable status"
                             << ", enable=" << enable
                             << ", is_slice_result_valid=" << current_plate->is_slice_result_valid()
                             << ", has_printable_instances=" << current_plate->has_printable_instances()
+                            << ", has_valid_gcode=" << has_valid_gcode
                             << ", is_all_plates=" << is_all_plates;
     return enable;
 }
@@ -4351,7 +4354,8 @@ void MainFrame::update_gfd_print_button()
     if (m_plater != nullptr) {
         PartPlate* current_plate = m_plater->get_partplate_list().get_curr_plate();
         const bool is_all_plates = m_plater->get_preview_canvas3D()->is_all_plates_selected();
-        slice_ready = current_plate != nullptr && current_plate->is_slice_result_valid() && current_plate->has_printable_instances() && !is_all_plates;
+        slice_ready = current_plate != nullptr && current_plate->is_slice_result_valid() && !is_all_plates &&
+                      (current_plate->has_printable_instances() || current_plate->is_valid_gcode_file());
     }
 
     const bool show = can_show_side_tools && should_show_gfd_print_button && slice_ready;
