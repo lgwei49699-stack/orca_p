@@ -37,6 +37,28 @@ std::string lower_copy(std::string value)
     return value;
 }
 
+bool starts_with_case_insensitive(const std::string& value, const std::string& prefix)
+{
+    if (prefix.size() > value.size())
+        return false;
+
+    for (size_t index = 0; index < prefix.size(); ++index) {
+        if (std::tolower(static_cast<unsigned char>(value[index])) != std::tolower(static_cast<unsigned char>(prefix[index])))
+            return false;
+    }
+
+    return true;
+}
+
+bool has_device_alias_boundary(const std::string& value, size_t prefix_length)
+{
+    if (value.size() <= prefix_length)
+        return true;
+
+    const unsigned char suffix_char = static_cast<unsigned char>(value[prefix_length]);
+    return !std::isalpha(suffix_char);
+}
+
 EnvironmentConfig resolve_environment(const std::string& env)
 {
     if (lower_copy(trim_copy(env)) == Config::ENV_QA) {
@@ -124,6 +146,8 @@ std::map<std::string, std::string> load_local_machine_device_types()
                 if (gfd_device_type.empty())
                     continue;
 
+                device_types[gfd_device_type] = gfd_device_type;
+
                 const std::string model_name = model_json.value("name", std::string());
                 const std::string model_id   = model_json.value("model_id", std::string());
                 if (!list_name.empty())
@@ -156,7 +180,8 @@ std::string resolve_device_type_from_local_config(const std::string& printer_mod
         cached_device_types  = load_local_machine_device_types();
     }
 
-    const auto it = cached_device_types.find(printer_model);
+    const std::string candidate = trim_copy(printer_model);
+    const auto        it        = cached_device_types.find(candidate);
     return it != cached_device_types.end() ? it->second : std::string();
 }
 
@@ -173,12 +198,44 @@ const std::map<std::string, std::string>& cached_local_machine_device_types()
     return cached_device_types;
 }
 
+std::string resolve_device_type_from_local_alias(const std::string& identifier)
+{
+    const std::string candidate = trim_copy(identifier);
+    if (candidate.empty())
+        return {};
+
+    const auto& device_types = cached_local_machine_device_types();
+    if (const auto it = device_types.find(candidate); it != device_types.end())
+        return it->second;
+
+    const auto lowered_candidate = lower_copy(candidate);
+    size_t      best_match_len   = 0;
+    std::string resolved_type;
+    for (const auto& entry : device_types) {
+        const std::string alias = trim_copy(entry.first);
+        if (alias.empty() || alias.size() <= best_match_len)
+            continue;
+
+        if (!starts_with_case_insensitive(lowered_candidate, lower_copy(alias)))
+            continue;
+        if (!has_device_alias_boundary(candidate, alias.size()))
+            continue;
+
+        best_match_len = alias.size();
+        resolved_type  = entry.second;
+    }
+
+    return resolved_type;
+}
+
 std::string resolve_device_type_from_preset(const Preset* preset)
 {
     if (preset == nullptr)
         return {};
 
     std::string gfd_device_type = config_string_value(preset->config, "gfd_device_type");
+    if (const std::string resolved = resolve_device_type_from_local_alias(gfd_device_type); !resolved.empty())
+        return resolved;
     if (!gfd_device_type.empty())
         return gfd_device_type;
 
@@ -187,6 +244,14 @@ std::string resolve_device_type_from_preset(const Preset* preset)
         return gfd_device_type;
 
     gfd_device_type = resolve_device_type_from_local_config(config_string_value(preset->config, "printer_model"));
+    if (!gfd_device_type.empty())
+        return gfd_device_type;
+
+    gfd_device_type = resolve_device_type_from_local_alias(config_string_value(preset->config, "printer_settings_id"));
+    if (!gfd_device_type.empty())
+        return gfd_device_type;
+
+    gfd_device_type = resolve_device_type_from_local_alias(preset->name);
     if (!gfd_device_type.empty())
         return gfd_device_type;
 
@@ -239,7 +304,8 @@ std::string Config::explicit_device_type(const DynamicPrintConfig& printer_confi
 {
     const std::string printer_model       = config_string_value(printer_config, "printer_model");
     const std::string printer_settings_id = config_string_value(printer_config, "printer_settings_id");
-    std::string       gfd_device_type     = config_string_value(printer_config, "gfd_device_type");
+    const std::string raw_gfd_device_type = config_string_value(printer_config, "gfd_device_type");
+    std::string       gfd_device_type     = resolve_device_type_from_local_alias(raw_gfd_device_type);
 
     if (!gfd_device_type.empty()) {
         BOOST_LOG_TRIVIAL(info) << "GFD current_device_type from printer config"
@@ -247,6 +313,13 @@ std::string Config::explicit_device_type(const DynamicPrintConfig& printer_confi
                                 << ", printer_settings_id=" << printer_settings_id
                                 << ", gfd_device_type=" << gfd_device_type;
         return gfd_device_type;
+    }
+    if (!raw_gfd_device_type.empty()) {
+        BOOST_LOG_TRIVIAL(info) << "GFD current_device_type from printer config"
+                                << ", printer_model=" << printer_model
+                                << ", printer_settings_id=" << printer_settings_id
+                                << ", gfd_device_type=" << raw_gfd_device_type;
+        return raw_gfd_device_type;
     }
 
     gfd_device_type = resolve_device_type_from_vendor_model(printer_model);
@@ -258,9 +331,18 @@ std::string Config::explicit_device_type(const DynamicPrintConfig& printer_confi
         return gfd_device_type;
     }
 
-    gfd_device_type = resolve_device_type_from_local_config(printer_model);
+    gfd_device_type = resolve_device_type_from_local_alias(printer_model);
     if (!gfd_device_type.empty()) {
         BOOST_LOG_TRIVIAL(info) << "GFD current_device_type resolved from local machine config"
+                                << ", printer_model=" << printer_model
+                                << ", printer_settings_id=" << printer_settings_id
+                                << ", gfd_device_type=" << gfd_device_type;
+        return gfd_device_type;
+    }
+
+    gfd_device_type = resolve_device_type_from_local_alias(printer_settings_id);
+    if (!gfd_device_type.empty()) {
+        BOOST_LOG_TRIVIAL(info) << "GFD current_device_type resolved from printer settings id"
                                 << ", printer_model=" << printer_model
                                 << ", printer_settings_id=" << printer_settings_id
                                 << ", gfd_device_type=" << gfd_device_type;
