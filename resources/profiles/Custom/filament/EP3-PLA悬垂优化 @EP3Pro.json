@@ -153,7 +153,9 @@
     ],
     "setting_id": "GFD_EP3PRO_FIL_PLA_OVERHANG",
     "compatible_printers": [
-        "EP3Pro 0.4 nozzle"
+	    "EP3 0.4 nozzle",
+        "EP3Pro 0.4 nozzle",
+		"MyMarlin 0.4 nozzle"
     ],
     "filament_id": "GFL99",
     "renamed_from": "My Generic PLA @MyToolChanger",

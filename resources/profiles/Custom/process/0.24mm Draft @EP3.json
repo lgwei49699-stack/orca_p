@@ -12,6 +12,8 @@
     "initial_layer_infill_speed": "30",
     "top_surface_speed": "55",
     "compatible_printers": [
-        "EP3 0.4 nozzle"
+	    "EP3 0.4 nozzle",
+        "EP3Pro 0.4 nozzle",
+		"MyMarlin 0.4 nozzle"
     ]
 }
