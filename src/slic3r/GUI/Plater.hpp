@@ -382,6 +382,7 @@ public:
     Sidebar::DockingState get_sidebar_docking_state() const;
     wxPanel* gfd_config_panel();
     Button*  gfd_cloud_import_button();
+    Button*  gfd_dynamic_params_button();
     Button*  gfd_upload_config_button();
     Button*  gfd_save_config_button();
     void     update_gfd_config_panel_position();
@@ -472,6 +473,13 @@ public:
     bool save_active_imported_cloud_config();
     bool fetch_cloud_configs(const std::string& device_type, std::vector<GFDCloudConfigInfo>& configs, std::string& error_message);
     bool import_cloud_config(const GFDCloudConfigInfo& config);
+    bool fetch_dynamic_filament_list(std::string& body, std::string& error_message);
+    bool fetch_dynamic_filament_detail(const std::string& filament_sn, std::string& body, std::string& error_message);
+    bool update_dynamic_filament_slice_param(const std::string& filament_sn,
+                                             const std::string& device_type,
+                                             const std::string& slice_param,
+                                             std::string&       body,
+                                             std::string&       error_message);
     //BBS jump to nonitor after print job finished
     void send_calibration_job_finished(wxCommandEvent &evt);
     void print_job_finished(wxCommandEvent &evt);

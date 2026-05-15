@@ -54,6 +54,10 @@ public:
     static constexpr const char* PATH_CONFIG_UPDATE     = "/app/print3d/manage/v1/slice-param-config/edit";
     static constexpr const char* PATH_DEVICE_QUERY      = "/app/print3d/manage/v1/md/query";
     static constexpr const char* PATH_DEVICE_SLICE_TYPE = "/app/print3d/manage/v1/slice-param-config/device-and-slice-type";
+    static constexpr const char* PATH_FILAMENT_TEMPERATURE_LIST = "/app/print3d/manage/v1/filamentTemperature/list";
+    static constexpr const char* PATH_FILAMENT_TEMPERATURE_DETAIL = "/app/print3d/manage/v1/filamentTemperature/detail";
+    static constexpr const char* PATH_FILAMENT_TEMPERATURE_UPDATE_SLICE_PARAM =
+        "/app/print3d/manage/v1/filamentTemperature/updateSliceParam";
     static constexpr const char* PATH_DEVICE_PRINT_CMD  = "/app/pmc/api/v1/deviceCmd/print";
 
     static EnvironmentConfig current_environment(const AppConfig* config);
@@ -68,6 +72,9 @@ public:
     static std::string config_update_url(const AppConfig* config);
     static std::string device_query_url(const AppConfig* config);
     static std::string device_slice_type_url(const AppConfig* config);
+    static std::string filament_temperature_list_url(const AppConfig* config);
+    static std::string filament_temperature_detail_url(const AppConfig* config);
+    static std::string filament_temperature_update_slice_param_url(const AppConfig* config);
     static std::string device_print_cmd_url(const AppConfig* config);
     static std::string explicit_device_type(const DynamicPrintConfig& printer_config);
     static std::string current_device_type(const DynamicPrintConfig& printer_config);

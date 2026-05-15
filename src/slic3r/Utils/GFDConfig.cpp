@@ -295,6 +295,21 @@ std::string Config::device_slice_type_url(const AppConfig* config)
     return current_environment(config).api_base_url + PATH_DEVICE_SLICE_TYPE;
 }
 
+std::string Config::filament_temperature_list_url(const AppConfig* config)
+{
+    return current_environment(config).api_base_url + PATH_FILAMENT_TEMPERATURE_LIST;
+}
+
+std::string Config::filament_temperature_detail_url(const AppConfig* config)
+{
+    return current_environment(config).api_base_url + PATH_FILAMENT_TEMPERATURE_DETAIL;
+}
+
+std::string Config::filament_temperature_update_slice_param_url(const AppConfig* config)
+{
+    return current_environment(config).api_base_url + PATH_FILAMENT_TEMPERATURE_UPDATE_SLICE_PARAM;
+}
+
 std::string Config::device_print_cmd_url(const AppConfig* config)
 {
     return current_environment(config).api_base_url + PATH_DEVICE_PRINT_CMD;

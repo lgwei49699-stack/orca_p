@@ -2505,6 +2505,7 @@ struct Plater::priv
     Sidebar*              sidebar;
     wxPanel*              gfd_config_panel{nullptr};
     Button*               gfd_cloud_import_btn{nullptr};
+    Button*               gfd_dynamic_params_btn{nullptr};
     Button*               gfd_upload_config_btn{nullptr};
     Button*               gfd_save_config_btn{nullptr};
     wxBoxSizer*           gfd_config_sizer{nullptr};
@@ -2964,6 +2965,13 @@ struct Plater::priv
     bool        gfd_has_active_imported_cloud_config() const;
     bool        gfd_has_dirty_active_imported_cloud_config() const;
     bool        gfd_get_active_imported_cloud_config(GFDCloudImportState& state) const;
+    bool        gfd_fetch_dynamic_filament_list(std::string& body, std::string& error_message) const;
+    bool        gfd_fetch_dynamic_filament_detail(const std::string& filament_sn, std::string& body, std::string& error_message) const;
+    bool        gfd_update_dynamic_filament_slice_param(const std::string& filament_sn,
+                                                        const std::string& device_type,
+                                                        const std::string& slice_param,
+                                                        std::string&       body,
+                                                        std::string&       error_message) const;
     nlohmann::json gfd_load_cloud_process_records() const;
     void           gfd_save_cloud_process_records(const nlohmann::json& records) const;
     bool        gfd_send_print_command(const GFDDeviceInfo& device,
@@ -3309,9 +3317,12 @@ Plater::priv::priv(Plater* q, MainFrame* main_frame)
     };
 
     gfd_cloud_import_btn = create_gfd_config_button("云\n端\n导\n入");
+    gfd_dynamic_params_btn = create_gfd_config_button("动\n态\n参\n数");
     gfd_upload_config_btn = create_gfd_config_button("上\n传\n配\n置");
     gfd_save_config_btn = create_gfd_config_button("保\n存\n配\n置");
 
+    gfd_config_sizer->AddSpacer(wxWindow::FromDIP(176, gfd_config_panel));
+    gfd_config_sizer->Add(gfd_dynamic_params_btn, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, wxWindow::FromDIP(4, gfd_config_panel));
     gfd_config_sizer->AddStretchSpacer(1);
     for (Button* btn : {gfd_cloud_import_btn, gfd_upload_config_btn, gfd_save_config_btn})
         gfd_config_sizer->Add(btn, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, wxWindow::FromDIP(4, gfd_config_panel));
@@ -9530,6 +9541,153 @@ bool Plater::priv::gfd_send_print_command(const GFDDeviceInfo& device,
     return ok;
 }
 
+bool Plater::priv::gfd_fetch_dynamic_filament_list(std::string& body, std::string& error_message) const
+{
+    const std::string token = gfd_auth_token();
+    if (token.empty()) {
+        error_message = "登录状态无效，请重新登录";
+        BOOST_LOG_TRIVIAL(warning) << "GFD dynamic params filament list skipped: auth token is empty";
+        return false;
+    }
+
+    bool              ok          = false;
+    const std::string request_url = GFD::Config::filament_temperature_list_url(wxGetApp().app_config);
+    BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament list request"
+                            << ", url=" << request_url;
+    Http::get(request_url)
+        .header("Authorization", token)
+        .header("Biz", "ZXBMan")
+        .on_complete([&](std::string response_body, unsigned status) {
+            body = std::move(response_body);
+            ok   = true;
+            BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament list response"
+                                    << ", http_status=" << status
+                                    << ", body_length=" << body.size();
+        })
+        .on_error([&](std::string response_body, std::string error, unsigned status) {
+            body          = std::move(response_body);
+            error_message = error.empty() ? body : error;
+            ok            = false;
+            BOOST_LOG_TRIVIAL(error) << "GFD dynamic params filament list failed"
+                                     << ", http_status=" << status
+                                     << ", error=" << error_message
+                                     << ", body=" << body;
+        })
+        .perform_sync();
+    return ok;
+}
+
+bool Plater::priv::gfd_fetch_dynamic_filament_detail(const std::string& filament_sn, std::string& body, std::string& error_message) const
+{
+    const std::string token = gfd_auth_token();
+    if (token.empty()) {
+        error_message = "登录状态无效，请重新登录";
+        BOOST_LOG_TRIVIAL(warning) << "GFD dynamic params filament detail skipped: auth token is empty";
+        return false;
+    }
+
+    if (filament_sn.empty()) {
+        error_message = "请选择耗材";
+        return false;
+    }
+
+    const std::string request_url = GFD::Config::filament_temperature_detail_url(wxGetApp().app_config) + "?sn=" +
+                                    Http::url_encode(filament_sn);
+    bool ok = false;
+    BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament detail request"
+                            << ", url=" << request_url
+                            << ", sn=" << filament_sn;
+    Http::get(request_url)
+        .header("Authorization", token)
+        .header("Biz", "ZXBMan")
+        .on_complete([&](std::string response_body, unsigned status) {
+            body = std::move(response_body);
+            ok   = true;
+            BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament detail response"
+                                    << ", http_status=" << status
+                                    << ", sn=" << filament_sn
+                                    << ", body_length=" << body.size();
+        })
+        .on_error([&](std::string response_body, std::string error, unsigned status) {
+            body          = std::move(response_body);
+            error_message = error.empty() ? body : error;
+            ok            = false;
+            BOOST_LOG_TRIVIAL(error) << "GFD dynamic params filament detail failed"
+                                     << ", http_status=" << status
+                                     << ", sn=" << filament_sn
+                                     << ", error=" << error_message
+                                     << ", body=" << body;
+        })
+        .perform_sync();
+    return ok;
+}
+
+bool Plater::priv::gfd_update_dynamic_filament_slice_param(const std::string& filament_sn,
+                                                           const std::string& device_type,
+                                                           const std::string& slice_param,
+                                                           std::string&       body,
+                                                           std::string&       error_message) const
+{
+    const std::string token = gfd_auth_token();
+    if (token.empty()) {
+        error_message = "登录状态无效，请重新登录";
+        BOOST_LOG_TRIVIAL(warning) << "GFD dynamic params update skipped: auth token is empty";
+        return false;
+    }
+
+    if (filament_sn.empty()) {
+        error_message = "请选择耗材";
+        return false;
+    }
+    if (device_type.empty()) {
+        error_message = "请选择机型";
+        return false;
+    }
+
+    nlohmann::json request_json;
+    request_json["sn"]         = filament_sn;
+    request_json["deviceType"] = device_type;
+    request_json["deviceTypes"] = nlohmann::json::array({device_type});
+    request_json["sliceType"]  = "orca";
+    request_json["sliceParam"] = slice_param;
+
+    const std::string request_url  = GFD::Config::filament_temperature_update_slice_param_url(wxGetApp().app_config);
+    const std::string request_body = request_json.dump();
+    bool              ok           = false;
+    BOOST_LOG_TRIVIAL(info) << "GFD dynamic params update request"
+                            << ", url=" << request_url
+                            << ", sn=" << filament_sn
+                            << ", device_type=" << device_type
+                            << ", slice_param=" << slice_param
+                            << ", body=" << request_body;
+    Http::post(request_url)
+        .header("Authorization", token)
+        .header("Biz", "ZXBMan")
+        .header("Content-Type", "application/json")
+        .set_post_body(request_body)
+        .on_complete([&](std::string response_body, unsigned status) {
+            body = std::move(response_body);
+            ok   = true;
+            BOOST_LOG_TRIVIAL(info) << "GFD dynamic params update response"
+                                    << ", http_status=" << status
+                                    << ", sn=" << filament_sn
+                                    << ", body=" << body;
+        })
+        .on_error([&](std::string response_body, std::string error, unsigned status) {
+            body          = std::move(response_body);
+            error_message = error.empty() ? body : error;
+            ok            = false;
+            BOOST_LOG_TRIVIAL(error) << "GFD dynamic params update failed"
+                                     << ", http_status=" << status
+                                     << ", sn=" << filament_sn
+                                     << ", device_type=" << device_type
+                                     << ", error=" << error_message
+                                     << ", body=" << body;
+        })
+        .perform_sync();
+    return ok;
+}
+
 bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, const std::string& gcode_path)
 {
     BOOST_LOG_TRIVIAL(info) << "GFD execute print begin"
@@ -13737,6 +13895,7 @@ bool                  Plater::is_sidebar_visible() { return p != nullptr && p->i
 Sidebar::DockingState Plater::get_sidebar_docking_state() const { return p->get_sidebar_docking_state(); }
 wxPanel*              Plater::gfd_config_panel() { return p != nullptr ? p->gfd_config_panel : nullptr; }
 Button*               Plater::gfd_cloud_import_button() { return p != nullptr ? p->gfd_cloud_import_btn : nullptr; }
+Button*               Plater::gfd_dynamic_params_button() { return p != nullptr ? p->gfd_dynamic_params_btn : nullptr; }
 Button*               Plater::gfd_upload_config_button() { return p != nullptr ? p->gfd_upload_config_btn : nullptr; }
 Button*               Plater::gfd_save_config_button() { return p != nullptr ? p->gfd_save_config_btn : nullptr; }
 void                  Plater::update_gfd_config_panel_position()
@@ -15415,6 +15574,31 @@ bool Plater::import_cloud_config(const GFDCloudConfigInfo& config)
     if (p == nullptr)
         return false;
     return p->gfd_import_cloud_config(config);
+}
+
+bool Plater::fetch_dynamic_filament_list(std::string& body, std::string& error_message)
+{
+    if (p == nullptr)
+        return false;
+    return p->gfd_fetch_dynamic_filament_list(body, error_message);
+}
+
+bool Plater::fetch_dynamic_filament_detail(const std::string& filament_sn, std::string& body, std::string& error_message)
+{
+    if (p == nullptr)
+        return false;
+    return p->gfd_fetch_dynamic_filament_detail(filament_sn, body, error_message);
+}
+
+bool Plater::update_dynamic_filament_slice_param(const std::string& filament_sn,
+                                                 const std::string& device_type,
+                                                 const std::string& slice_param,
+                                                 std::string&       body,
+                                                 std::string&       error_message)
+{
+    if (p == nullptr)
+        return false;
+    return p->gfd_update_dynamic_filament_slice_param(filament_sn, device_type, slice_param, body, error_message);
 }
 
 // BBS
