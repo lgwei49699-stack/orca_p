@@ -8701,13 +8701,6 @@ void Plater::priv::gfd_apply_cloud_process_name(const DynamicPrintConfig& import
     const std::string before_name = bundle.prints.get_selected_preset_name();
     const std::string current_printer_name = bundle.printers.get_selected_preset_name();
 
-    if (!current_printer_name.empty()) {
-        ConfigOptionStrings* compatible_printers = bundle.prints.get_edited_preset().config.option<ConfigOptionStrings>("compatible_printers", true);
-        compatible_printers->values.clear();
-        compatible_printers->values.emplace_back(current_printer_name);
-        bundle.prints.get_edited_preset().config.option<ConfigOptionString>("compatible_printers_condition", true)->value.clear();
-    }
-
     bundle.prints.save_current_preset(target_name, false, false);
     if (Preset* saved_preset = bundle.prints.find_preset(target_name, false, true); saved_preset != nullptr) {
         saved_preset->is_visible    = true;

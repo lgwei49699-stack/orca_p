@@ -69,7 +69,7 @@ static const std::vector<std::string> filament_types = {"PLA",    "rPLA",  "PLA+
 static const std::vector<std::string> printer_vendors = 
     {"Anker",              "Anycubic",           "Artillery",          "Bambulab",           "BIQU",
      "Blocks",             "Chuanying",          "Co Print",           "Comgrow",            "CONSTRUCT3D",
-     "Creality",           "DeltaMaker",         "Dremel",             "Elegoo",             "Flashforge",
+     "Creality",           "Custom Printer",     "DeltaMaker",         "Dremel",             "Elegoo",             "Flashforge",
      "FLSun",              "FlyingBear",         "Folgertech",         "Geeetech",           "Ginger Additive",
      "InfiMech",           "Kingroon",           "Lulzbot",            "MagicMaker",         "Mellow",
      "Orca Arena Printer", "Peopoly",            "Positron 3D",        "Prusa",              "Qidi",
@@ -100,6 +100,7 @@ static const std::unordered_map<std::string, std::vector<std::string>> printer_m
                             "Creality Ender-5 Pro (2019)", "Creality Ender-5S",           "Creality Ender-5 S1",         "Creality Ender-6",            "Creality Sermoon V1",
                             "Creality K1",                 "Creality K1C",                "Creality K1 Max",             "Creality K1 SE",              "Creality K2 Plus",
                             "Creality Hi"}},
+     {"Custom Printer",    {"Generic Klipper Printer", "Generic Marlin Printer", "Generic RRF Printer", "Generic ToolChanger Printer", "EP3", "EP3 Pro", "EP3 Plus"}},
      {"DeltaMaker",        {"DeltaMaker 2",   "DeltaMaker 2T",  "DeltaMaker 2XT"}},
      {"Dremel",            {"Dremel 3D20", "Dremel 3D40", "Dremel 3D45"}},
      {"Elegoo",            {"Elegoo Centauri Carbon",  "Elegoo Centauri",         "Elegoo Neptune",          "Elegoo Neptune X",        "Elegoo Neptune 2",

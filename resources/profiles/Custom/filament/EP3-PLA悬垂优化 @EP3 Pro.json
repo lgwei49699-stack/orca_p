@@ -152,11 +152,7 @@
     "70"
   ],
   "setting_id": "GFD_EP3PRO_FIL_PLA_OVERHANG",
-  "compatible_printers": [
-    "EP3 0.4 nozzle",
-    "EP3 Pro 0.4 nozzle",
-    "EP3 Plus 0.4 nozzle"
-  ],
+  "compatible_printers": [],
   "filament_id": "GFL99",
   "renamed_from": "My Generic PLA @MyToolChanger",
   "filament_cooling_final_speed": [

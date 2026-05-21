@@ -1167,6 +1167,24 @@ nlohmann::json gfd_config_to_json(const DynamicPrintConfig& config,
     return payload;
 }
 
+DynamicPrintConfig gfd_resolve_preset_config(const PresetCollection& presets, const Preset& preset)
+{
+    const Preset* parent = presets.get_preset_parent(preset);
+    if (parent == nullptr)
+        return preset.config;
+
+    DynamicPrintConfig resolved = gfd_resolve_preset_config(presets, *parent);
+    for (const std::string& opt_key : preset.config.diff(parent->config)) {
+        const ConfigOption* opt_src = preset.config.option(opt_key);
+        if (opt_src == nullptr)
+            continue;
+        ConfigOption* opt_dst = resolved.option(opt_key, true);
+        opt_dst->set(opt_src);
+    }
+
+    return resolved;
+}
+
 const nlohmann::json* gfd_extract_detail_data(const nlohmann::json& payload)
 {
     const nlohmann::json* current = &payload;
@@ -1743,12 +1761,13 @@ private:
             return "{}";
 
         const Preset& preset = m_bundle->filaments.get_edited_preset();
+        DynamicPrintConfig resolved_config = gfd_resolve_preset_config(m_bundle->filaments, preset);
         std::string name = preset.name;
         if (const ConfigOptionStrings* settings_id = preset.config.option<ConfigOptionStrings>("filament_settings_id");
             settings_id != nullptr && !settings_id->values.empty() && !settings_id->values.front().empty())
             name = settings_id->values.front();
 
-        nlohmann::json payload = gfd_config_to_json(preset.config, name, "system", "filament");
+        nlohmann::json payload = gfd_config_to_json(resolved_config, name, "system", "filament");
         if (!preset.setting_id.empty())
             payload[BBL_JSON_KEY_SETTING_ID] = preset.setting_id;
         if (!preset.filament_id.empty())
