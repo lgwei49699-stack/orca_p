@@ -1,6 +1,6 @@
 {
   "type": "filament",
-  "name": "EP3-PLA悬垂优化 @EP3",
+  "name": "EP3-PLA悬垂优化 @EP3 Pro",
   "from": "system",
   "instantiation": "true",
   "cool_plate_temp": [
@@ -94,7 +94,7 @@
     "nil"
   ],
   "filament_settings_id": [
-    "EP3-PLA悬垂优化 @EP3"
+    "EP3-PLA悬垂优化 @EP3 Pro"
   ],
   "filament_soluble": [
     "0"
@@ -151,7 +151,7 @@
   "additional_cooling_fan_speed": [
     "70"
   ],
-  "setting_id": "GFD_EP3_FIL_PLA_OVERHANG",
+  "setting_id": "GFD_EP3PRO_FIL_PLA_OVERHANG",
   "compatible_printers": [
     "EP3 0.4 nozzle",
     "EP3 Pro 0.4 nozzle",
@@ -307,5 +307,8 @@
   "textured_cool_plate_temp_initial_layer": [
     "40"
   ],
-  "version": "2.3.1.0"
+  "version": "2.3.1.0",
+  "ironing_fan_speed": [
+    "-1"
+  ]
 }

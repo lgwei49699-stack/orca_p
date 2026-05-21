@@ -1,6 +1,6 @@
 {
   "type": "filament",
-  "name": "EP3-PLA悬垂优化 @EP3",
+  "name": "EP3-PLA悬垂优化 @EP3 Plus",
   "from": "system",
   "instantiation": "true",
   "cool_plate_temp": [
@@ -37,13 +37,13 @@
     "1"
   ],
   "close_fan_the_first_x_layers": [
-    "2"
+    "1"
   ],
   "filament_end_gcode": [
     "; filament end gcode\n"
   ],
   "filament_flow_ratio": [
-    "0.98"
+    "1"
   ],
   "reduce_fan_stop_start_freq": [
     "1"
@@ -94,7 +94,7 @@
     "nil"
   ],
   "filament_settings_id": [
-    "EP3-PLA悬垂优化 @EP3"
+    "EP3-PLA悬垂优化 @EP3 Plus"
   ],
   "filament_soluble": [
     "0"
@@ -118,13 +118,13 @@
     "200"
   ],
   "full_fan_speed_layer": [
-    "0"
+    "2"
   ],
   "fan_max_speed": [
-    "100"
+    "30"
   ],
   "fan_min_speed": [
-    "100"
+    "30"
   ],
   "slow_down_min_speed": [
     "5"
@@ -136,22 +136,22 @@
     "; Filament gcode\n"
   ],
   "nozzle_temperature": [
-    "195"
+    "200"
   ],
   "temperature_vitrification": [
     "45"
   ],
   "inherits": "Generic PLA @System",
   "nozzle_temperature_range_low": [
-    "190"
+    "180"
   ],
   "nozzle_temperature_range_high": [
     "240"
   ],
   "additional_cooling_fan_speed": [
-    "70"
+    "100"
   ],
-  "setting_id": "GFD_EP3_FIL_PLA_OVERHANG",
+  "setting_id": "GFD_EP3PLUS_FIL_PLA_OVERHANG",
   "compatible_printers": [
     "EP3 0.4 nozzle",
     "EP3 Pro 0.4 nozzle",
@@ -232,10 +232,10 @@
     "70"
   ],
   "enable_overhang_bridge_fan": [
-    "1"
+    "0"
   ],
   "enable_pressure_advance": [
-    "1"
+    "0"
   ],
   "filament_is_support": [
     "0"
@@ -307,5 +307,8 @@
   "textured_cool_plate_temp_initial_layer": [
     "40"
   ],
-  "version": "2.3.1.0"
+  "version": "2.3.1.10",
+  "ironing_fan_speed": [
+    "-1"
+  ]
 }

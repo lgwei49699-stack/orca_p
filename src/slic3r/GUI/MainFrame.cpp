@@ -65,6 +65,7 @@
 #include "ConfigWizard.hpp"
 #include "Widgets/Button.hpp"
 #include "Widgets/TextInput.hpp"
+#include "Widgets/SwitchButton.hpp"
 #include "Widgets/WebView.hpp"
 #include "DailyTips.hpp"
 #include <wx/stattext.h>
@@ -1119,6 +1120,53 @@ void gfd_collect_orca_param_values(const std::string& contents, std::map<std::st
     gfd_collect_orca_param_values(nlohmann::json::parse(contents), values);
 }
 
+void gfd_collect_orca_param_json(const nlohmann::json& payload, nlohmann::json& values)
+{
+    if (!payload.is_object())
+        return;
+
+    for (auto it = payload.begin(); it != payload.end(); ++it)
+        values[it.key()] = it.value();
+}
+
+void gfd_collect_orca_param_json(const std::string& contents, nlohmann::json& values)
+{
+    if (gfd_trim_copy(contents).empty())
+        return;
+
+    gfd_collect_orca_param_json(nlohmann::json::parse(contents), values);
+}
+
+nlohmann::json gfd_config_to_json(const DynamicPrintConfig& config,
+                                  const std::string&        name,
+                                  const std::string&        from,
+                                  const std::string&        type)
+{
+    nlohmann::json payload = nlohmann::json::object();
+    payload[BBL_JSON_KEY_TYPE] = type;
+    payload[BBL_JSON_KEY_NAME] = name;
+    payload[BBL_JSON_KEY_FROM] = from;
+    payload[BBL_JSON_KEY_INSTANTIATION] = "true";
+
+    for (const std::string& opt_key : config.keys()) {
+        const ConfigOption* opt = config.option(opt_key);
+        if (opt == nullptr)
+            continue;
+
+        if (opt->is_scalar()) {
+            if (opt->type() == coString && opt_key != "bed_custom_texture" && opt_key != "bed_custom_model")
+                payload[opt_key] = static_cast<const ConfigOptionString*>(opt)->value;
+            else
+                payload[opt_key] = opt->serialize();
+        } else {
+            const ConfigOptionVectorBase* vec = static_cast<const ConfigOptionVectorBase*>(opt);
+            payload[opt_key] = vec->vserialize();
+        }
+    }
+
+    return payload;
+}
+
 const nlohmann::json* gfd_extract_detail_data(const nlohmann::json& payload)
 {
     const nlohmann::json* current = &payload;
@@ -1141,6 +1189,614 @@ const nlohmann::json* gfd_extract_detail_data(const nlohmann::json& payload)
     }
     return current;
 }
+
+class GFDDynamicFilamentTab : public TabFilament
+{
+public:
+    GFDDynamicFilamentTab(ParamsPanel* parent, PresetBundle* preset_bundle)
+        : TabFilament(parent)
+    {
+        set_preset_bundle_override(preset_bundle);
+        set_detached_from_app_state(true);
+    }
+
+    wxBoxSizer* top_sizer() const { return m_top_sizer; }
+    wxPanel* top_panel() const { return m_top_panel; }
+    wxWindow* preset_choice() const { return m_presets_choice; }
+    wxWindow* undo_button() const { return m_undo_btn; }
+    wxWindow* save_preset_button() const { return m_btn_save_preset; }
+    wxWindow* delete_preset_button() const { return m_btn_delete_preset; }
+    wxWindow* search_button() const { return m_btn_search; }
+    wxWindow* search_item() const { return m_search_item; }
+    wxWindow* static_title() const { return m_static_title; }
+    wxWindow* mode_view() const { return m_mode_view; }
+
+    void activate_selected_page(std::function<void()> throw_if_canceled) override
+    {
+        if (!m_active_page)
+            return;
+
+        m_active_page->activate(m_mode, throw_if_canceled);
+        update_description_lines();
+        if (m_active_page && !(m_active_page->title() == "Dependencies"))
+            toggle_options();
+        m_active_page->update_visibility(m_mode, true);
+    }
+};
+
+class GFDDynamicMaterialDialog : public DPIDialog
+{
+public:
+    GFDDynamicMaterialDialog(wxWindow* parent, Plater* plater)
+        : DPIDialog(parent, wxID_ANY, _L("材料设置"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
+        , m_plater(plater)
+    {
+        m_bundle = wxGetApp().preset_bundle != nullptr ? std::make_unique<PresetBundle>(*wxGetApp().preset_bundle) : std::make_unique<PresetBundle>();
+
+        build();
+        bind_events();
+        wxGetApp().UpdateDlgDarkUI(this);
+
+        load_device_types();
+        refresh_filament_options();
+    }
+
+private:
+    Plater*                       m_plater{nullptr};
+    std::unique_ptr<PresetBundle> m_bundle;
+    ParamsPanel*                  m_panel{nullptr};
+    GFDDynamicFilamentTab*        m_filament_tab{nullptr};
+    wxComboBox*                   m_filament_choice{nullptr};
+    wxChoice*                     m_device_choice{nullptr};
+    wxStaticText*                 m_sn_label{nullptr};
+    wxStaticText*                 m_tip_label{nullptr};
+    Button*                       m_save_button{nullptr};
+
+    std::vector<GFDDynamicFilamentOption> m_filaments;
+    nlohmann::json                        m_current_detail;
+    std::string                           m_selected_sn;
+
+    void build()
+    {
+        SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+        SetMinSize(wxSize(FromDIP(1040), FromDIP(650)));
+        SetSize(wxSize(FromDIP(1120), FromDIP(720)));
+
+        m_panel = new ParamsPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBK_LEFT | wxTAB_TRAVERSAL);
+        m_panel->set_dialog_title_enabled(false);
+        m_panel->set_skip_missing_global_mode_region(true);
+
+        m_filament_tab = new GFDDynamicFilamentTab(m_panel, m_bundle.get());
+        m_filament_tab->create_preset_tab();
+        m_panel->rebuild_panels();
+        m_panel->set_active_tab(m_filament_tab);
+        detach_tab_from_app_list();
+
+        customize_top_row();
+
+        auto* main_sizer = new wxBoxSizer(wxVERTICAL);
+        main_sizer->Add(m_panel, 1, wxEXPAND | wxALL, 0);
+
+        m_tip_label = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
+        m_tip_label->SetFont(::Label::Body_12);
+        m_tip_label->SetForegroundColour(wxColour(220, 38, 38));
+        main_sizer->Add(m_tip_label, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, FromDIP(16));
+
+        SetSizer(main_sizer);
+        Layout();
+        CentreOnParent();
+        m_filament_tab->OnActivate();
+    }
+
+    void detach_tab_from_app_list()
+    {
+        auto& tabs = wxGetApp().tabs_list;
+        tabs.erase(std::remove(tabs.begin(), tabs.end(), m_filament_tab), tabs.end());
+    }
+
+    void customize_top_row()
+    {
+        wxBoxSizer* top_sizer = m_filament_tab != nullptr ? m_filament_tab->top_sizer() : nullptr;
+        wxPanel*    top_panel = m_filament_tab != nullptr ? m_filament_tab->top_panel() : nullptr;
+        if (top_sizer == nullptr || top_panel == nullptr)
+            return;
+
+        hide_top_child(m_filament_tab->preset_choice(), false);
+        hide_top_child(m_filament_tab->save_preset_button(), false);
+        hide_top_child(m_filament_tab->delete_preset_button(), false);
+        hide_top_child(m_filament_tab->static_title(), false);
+        hide_top_child(m_filament_tab->mode_view(), false);
+        hide_top_child(m_filament_tab->search_button(), false);
+        hide_top_child(m_filament_tab->search_item(), false);
+
+        top_sizer->Clear(false);
+        top_sizer->AddSpacer(FromDIP(SidebarProps::ContentMargin()));
+
+        top_sizer->Add(m_filament_tab->undo_button(), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+
+        auto* filament_label = new wxStaticText(top_panel, wxID_ANY, _L("耗材"));
+        filament_label->SetFont(::Label::Body_13);
+        top_sizer->Add(filament_label, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(8));
+
+        m_filament_choice = new wxComboBox(top_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(280), FromDIP(30)), 0, nullptr, wxCB_READONLY);
+        configure_filament_dropdown();
+        top_sizer->Add(m_filament_choice, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(18));
+
+        auto* device_label = new wxStaticText(top_panel, wxID_ANY, _L("机型"));
+        device_label->SetFont(::Label::Body_13);
+        top_sizer->Add(device_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+
+        m_device_choice = new wxChoice(top_panel, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(96), FromDIP(30)));
+        top_sizer->Add(m_device_choice, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(18));
+
+        auto* sn_caption = new wxStaticText(top_panel, wxID_ANY, _L("耗材SN:"));
+        sn_caption->SetFont(::Label::Body_13);
+        top_sizer->Add(sn_caption, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+
+        m_sn_label = new wxStaticText(top_panel, wxID_ANY, _L("-"), wxDefaultPosition, wxSize(FromDIP(230), -1), wxST_ELLIPSIZE_END);
+        m_sn_label->SetFont(::Label::Body_13);
+        top_sizer->Add(m_sn_label, 0, wxALIGN_CENTER_VERTICAL);
+        top_sizer->AddStretchSpacer(1);
+
+        m_save_button = new Button(top_panel, _L("保存"));
+        apply_dialog_action_button_style(m_save_button, ButtonStyle::Confirm, wxSize(FromDIP(72), FromDIP(30)));
+        top_sizer->Add(m_save_button, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(12));
+        top_sizer->AddSpacer(FromDIP(SidebarProps::ContentMargin()));
+        top_panel->Layout();
+    }
+
+    void hide_top_child(wxWindow* child, bool delete_window)
+    {
+        if (child == nullptr || m_filament_tab == nullptr || m_filament_tab->top_sizer() == nullptr)
+            return;
+        m_filament_tab->top_sizer()->Detach(child);
+        child->Hide();
+        if (delete_window)
+            child->Destroy();
+    }
+
+    void bind_events()
+    {
+        if (m_save_button != nullptr)
+            m_save_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { save_slice_params(); });
+        if (m_filament_choice != nullptr)
+            m_filament_choice->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) { on_filament_changed(true); });
+        if (m_device_choice != nullptr)
+            m_device_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { apply_detail_for_selected_device(); });
+        Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent&) { EndModal(wxID_CANCEL); });
+    }
+
+    void configure_filament_dropdown()
+    {
+#ifdef _WIN32
+        if (m_filament_choice != nullptr) {
+            ::SendMessage((HWND) m_filament_choice->GetHandle(), CB_SETMINVISIBLE, 10, 0);
+            ::SendMessage((HWND) m_filament_choice->GetHandle(), CB_SETITEMHEIGHT, 0, FromDIP(28));
+        }
+#endif
+    }
+
+    void set_tip(const wxString& text)
+    {
+        if (m_tip_label != nullptr)
+            m_tip_label->SetLabel(text);
+        Layout();
+    }
+
+    void load_device_types()
+    {
+        std::vector<std::string> device_types = GFD::Config::local_gfd_device_types();
+        std::string current_device_type;
+        if (wxGetApp().preset_bundle != nullptr)
+            current_device_type = GFD::Config::current_device_type(wxGetApp().preset_bundle->printers.get_selected_preset().config);
+        if (!current_device_type.empty() &&
+            std::find(device_types.begin(), device_types.end(), current_device_type) == device_types.end())
+            device_types.insert(device_types.begin(), current_device_type);
+        if (device_types.empty())
+            device_types = {"EP3", "EP3Pro", "EP3Plus"};
+
+        m_device_choice->Clear();
+        for (const std::string& device_type : device_types)
+            m_device_choice->Append(from_u8(device_type));
+
+        if (!current_device_type.empty())
+            m_device_choice->SetStringSelection(from_u8(current_device_type));
+        if (m_device_choice->GetSelection() == wxNOT_FOUND && !device_types.empty())
+            m_device_choice->SetSelection(0);
+    }
+
+    std::string selected_device_type() const
+    {
+        return m_device_choice != nullptr && m_device_choice->GetSelection() != wxNOT_FOUND ?
+                   into_u8(m_device_choice->GetStringSelection()) :
+                   std::string("EP3");
+    }
+
+    int find_initial_filament_index() const
+    {
+        if (m_filaments.empty())
+            return wxNOT_FOUND;
+        if (wxGetApp().preset_bundle == nullptr)
+            return 0;
+
+        const std::string selected_filament_name = !wxGetApp().preset_bundle->filament_presets.empty() ?
+                                                       wxGetApp().preset_bundle->filament_presets.front() :
+                                                       wxGetApp().preset_bundle->filaments.get_selected_preset_name();
+        const std::string normalized_selected = gfd_lower_compact_copy(Preset::remove_suffix_modified(selected_filament_name));
+        if (normalized_selected.empty())
+            return 0;
+
+        for (size_t index = 0; index < m_filaments.size(); ++index) {
+            const GFDDynamicFilamentOption& item = m_filaments[index];
+            const std::string option_text = gfd_lower_compact_copy(item.text + item.name + item.material);
+            if (!option_text.empty() && (option_text.find(normalized_selected) != std::string::npos ||
+                                         normalized_selected.find(gfd_lower_compact_copy(item.name)) != std::string::npos))
+                return static_cast<int>(index);
+        }
+
+        return 0;
+    }
+
+    bool response_success_or_message(const std::string& body, std::string& message) const
+    {
+        try {
+            const nlohmann::json response = nlohmann::json::parse(body);
+            const int code = response.value("code", 0);
+            const std::string msg = response.value("msg", std::string());
+            message = msg;
+            return msg == "success" || msg.empty() || code == 0 || code == 200;
+        } catch (...) {
+            return true;
+        }
+    }
+
+    GFDDynamicFilamentOption option_from_json(const nlohmann::json& item) const
+    {
+        GFDDynamicFilamentOption option;
+        option.sn       = gfd_json_first_string_recursive(item, {"sn", "filamentSn", "materialSn", "serialNo", "serialNumber"});
+        option.id       = gfd_json_first_string_recursive(item, {"id", "rootId", "rootMaterialId", "materialId", "filamentId"});
+        option.color    = gfd_json_first_string_recursive(item, {"colorTitle"});
+        option.barcode  = gfd_json_first_string_recursive(item, {"barcode"});
+        option.text     = gfd_filament_display_text(option.color, option.barcode);
+        if (option.text.empty()) {
+            option.barcode  = gfd_json_first_string_recursive(item, {"barCode", "bar_code", "barCodeNo", "barcodeNo"});
+            option.color    = gfd_json_first_string_recursive(item, {"colorName", "colourName", "colorCn", "colourCn", "color", "colour"});
+            option.title    = gfd_best_filament_title({}, {}, option.color, {}, option.barcode, option.sn, option.id);
+            option.text     = gfd_filament_display_text(option.title, option.barcode);
+        }
+        if (option.text.empty())
+            option.text = !option.sn.empty() ? option.sn : option.id;
+        return option;
+    }
+
+    void parse_filament_options(const std::string& body)
+    {
+        m_filaments.clear();
+        const nlohmann::json response = nlohmann::json::parse(body);
+        std::vector<nlohmann::json> arrays;
+        gfd_collect_json_array_candidates(response, arrays);
+
+        std::vector<GFDDynamicFilamentOption> best_filaments;
+        int                                   best_score = -1;
+        for (const nlohmann::json& array : arrays) {
+            if (!array.is_array())
+                continue;
+            std::vector<GFDDynamicFilamentOption> options;
+            int                                   array_score = 0;
+            std::set<std::string>                 seen;
+            for (const nlohmann::json& item : array) {
+                if (!item.is_object())
+                    continue;
+                GFDDynamicFilamentOption option = option_from_json(item);
+                if (option.sn.empty() && option.id.empty() && option.text.empty())
+                    continue;
+                const std::string key = !option.sn.empty() ? option.sn : (!option.id.empty() ? option.id : option.text);
+                if (!seen.insert(key).second)
+                    continue;
+                array_score += gfd_filament_option_score(option);
+                if (gfd_json_has_any_key_recursive(item, {"colorTitle"}))
+                    array_score += 50;
+                if (gfd_json_has_any_key_recursive(item, {"barcode"}))
+                    array_score += 50;
+                options.emplace_back(std::move(option));
+            }
+            if (!options.empty() && array_score > best_score) {
+                best_score     = array_score;
+                best_filaments = std::move(options);
+            }
+        }
+        m_filaments = std::move(best_filaments);
+    }
+
+    void refresh_filament_options()
+    {
+        if (m_plater == nullptr) {
+            set_tip(_L("Plater 未初始化"));
+            return;
+        }
+
+        set_tip(_L("正在获取耗材列表..."));
+        std::string body;
+        std::string error_message;
+        if (!m_plater->fetch_dynamic_filament_list(body, error_message)) {
+            set_tip(from_u8(error_message.empty() ? "获取耗材列表失败" : error_message));
+            return;
+        }
+
+        std::string response_message;
+        if (!response_success_or_message(body, response_message)) {
+            set_tip(from_u8(response_message.empty() ? "获取耗材列表失败" : response_message));
+            return;
+        }
+
+        try {
+            parse_filament_options(body);
+        } catch (const std::exception& ex) {
+            set_tip(from_u8(std::string("解析耗材列表失败: ") + ex.what()));
+            return;
+        }
+
+        m_filament_choice->Clear();
+        for (const GFDDynamicFilamentOption& option : m_filaments)
+            m_filament_choice->Append(from_u8(option.text), new wxStringClientData(from_u8(option.sn)));
+
+        const int initial_index = find_initial_filament_index();
+        if (initial_index != wxNOT_FOUND)
+            m_filament_choice->SetSelection(initial_index);
+        else
+            set_tip(_L("暂无耗材"));
+
+        on_filament_changed(true);
+    }
+
+    void on_filament_changed(bool force_fetch)
+    {
+        const int selection = m_filament_choice != nullptr ? m_filament_choice->GetSelection() : wxNOT_FOUND;
+        if (selection == wxNOT_FOUND || selection < 0 || selection >= static_cast<int>(m_filaments.size())) {
+            m_selected_sn.clear();
+            if (m_sn_label != nullptr)
+                m_sn_label->SetLabel(_L("-"));
+            return;
+        }
+
+        const GFDDynamicFilamentOption& option = m_filaments[selection];
+        std::string option_sn = option.sn;
+        if (auto* data = static_cast<wxStringClientData*>(m_filament_choice->GetClientObject(selection)))
+            option_sn = into_u8(data->GetData());
+
+        if (!force_fetch && option_sn == m_selected_sn)
+            return;
+
+        m_selected_sn = option_sn;
+        if (m_sn_label != nullptr) {
+            m_sn_label->SetLabel(m_selected_sn.empty() ? _L("-") : from_u8(m_selected_sn));
+            m_sn_label->SetToolTip(m_sn_label->GetLabel());
+        }
+
+        reset_filament_to_base_config();
+
+        if (m_selected_sn.empty()) {
+            set_tip(_L("当前耗材缺少 SN，无法获取详情"));
+            return;
+        }
+
+        std::string body;
+        std::string error_message;
+        set_tip(_L("正在获取动态参数..."));
+        if (m_plater == nullptr || !m_plater->fetch_dynamic_filament_detail(m_selected_sn, body, error_message)) {
+            set_tip(from_u8(error_message.empty() ? "获取动态参数失败" : error_message));
+            return;
+        }
+
+        std::string response_message;
+        if (!response_success_or_message(body, response_message)) {
+            set_tip(from_u8(response_message.empty() ? "获取动态参数失败" : response_message));
+            return;
+        }
+
+        try {
+            m_current_detail = nlohmann::json::parse(body);
+        } catch (const std::exception& ex) {
+            m_current_detail = nlohmann::json();
+            set_tip(from_u8(std::string("解析动态参数失败: ") + ex.what()));
+            return;
+        }
+
+        apply_detail_for_selected_device();
+    }
+
+    void apply_detail_for_selected_device()
+    {
+        reset_filament_to_base_config();
+        if (m_current_detail.is_null())
+        {
+            set_tip(_L("未查询到当前耗材动态参数，已使用当前耗材参数"));
+            return;
+        }
+
+        const nlohmann::json* detail = gfd_extract_detail_data(m_current_detail);
+        if (detail == nullptr || !detail->is_object()) {
+            set_tip(_L("未查询到当前耗材动态参数，已使用当前耗材参数"));
+            return;
+        }
+
+        const std::string device_type = selected_device_type();
+        const auto device_temps_it = detail->find("deviceTypeTemps");
+        if (device_temps_it == detail->end() || !device_temps_it->is_object()) {
+            set_tip(_L("未查询到当前耗材动态参数，已使用当前耗材参数"));
+            return;
+        }
+
+        const auto device_it = device_temps_it->find(device_type);
+        if (device_it == device_temps_it->end() || !device_it->is_object()) {
+            set_tip(_L("未查询到当前耗材动态参数，已使用当前耗材参数"));
+            return;
+        }
+
+        const nlohmann::json* slice_param = gfd_json_first_value(*device_it, {"orcaSliceParam", "sliceParam"});
+        if (slice_param == nullptr) {
+            set_tip(_L("未查询到当前耗材动态参数，已使用当前耗材参数"));
+            return;
+        }
+
+        nlohmann::json values = nlohmann::json::object();
+        try {
+            if (slice_param->is_string())
+                gfd_collect_orca_param_json(slice_param->get<std::string>(), values);
+            else
+                gfd_collect_orca_param_json(*slice_param, values);
+        } catch (const std::exception& ex) {
+            set_tip(from_u8(std::string("解析 Orca 参数失败: ") + ex.what()));
+            return;
+        }
+
+        apply_orca_json_to_filament(values);
+        set_tip(wxEmptyString);
+    }
+
+    void reset_filament_to_base_config()
+    {
+        if (m_bundle == nullptr || m_filament_tab == nullptr)
+            return;
+
+        if (wxGetApp().preset_bundle != nullptr)
+            *m_bundle = *wxGetApp().preset_bundle;
+        m_bundle->filaments.update_saved_preset_from_current_preset();
+        m_filament_tab->m_preset_bundle = m_bundle.get();
+        m_filament_tab->m_presets       = &m_bundle->filaments;
+        m_filament_tab->m_config        = &m_bundle->filaments.get_edited_preset().config;
+        m_filament_tab->load_current_preset();
+    }
+
+    std::string value_for_deserialize(const nlohmann::json& value, bool is_strings) const
+    {
+        if (value.is_null())
+            return "nil";
+        if (value.is_string())
+            return is_strings ? ("\"" + escape_string_cstyle(value.get<std::string>()) + "\"") : value.get<std::string>();
+        if (value.is_boolean())
+            return value.get<bool>() ? "1" : "0";
+        if (value.is_number_integer())
+            return std::to_string(value.get<long long>());
+        if (value.is_number_unsigned())
+            return std::to_string(value.get<unsigned long long>());
+        if (value.is_number_float())
+            return (boost::format("%1%") % value.get<double>()).str();
+        return {};
+    }
+
+    std::string json_option_to_deserialize_string(const std::string& opt_key, const nlohmann::json& value) const
+    {
+        const ConfigOption* opt = m_bundle != nullptr ? m_bundle->filaments.get_edited_preset().config.option(opt_key) : nullptr;
+        const bool is_strings = opt != nullptr && opt->type() == coStrings;
+
+        if (!value.is_array())
+            return value_for_deserialize(value, is_strings);
+
+        std::vector<std::string> parts;
+        for (const nlohmann::json& item : value)
+            parts.emplace_back(value_for_deserialize(item, is_strings));
+        return boost::algorithm::join(parts, is_strings ? ";" : ",");
+    }
+
+    void apply_orca_json_to_filament(const nlohmann::json& values)
+    {
+        if (m_bundle == nullptr || m_filament_tab == nullptr || !values.is_object())
+            return;
+
+        Preset&             edited_preset = m_bundle->filaments.get_edited_preset();
+        DynamicPrintConfig& config        = edited_preset.config;
+        ConfigSubstitutionContext substitutions{ForwardCompatibilitySubstitutionRule::Disable};
+        std::vector<std::string> skipped_keys;
+
+        if (const auto it = values.find(BBL_JSON_KEY_SETTING_ID); it != values.end() && it->is_string())
+            edited_preset.setting_id = it->get<std::string>();
+        if (const auto it = values.find(BBL_JSON_KEY_FILAMENT_ID); it != values.end() && it->is_string())
+            edited_preset.filament_id = it->get<std::string>();
+
+        for (auto it = values.begin(); it != values.end(); ++it) {
+            const std::string opt_key = it.key();
+            if (opt_key == BBL_JSON_KEY_TYPE || opt_key == BBL_JSON_KEY_NAME || opt_key == BBL_JSON_KEY_FROM ||
+                opt_key == BBL_JSON_KEY_VERSION || opt_key == BBL_JSON_KEY_INSTANTIATION ||
+                opt_key == BBL_JSON_KEY_SETTING_ID || opt_key == BBL_JSON_KEY_FILAMENT_ID)
+                continue;
+            try {
+                config.set_deserialize(opt_key, json_option_to_deserialize_string(opt_key, it.value()), substitutions);
+            } catch (const std::exception&) {
+                skipped_keys.emplace_back(opt_key);
+            }
+        }
+
+        if (const auto it = values.find(BBL_JSON_KEY_NAME); it != values.end() && it->is_string())
+            config.option<ConfigOptionStrings>("filament_settings_id", true)->values = {it->get<std::string>()};
+
+        m_bundle->filaments.update_saved_preset_from_current_preset();
+        m_filament_tab->load_current_preset();
+
+        if (!skipped_keys.empty())
+            set_tip(from_u8((boost::format("部分参数未识别，已跳过 %1% 项") % skipped_keys.size()).str()));
+    }
+
+    std::string build_orca_slice_param_json() const
+    {
+        if (m_bundle == nullptr)
+            return "{}";
+
+        const Preset& preset = m_bundle->filaments.get_edited_preset();
+        std::string name = preset.name;
+        if (const ConfigOptionStrings* settings_id = preset.config.option<ConfigOptionStrings>("filament_settings_id");
+            settings_id != nullptr && !settings_id->values.empty() && !settings_id->values.front().empty())
+            name = settings_id->values.front();
+
+        nlohmann::json payload = gfd_config_to_json(preset.config, name, "system", "filament");
+        if (!preset.setting_id.empty())
+            payload[BBL_JSON_KEY_SETTING_ID] = preset.setting_id;
+        if (!preset.filament_id.empty())
+            payload[BBL_JSON_KEY_FILAMENT_ID] = preset.filament_id;
+        return payload.dump();
+    }
+
+    void save_slice_params()
+    {
+        if (m_selected_sn.empty()) {
+            set_tip(_L("请选择耗材"));
+            return;
+        }
+
+        std::string body;
+        std::string error_message;
+        set_tip(_L("正在保存..."));
+        if (m_save_button != nullptr)
+            m_save_button->Enable(false);
+        const bool ok = m_plater != nullptr &&
+                        m_plater->update_dynamic_filament_slice_param(m_selected_sn, selected_device_type(), build_orca_slice_param_json(), body, error_message);
+        if (m_save_button != nullptr)
+            m_save_button->Enable(true);
+
+        if (!ok) {
+            set_tip(from_u8(error_message.empty() ? "保存失败" : error_message));
+            return;
+        }
+
+        std::string response_message;
+        if (!response_success_or_message(body, response_message)) {
+            set_tip(from_u8(response_message.empty() ? "保存失败" : response_message));
+            return;
+        }
+
+        set_tip(wxEmptyString);
+        GUI::show_info(this, _L("保存成功"), _L("提示"));
+    }
+
+    void on_dpi_changed(const wxRect& suggested_rect) override
+    {
+        Fit();
+        SetSize(wxSize(FromDIP(1120), FromDIP(720)));
+        if (m_panel != nullptr)
+            m_panel->msw_rescale();
+        Refresh();
+    }
+};
 
 class GFDDynamicParamsDialog : public wxDialog
 {
@@ -1293,7 +1949,7 @@ private:
             std::find(device_types.begin(), device_types.end(), current_device_type) == device_types.end())
             device_types.insert(device_types.begin(), current_device_type);
         if (device_types.empty())
-            device_types = {"EP3", "EP3Pro"};
+            device_types = {"EP3", "EP3Pro", "EP3Plus"};
 
         m_device_choice->Clear();
         for (const std::string& device_type : device_types)
@@ -5299,7 +5955,7 @@ void MainFrame::bind_gfd_config_buttons()
     });
     bind_gfd_config_button(m_plater->gfd_dynamic_params_button(), "dynamic_params", [this]() {
         BOOST_LOG_TRIVIAL(info) << "GFD dynamic params dialog opening";
-        GFDDynamicParamsDialog dialog(this, m_plater);
+        GFDDynamicMaterialDialog dialog(this, m_plater);
         BOOST_LOG_TRIVIAL(info) << "GFD dynamic params dialog ready";
         dialog.ShowModal();
     });

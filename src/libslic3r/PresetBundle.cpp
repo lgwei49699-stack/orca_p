@@ -50,6 +50,30 @@ const char *PresetBundle::ORCA_DEFAULT_PRINTER_VARIANT = "0.4";
 const char *PresetBundle::ORCA_DEFAULT_FILAMENT = "Generic PLA @System";
 const char *PresetBundle::ORCA_FILAMENT_LIBRARY = "OrcaFilamentLibrary";
 
+static bool gfd_use_printer_default_filament(const Preset& printer_preset)
+{
+    const std::string printer_model = printer_preset.config.opt_string("printer_model");
+    return printer_model == "EP3" || printer_model == "EP3 Pro" || printer_model == "EP3Plus" || printer_model == "EP3 Plus";
+}
+
+static std::string gfd_first_default_filament_profile(const Preset& printer_preset)
+{
+    auto default_filament_profile = printer_preset.config.option<ConfigOptionStrings>("default_filament_profile");
+    return default_filament_profile != nullptr && !default_filament_profile->values.empty() ?
+        default_filament_profile->values.front() : std::string();
+}
+
+static Preset* gfd_install_filament_profile(AppConfig& config, PresetCollection& filaments, const std::string& filament_profile)
+{
+    Preset* filament = filaments.find_preset(filament_profile, false, true);
+    if (filament == nullptr)
+        return nullptr;
+
+    filament->is_visible = true;
+    config.set(AppConfig::SECTION_FILAMENTS, filament->name, "true");
+    return filament;
+}
+
 PresetBundle::PresetBundle()
     : prints(Preset::TYPE_PRINT, Preset::print_options(), static_cast<const PrintRegionConfig &>(FullPrintConfig::defaults()))
     , filaments(Preset::TYPE_FILAMENT, Preset::filament_options(), static_cast<const PrintRegionConfig &>(FullPrintConfig::defaults()), "Default Filament")
@@ -1598,19 +1622,27 @@ void PresetBundle::update_selections(AppConfig &config)
     // Selects the profiles, which were selected at the last application close.
     prints.select_preset_by_name_strict(initial_print_profile_name);
     filaments.select_preset_by_name_strict(initial_filament_profile_name);
+    const Preset& current_printer = printers.get_selected_preset();
+    const std::string default_filament_profile = gfd_first_default_filament_profile(current_printer);
+    const bool use_printer_default_filament =
+        gfd_use_printer_default_filament(current_printer) && gfd_install_filament_profile(config, filaments, default_filament_profile) != nullptr;
+    if (use_printer_default_filament)
+        filaments.select_preset_by_name_strict(default_filament_profile);
 
     // Load the names of the other filament profiles selected for a multi-material printer.
     // Load it even if the current printer technology is SLA.
     // The possibly excessive filament names will be later removed with this->update_multi_material_filament_presets()
     // once the FFF technology gets selected.
     this->filament_presets = { filaments.get_selected_preset_name() };
-    for (unsigned int i = 1; i < 1000; ++ i) {
-        char name[64];
-        sprintf(name, "filament_%02u", i);
-        auto f_name = config.get_printer_setting(initial_printer_profile_name, name);
-        if (f_name.empty())
-            break;
-        this->filament_presets.emplace_back(remove_ini_suffix(f_name));
+    if (!use_printer_default_filament) {
+        for (unsigned int i = 1; i < 1000; ++ i) {
+            char name[64];
+            sprintf(name, "filament_%02u", i);
+            auto f_name = config.get_printer_setting(initial_printer_profile_name, name);
+            if (f_name.empty())
+                break;
+            this->filament_presets.emplace_back(remove_ini_suffix(f_name));
+        }
     }
     std::vector<std::string> filament_colors;
     auto f_colors = config.get_printer_setting(initial_printer_profile_name, "filament_colors");
@@ -1641,6 +1673,11 @@ void PresetBundle::update_selections(AppConfig &config)
     // as the application may have been closed with an active "external" preset, which does not
     // exist.
     this->update_compatible(PresetSelectCompatibleType::Always);
+    if (use_printer_default_filament) {
+        gfd_install_filament_profile(config, filaments, default_filament_profile);
+        filaments.select_preset_by_name_strict(default_filament_profile);
+        filament_presets.assign(1, filaments.get_selected_preset_name());
+    }
     this->update_multi_material_filament_presets();
 
     std::string first_visible_filament_name;
@@ -1699,6 +1736,12 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
         if ((!initial_filament_profile_name.compare("Default Filament")) && (prefered_filament_profiles.size() > 0))
             initial_filament_profile_name = prefered_filament_profiles[0];
     }
+    const Preset& current_printer = printers.get_selected_preset();
+    const std::string default_filament_profile = gfd_first_default_filament_profile(current_printer);
+    const bool use_printer_default_filament =
+        gfd_use_printer_default_filament(current_printer) && gfd_install_filament_profile(config, filaments, default_filament_profile) != nullptr;
+    if (use_printer_default_filament)
+        initial_filament_profile_name = default_filament_profile;
 
     // Selects the profile, leaves it to -1 if the initial profile name is empty or if it was not found.
     prints.select_preset_by_name_strict(initial_print_profile_name);
@@ -1711,13 +1754,15 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     // The possibly excessive filament names will be later removed with this->update_multi_material_filament_presets()
     // once the FFF technology gets selected.
     this->filament_presets = { filaments.get_selected_preset_name() };
-    for (unsigned int i = 1; i < 1000; ++ i) {
-        char name[64];
-        sprintf(name, "filament_%02u", i);
-        auto f_name = config.get_printer_setting(initial_printer_profile_name, name);
-        if (f_name.empty())
-            break;
-        this->filament_presets.emplace_back(remove_ini_suffix(f_name));
+    if (!use_printer_default_filament) {
+        for (unsigned int i = 1; i < 1000; ++ i) {
+            char name[64];
+            sprintf(name, "filament_%02u", i);
+            auto f_name = config.get_printer_setting(initial_printer_profile_name, name);
+            if (f_name.empty())
+                break;
+            this->filament_presets.emplace_back(remove_ini_suffix(f_name));
+        }
     }
     std::vector<std::string> filament_colors;
     auto f_colors = config.get_printer_setting(initial_printer_profile_name, "filament_colors");
@@ -1748,6 +1793,11 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     // as the application may have been closed with an active "external" preset, which does not
     // exist.
     this->update_compatible(PresetSelectCompatibleType::Always);
+    if (use_printer_default_filament) {
+        gfd_install_filament_profile(config, filaments, default_filament_profile);
+        filaments.select_preset_by_name_strict(default_filament_profile);
+        filament_presets.assign(1, filaments.get_selected_preset_name());
+    }
     this->update_multi_material_filament_presets();
 
     if (initial_printer != nullptr && (preferred_printer == nullptr || initial_printer == preferred_printer)) {
@@ -3300,10 +3350,11 @@ void PresetBundle::update_compatible(PresetSelectCompatibleType select_other_pri
             // Don't match any properties of the "-- default --" profile or the external profiles when switching printer profile.
             if (preset.is_default || preset.is_external)
                 return 0;
-            if (! m_prefered_alias.empty() && m_prefered_alias == preset.alias)
-                // Matching an alias, always take this preset with priority.
+            if (std::find(m_prefered_names.begin(), m_prefered_names.end(), preset.name) != m_prefered_names.end())
                 return std::numeric_limits<int>::max();
-            int match_quality = (std::find(m_prefered_names.begin(), m_prefered_names.end(), preset.name) != m_prefered_names.end()) + 1;
+            if (!m_prefered_alias.empty() && m_prefered_alias == preset.alias)
+                return std::numeric_limits<int>::max() / 2;
+            int match_quality = 1;
             if (! m_prefered_filament_type.empty() && m_prefered_filament_type == preset.config.opt_string("filament_type", 0))
                 match_quality *= 10;
             return match_quality;

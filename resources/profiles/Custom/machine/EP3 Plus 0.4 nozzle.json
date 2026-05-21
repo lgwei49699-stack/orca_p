@@ -1,0 +1,25 @@
+{
+  "from": "system",
+  "inherits": "EP3 Pro 0.4 nozzle",
+  "machine_start_gcode": "M201 X5000 Y5000 Z100 E1000\nM104 S[nozzle_temperature_initial_layer] ; start nozzle heating but don't wait\nM109 S[nozzle_temperature_initial_layer] ; wait for the nozzle to heat up\nG28 ; home\n\nG90\nM82\nM900 K0.28\n\nM117 Wipe\nG92 E0\nG1 Z2.0 F3000\nG1 X-1.00 Y103 F3000\nG1 Z0.28 F1200\n\nG1 X-1.00 Y95 F6000\nG1 X-1.05 Y103 F6000\nG1 X-1.10 Y95 F5200\nG1 X-1.15 Y103 F5200\nG1 X-1.20 Y95 F4500\nG1 X-1.25 Y103 F4500\nG1 X-1.30 Y95 F3800\nG1 X-1.35 Y103 F3800\nG1 X-1.40 Y95 F3200\nG1 X-1.45 Y103 F3200\nG1 X-1.50 Y95 F2600\nG1 X-1.55 Y103 F2600\nG1 X-1.60 Y95 F2000\nG1 X-1.65 Y103 F2000\nG1 X-1.70 Y95 F1500\nG1 X-1.75 Y103 F1500\nG1 X-1.80 Y95 F1200\nG1 X-1.85 Y103 F1200\n\nM117 Print\nG1 Z0.28 F1200\nG1 X5 Y108 F3000\nG1 X85 E8 F2400\nG1 Y107.6 F1500\nG1 X10 E16 F2400\nG92 E0\n\n;Delete all of the above",
+  "name": "EP3 Plus 0.4 nozzle",
+  "printer_settings_id": "EP3 Plus 0.4 nozzle",
+  "retraction_length": [
+    "3"
+  ],
+  "z_hop": [
+    "0.4"
+  ],
+  "z_hop_types": [
+    "Normal Lift"
+  ],
+  "type": "machine",
+  "instantiation": "true",
+  "default_print_profile": "0.20mm Standard @EP3 Plus",
+  "setting_id": "GFD_EP3PLUS_M_04",
+  "printer_model": "EP3Plus",
+  "gfd_device_type": "EP3Plus",
+  "default_filament_profile": [
+    "EP3-PLA悬垂优化 @EP3 Plus"
+  ]
+}

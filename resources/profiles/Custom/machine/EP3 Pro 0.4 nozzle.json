@@ -1,0 +1,149 @@
+{
+  "type": "machine",
+  "name": "EP3 Pro 0.4 nozzle",
+  "from": "system",
+  "instantiation": "true",
+  "printer_technology": "FFF",
+  "deretraction_speed": [
+    "40"
+  ],
+  "extruder_colour": [
+    "#FCE94F"
+  ],
+  "extruder_offset": [
+    "0x0"
+  ],
+  "gcode_flavor": "marlin2",
+  "silent_mode": "0",
+  "support_chamber_temp_control": "0",
+  "support_air_filtration": "0",
+  "machine_max_acceleration_e": [
+    "5000"
+  ],
+  "machine_max_acceleration_extruding": [
+    "10000"
+  ],
+  "machine_max_acceleration_retracting": [
+    "1000"
+  ],
+  "machine_max_acceleration_x": [
+    "10000"
+  ],
+  "machine_max_acceleration_y": [
+    "10000"
+  ],
+  "machine_max_acceleration_z": [
+    "500"
+  ],
+  "machine_max_speed_e": [
+    "50"
+  ],
+  "machine_max_speed_x": [
+    "400"
+  ],
+  "machine_max_speed_y": [
+    "400"
+  ],
+  "machine_max_speed_z": [
+    "20"
+  ],
+  "machine_max_jerk_e": [
+    "5"
+  ],
+  "machine_max_jerk_x": [
+    "8"
+  ],
+  "machine_max_jerk_y": [
+    "8"
+  ],
+  "machine_max_jerk_z": [
+    "0.4"
+  ],
+  "machine_min_extruding_rate": [
+    "0"
+  ],
+  "machine_min_travel_rate": [
+    "0"
+  ],
+  "max_layer_height": [
+    "0.32"
+  ],
+  "min_layer_height": [
+    "0.08"
+  ],
+  "printable_height": "105",
+  "extruder_clearance_radius": "65",
+  "extruder_clearance_height_to_rod": "36",
+  "extruder_clearance_height_to_lid": "140",
+  "nozzle_diameter": [
+    "0.4"
+  ],
+  "printer_settings_id": "EP3 Pro 0.4 nozzle",
+  "printer_variant": "0.4",
+  "retraction_minimum_travel": [
+    "0.5"
+  ],
+  "retract_before_wipe": [
+    "70%"
+  ],
+  "retract_when_changing_layer": [
+    "1"
+  ],
+  "retraction_length": [
+    "4"
+  ],
+  "retract_length_toolchange": [
+    "1"
+  ],
+  "z_hop": [
+    "0.8"
+  ],
+  "retract_restart_extra": [
+    "0"
+  ],
+  "retract_restart_extra_toolchange": [
+    "0"
+  ],
+  "retraction_speed": [
+    "40"
+  ],
+  "single_extruder_multi_material": "1",
+  "change_filament_gcode": "",
+  "wipe": [
+    "0"
+  ],
+  "z_hop_types": [
+    "Auto Lift"
+  ],
+  "before_layer_change_gcode": ";BEFORE_LAYER_CHANGE\\n;[layer_z]\\nG92 E0\\n",
+  "default_print_profile": "0.20mm Standard @EP3 Pro",
+  "machine_start_gcode": "M201 X5000 Y5000 Z100 E1000\nM104 S[nozzle_temperature_initial_layer] ; start nozzle heating but don't wait\nM109 S[nozzle_temperature_initial_layer] ; wait for the nozzle to heat up\nG28 ; home\n\nG90\nM82\nM900 K0.16\n\nM117 Wipe\nG92 E0\nG1 Z2.0 F3000\nG1 X-1 Y110 F5000\nG1 Z0.28 F1200\nG1 X-1 Y100 F3000\nG1 X-1 Y110 F3000\n\nM117 Print\nG1 X-2 Y0 F3000\nG1 Y70 E8 F2400\nG1 X-1.7 F1500\nG1 Y0 E16 F2400\nG92 E0\n\n;Delete all of the above",
+  "machine_end_gcode": "M104 S0\nM140 S0\n;Retract the filament\nG92 E0\nG1 E-5 F300\nG1 F1500 Z100\nG28 X0 Y0\nM84",
+  "setting_id": "GFD_EP3PRO_M_04",
+  "inherits": "fdm_machine_common",
+  "printer_model": "EP3 Pro",
+  "version": "2.3.0.3",
+  "printable_area": [
+    "0x0",
+    "101x0",
+    "101x101",
+    "0x101"
+  ],
+  "bed_mesh_min": "-0,-0",
+  "cooling_tube_length": "30",
+  "enable_filament_ramming": "0",
+  "is_custom_defined": "0",
+  "nozzle_type": "brass",
+  "purge_in_prime_tower": "0",
+  "thumbnails": "48x48/PNG",
+  "auxiliary_fan": "1",
+  "default_filament_profile": [
+    "EP3-PLA悬垂优化 @EP3 Pro"
+  ],
+  "bed_exclude_area": [
+    "0x90",
+    "5x90",
+    "5x100",
+    "0x100"
+  ]
+}

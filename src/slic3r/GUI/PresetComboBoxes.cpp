@@ -934,6 +934,13 @@ void PlaterPresetComboBox::show_edit_menu()
 
 wxString PlaterPresetComboBox::get_preset_name(const Preset& preset)
 {
+    if (m_type == Preset::TYPE_FILAMENT && !preset.alias.empty()) {
+        for (const Preset& other : m_collection->get_presets()) {
+            if (other.name != preset.name && other.is_visible && other.is_compatible && other.alias == preset.alias)
+                return from_u8(preset.label(true));
+        }
+    }
+
     return from_u8(preset.label(false));
 }
 
@@ -1172,6 +1179,11 @@ void PlaterPresetComboBox::msw_rescale()
 TabPresetComboBox::TabPresetComboBox(wxWindow* parent, Preset::Type preset_type) :
     // BBS: new layout
     PresetComboBox(parent, preset_type, wxSize(20 * wxGetApp().em_unit(), 30 * wxGetApp().em_unit() / 10))
+{
+}
+
+TabPresetComboBox::TabPresetComboBox(wxWindow* parent, Preset::Type preset_type, PresetBundle* preset_bundle) :
+    PresetComboBox(parent, preset_type, wxSize(20 * wxGetApp().em_unit(), 30 * wxGetApp().em_unit() / 10), preset_bundle)
 {
 }
 

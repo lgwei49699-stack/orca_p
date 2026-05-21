@@ -1,0 +1,13 @@
+{
+  "type": "machine_model",
+  "name": "EP3 Pro",
+  "model_id": "EP3Pro",
+  "nozzle_diameter": "0.4",
+  "machine_tech": "FFF",
+  "family": "Custom",
+  "gfd_device_type": "EP3Pro",
+  "bed_model": "ep3_bed_model.stl",
+  "bed_texture": "ep3_bed_texture.png",
+  "hotend_model": "",
+  "default_materials": "EP3-PLA悬垂优化 @EP3 Pro;Generic PLA @System;Generic PETG @System;Generic ABS @System;Generic ASA @System;Generic TPU @System;Generic PC @System;Generic PVA @System;Generic PA @System;Generic PA-CF @System;Generic PLA-CF @System"
+}
