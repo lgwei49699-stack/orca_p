@@ -2,6 +2,7 @@
 
 #include "GUI.hpp"
 #include "GUI_App.hpp"
+#include "GFDAuthManager.hpp"
 #include "I18N.hpp"
 #include "MsgDialog.hpp"
 #include "Widgets/Button.hpp"
@@ -583,29 +584,29 @@ std::string GFDDeviceSelectionDialog::build_query_url() const
 
 bool GFDDeviceSelectionDialog::request_devices(std::string& body, std::string& error_message) const
 {
-    const std::string token = GFD::Config::auth_token(wxGetApp().app_config).empty() ? GFD::Config::verify_token(wxGetApp().app_config) :
-                                                                                       GFD::Config::auth_token(wxGetApp().app_config);
-    if (token.empty()) {
-        error_message = "登录状态无效，请重新登录";
-        return false;
-    }
-
-    bool ok = false;
-    Http::get(build_query_url())
-        .header("Authorization", token)
-        .header("Biz", BIZ_VALUE)
-        .on_complete([&](std::string response_body, unsigned) {
-            body = std::move(response_body);
-            ok   = true;
-        })
-        .on_error([&](std::string response_body, std::string error, unsigned) {
-            body          = std::move(response_body);
-            error_message = error.empty() ? response_body : error;
-            ok            = false;
-        })
-        .perform_sync();
-
-    return ok;
+    return GFDAuthManager::perform_authenticated_request(
+        [&](const std::string& token) {
+            GFDHttpResult result;
+            Http::get(build_query_url())
+                .header("Authorization", token)
+                .header("Biz", BIZ_VALUE)
+                .on_complete([&](std::string response_body, unsigned status) {
+                    result.body   = std::move(response_body);
+                    result.status = status;
+                    result.ok     = true;
+                })
+                .on_error([&](std::string response_body, std::string error, unsigned status) {
+                    result.body          = std::move(response_body);
+                    result.status        = status;
+                    result.error_message = error.empty() ? result.body : error;
+                    result.ok            = false;
+                })
+                .perform_sync();
+            return result;
+        },
+        body,
+        error_message,
+        const_cast<GFDDeviceSelectionDialog*>(this));
 }
 
 bool GFDDeviceSelectionDialog::parse_devices(const std::string& body, std::vector<GFDDeviceInfo>& devices, std::string& error_message) const

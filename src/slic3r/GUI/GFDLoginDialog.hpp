@@ -19,10 +19,22 @@ class GFDVerifyDialog;
 class GFDLoginDialog : public wxDialog
 {
 public:
+    enum class LoginResult
+    {
+        Success,
+        Failed,
+        Cancelled
+    };
+
     GFDLoginDialog();
     ~GFDLoginDialog() override;
 
     bool run();
+    static LoginResult login_with_credentials(const std::string& username,
+                                              const std::string& password,
+                                              std::string&       error_message,
+                                              bool               persist_credentials = false,
+                                              bool               remember_credentials = false);
 
 private:
     void build();

@@ -40,6 +40,7 @@ public:
     virtual ~WebViewPanel();
 
     void load_url(wxString& url);
+    void refresh_view();
 
     void UpdateState();
     void OnIdle(wxIdleEvent& evt);

@@ -7019,7 +7019,7 @@ extern "C" {
             *a     = 0;
             });
         // Call the UTF8 main.
-        //attach_console_on_demand();
+        attach_console_on_demand();
         return CLI().run(argc, argv_ptrs.data());
     }
 }

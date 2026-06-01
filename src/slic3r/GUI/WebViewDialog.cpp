@@ -36,6 +36,9 @@ namespace GUI {
 WebViewPanel::WebViewPanel(wxWindow *parent)
         : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize)
  {
+    SetBackgroundStyle(wxBG_STYLE_PAINT);
+    SetBackgroundColour(wxGetApp().dark_mode() ? wxColour(36, 36, 40) : wxColour(245, 245, 245));
+
     wxString url = wxString::Format("file://%s/web/homepage/index.html", from_u8(resources_dir()));
     wxString strlang = wxGetApp().current_language_code_safe();
     if (strlang != "")
@@ -241,13 +244,32 @@ void WebViewPanel::load_url(wxString& url)
 {
     this->Show();
     this->Raise();
+#if !BBL_RELEASE_TO_PUBLIC
     m_url->SetLabelText(url);
+#endif
 
     if (wxGetApp().get_mode() == comDevelop)
         wxLogMessage(m_url->GetValue());
     m_browser->LoadURL(url);
     m_browser->SetFocus();
+    Refresh();
+    Update();
     UpdateState();
+}
+
+void WebViewPanel::refresh_view()
+{
+    if (!IsShownOnScreen())
+        return;
+
+    Show();
+    Raise();
+    m_browser->Show();
+    m_browser->Refresh();
+    m_browser->Update();
+    Layout();
+    Refresh();
+    Update();
 }
 
 /**
@@ -590,6 +612,8 @@ void WebViewPanel::OnNavigationComplete(wxWebViewEvent& evt)
 {
     m_browser->Show();
     Layout();
+    Refresh();
+    Update();
     BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << ": " << evt.GetTarget().ToUTF8().data();
     if (wxGetApp().get_mode() == comDevelop)
         wxLogMessage("%s", "Navigation complete; url='" + evt.GetURL() + "'");

@@ -3255,6 +3255,9 @@ void MainFrame::init_tabpanel() {
                 m_param_panel->OnActivate();
             }
         }
+        else if (panel == m_webview) {
+            m_webview->refresh_view();
+        }
         //else if (panel == m_param_panel)
         //    m_param_panel->OnActivate();
         else if (panel == m_monitor) {

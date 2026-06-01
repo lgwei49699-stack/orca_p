@@ -58,6 +58,34 @@ bool has_valid_verify_cache()
     }
 }
 
+bool persist_login_state(const std::string& email,
+                         const std::string& password,
+                         const std::string& uuid,
+                         const std::string& verify_token,
+                         bool               persist_credentials,
+                         bool               remember_credentials)
+{
+    if (wxGetApp().app_config == nullptr)
+        return false;
+
+    GFD::Config::set_remember_login(wxGetApp().app_config, remember_credentials);
+    if (persist_credentials && remember_credentials) {
+        GFD::Config::set_cached_username(wxGetApp().app_config, email);
+        GFD::Config::set_cached_password(wxGetApp().app_config, password);
+    } else if (persist_credentials) {
+        GFD::Config::set_cached_username(wxGetApp().app_config, "");
+        GFD::Config::set_cached_password(wxGetApp().app_config, "");
+    }
+
+    GFD::Config::set_verify_token(wxGetApp().app_config, verify_token);
+    GFD::Config::set_verify_expire_ts(wxGetApp().app_config, std::to_string(now_ts() + VERIFY_VALID_SECONDS));
+    GFD::Config::set_user_email(wxGetApp().app_config, email);
+    GFD::Config::set_user_uuid(wxGetApp().app_config, uuid);
+    GFD::Config::set_auth_token(wxGetApp().app_config, verify_token);
+    wxGetApp().app_config->save();
+    return true;
+}
+
 bool post_json_request(const std::string& url, const std::string& request_body, std::string& body, std::string& error_message)
 {
     bool ok = false;
@@ -122,6 +150,63 @@ GFDLoginDialog::GFDLoginDialog()
 GFDLoginDialog::~GFDLoginDialog() = default;
 
 bool GFDLoginDialog::run() { return ShowModal() == wxID_OK; }
+
+GFDLoginDialog::LoginResult GFDLoginDialog::login_with_credentials(const std::string& username,
+                                                                   const std::string& password,
+                                                                   std::string&       error_message,
+                                                                   bool               persist_credentials,
+                                                                   bool               remember_credentials)
+{
+    const std::string email = trim_copy(username);
+    if (email.empty()) {
+        error_message = "请输入账户";
+        return LoginResult::Failed;
+    }
+
+    static const std::regex email_regex(R"(^[^@\s]+@[^@\s]+\.[^@\s]+$)");
+    if (!std::regex_match(email, email_regex)) {
+        error_message = "邮箱格式错误";
+        return LoginResult::Failed;
+    }
+
+    if (password.empty()) {
+        error_message = "请输入密码";
+        return LoginResult::Failed;
+    }
+
+    GFDLoginDialog dialog;
+
+    std::string public_key;
+    if (!dialog.request_public_key(public_key, error_message))
+        return LoginResult::Failed;
+
+    const std::string encrypted_password = rsa_encrypt_password(password, public_key, error_message);
+    if (encrypted_password.empty()) {
+        if (error_message.empty())
+            error_message = "密码加密失败";
+        return LoginResult::Failed;
+    }
+
+    std::string uuid;
+    if (!dialog.request_login(email, encrypted_password, uuid, error_message))
+        return LoginResult::Failed;
+
+    std::string verify_token = GFD::Config::verify_token(wxGetApp().app_config);
+    if (!has_valid_verify_cache()) {
+        GFDVerifyDialog verify_dialog;
+        if (!verify_dialog.verify_login(uuid, verify_token)) {
+            error_message = "验证码校验已取消或失败";
+            return LoginResult::Cancelled;
+        }
+    }
+
+    if (!persist_login_state(email, password, uuid, verify_token, persist_credentials, remember_credentials)) {
+        error_message = "保存登录状态失败";
+        return LoginResult::Failed;
+    }
+
+    return LoginResult::Success;
+}
 
 void GFDLoginDialog::build()
 {
@@ -252,46 +337,14 @@ void GFDLoginDialog::on_login(wxCommandEvent&)
 
     const std::string email    = trim_copy(into_u8(m_username_input->GetTextCtrl()->GetValue()));
     const std::string password = into_u8(m_password_input->GetTextCtrl()->GetValue());
-
-    std::string public_key;
     std::string error_message;
-    if (!request_public_key(public_key, error_message)) {
+    const LoginResult result = login_with_credentials(email, password, error_message, true, m_remember_checkbox->GetValue());
+    if (result != LoginResult::Success) {
         m_tip_label->SetLabel(from_u8(error_message));
         return;
     }
 
-    const std::string encrypted_password = rsa_encrypt_password(password, public_key, error_message);
-    if (encrypted_password.empty()) {
-        m_tip_label->SetLabel(from_u8(error_message.empty() ? "密码加密失败" : error_message));
-        return;
-    }
-
-    std::string uuid;
-    if (!request_login(email, encrypted_password, uuid, error_message)) {
-        m_tip_label->SetLabel(from_u8(error_message));
-        return;
-    }
-
-    std::string verify_token = GFD::Config::verify_token(wxGetApp().app_config);
-    if (!has_valid_verify_cache()) {
-        GFDVerifyDialog verify_dialog;
-        if (!verify_dialog.verify_login(uuid, verify_token)) {
-            m_tip_label->SetLabel(_L("验证码校验已取消或失败"));
-            return;
-        }
-        GFD::Config::set_verify_token(wxGetApp().app_config, verify_token);
-        GFD::Config::set_verify_expire_ts(wxGetApp().app_config, std::to_string(now_ts() + VERIFY_VALID_SECONDS));
-    }
-
-    if (wxGetApp().app_config != nullptr) {
-        GFD::Config::set_user_email(wxGetApp().app_config, email);
-        GFD::Config::set_user_uuid(wxGetApp().app_config, uuid);
-        GFD::Config::set_auth_token(wxGetApp().app_config, verify_token);
-    }
     save_cached_credentials();
-    if (wxGetApp().app_config != nullptr)
-        wxGetApp().app_config->save();
-
     EndModal(wxID_OK);
 }
 

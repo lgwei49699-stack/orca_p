@@ -208,6 +208,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/GUI_Utils.hpp
     GUI/GFDDeviceSelectionDialog.cpp
     GUI/GFDDeviceSelectionDialog.hpp
+    GUI/GFDAuthManager.cpp
+    GUI/GFDAuthManager.hpp
     GUI/GFDLoginDialog.cpp
     GUI/GFDLoginDialog.hpp
     GUI/HintNotification.cpp

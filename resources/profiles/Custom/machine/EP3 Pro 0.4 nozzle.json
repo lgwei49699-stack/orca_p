@@ -139,11 +139,5 @@
   "auxiliary_fan": "1",
   "default_filament_profile": [
     "EP3-PLA悬垂优化 @EP3 Pro"
-  ],
-  "bed_exclude_area": [
-    "0x90",
-    "5x90",
-    "5x100",
-    "0x100"
   ]
 }

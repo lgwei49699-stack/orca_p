@@ -103,6 +103,7 @@
 #include "SelectMachine.hpp"
 #include "SendMultiMachinePage.hpp"
 #include "SendToPrinter.hpp"
+#include "GFDAuthManager.hpp"
 #include "GFDDeviceSelectionDialog.hpp"
 #include "PublishDialog.hpp"
 #include "ModelMall.hpp"
@@ -7810,15 +7811,13 @@ std::string Plater::priv::gfd_current_device_type() const
 
 bool Plater::priv::ensure_gfd_login()
 {
-    return !gfd_auth_token().empty();
+    std::string error_message;
+    return GFDAuthManager::ensure_logged_in(q, &error_message);
 }
 
 std::string Plater::priv::gfd_auth_token() const
 {
-    std::string token = GFD::Config::auth_token(wxGetApp().app_config);
-    if (token.empty())
-        token = GFD::Config::verify_token(wxGetApp().app_config);
-    return token;
+    return GFDAuthManager::current_auth_token(wxGetApp().app_config);
 }
 
 fs::path Plater::priv::gfd_temp_config_3mf_path()
@@ -7972,13 +7971,6 @@ bool Plater::priv::gfd_save_config_to_server(const std::string& config_name,
                                              std::string&       body,
                                              std::string&       error_message) const
 {
-    const std::string token = gfd_auth_token();
-    if (token.empty()) {
-        error_message = "登录状态无效，请重新登录";
-        BOOST_LOG_TRIVIAL(warning) << "GFD save config skipped: auth token is empty";
-        return false;
-    }
-
     const DynamicPrintConfig& printer_config = wxGetApp().preset_bundle->printers.get_selected_preset().config;
     const std::string         device_type    = GFD::Config::current_device_type(printer_config);
     if (device_type.empty()) {
@@ -8015,7 +8007,6 @@ bool Plater::priv::gfd_save_config_to_server(const std::string& config_name,
     const std::string request_body = request_json.dump();
     const std::string request_url  = is_update ? GFD::Config::config_update_url(wxGetApp().app_config)
                                                : GFD::Config::config_add_url(wxGetApp().app_config);
-    bool              ok           = false;
 
     BOOST_LOG_TRIVIAL(info) << "GFD save config request"
                             << ", url=" << request_url
@@ -8027,30 +8018,38 @@ bool Plater::priv::gfd_save_config_to_server(const std::string& config_name,
                             << ", text_length=" << project_settings_text.size()
                             << ", body=" << request_body;
 
-    Http::post(request_url)
-        .header("Authorization", token)
-        .header("Biz", "ZXBMan")
-        .header("Content-Type", "application/json")
-        .set_post_body(request_body)
-        .on_complete([&](std::string response_body, unsigned status) {
-            body = std::move(response_body);
-            ok   = true;
-            BOOST_LOG_TRIVIAL(info) << "GFD save config response"
-                                    << ", http_status=" << status
-                                    << ", body=" << body;
-        })
-        .on_error([&](std::string response_body, std::string error, unsigned status) {
-            body          = std::move(response_body);
-            error_message = error.empty() ? body : error;
-            ok            = false;
-            BOOST_LOG_TRIVIAL(error) << "GFD save config request failed"
-                                     << ", http_status=" << status
-                                     << ", error=" << error_message
-                                     << ", body=" << body;
-        })
-        .perform_sync();
-
-    return ok;
+    return GFDAuthManager::perform_authenticated_request(
+        [&](const std::string& token) {
+            GFDHttpResult result;
+            Http::post(request_url)
+                .header("Authorization", token)
+                .header("Biz", "ZXBMan")
+                .header("Content-Type", "application/json")
+                .set_post_body(request_body)
+                .on_complete([&](std::string response_body, unsigned status) {
+                    result.body   = std::move(response_body);
+                    result.status = status;
+                    result.ok     = true;
+                    BOOST_LOG_TRIVIAL(info) << "GFD save config response"
+                                            << ", http_status=" << status
+                                            << ", body=" << result.body;
+                })
+                .on_error([&](std::string response_body, std::string error, unsigned status) {
+                    result.body          = std::move(response_body);
+                    result.status        = status;
+                    result.error_message = error.empty() ? result.body : error;
+                    result.ok            = false;
+                    BOOST_LOG_TRIVIAL(error) << "GFD save config request failed"
+                                             << ", http_status=" << status
+                                             << ", error=" << result.error_message
+                                             << ", body=" << result.body;
+                })
+                .perform_sync();
+            return result;
+        },
+        body,
+        error_message,
+        q);
 }
 
 bool Plater::priv::gfd_upload_current_config(const std::string& config_name, const std::string& remarks)
@@ -8326,13 +8325,6 @@ bool Plater::priv::gfd_fetch_cloud_configs(const std::string& device_type,
                                            std::string& error_message) const
 {
     configs.clear();
-    const std::string token = gfd_auth_token();
-    if (token.empty()) {
-        error_message = "登录状态无效，请重新登录";
-        BOOST_LOG_TRIVIAL(warning) << "GFD fetch cloud configs skipped: auth token is empty";
-        return false;
-    }
-
     const std::string requested_device_type = boost::algorithm::trim_copy(device_type);
     if (requested_device_type.empty()) {
         error_message = "请选择机型";
@@ -8341,34 +8333,41 @@ bool Plater::priv::gfd_fetch_cloud_configs(const std::string& device_type,
 
     const std::string request_url = GFD::Config::device_slice_type_url(wxGetApp().app_config);
     std::string       body;
-    bool              ok = false;
 
     BOOST_LOG_TRIVIAL(info) << "GFD fetch cloud configs request"
                             << ", url=" << request_url
                             << ", device_type=" << requested_device_type;
 
-    Http::get(request_url)
-        .header("Authorization", token)
-        .header("Biz", "ZXBMan")
-        .on_complete([&](std::string response_body, unsigned status) {
-            body = std::move(response_body);
-            ok   = true;
-            BOOST_LOG_TRIVIAL(info) << "GFD fetch cloud configs response"
-                                    << ", http_status=" << status
-                                    << ", body=" << body;
-        })
-        .on_error([&](std::string response_body, std::string error, unsigned status) {
-            body          = std::move(response_body);
-            error_message = error.empty() ? body : error;
-            ok            = false;
-            BOOST_LOG_TRIVIAL(error) << "GFD fetch cloud configs request failed"
-                                     << ", http_status=" << status
-                                     << ", error=" << error_message
-                                     << ", body=" << body;
-        })
-        .perform_sync();
-
-    if (!ok)
+    if (!GFDAuthManager::perform_authenticated_request(
+            [&](const std::string& token) {
+                GFDHttpResult result;
+                Http::get(request_url)
+                    .header("Authorization", token)
+                    .header("Biz", "ZXBMan")
+                    .on_complete([&](std::string response_body, unsigned status) {
+                        result.body   = std::move(response_body);
+                        result.status = status;
+                        result.ok     = true;
+                        BOOST_LOG_TRIVIAL(info) << "GFD fetch cloud configs response"
+                                                << ", http_status=" << status
+                                                << ", body=" << result.body;
+                    })
+                    .on_error([&](std::string response_body, std::string error, unsigned status) {
+                        result.body          = std::move(response_body);
+                        result.status        = status;
+                        result.error_message = error.empty() ? result.body : error;
+                        result.ok            = false;
+                        BOOST_LOG_TRIVIAL(error) << "GFD fetch cloud configs request failed"
+                                                 << ", http_status=" << status
+                                                 << ", error=" << result.error_message
+                                                 << ", body=" << result.body;
+                    })
+                    .perform_sync();
+                return result;
+            },
+            body,
+            error_message,
+            q))
         return false;
 
     auto json_string = [](const nlohmann::json& object, const char* key) -> std::string {
@@ -8530,46 +8529,55 @@ bool Plater::priv::gfd_download_file_to_temp(const std::string& url,
         output_path.replace_extension(".3mf");
 
     const std::string tmp_path = output_path.string() + ".download";
-    bool              ok       = false;
 
     BOOST_LOG_TRIVIAL(info) << "GFD download cloud config start"
                             << ", url=" << url
                             << ", tmp_path=" << tmp_path
                             << ", output_path=" << output_path.string();
 
-    Http::get(url)
-        .header("Authorization", gfd_auth_token())
-        .header("Biz", "ZXBMan")
-        .on_complete([&](std::string body, unsigned status) {
-            try {
-                boost::nowide::ofstream ofs(tmp_path, std::ios::binary | std::ios::trunc);
-                ofs.write(body.data(), static_cast<std::streamsize>(body.size()));
-                ofs.close();
-                boost::filesystem::rename(tmp_path, output_path);
-                ok = true;
-                BOOST_LOG_TRIVIAL(info) << "GFD download cloud config finished"
-                                        << ", http_status=" << status
-                                        << ", output_path=" << output_path.string()
-                                        << ", file_size=" << body.size();
-            } catch (const std::exception& ex) {
-                error_message = std::string("保存云端配置文件失败: ") + ex.what();
-                ok            = false;
-                BOOST_LOG_TRIVIAL(error) << "GFD download cloud config save failed"
-                                         << ", error=" << ex.what()
-                                         << ", output_path=" << output_path.string();
-            }
-        })
-        .on_error([&](std::string body, std::string error, unsigned status) {
-            error_message = error.empty() ? body : error;
-            ok            = false;
-            BOOST_LOG_TRIVIAL(error) << "GFD download cloud config failed"
-                                     << ", http_status=" << status
-                                     << ", error=" << error_message
-                                     << ", body_size=" << body.size();
-        })
-        .perform_sync();
-
-    return ok;
+    std::string ignored_body;
+    return GFDAuthManager::perform_authenticated_request(
+        [&](const std::string& token) {
+            GFDHttpResult result;
+            Http::get(url)
+                .header("Authorization", token)
+                .header("Biz", "ZXBMan")
+                .on_complete([&](std::string response_body, unsigned status) {
+                    result.status = status;
+                    try {
+                        boost::nowide::ofstream ofs(tmp_path, std::ios::binary | std::ios::trunc);
+                        ofs.write(response_body.data(), static_cast<std::streamsize>(response_body.size()));
+                        ofs.close();
+                        boost::filesystem::rename(tmp_path, output_path);
+                        result.ok = true;
+                        BOOST_LOG_TRIVIAL(info) << "GFD download cloud config finished"
+                                                << ", http_status=" << status
+                                                << ", output_path=" << output_path.string()
+                                                << ", file_size=" << response_body.size();
+                    } catch (const std::exception& ex) {
+                        result.ok            = false;
+                        result.error_message = std::string("保存云端配置文件失败: ") + ex.what();
+                        BOOST_LOG_TRIVIAL(error) << "GFD download cloud config save failed"
+                                                 << ", error=" << ex.what()
+                                                 << ", output_path=" << output_path.string();
+                    }
+                })
+                .on_error([&](std::string response_body, std::string error, unsigned status) {
+                    result.body          = std::move(response_body);
+                    result.status        = status;
+                    result.error_message = error.empty() ? result.body : error;
+                    result.ok            = false;
+                    BOOST_LOG_TRIVIAL(error) << "GFD download cloud config failed"
+                                             << ", http_status=" << status
+                                             << ", error=" << result.error_message
+                                             << ", body_size=" << result.body.size();
+                })
+                .perform_sync();
+            return result;
+        },
+        ignored_body,
+        error_message,
+        q);
 }
 
 bool Plater::priv::gfd_parse_project_settings_text(const std::string& text,
@@ -9347,41 +9355,43 @@ void Plater::priv::start_gfd_print_export()
 
 bool Plater::priv::gfd_request_obs_token(const std::string& suffix, std::string& body, std::string& error_message) const
 {
-    const std::string token = gfd_auth_token();
-    if (token.empty()) {
-        error_message = "登录状态无效，请重新登录";
-        BOOST_LOG_TRIVIAL(warning) << "GFD OBS token request skipped: auth token is empty";
-        return false;
-    }
-
     const std::string requested_suffix = suffix.empty() ? "3mf" : suffix;
     const std::string url = GFD::Config::obs_token_url(wxGetApp().app_config) + "?ruleCode=print3dPermanently&suffix=" + requested_suffix;
-    bool              ok  = false;
     BOOST_LOG_TRIVIAL(info) << "GFD request OBS token"
                             << ", url=" << url
-                            << ", suffix=" << requested_suffix
-                            << ", auth_token_length=" << token.size();
-    Http::get(url)
-        .header("Authorization", token)
-        .header("Biz", "ZXBMan")
-        .on_complete([&](std::string response_body, unsigned status) {
-            body = std::move(response_body);
-            ok   = true;
-            BOOST_LOG_TRIVIAL(info) << "GFD OBS token response"
-                                    << ", http_status=" << status
-                                    << ", body=" << body;
-        })
-        .on_error([&](std::string response_body, std::string error, unsigned status) {
-            body          = std::move(response_body);
-            error_message = error.empty() ? body : error;
-            ok            = false;
-            BOOST_LOG_TRIVIAL(error) << "GFD OBS token request failed"
-                                     << ", http_status=" << status
-                                     << ", error=" << error_message
-                                     << ", body=" << body;
-        })
-        .perform_sync();
-    return ok;
+                            << ", suffix=" << requested_suffix;
+    return GFDAuthManager::perform_authenticated_request(
+        [&](const std::string& token) {
+            GFDHttpResult result;
+            BOOST_LOG_TRIVIAL(info) << "GFD request OBS token"
+                                    << ", auth_token_length=" << token.size();
+            Http::get(url)
+                .header("Authorization", token)
+                .header("Biz", "ZXBMan")
+                .on_complete([&](std::string response_body, unsigned status) {
+                    result.body   = std::move(response_body);
+                    result.status = status;
+                    result.ok     = true;
+                    BOOST_LOG_TRIVIAL(info) << "GFD OBS token response"
+                                            << ", http_status=" << status
+                                            << ", body=" << result.body;
+                })
+                .on_error([&](std::string response_body, std::string error, unsigned status) {
+                    result.body          = std::move(response_body);
+                    result.status        = status;
+                    result.error_message = error.empty() ? result.body : error;
+                    result.ok            = false;
+                    BOOST_LOG_TRIVIAL(error) << "GFD OBS token request failed"
+                                             << ", http_status=" << status
+                                             << ", error=" << result.error_message
+                                             << ", body=" << result.body;
+                })
+                .perform_sync();
+            return result;
+        },
+        body,
+        error_message,
+        q);
 }
 
 bool Plater::priv::gfd_upload_file_with_token(const std::string&       file_path,
@@ -9478,16 +9488,6 @@ bool Plater::priv::gfd_send_print_command(const GFDDeviceInfo& device,
                                           std::string&        body,
                                           std::string&        error_message) const
 {
-    const std::string token = gfd_auth_token();
-    if (token.empty()) {
-        error_message = "登录状态无效，请重新登录";
-        BOOST_LOG_TRIVIAL(warning) << "GFD print command skipped: auth token is empty"
-                                   << ", device_mac=" << device.mac
-                                   << ", device_sn=" << device.device_sn
-                                   << ", device_id=" << device.device_id;
-        return false;
-    }
-
     nlohmann::json request_json;
     request_json["url"]       = file_url;
     request_json["deviceId"]  = device.device_id;
@@ -9495,7 +9495,6 @@ bool Plater::priv::gfd_send_print_command(const GFDDeviceInfo& device,
     request_json["requestId"] = device.device_sn;
     request_json["fileType"]  = "gcode";
 
-    bool ok = false;
     const std::string print_cmd_url = GFD::Config::device_print_cmd_url(wxGetApp().app_config);
     const std::string request_body  = request_json.dump();
     BOOST_LOG_TRIVIAL(info) << "GFD send print command request"
@@ -9505,80 +9504,83 @@ bool Plater::priv::gfd_send_print_command(const GFDDeviceInfo& device,
                             << ", device_id=" << device.device_id
                             << ", file_url=" << file_url
                             << ", body=" << request_body;
-    Http::post(print_cmd_url)
-        .header("Authorization", token)
-        .header("Biz", "ZXBMan")
-        .header("Content-Type", "application/json")
-        .set_post_body(request_body)
-        .on_complete([&](std::string response_body, unsigned status) {
-            body = std::move(response_body);
-            ok   = true;
-            BOOST_LOG_TRIVIAL(info) << "GFD print command response"
-                                    << ", http_status=" << status
-                                    << ", device_mac=" << device.mac
-                                    << ", device_sn=" << device.device_sn
-                                    << ", body=" << body;
-        })
-        .on_error([&](std::string response_body, std::string error, unsigned status) {
-            body          = std::move(response_body);
-            error_message = error.empty() ? body : error;
-            ok            = false;
-            BOOST_LOG_TRIVIAL(error) << "GFD print command failed"
-                                     << ", http_status=" << status
-                                     << ", device_mac=" << device.mac
-                                     << ", device_sn=" << device.device_sn
-                                     << ", error=" << error_message
-                                     << ", body=" << body;
-        })
-        .perform_sync();
-    return ok;
+    return GFDAuthManager::perform_authenticated_request(
+        [&](const std::string& token) {
+            GFDHttpResult result;
+            Http::post(print_cmd_url)
+                .header("Authorization", token)
+                .header("Biz", "ZXBMan")
+                .header("Content-Type", "application/json")
+                .set_post_body(request_body)
+                .on_complete([&](std::string response_body, unsigned status) {
+                    result.body   = std::move(response_body);
+                    result.status = status;
+                    result.ok     = true;
+                    BOOST_LOG_TRIVIAL(info) << "GFD print command response"
+                                            << ", http_status=" << status
+                                            << ", device_mac=" << device.mac
+                                            << ", device_sn=" << device.device_sn
+                                            << ", body=" << result.body;
+                })
+                .on_error([&](std::string response_body, std::string error, unsigned status) {
+                    result.body          = std::move(response_body);
+                    result.status        = status;
+                    result.error_message = error.empty() ? result.body : error;
+                    result.ok            = false;
+                    BOOST_LOG_TRIVIAL(error) << "GFD print command failed"
+                                             << ", http_status=" << status
+                                             << ", device_mac=" << device.mac
+                                             << ", device_sn=" << device.device_sn
+                                             << ", error=" << result.error_message
+                                             << ", body=" << result.body;
+                })
+                .perform_sync();
+            return result;
+        },
+        body,
+        error_message,
+        q);
 }
 
 bool Plater::priv::gfd_fetch_dynamic_filament_list(std::string& body, std::string& error_message) const
 {
-    const std::string token = gfd_auth_token();
-    if (token.empty()) {
-        error_message = "登录状态无效，请重新登录";
-        BOOST_LOG_TRIVIAL(warning) << "GFD dynamic params filament list skipped: auth token is empty";
-        return false;
-    }
-
-    bool              ok          = false;
     const std::string request_url = GFD::Config::filament_temperature_list_url(wxGetApp().app_config);
     BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament list request"
                             << ", url=" << request_url;
-    Http::get(request_url)
-        .header("Authorization", token)
-        .header("Biz", "ZXBMan")
-        .on_complete([&](std::string response_body, unsigned status) {
-            body = std::move(response_body);
-            ok   = true;
-            BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament list response"
-                                    << ", http_status=" << status
-                                    << ", body_length=" << body.size();
-        })
-        .on_error([&](std::string response_body, std::string error, unsigned status) {
-            body          = std::move(response_body);
-            error_message = error.empty() ? body : error;
-            ok            = false;
-            BOOST_LOG_TRIVIAL(error) << "GFD dynamic params filament list failed"
-                                     << ", http_status=" << status
-                                     << ", error=" << error_message
-                                     << ", body=" << body;
-        })
-        .perform_sync();
-    return ok;
+    return GFDAuthManager::perform_authenticated_request(
+        [&](const std::string& token) {
+            GFDHttpResult result;
+            Http::get(request_url)
+                .header("Authorization", token)
+                .header("Biz", "ZXBMan")
+                .on_complete([&](std::string response_body, unsigned status) {
+                    result.body   = std::move(response_body);
+                    result.status = status;
+                    result.ok     = true;
+                    BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament list response"
+                                            << ", http_status=" << status
+                                            << ", body_length=" << result.body.size();
+                })
+                .on_error([&](std::string response_body, std::string error, unsigned status) {
+                    result.body          = std::move(response_body);
+                    result.status        = status;
+                    result.error_message = error.empty() ? result.body : error;
+                    result.ok            = false;
+                    BOOST_LOG_TRIVIAL(error) << "GFD dynamic params filament list failed"
+                                             << ", http_status=" << status
+                                             << ", error=" << result.error_message
+                                             << ", body=" << result.body;
+                })
+                .perform_sync();
+            return result;
+        },
+        body,
+        error_message,
+        q);
 }
 
 bool Plater::priv::gfd_fetch_dynamic_filament_detail(const std::string& filament_sn, std::string& body, std::string& error_message) const
 {
-    const std::string token = gfd_auth_token();
-    if (token.empty()) {
-        error_message = "登录状态无效，请重新登录";
-        BOOST_LOG_TRIVIAL(warning) << "GFD dynamic params filament detail skipped: auth token is empty";
-        return false;
-    }
-
     if (filament_sn.empty()) {
         error_message = "请选择耗材";
         return false;
@@ -9586,33 +9588,41 @@ bool Plater::priv::gfd_fetch_dynamic_filament_detail(const std::string& filament
 
     const std::string request_url = GFD::Config::filament_temperature_detail_url(wxGetApp().app_config) + "?sn=" +
                                     Http::url_encode(filament_sn);
-    bool ok = false;
     BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament detail request"
                             << ", url=" << request_url
                             << ", sn=" << filament_sn;
-    Http::get(request_url)
-        .header("Authorization", token)
-        .header("Biz", "ZXBMan")
-        .on_complete([&](std::string response_body, unsigned status) {
-            body = std::move(response_body);
-            ok   = true;
-            BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament detail response"
-                                    << ", http_status=" << status
-                                    << ", sn=" << filament_sn
-                                    << ", body_length=" << body.size();
-        })
-        .on_error([&](std::string response_body, std::string error, unsigned status) {
-            body          = std::move(response_body);
-            error_message = error.empty() ? body : error;
-            ok            = false;
-            BOOST_LOG_TRIVIAL(error) << "GFD dynamic params filament detail failed"
-                                     << ", http_status=" << status
-                                     << ", sn=" << filament_sn
-                                     << ", error=" << error_message
-                                     << ", body=" << body;
-        })
-        .perform_sync();
-    return ok;
+    return GFDAuthManager::perform_authenticated_request(
+        [&](const std::string& token) {
+            GFDHttpResult result;
+            Http::get(request_url)
+                .header("Authorization", token)
+                .header("Biz", "ZXBMan")
+                .on_complete([&](std::string response_body, unsigned status) {
+                    result.body   = std::move(response_body);
+                    result.status = status;
+                    result.ok     = true;
+                    BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament detail response"
+                                            << ", http_status=" << status
+                                            << ", sn=" << filament_sn
+                                            << ", body_length=" << result.body.size();
+                })
+                .on_error([&](std::string response_body, std::string error, unsigned status) {
+                    result.body          = std::move(response_body);
+                    result.status        = status;
+                    result.error_message = error.empty() ? result.body : error;
+                    result.ok            = false;
+                    BOOST_LOG_TRIVIAL(error) << "GFD dynamic params filament detail failed"
+                                             << ", http_status=" << status
+                                             << ", sn=" << filament_sn
+                                             << ", error=" << result.error_message
+                                             << ", body=" << result.body;
+                })
+                .perform_sync();
+            return result;
+        },
+        body,
+        error_message,
+        q);
 }
 
 bool Plater::priv::gfd_update_dynamic_filament_slice_param(const std::string& filament_sn,
@@ -9621,13 +9631,6 @@ bool Plater::priv::gfd_update_dynamic_filament_slice_param(const std::string& fi
                                                            std::string&       body,
                                                            std::string&       error_message) const
 {
-    const std::string token = gfd_auth_token();
-    if (token.empty()) {
-        error_message = "登录状态无效，请重新登录";
-        BOOST_LOG_TRIVIAL(warning) << "GFD dynamic params update skipped: auth token is empty";
-        return false;
-    }
-
     if (filament_sn.empty()) {
         error_message = "请选择耗材";
         return false;
@@ -9646,39 +9649,47 @@ bool Plater::priv::gfd_update_dynamic_filament_slice_param(const std::string& fi
 
     const std::string request_url  = GFD::Config::filament_temperature_update_slice_param_url(wxGetApp().app_config);
     const std::string request_body = request_json.dump();
-    bool              ok           = false;
     BOOST_LOG_TRIVIAL(info) << "GFD dynamic params update request"
                             << ", url=" << request_url
                             << ", sn=" << filament_sn
                             << ", device_type=" << device_type
                             << ", slice_param=" << slice_param
                             << ", body=" << request_body;
-    Http::post(request_url)
-        .header("Authorization", token)
-        .header("Biz", "ZXBMan")
-        .header("Content-Type", "application/json")
-        .set_post_body(request_body)
-        .on_complete([&](std::string response_body, unsigned status) {
-            body = std::move(response_body);
-            ok   = true;
-            BOOST_LOG_TRIVIAL(info) << "GFD dynamic params update response"
-                                    << ", http_status=" << status
-                                    << ", sn=" << filament_sn
-                                    << ", body=" << body;
-        })
-        .on_error([&](std::string response_body, std::string error, unsigned status) {
-            body          = std::move(response_body);
-            error_message = error.empty() ? body : error;
-            ok            = false;
-            BOOST_LOG_TRIVIAL(error) << "GFD dynamic params update failed"
-                                     << ", http_status=" << status
-                                     << ", sn=" << filament_sn
-                                     << ", device_type=" << device_type
-                                     << ", error=" << error_message
-                                     << ", body=" << body;
-        })
-        .perform_sync();
-    return ok;
+    return GFDAuthManager::perform_authenticated_request(
+        [&](const std::string& token) {
+            GFDHttpResult result;
+            Http::post(request_url)
+                .header("Authorization", token)
+                .header("Biz", "ZXBMan")
+                .header("Content-Type", "application/json")
+                .set_post_body(request_body)
+                .on_complete([&](std::string response_body, unsigned status) {
+                    result.body   = std::move(response_body);
+                    result.status = status;
+                    result.ok     = true;
+                    BOOST_LOG_TRIVIAL(info) << "GFD dynamic params update response"
+                                            << ", http_status=" << status
+                                            << ", sn=" << filament_sn
+                                            << ", body=" << result.body;
+                })
+                .on_error([&](std::string response_body, std::string error, unsigned status) {
+                    result.body          = std::move(response_body);
+                    result.status        = status;
+                    result.error_message = error.empty() ? result.body : error;
+                    result.ok            = false;
+                    BOOST_LOG_TRIVIAL(error) << "GFD dynamic params update failed"
+                                             << ", http_status=" << status
+                                             << ", sn=" << filament_sn
+                                             << ", device_type=" << device_type
+                                             << ", error=" << result.error_message
+                                             << ", body=" << result.body;
+                })
+                .perform_sync();
+            return result;
+        },
+        body,
+        error_message,
+        q);
 }
 
 bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, const std::string& gcode_path)
