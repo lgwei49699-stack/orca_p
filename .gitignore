@@ -42,3 +42,7 @@ deps_src/build/
 docs
 .idea
 planning
+tmp
+.mcp.json
+.codegraph
+.understand-anything
