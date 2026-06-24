@@ -31,6 +31,7 @@ struct CompressedImageBuffer
 
 std::string get_hex(const unsigned int input);
 std::string rjust(std::string input, unsigned int width, char fill_char);
+ThumbnailData resize_thumbnail(const ThumbnailData &data, unsigned int width, unsigned int height);
 std::unique_ptr<CompressedImageBuffer> compress_thumbnail(const ThumbnailData &data, GCodeThumbnailsFormat format);
 std::string get_error_string(const ThumbnailErrors& errors);
 

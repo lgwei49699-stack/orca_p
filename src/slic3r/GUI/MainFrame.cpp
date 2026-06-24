@@ -271,12 +271,12 @@ public:
 
     wxString config_name() const
     {
-        return m_name_input != nullptr ? m_name_input->GetTextCtrl()->GetValue() : wxEmptyString;
+        return m_name_input != nullptr ? m_name_input->GetTextCtrl()->GetValue() : wxString(wxEmptyString);
     }
 
     wxString remarks() const
     {
-        return m_remarks_input != nullptr ? m_remarks_input->GetValue() : wxEmptyString;
+        return m_remarks_input != nullptr ? m_remarks_input->GetValue() : wxString(wxEmptyString);
     }
 
 private:
