@@ -1195,6 +1195,8 @@ int CLI::run(int argc, char **argv)
     std::vector<plate_obj_size_info_t> plate_obj_size_infos;
     int plate_to_slice = 0, filament_count = 0, duplicate_count = 0, real_duplicate_count = 0;
     bool first_file = true, is_bbl_3mf = false, need_arrange = true, has_thumbnails = false, up_config_to_date = false, normative_check = true, duplicate_single_object = false, use_first_fila_as_default = false, minimum_save = false, enable_timelapse = false;
+    bool obj_multicolor_auto_mapping = false;
+    std::vector<std::string> obj_multicolor_filament_colors;
     bool allow_rotations = true, skip_modified_gcodes = false, avoid_extrusion_cali_region = false, skip_useless_pick = false, allow_newer_file = false;
     Semver file_version;
     std::map<size_t, bool> orients_requirement;
@@ -1408,6 +1410,14 @@ int CLI::run(int argc, char **argv)
                 //LoadStrategy strategy = LoadStrategy::LoadModel | LoadStrategy::LoadConfig|LoadStrategy::AddDefaultInstances;
                 //if (load_aux) strategy = strategy | LoadStrategy::LoadAuxiliary;
                 model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets, &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice);
+                if (boost::algorithm::iends_with(file, ".obj")) {
+                    const ConfigOptionStrings* obj_filament_colors = config.option<ConfigOptionStrings>("filament_colour");
+                    if (obj_filament_colors && obj_filament_colors->values.size() > 1) {
+                        obj_multicolor_auto_mapping = true;
+                        obj_multicolor_filament_colors = obj_filament_colors->values;
+                        BOOST_LOG_TRIVIAL(info) << boost::format("OBJ multicolor auto mapping detected, color count %1%") % obj_filament_colors->values.size();
+                    }
+                }
                 if (is_bbl_3mf)
                 {
                     if (!first_file)
@@ -2980,6 +2990,13 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    if (obj_multicolor_auto_mapping && !obj_multicolor_filament_colors.empty()) {
+        BOOST_LOG_TRIVIAL(info) << boost::format("restore OBJ multicolor filament colors after loading filament configs, color count %1%")
+                                       % obj_multicolor_filament_colors.size();
+        ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour", true);
+        project_filament_colors_option->values = obj_multicolor_filament_colors;
+    }
+
     // CLI temperature overrides: apply after filament configs are loaded
     {
         double cli_nozzle_temp = 0, cli_nozzle_temp_initial = 0;
@@ -3009,6 +3026,19 @@ int CLI::run(int argc, char **argv)
     //compute the flush volume
     ConfigOptionStrings *selected_filament_colors_option = m_extra_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour");
+    bool restored_obj_filament_colors = false;
+    if (obj_multicolor_auto_mapping && !obj_multicolor_filament_colors.empty()) {
+        bool should_restore_obj_filament_colors = !project_filament_colors_option ||
+                                                  project_filament_colors_option->values.size() != obj_multicolor_filament_colors.size() ||
+                                                  project_filament_colors_option->values != obj_multicolor_filament_colors;
+        if (should_restore_obj_filament_colors) {
+            BOOST_LOG_TRIVIAL(info) << boost::format("restore OBJ multicolor filament colors after filament config merge, color count %1%")
+                                           % obj_multicolor_filament_colors.size();
+            project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour", true);
+            project_filament_colors_option->values = obj_multicolor_filament_colors;
+            restored_obj_filament_colors = true;
+        }
+    }
     if ((!project_filament_colors_option || (project_filament_colors_option->values.size() == 0)) && selected_filament_colors_option)
     {
         BOOST_LOG_TRIVIAL(info) << boost::format("initial project_filament_colors is null, create it due to filament_colour set in cli");
@@ -3016,10 +3046,36 @@ int CLI::run(int argc, char **argv)
         std::vector<std::string>& project_filament_colors = project_filament_colors_option->values;
         project_filament_colors.resize(filament_count, "#FFFFFF");
     }
-    if (project_filament_colors_option && (selected_filament_colors_option || !m_print_config.option<ConfigOptionFloats>("flush_volumes_matrix")))
+    const ConfigOptionFloats* existing_flush_matrix_option = m_print_config.option<ConfigOptionFloats>("flush_volumes_matrix");
+    bool need_recompute_flush_volumes = selected_filament_colors_option || restored_obj_filament_colors || obj_multicolor_auto_mapping || !existing_flush_matrix_option;
+    if (!need_recompute_flush_volumes && obj_multicolor_auto_mapping && project_filament_colors_option) {
+        const size_t project_filament_count = project_filament_colors_option->values.size();
+        const std::vector<double>& matrix_values = existing_flush_matrix_option->values;
+        const bool matrix_size_invalid = matrix_values.size() != project_filament_count * project_filament_count;
+        bool matrix_has_positive_offdiag = false;
+        if (!matrix_size_invalid) {
+            for (size_t from_idx = 0; from_idx < project_filament_count; ++from_idx) {
+                for (size_t to_idx = 0; to_idx < project_filament_count; ++to_idx) {
+                    if (from_idx != to_idx && matrix_values[project_filament_count * from_idx + to_idx] > 0.) {
+                        matrix_has_positive_offdiag = true;
+                        break;
+                    }
+                }
+                if (matrix_has_positive_offdiag)
+                    break;
+            }
+        }
+        need_recompute_flush_volumes = matrix_size_invalid || (project_filament_count > 1 && !matrix_has_positive_offdiag);
+        if (need_recompute_flush_volumes) {
+            BOOST_LOG_TRIVIAL(warning)
+                << boost::format("OBJ multicolor flush volumes are missing or zero, recomputing from filament colors. matrix_size=%1%, color_count=%2%")
+                       % matrix_values.size() % project_filament_count;
+        }
+    }
+    if (project_filament_colors_option && need_recompute_flush_volumes)
     {
         std::vector<std::string>  selected_filament_colors;
-        if (selected_filament_colors_option) {
+        if (selected_filament_colors_option && !obj_multicolor_auto_mapping) {
             selected_filament_colors = selected_filament_colors_option->values;
             //erase here
             m_extra_config.erase("filament_colour");
@@ -3045,6 +3101,9 @@ int CLI::run(int argc, char **argv)
                 }
 
             }
+        }
+        else if (selected_filament_colors_option && obj_multicolor_auto_mapping) {
+            BOOST_LOG_TRIVIAL(info) << boost::format("skip applying selected filament colors to OBJ multicolor flush calculation");
         }
 
         std::vector<std::string>  &project_filament_colors = project_filament_colors_option->values;
@@ -3084,6 +3143,13 @@ int CLI::run(int argc, char **argv)
             m_print_config.option<ConfigOptionFloat>("flush_multiplier", true)->set(new ConfigOptionFloat(1.f));
 
             const std::vector<int>& min_flush_volumes = Slic3r::GUI::get_min_flush_volumes(m_print_config);
+
+            if (obj_multicolor_auto_mapping && filament_is_support->size() != project_filament_count) {
+                BOOST_LOG_TRIVIAL(warning)
+                    << boost::format("normalize OBJ multicolor filament_is_support size from %1% to %2%")
+                           % filament_is_support->size() % project_filament_count;
+                filament_is_support->values.resize(project_filament_count, 0);
+            }
 
             if (filament_is_support->size() != project_filament_count)
             {

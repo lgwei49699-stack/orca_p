@@ -242,9 +242,9 @@ static void update_filament_config_for_cmd(DynamicPrintConfig&                  
         }
     }
 
-    ConfigOptionFloats* flush_vol_vector_opt = config.option<ConfigOptionFloats>("flush_vol_vector");
+    ConfigOptionFloats* flush_vol_vector_opt = config.option<ConfigOptionFloats>("flush_volumes_vector");
     if (!flush_vol_vector_opt) {
-        flush_vol_vector_opt = new ConfigOptionFloats(1, 0.0);
+        flush_vol_vector_opt = new ConfigOptionFloats();
         config.set_key_value("flush_volumes_vector", flush_vol_vector_opt);
     }
 
