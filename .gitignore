@@ -43,6 +43,7 @@ docs
 .idea
 planning
 tmp
+dist/
 .mcp.json
 .codegraph
 .understand-anything
