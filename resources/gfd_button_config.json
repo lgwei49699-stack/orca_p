@@ -1,0 +1,45 @@
+{
+  "comment": "GFD per-device button visibility. Matched by gfd_device_type (e.g. EP7). 'default' applies to any device not listed under 'devices'. 'print_device_types' lists the device types shown in the print (下发打印) dialog dropdown; empty = use cloud-returned types.",
+  "default": {
+    "cloud_import": true,
+    "dynamic_params": true,
+    "upload_config": true,
+    "save_config": true,
+    "print": true,
+    "print_device_types": []
+  },
+  "devices": {
+    "EP7": {
+      "cloud_import": true,
+      "dynamic_params": false,
+      "upload_config": true,
+      "save_config": true,
+      "print": true,
+      "print_device_types": ["EP7"]
+    },
+    "EP3": {
+      "cloud_import": true,
+      "dynamic_params": true,
+      "upload_config": true,
+      "save_config": true,
+      "print": true,
+      "print_device_types": ["EP3"]
+    },
+    "EP3Pro": {
+      "cloud_import": true,
+      "dynamic_params": true,
+      "upload_config": true,
+      "save_config": true,
+      "print": true,
+      "print_device_types": ["EP3Pro"]
+    },
+    "EP3Plus": {
+      "cloud_import": true,
+      "dynamic_params": true,
+      "upload_config": true,
+      "save_config": true,
+      "print": true,
+      "print_device_types": ["EP3Plus"]
+    }
+  }
+}

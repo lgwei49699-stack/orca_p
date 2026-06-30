@@ -1,0 +1,24 @@
+{
+	"type": "filament",
+	"setting_id": "GFSA04",
+	"name": "PolyLite ABS @EP7 0.2 nozzle",
+	"from": "system",
+	"instantiation": "true",
+	"inherits": "PolyLite ABS@EP7-Series",
+	"chamber_temperatures": [
+		"0"
+	],
+	"during_print_exhaust_fan_speed": [
+		"40"
+	],
+	"filament_max_volumetric_speed": [
+		"2"
+	],
+	"pressure_advance": [
+		"0.052"
+	],
+	"compatible_printers": [
+		"EP7 0.2 nozzle"
+	]
+}
+

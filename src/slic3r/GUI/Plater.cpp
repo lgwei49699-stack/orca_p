@@ -2185,6 +2185,7 @@ struct GFDImportRestoreState
     std::string              printer_preset_name;
     std::string              selected_filament_preset_name;
     std::vector<std::string> filament_presets;
+    std::vector<std::string> filament_colors;
 };
 
 GFDImportRestoreState gfd_capture_import_restore_state(const PresetBundle* bundle)
@@ -2196,15 +2197,65 @@ GFDImportRestoreState gfd_capture_import_restore_state(const PresetBundle* bundl
     state.printer_preset_name           = bundle->printers.get_selected_preset_name();
     state.selected_filament_preset_name = bundle->filaments.get_selected_preset_name();
     state.filament_presets              = bundle->filament_presets;
+    if (const ConfigOptionStrings* filament_colors = bundle->project_config.option<ConfigOptionStrings>("filament_colour");
+        filament_colors != nullptr)
+        state.filament_colors = filament_colors->values;
     return state;
+}
+
+std::vector<std::string> gfd_resolve_restored_filament_colors(const PresetBundle& bundle, const GFDImportRestoreState& state)
+{
+    static const std::string default_color = "#26A69A";
+
+    size_t target_count = state.filament_presets.size();
+    if (target_count == 0)
+        target_count = state.filament_colors.size();
+    if (target_count == 0)
+        return {};
+
+    std::vector<std::string> colors = state.filament_colors;
+    if (colors.size() > target_count)
+        colors.resize(target_count);
+
+    colors.reserve(target_count);
+    for (size_t index = colors.size(); index < target_count; ++index) {
+        std::string color = default_color;
+        if (index < state.filament_presets.size()) {
+            if (const Preset* preset = bundle.filaments.find_preset(state.filament_presets[index], true); preset != nullptr) {
+                if (const ConfigOptionStrings* preset_colors = preset->config.option<ConfigOptionStrings>("filament_colour");
+                    preset_colors != nullptr && !preset_colors->values.empty() && !preset_colors->values.front().empty())
+                    color = preset_colors->values.front();
+            }
+        }
+        colors.emplace_back(std::move(color));
+    }
+
+    for (std::string& color : colors) {
+        if (color.empty())
+            color = default_color;
+    }
+    return colors;
 }
 
 void gfd_restore_filament_selection(PresetBundle& bundle, const GFDImportRestoreState& state)
 {
     if (!state.filament_presets.empty())
         bundle.filament_presets = state.filament_presets;
+    else if (bundle.filament_presets.empty()) {
+        const std::string fallback_filament =
+            !state.selected_filament_preset_name.empty() ? state.selected_filament_preset_name : bundle.filaments.get_selected_preset_name();
+        if (!fallback_filament.empty())
+            bundle.filament_presets.assign(1, fallback_filament);
+    }
     if (!state.selected_filament_preset_name.empty())
         bundle.filaments.select_preset_by_name(state.selected_filament_preset_name, true);
+    bundle.update_multi_material_filament_presets();
+
+    if (std::vector<std::string> restored_colors = gfd_resolve_restored_filament_colors(bundle, state); !restored_colors.empty()) {
+        if (ConfigOptionStrings* filament_colors = bundle.project_config.option<ConfigOptionStrings>("filament_colour", true); filament_colors != nullptr)
+            filament_colors->values = std::move(restored_colors);
+    }
+    bundle.ams_multi_color_filment.resize(bundle.filament_presets.size());
     bundle.update_multi_material_filament_presets();
 }
 
@@ -9817,7 +9868,8 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
 void Plater::priv::show_gfd_device_selection_dialog()
 {
     gfd_print_device_type = gfd_current_device_type();
-    GFDDeviceSelectionDialog dialog(q, std::string(), gfd_print_device_type);
+    std::vector<std::string> allowed_device_types = GFD::Config::all_print_device_types();
+    GFDDeviceSelectionDialog dialog(q, std::string(), gfd_print_device_type, allowed_device_types);
     if (dialog.ShowModal() == wxID_OK) {
         gfd_selected_devices = dialog.selected_devices();
         BOOST_LOG_TRIVIAL(info) << "GFD selected devices"

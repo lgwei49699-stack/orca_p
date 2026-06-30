@@ -1,0 +1,14 @@
+{
+  "type": "machine_model",
+  "name": "EP7",
+  "model_id": "EP7",
+  "gfd_device_type": "EP7",
+  "nozzle_diameter": "0.4;0.2;0.6;0.8",
+  "machine_tech": "FFF",
+  "family": "Qidi",
+  "bed_model": "ep7_buildplate_model.stl",
+  "hotend_model": "qidi_xseries_gen3_hotend.stl",
+  "default_bed_type": "Supertack Plate",
+  "default_materials": "Bambu PLA @EP7 0.2 nozzle;Bambu PLA @EP7 0.4 nozzle;Bambu PLA @EP7 0.6 nozzle;Bambu PLA @EP7 0.8 nozzle;Generic PLA @EP7 0.2 nozzle;Generic PLA @EP7 0.4 nozzle;Generic PLA @EP7 0.6 nozzle;Generic PLA @EP7 0.8 nozzle;Generic PLA Silk @EP7 0.4 nozzle;Generic PLA Silk @EP7 0.6 nozzle;Generic PLA+ @EP7 0.2 nozzle;Generic PLA+ @EP7 0.4 nozzle;Generic PLA+ @EP7 0.6 nozzle;Generic PLA+ @EP7 0.8 nozzle;HATCHBOX PLA @EP7 0.2 nozzle;HATCHBOX PLA @EP7 0.4 nozzle;HATCHBOX PLA @EP7 0.6 nozzle;HATCHBOX PLA @EP7 0.8 nozzle;Overture PLA @EP7 0.2 nozzle;Overture PLA @EP7 0.4 nozzle;Overture PLA @EP7 0.6 nozzle;Overture PLA @EP7 0.8 nozzle;PolyLite PLA @EP7 0.2 nozzle;PolyLite PLA @EP7 0.4 nozzle;PolyLite PLA @EP7 0.6 nozzle;PolyLite PLA @EP7 0.8 nozzle;Polymaker PLA-HT @EP7 0.2 nozzle;Polymaker PLA-HT @EP7 0.4 nozzle;Polymaker PLA-HT @EP7 0.6 nozzle;Polymaker PLA-HT @EP7 0.8 nozzle;QIDI PLA Basic @EP7 0.2 nozzle;QIDI PLA Basic @EP7 0.4 nozzle;QIDI PLA Basic @EP7 0.6 nozzle;QIDI PLA Basic @EP7 0.8 nozzle;QIDI PLA Matte Basic @EP7 0.2 nozzle;QIDI PLA Matte Basic @EP7 0.4 nozzle;QIDI PLA Matte Basic @EP7 0.6 nozzle;QIDI PLA Matte Basic @EP7 0.8 nozzle;QIDI PLA Rapido @EP7 0.2 nozzle;QIDI PLA Rapido @EP7 0.4 nozzle;QIDI PLA Rapido @EP7 0.6 nozzle;QIDI PLA Rapido @EP7 0.8 nozzle;QIDI PLA Rapido Matte @EP7 0.2 nozzle;QIDI PLA Rapido Matte @EP7 0.4 nozzle;QIDI PLA Rapido Matte @EP7 0.6 nozzle;QIDI PLA Rapido Matte @EP7 0.8 nozzle;QIDI PLA Rapido Metal @EP7 0.2 nozzle;QIDI PLA Rapido Metal @EP7 0.4 nozzle;QIDI PLA Rapido Metal @EP7 0.6 nozzle;QIDI PLA Rapido Metal @EP7 0.8 nozzle;QIDI PLA Rapido Silk @EP7 0.4 nozzle;QIDI PLA Rapido Silk @EP7 0.6 nozzle;QIDI PLA-CF @EP7 0.4 nozzle;QIDI PLA-CF @EP7 0.6 nozzle;QIDI PLA-CF @EP7 0.8 nozzle",
+  "bed_texture": "ep7_buildplate_texture.svg"
+}

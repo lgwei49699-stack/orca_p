@@ -20,6 +20,18 @@ struct EnvironmentConfig
     std::string api_base_url;
 };
 
+// GFD: per-device button visibility, loaded from resources/gfd_button_config.json.
+struct ButtonVisibility
+{
+    bool cloud_import   = true;
+    bool dynamic_params = true;
+    bool upload_config  = true;
+    bool save_config    = true;
+    bool print          = true;
+    // Device types shown in the "下发打印" dialog dropdown; empty = fall back to cloud-returned types.
+    std::vector<std::string> print_device_types;
+};
+
 class Config
 {
 public:
@@ -78,6 +90,10 @@ public:
     static std::string device_print_cmd_url(const AppConfig* config);
     static std::string explicit_device_type(const DynamicPrintConfig& printer_config);
     static std::string current_device_type(const DynamicPrintConfig& printer_config);
+    static ButtonVisibility button_visibility(const std::string& device_type);
+    static std::vector<std::string> print_device_types(const std::string& device_type);
+    // All device types declared across the central config (every "devices" entry's print_device_types, deduped).
+    static std::vector<std::string> all_print_device_types();
     static std::vector<std::string> local_gfd_device_types();
     static bool        is_gfd_printer(const DynamicPrintConfig& printer_config);
     static bool        should_show_print_button(const DynamicPrintConfig& printer_config);
@@ -88,6 +104,8 @@ public:
     static std::string auth_token(const AppConfig* config);
     static std::string verify_token(const AppConfig* config);
     static std::string verify_expire_ts(const AppConfig* config);
+    static std::string user_email(const AppConfig* config);
+    static std::string user_uuid(const AppConfig* config);
 
     static void set_remember_login(AppConfig* config, bool remember);
     static void set_cached_username(AppConfig* config, const std::string& username);
@@ -100,6 +118,7 @@ public:
     static void set_user_uuid(AppConfig* config, const std::string& uuid);
 
     static void clear_verify_cache(AppConfig* config);
+    static void clear_login_identity(AppConfig* config);
 };
 
 } // namespace GFD

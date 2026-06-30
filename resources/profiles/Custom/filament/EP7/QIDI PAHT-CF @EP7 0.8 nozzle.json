@@ -1,0 +1,18 @@
+{
+	"type": "filament",
+	"setting_id": "GFSN99",
+	"name": "QIDI PAHT-CF @EP7 0.8 nozzle",
+	"from": "system",
+	"instantiation": "true",
+	"inherits": "QIDI PAHT-CF@EP7-Series",
+	"additional_cooling_fan_speed": [
+		"0"
+	],
+	"additional_cooling_fan_speed_unseal": [
+		"0"
+	],
+	"compatible_printers": [
+		"EP7 0.8 nozzle"
+	]
+}
+

@@ -1,0 +1,20 @@
+{
+	"type": "filament",
+	"setting_id": "GFSL99",
+	"name": "Generic PLA+ @Qidi X-Smart 5 0.6 nozzle",
+	"from": "system",
+	"instantiation": "true",
+	"inherits": "Generic PLA+@X-Smart 5-Series",
+	"pressure_advance": [
+		"0.016"
+	],
+	"additional_cooling_fan_speed": [
+		"0"
+	],
+	"additional_cooling_fan_speed_unseal": [
+		"0"
+	],
+	"compatible_printers": [
+		"Qidi X-Smart 5 0.6 nozzle"
+	]
+}

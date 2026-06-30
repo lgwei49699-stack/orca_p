@@ -412,6 +412,129 @@ std::string Config::current_device_type(const DynamicPrintConfig& printer_config
 
 bool Config::is_gfd_printer(const DynamicPrintConfig& printer_config) { return !current_device_type(printer_config).empty(); }
 
+namespace {
+
+void parse_button_visibility(const json& node, ButtonVisibility& visibility)
+{
+    auto read_bool = [&node](const char* key, bool& out) {
+        if (!node.contains(key) || node[key].is_null())
+            return;
+        const json& value = node[key];
+        if (value.is_boolean())
+            out = value.get<bool>();
+        else if (value.is_number_integer())
+            out = value.get<long long>() != 0;
+        else if (value.is_string()) {
+            const std::string v = value.get<std::string>();
+            out = !(v == "0" || lower_copy(trim_copy(v)) == "false");
+        }
+    };
+
+    read_bool("cloud_import", visibility.cloud_import);
+    read_bool("dynamic_params", visibility.dynamic_params);
+    read_bool("upload_config", visibility.upload_config);
+    read_bool("save_config", visibility.save_config);
+    read_bool("print", visibility.print);
+
+    if (node.contains("print_device_types")) {
+        const json& types = node["print_device_types"];
+        if (types.is_array()) {
+            visibility.print_device_types.clear();
+            for (const auto& el : types) {
+                if (!el.is_string())
+                    continue;
+                const std::string entry = trim_copy(el.get<std::string>());
+                if (!entry.empty())
+                    visibility.print_device_types.push_back(entry);
+            }
+        }
+        else if (types.is_string()) {
+            visibility.print_device_types.clear();
+            const std::string entry = trim_copy(types.get<std::string>());
+            if (!entry.empty())
+                visibility.print_device_types.push_back(entry);
+        }
+    }
+}
+
+struct ButtonConfigData
+{
+    ButtonVisibility                     default_visibility;
+    std::map<std::string, ButtonVisibility> by_device; // key = lowercased device type
+};
+
+const ButtonConfigData& cached_button_config()
+{
+    static const ButtonConfigData data = []() {
+        ButtonConfigData result;
+        const boost::filesystem::path path =
+            (boost::filesystem::path(resources_dir()) / "gfd_button_config.json").make_preferred();
+        try {
+            if (boost::filesystem::exists(path)) {
+                boost::nowide::ifstream ifs(path.string());
+                json root;
+                ifs >> root;
+                if (root.contains("default") && root["default"].is_object())
+                    parse_button_visibility(root["default"], result.default_visibility);
+                if (root.contains("devices") && root["devices"].is_object()) {
+                    for (auto it = root["devices"].begin(); it != root["devices"].end(); ++it) {
+                        if (!it.value().is_object())
+                            continue;
+                        ButtonVisibility visibility = result.default_visibility;
+                        parse_button_visibility(it.value(), visibility);
+                        result.by_device[lower_copy(trim_copy(it.key()))] = visibility;
+                    }
+                }
+                BOOST_LOG_TRIVIAL(info) << "GFD button config loaded"
+                                        << ", path=" << path.string()
+                                        << ", device_entries=" << result.by_device.size();
+            }
+            else {
+                BOOST_LOG_TRIVIAL(info) << "GFD button config not found, using defaults"
+                                        << ", path=" << path.string();
+            }
+        } catch (const std::exception& ex) {
+            BOOST_LOG_TRIVIAL(error) << "GFD button config parse failed"
+                                     << ", path=" << path.string()
+                                     << ", error=" << ex.what();
+        }
+        return result;
+    }();
+    return data;
+}
+
+} // namespace
+
+ButtonVisibility Config::button_visibility(const std::string& device_type)
+{
+    const ButtonConfigData& data = cached_button_config();
+    const std::string key = lower_copy(trim_copy(device_type));
+    if (!key.empty()) {
+        const auto it = data.by_device.find(key);
+        if (it != data.by_device.end())
+            return it->second;
+    }
+    return data.default_visibility;
+}
+
+std::vector<std::string> Config::print_device_types(const std::string& device_type)
+{
+    return button_visibility(device_type).print_device_types;
+}
+
+std::vector<std::string> Config::all_print_device_types()
+{
+    const ButtonConfigData& data = cached_button_config();
+    std::vector<std::string> result;
+    for (const auto& entry : data.by_device) {
+        for (const std::string& type : entry.second.print_device_types) {
+            if (std::find(result.begin(), result.end(), type) == result.end())
+                result.push_back(type);
+        }
+    }
+    return result;
+}
+
 std::vector<std::string> Config::local_gfd_device_types()
 {
     std::set<std::string> unique_device_types;
@@ -443,6 +566,10 @@ std::string Config::verify_token(const AppConfig* config) { return get_value(con
 
 std::string Config::verify_expire_ts(const AppConfig* config) { return get_value(config, KEY_VERIFY_EXPIRE_TS); }
 
+std::string Config::user_email(const AppConfig* config) { return get_value(config, KEY_USER_EMAIL); }
+
+std::string Config::user_uuid(const AppConfig* config) { return get_value(config, KEY_USER_UUID); }
+
 void Config::set_remember_login(AppConfig* config, bool remember) { set_value(config, KEY_LOGIN_REMEMBER, remember ? "true" : "false"); }
 
 void Config::set_cached_username(AppConfig* config, const std::string& username) { set_value(config, KEY_LOGIN_USERNAME, username); }
@@ -468,6 +595,13 @@ void Config::clear_verify_cache(AppConfig* config)
 {
     set_value(config, KEY_VERIFY_TOKEN, "");
     set_value(config, KEY_VERIFY_EXPIRE_TS, "");
+}
+
+void Config::clear_login_identity(AppConfig* config)
+{
+    set_value(config, KEY_AUTH_TOKEN, "");
+    set_value(config, KEY_USER_EMAIL, "");
+    set_value(config, KEY_USER_UUID, "");
 }
 
 }} // namespace Slic3r::GFD

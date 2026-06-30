@@ -1,0 +1,18 @@
+{
+	"type": "filament",
+	"setting_id": "GFSL99",
+	"name": "Polymaker PLA-HT @EP7 0.2 nozzle",
+	"from": "system",
+	"instantiation": "true",
+	"inherits": "Polymaker PLA-HT@EP7-Series",
+	"filament_max_volumetric_speed": [
+		"2"
+	],
+	"pressure_advance": [
+		"0.057"
+	],
+	"compatible_printers": [
+		"EP7 0.2 nozzle"
+	]
+}
+

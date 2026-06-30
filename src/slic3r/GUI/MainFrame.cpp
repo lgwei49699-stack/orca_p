@@ -1411,7 +1411,7 @@ private:
             std::find(device_types.begin(), device_types.end(), current_device_type) == device_types.end())
             device_types.insert(device_types.begin(), current_device_type);
         if (device_types.empty())
-            device_types = {"EP3", "EP3Pro", "EP3Plus"};
+            device_types = {"EP3", "EP3Pro", "EP3Plus", "EP7"};
 
         m_device_choice->Clear();
         for (const std::string& device_type : device_types)
@@ -1968,7 +1968,7 @@ private:
             std::find(device_types.begin(), device_types.end(), current_device_type) == device_types.end())
             device_types.insert(device_types.begin(), current_device_type);
         if (device_types.empty())
-            device_types = {"EP3", "EP3Pro", "EP3Plus"};
+            device_types = {"EP3", "EP3Pro", "EP3Plus", "EP7"};
 
         m_device_choice->Clear();
         for (const std::string& device_type : device_types)
@@ -6015,12 +6015,18 @@ void MainFrame::update_gfd_config_buttons()
     const bool parameter_panel_shown = m_plater->is_sidebar_enabled() && !m_plater->is_sidebar_collapsed() &&
                                        (m_plater->is_view3D_shown() || m_plater->is_preview_shown());
     should_show = should_show && parameter_panel_shown;
-    const bool show_save_config = should_show && m_plater->has_dirty_active_imported_cloud_config();
+
+    // GFD: per-device button visibility, driven by the central resources/gfd_button_config.json file.
+    const auto button_vis = GFD::Config::button_visibility(printer_state.effective_device_type);
+    const bool show_save_config = should_show && button_vis.save_config && m_plater->has_dirty_active_imported_cloud_config();
 
     panel->Show(should_show);
-    for (Button* btn : {m_plater->gfd_cloud_import_button(), m_plater->gfd_dynamic_params_button(), m_plater->gfd_upload_config_button()})
-        if (btn)
-            btn->Show(should_show);
+    if (m_plater->gfd_cloud_import_button() != nullptr)
+        m_plater->gfd_cloud_import_button()->Show(should_show && button_vis.cloud_import);
+    if (m_plater->gfd_upload_config_button() != nullptr)
+        m_plater->gfd_upload_config_button()->Show(should_show && button_vis.upload_config);
+    if (m_plater->gfd_dynamic_params_button() != nullptr)
+        m_plater->gfd_dynamic_params_button()->Show(should_show && button_vis.dynamic_params);
     if (m_plater->gfd_save_config_button() != nullptr) {
         m_plater->gfd_save_config_button()->Enable(show_save_config);
         if (panel->GetSizer() != nullptr)
@@ -6074,7 +6080,8 @@ void MainFrame::update_gfd_print_button()
     bool should_show_gfd_print_button = false;
     bool slice_ready = false;
     const GFDPrinterState printer_state = current_gfd_printer_state();
-    should_show_gfd_print_button = !printer_state.effective_device_type.empty();
+    const auto print_button_vis = GFD::Config::button_visibility(printer_state.effective_device_type);
+    should_show_gfd_print_button = !printer_state.effective_device_type.empty() && print_button_vis.print;
 
     if (m_plater != nullptr) {
         PartPlate* current_plate = m_plater->get_partplate_list().get_curr_plate();

@@ -15,6 +15,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/algorithm/clamp.hpp>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/nowide/cstdio.hpp>
 #include <boost/nowide/fstream.hpp>
@@ -53,7 +54,7 @@ const char *PresetBundle::ORCA_FILAMENT_LIBRARY = "OrcaFilamentLibrary";
 static bool gfd_use_printer_default_filament(const Preset& printer_preset)
 {
     const std::string printer_model = printer_preset.config.opt_string("printer_model");
-    return printer_model == "EP3" || printer_model == "EP3 Pro" || printer_model == "EP3Plus" || printer_model == "EP3 Plus";
+    return printer_model == "EP3" || printer_model == "EP3 Pro" || printer_model == "EP3Plus" || printer_model == "EP3 Plus" || printer_model == "EP7";
 }
 
 static std::string gfd_first_default_filament_profile(const Preset& printer_preset)
@@ -1844,6 +1845,13 @@ void PresetBundle::export_selections(AppConfig &config)
 {
 	assert(this->printers.get_edited_preset().printer_technology() != ptFFF || filament_presets.size() >= 1);
 	//assert(this->printers.get_edited_preset().printer_technology() != ptFFF || filament_presets.size() > 1 || filaments.get_selected_preset_name() == filament_presets.front());
+    if (this->printers.get_edited_preset().printer_technology() == ptFFF && filament_presets.empty()) {
+        const std::string fallback_filament = filaments.get_selected_preset_name();
+        if (!fallback_filament.empty())
+            filament_presets.assign(1, fallback_filament);
+    }
+
+    const std::string selected_filament_name = filament_presets.empty() ? std::string() : filament_presets.front();
     config.clear_section("presets");
     auto printer_name = printers.get_selected_preset_name();
     config.set("presets", PRESET_PRINTER_NAME, printer_name);
@@ -1851,7 +1859,7 @@ void PresetBundle::export_selections(AppConfig &config)
     config.clear_printer_settings(printer_name);
     config.set_printer_setting(printer_name, PRESET_PRINTER_NAME, printer_name);
     config.set_printer_setting(printer_name, PRESET_PRINT_NAME, prints.get_selected_preset_name());
-    config.set_printer_setting(printer_name, PRESET_FILAMENT_NAME,     filament_presets.front());
+    config.set_printer_setting(printer_name, PRESET_FILAMENT_NAME,     selected_filament_name);
     config.set_printer_setting(printer_name, "curr_bed_type", config.get("curr_bed_type"));
     for (unsigned i = 1; i < filament_presets.size(); ++i) {
         char name[64];
@@ -1879,7 +1887,7 @@ void PresetBundle::export_selections(AppConfig &config)
     //config.set("presets", "sla_material", sla_materials.get_selected_preset_name());
     //config.set("presets", "physical_printer", physical_printers.get_selected_full_printer_name());
     //BBS: add config related log
-    BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": printer %1%, print %2%, filaments[0] %3% ")%printers.get_selected_preset_name() % prints.get_selected_preset_name() %filament_presets[0];
+    BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": printer %1%, print %2%, filaments[0] %3% ")%printers.get_selected_preset_name() % prints.get_selected_preset_name() %selected_filament_name;
 }
 
 // BBS
@@ -2202,9 +2210,9 @@ DynamicPrintConfig PresetBundle::full_fff_config() const
         compatible_prints_condition  .emplace_back(this->filaments.get_edited_preset().compatible_prints_condition());
         //BBS: add logic for settings check between different system presets
         //std::string filament_inherits = this->filaments.get_edited_preset().inherits();
-        std::string current_preset_name = this->filament_presets[0];
-        const Preset* preset = this->filaments.find_preset(current_preset_name, true);
-        std::string filament_inherits = preset->inherits();
+        std::string current_preset_name = this->filament_presets.empty() ? this->filaments.get_selected_preset_name() : this->filament_presets.front();
+        const Preset* preset = current_preset_name.empty() ? nullptr : this->filaments.find_preset(current_preset_name, true);
+        std::string filament_inherits = preset != nullptr ? preset->inherits() : std::string();
         inherits                     .emplace_back(filament_inherits);
         filament_ids.emplace_back(this->filaments.get_edited_preset().filament_id);
 
@@ -2470,8 +2478,15 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
 		// 1 SLA material
         1;
 #else
-    // BBS: use filament_colour insteadof filament_settings_id, filament_settings_id sometimes is not generated
-    size_t num_filaments = config.option<ConfigOptionStrings>("filament_colour")->size();
+    auto option_vector_size = [&config](const char* key) -> size_t {
+        const ConfigOption* option = config.option(key);
+        return option != nullptr && option->is_vector() ? static_cast<const ConfigOptionVectorBase*>(option)->size() : 0;
+    };
+    size_t num_filaments = 0;
+    for (const char* key : {"filament_colour", "filament_settings_id", "filament_ids", "compatible_process_expression_group", "filament_diameter"})
+        num_filaments = std::max(num_filaments, option_vector_size(key));
+    if (printer_technology == ptFFF && num_filaments == 0)
+        num_filaments = std::max<size_t>(1, filament_presets.empty() ? 0 : filament_presets.size());
 #endif
 
     //BBS: add config related logs

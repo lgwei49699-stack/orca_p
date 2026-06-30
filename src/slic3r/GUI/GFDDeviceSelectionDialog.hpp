@@ -29,7 +29,7 @@ struct GFDDeviceInfo
 class GFDDeviceSelectionDialog : public wxDialog
 {
 public:
-    GFDDeviceSelectionDialog(wxWindow* parent, std::string gcode_path, std::string default_device_type);
+    GFDDeviceSelectionDialog(wxWindow* parent, std::string gcode_path, std::string default_device_type, std::vector<std::string> allowed_device_types = {});
     ~GFDDeviceSelectionDialog() override;
 
     const std::vector<GFDDeviceInfo>& selected_devices() const { return m_selected_devices; }
@@ -66,6 +66,7 @@ private:
 private:
     std::string m_gcode_path;
     std::string m_default_device_type;
+    std::vector<std::string> m_allowed_device_types;
 
     std::vector<GFDDeviceInfo> m_devices;
     std::vector<GFDDeviceInfo> m_all_devices;

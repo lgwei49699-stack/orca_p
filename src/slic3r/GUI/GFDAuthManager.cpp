@@ -59,6 +59,15 @@ GFDLoginDialog::LoginResult try_auto_login_from_cache(std::string& error_message
     return GFDLoginDialog::login_with_credentials(username, password, error_message, true, true);
 }
 
+bool has_nonempty_login_identity(const AppConfig* config)
+{
+    if (config == nullptr)
+        return false;
+
+    return !trim_copy(GFD::Config::auth_token(config)).empty() ||
+           !trim_copy(GFD::Config::user_uuid(config)).empty();
+}
+
 } // namespace
 
 bool GFDAuthManager::has_valid_session(const AppConfig* config)
@@ -66,19 +75,38 @@ bool GFDAuthManager::has_valid_session(const AppConfig* config)
     if (config == nullptr)
         return false;
 
-    std::string token = current_auth_token(config);
-    if (token.empty())
-        return false;
+    const std::string auth_token       = trim_copy(GFD::Config::auth_token(config));
+    const std::string verify_token     = trim_copy(GFD::Config::verify_token(config));
+    const std::string verify_expire_ts = GFD::Config::verify_expire_ts(config);
 
-    const std::string expire_ts = GFD::Config::verify_expire_ts(config);
-    if (expire_ts.empty())
-        return false;
-
-    try {
-        return static_cast<long long>(std::time(nullptr)) <= std::stoll(expire_ts);
-    } catch (...) {
-        return false;
+    if (!verify_token.empty() && !verify_expire_ts.empty()) {
+        try {
+            const bool valid = static_cast<long long>(std::time(nullptr)) <= std::stoll(verify_expire_ts);
+            BOOST_LOG_TRIVIAL(info) << "GFD session validity"
+                                    << ", env=" << GFD::Config::current_environment_name(config)
+                                    << ", token_length=" << verify_token.size()
+                                    << ", valid=" << valid
+                                    << ", mode=" << (auth_token.empty() ? "verify_cache_only" : "verify_cache");
+            return valid;
+        } catch (...) {
+            BOOST_LOG_TRIVIAL(warning) << "GFD session validity parse failed"
+                                       << ", env=" << GFD::Config::current_environment_name(config)
+                                       << ", mode=" << (auth_token.empty() ? "verify_cache_only" : "verify_cache");
+            return false;
+        }
     }
+
+    if (!auth_token.empty()) {
+        const bool valid = true;
+        BOOST_LOG_TRIVIAL(info) << "GFD session validity"
+                                << ", env=" << GFD::Config::current_environment_name(config)
+                                << ", token_length=" << auth_token.size()
+                                << ", valid=" << valid
+                                << ", mode=auth_token_only";
+        return valid;
+    }
+
+    return false;
 }
 
 std::string GFDAuthManager::current_auth_token(const AppConfig* config)
@@ -97,7 +125,7 @@ void GFDAuthManager::clear_session(AppConfig* config)
     if (config == nullptr)
         return;
 
-    GFD::Config::set_auth_token(config, "");
+    GFD::Config::clear_login_identity(config);
     GFD::Config::clear_verify_cache(config);
     config->save();
 }
@@ -129,7 +157,7 @@ bool GFDAuthManager::ensure_logged_in(wxWindow*, std::string* error_message)
         return false;
     }
 
-    return has_valid_session(config) || !current_auth_token(config).empty();
+    return has_valid_session(config) || has_nonempty_login_identity(config);
 }
 
 bool GFDAuthManager::perform_authenticated_request(const RequestFn& request,
@@ -142,6 +170,9 @@ bool GFDAuthManager::perform_authenticated_request(const RequestFn& request,
 
     const auto run_once = [&]() {
         const std::string token = current_auth_token(wxGetApp().app_config);
+        BOOST_LOG_TRIVIAL(info) << "GFD authenticated request"
+                                << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
+                                << ", token_length=" << token.size();
         if (token.empty()) {
             GFDHttpResult result;
             result.ok            = false;
@@ -158,6 +189,10 @@ bool GFDAuthManager::perform_authenticated_request(const RequestFn& request,
     if (!is_auth_failure_response(result.status, result.body, result.error_message))
         return result.ok;
 
+    BOOST_LOG_TRIVIAL(warning) << "GFD authenticated request requires re-login"
+                               << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
+                               << ", http_status=" << result.status
+                               << ", error=" << result.error_message;
     clear_session(wxGetApp().app_config);
     if (!ensure_logged_in(parent, &error_message))
         return false;

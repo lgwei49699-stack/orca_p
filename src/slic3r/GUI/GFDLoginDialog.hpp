@@ -35,6 +35,11 @@ public:
                                               std::string&       error_message,
                                               bool               persist_credentials = false,
                                               bool               remember_credentials = false);
+    LoginResult login_with_credentials_local(const std::string& username,
+                                             const std::string& password,
+                                             std::string&       error_message,
+                                             bool               persist_credentials = false,
+                                             bool               remember_credentials = false);
 
 private:
     void build();
@@ -47,7 +52,11 @@ private:
 
     bool validate_input();
     bool request_public_key(std::string& public_key, std::string& error_message);
-    bool request_login(const std::string& email, const std::string& password_encrypted, std::string& uuid, std::string& error_message);
+    bool request_login(const std::string& email,
+                       const std::string& password_encrypted,
+                       std::string&       uuid,
+                       std::string&       auth_token,
+                       std::string&       error_message);
     bool request_verify(const std::string& uuid, const std::string& code, std::string& verify_token, std::string& error_message);
 
     static std::string rsa_encrypt_password(const std::string& password, const std::string& public_key_base64, std::string& error_message);
@@ -65,7 +74,7 @@ private:
 class GFDVerifyDialog : public wxDialog
 {
 public:
-    GFDVerifyDialog();
+    explicit GFDVerifyDialog(wxWindow* parent = nullptr);
     ~GFDVerifyDialog() override = default;
 
     bool verify_login(const std::string& uuid, std::string& verify_token);

@@ -112,6 +112,7 @@
 #include "WebDownPluginDlg.hpp"
 #include "WebGuideDialog.hpp"
 #include "GFDLoginDialog.hpp"
+#include "GFDAuthManager.hpp"
 #include "ReleaseNote.hpp"
 #include "PrivacyUpdateDialog.hpp"
 #include "ModelMall.hpp"
@@ -169,21 +170,37 @@ bool gfd_user_login_valid(const AppConfig* config)
     if (config == nullptr)
         return false;
 
-    std::string token = GFD::Config::auth_token(config);
-    if (token.empty())
-        token = GFD::Config::verify_token(config);
-    if (token.empty())
-        return false;
+    const std::string auth_token       = GFD::Config::auth_token(config);
+    const std::string verify_token     = GFD::Config::verify_token(config);
+    const std::string verify_expire_ts = GFD::Config::verify_expire_ts(config);
 
-    const std::string expire_ts = GFD::Config::verify_expire_ts(config);
-    if (expire_ts.empty())
-        return false;
-
-    try {
-        return static_cast<long long>(std::time(nullptr)) <= std::stoll(expire_ts);
-    } catch (...) {
-        return false;
+    if (!verify_token.empty() && !verify_expire_ts.empty()) {
+        try {
+            const bool valid = static_cast<long long>(std::time(nullptr)) <= std::stoll(verify_expire_ts);
+            BOOST_LOG_TRIVIAL(info) << "GFD startup login validity"
+                                    << ", env=" << GFD::Config::current_environment_name(config)
+                                    << ", token_length=" << verify_token.size()
+                                    << ", valid=" << valid
+                                    << ", mode=" << (auth_token.empty() ? "verify_cache_only" : "verify_cache");
+            return valid;
+        } catch (...) {
+            BOOST_LOG_TRIVIAL(warning) << "GFD startup login validity parse failed"
+                                       << ", env=" << GFD::Config::current_environment_name(config)
+                                       << ", mode=" << (auth_token.empty() ? "verify_cache_only" : "verify_cache");
+            return false;
+        }
     }
+
+    if (!auth_token.empty()) {
+        BOOST_LOG_TRIVIAL(info) << "GFD startup login validity"
+                                << ", env=" << GFD::Config::current_environment_name(config)
+                                << ", token_length=" << auth_token.size()
+                                << ", valid=true"
+                                << ", mode=auth_token_only";
+        return true;
+    }
+
+    return false;
 }
 
 bool gfd_can_show_login_ui()
@@ -3772,6 +3789,8 @@ void GUI_App::request_user_login(int online_login)
 
 void GUI_App::request_user_logout()
 {
+    GFDAuthManager::clear_session(app_config);
+
     if (m_agent && m_agent->is_user_login()) {
         // Update data first before showing dialogs
         m_agent->user_logout(true);

@@ -164,7 +164,7 @@ void apply_flat_filter_choice_style(wxChoice* choice)
 
 } // namespace
 
-GFDDeviceSelectionDialog::GFDDeviceSelectionDialog(wxWindow* parent, std::string gcode_path, std::string default_device_type)
+GFDDeviceSelectionDialog::GFDDeviceSelectionDialog(wxWindow* parent, std::string gcode_path, std::string default_device_type, std::vector<std::string> allowed_device_types)
     : wxDialog(parent,
                wxID_ANY,
                _L("打印机选择"),
@@ -173,6 +173,7 @@ GFDDeviceSelectionDialog::GFDDeviceSelectionDialog(wxWindow* parent, std::string
                wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
     , m_gcode_path(std::move(gcode_path))
     , m_default_device_type(std::move(default_device_type))
+    , m_allowed_device_types(std::move(allowed_device_types))
 {
     SetDoubleBuffered(true);
     build();
@@ -369,8 +370,15 @@ void GFDDeviceSelectionDialog::refresh_filter_choices(const std::string& selecte
     m_suppress_filter_events = true;
     m_type_choice->Clear();
     append_choice(m_type_choice, _L("全部"), ALL_VALUE);
-    for (const std::string& type : types)
-        append_choice(m_type_choice, from_u8(type), type);
+    if (!m_allowed_device_types.empty()) {
+        // Config-driven: the dropdown lists only the device types declared in the printer config file.
+        for (const std::string& type : m_allowed_device_types)
+            append_choice(m_type_choice, from_u8(type), type);
+    }
+    else {
+        for (const std::string& type : types)
+            append_choice(m_type_choice, from_u8(type), type);
+    }
     set_choice_value(m_type_choice, selected_type);
 
     m_status_choice->Clear();
@@ -663,7 +671,10 @@ bool GFDDeviceSelectionDialog::match_filters(const GFDDeviceInfo& device) const
     const bool op_match     = op_filter.empty() || lower_copy(device.operator_name).find(op_filter) != std::string::npos;
     const bool type_match   = type_filter == ALL_VALUE || type_filter.empty() || device.device_type == type_filter;
     const bool status_match = status_filter == ALL_VALUE || status_filter.empty() || device.device_status == status_filter;
-    return mac_match && op_match && type_match && status_match;
+    // Config-driven scope: when allowed types are declared, only devices of those types are ever shown (even under "全部").
+    const bool allowed_match = m_allowed_device_types.empty() ||
+        std::find(m_allowed_device_types.begin(), m_allowed_device_types.end(), device.device_type) != m_allowed_device_types.end();
+    return mac_match && op_match && type_match && status_match && allowed_match;
 }
 
 std::vector<GFDDeviceInfo> GFDDeviceSelectionDialog::checked_devices(bool skip_offline, bool* has_offline) const
