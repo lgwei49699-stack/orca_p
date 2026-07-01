@@ -23,6 +23,7 @@
 #include "libslic3r/Format/SL1.hpp"
 #include "libslic3r/Thread.hpp"
 #include "libslic3r/libslic3r.h"
+#include "slic3r/Utils/GFDConfig.hpp"
 
 #include <cassert>
 #include <stdexcept>
@@ -38,6 +39,15 @@
 #include "slic3r/GUI/Plater.hpp"
 
 namespace Slic3r {
+
+namespace {
+
+bool should_smooth_m73_progress(const DynamicPrintConfig& config)
+{
+    return GFD::Config::current_device_type(config) == "EP7";
+}
+
+}
 
 bool SlicingProcessCompletedEvent::critical_error() const
 {
@@ -689,6 +699,9 @@ Print::ApplyStatus BackgroundSlicingProcess::apply(const Model &model, const Dyn
 	// TODO: add partplate config
 	DynamicPrintConfig new_config = config;
 	new_config.apply(*m_current_plate->config());
+    if (should_smooth_m73_progress(new_config)) {
+        new_config.option<ConfigOptionInt>("smooth_m73_progress", true)->value = 1;
+    }
 	Print::ApplyStatus invalidated = m_print->apply(model, new_config);
 
 	// Orca: prevent resetting under gcode viewer mode

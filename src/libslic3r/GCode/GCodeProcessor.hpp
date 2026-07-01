@@ -432,6 +432,7 @@ class Print;
                 unsigned int id;
                 unsigned int remaining_internal_g1_lines{ 0 };
                 float elapsed_time;
+                float progress_time;
             };
 
             bool enabled;
@@ -446,6 +447,9 @@ class Print;
             float max_travel_acceleration; // mm/s^2
             float extrude_factor_override_percentage;
             float time; // s
+            // Time used for user-facing progress percent. Blocking waits are
+            // intentionally excluded so M73 P advances smoothly through startup.
+            float progress_time; // s
             struct StopTime
             {
                 unsigned int g1_line_id;
@@ -496,6 +500,7 @@ class Print;
             float filament_unload_times;
             //Orca:  time for tool change
             float machine_tool_change_time;
+            bool smooth_m73_progress;
 
             std::array<TimeMachine, static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count)> machines;
 
@@ -983,5 +988,4 @@ class Print;
 } /* namespace Slic3r */
 
 #endif /* slic3r_GCodeProcessor_hpp_ */
-
 

@@ -4387,6 +4387,16 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("smooth_m73_progress", coInt);
+    def->label = L("Smooth M73 progress");
+    def->tooltip = L("Use a separate progress clock for M73 percent so blocking startup commands affect remaining time but do not make progress jump suddenly.");
+    def->cli = "smooth-m73-progress";
+    def->cli_params = "option";
+    def->mode = comDevelop;
+    def->min = 0;
+    def->max = 1;
+    def->set_default_value(new ConfigOptionInt(0));
+
     def = this->add("seam_position", coEnum);
     def->label = L("Seam position");
     def->category = L("Quality");

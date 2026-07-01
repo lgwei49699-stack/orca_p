@@ -242,6 +242,7 @@ void GCodeProcessor::TimeMachine::reset()
     max_travel_acceleration = 0.0f;
     extrude_factor_override_percentage = 1.0f;
     time = 0.0f;
+    progress_time = 0.0f;
     stop_times = std::vector<StopTime>();
     curr.reset();
     prev.reset();
@@ -358,6 +359,7 @@ void GCodeProcessor::TimeMachine::calculate_time(size_t keep_last_n_blocks, floa
             block_time += additional_time;
 
         time += block_time;
+        progress_time += block.time();
         gcode_time.cache += block_time;
         //BBS: don't calculate travel of start gcode into travel time
         if (!block.flags.prepare_stage || block.move_type != EMoveType::Travel)
@@ -374,7 +376,7 @@ void GCodeProcessor::TimeMachine::calculate_time(size_t keep_last_n_blocks, floa
         //BBS
         if (block.flags.prepare_stage)
             prepare_time += block_time;
-        g1_times_cache.push_back({ block.g1_line_id, block.remaining_internal_g1_lines, time });
+        g1_times_cache.push_back({ block.g1_line_id, block.remaining_internal_g1_lines, time, progress_time });
         // update times for remaining time to printer stop placeholders
         auto it_stop_time = std::lower_bound(stop_times.begin(), stop_times.end(), block.g1_line_id,
             [](const StopTime& t, unsigned int value) { return t.g1_line_id < value; });
@@ -396,6 +398,7 @@ void GCodeProcessor::TimeProcessor::reset()
     filament_load_times = 0.0f;
     filament_unload_times = 0.0f;
     machine_tool_change_time = 0.0f;
+    smooth_m73_progress = false;
 
 
     for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i) {
@@ -765,6 +768,7 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
     m_time_processor.filament_load_times = static_cast<float>(config.machine_load_filament_time.value);
     m_time_processor.filament_unload_times = static_cast<float>(config.machine_unload_filament_time.value);
     m_time_processor.machine_tool_change_time = static_cast<float>(config.machine_tool_change_time.value);
+    m_time_processor.smooth_m73_progress = config.smooth_m73_progress.value > 0;
 
     for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i) {
         float max_acceleration = get_option_value(m_time_processor.machine_limits.machine_max_acceleration_extruding, i);
@@ -987,6 +991,10 @@ void GCodeProcessor::apply_config(const DynamicPrintConfig& config)
     const ConfigOptionFloat* machine_tool_change_time = config.option<ConfigOptionFloat>("machine_tool_change_time");
     if (machine_tool_change_time != nullptr)
         m_time_processor.machine_tool_change_time = static_cast<float>(machine_tool_change_time->value);
+
+    const ConfigOptionInt* smooth_m73_progress = config.option<ConfigOptionInt>("smooth_m73_progress");
+    if (smooth_m73_progress != nullptr)
+        m_time_processor.smooth_m73_progress = smooth_m73_progress->value > 0;
 
 
     if (m_flavor == gcfMarlinLegacy || m_flavor == gcfMarlinFirmware || m_flavor == gcfKlipper) {
@@ -4550,7 +4558,10 @@ void GCodeProcessor::run_post_process()
                     while (it != machine.g1_times_cache.end() && it->id < g1_lines_counter)
                         ++it;
                     if (it != machine.g1_times_cache.end() && it->id == g1_lines_counter) {
-                        std::pair<int, int> to_export_main = { int(100.0f * it->elapsed_time / machine.time),
+                        const bool smooth_progress = m_time_processor.smooth_m73_progress && machine.progress_time > 0.0f;
+                        const float percent_elapsed = smooth_progress ? it->progress_time : it->elapsed_time;
+                        const float percent_total = smooth_progress ? machine.progress_time : machine.time;
+                        std::pair<int, int> to_export_main = { int(100.0f * percent_elapsed / percent_total),
                                                                 time_in_minutes(machine.time - it->elapsed_time) };
                         if (last_exported_main[i] != to_export_main) {
                             export_lines.append_line(format_line_M73_main(machine.line_m73_main_mask.c_str(),

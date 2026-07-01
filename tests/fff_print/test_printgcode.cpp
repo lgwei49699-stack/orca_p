@@ -17,6 +17,15 @@ boost::regex perimeters_regex("G1 X[-0-9.]* Y[-0-9.]* E[-0-9.]* ; perimeter");
 boost::regex infill_regex("G1 X[-0-9.]* Y[-0-9.]* E[-0-9.]* ; infill");
 boost::regex skirt_regex("G1 X[-0-9.]* Y[-0-9.]* E[-0-9.]* ; skirt");
 
+static std::vector<int> m73_progress_values(const std::string& gcode)
+{
+    std::vector<int> values;
+    static const boost::regex m73_regex("(^|\\n)M73 P([0-9]+) R[0-9]+");
+    for (boost::sregex_iterator it(gcode.begin(), gcode.end(), m73_regex), end; it != end; ++it)
+        values.emplace_back(std::stoi((*it)[2].str()));
+    return values;
+}
+
 SCENARIO( "PrintGCode basic functionality", "[PrintGCode]") {
     GIVEN("A default configuration and a print test object") {
         WHEN("the output is executed with no support material") {
@@ -303,6 +312,29 @@ SCENARIO( "PrintGCode basic functionality", "[PrintGCode]") {
 				REQUIRE((sscanf(gcode.data() + pos, "(%lf mm)", &z) == 1));
 				REQUIRE(z == Approx(20.));
 			}
+        }
+
+        WHEN("startup contains a long blocking calibration command") {
+            const std::string default_gcode = ::Test::slice({ TestMesh::cube_20x20x20 }, {
+                { "gcode_comments",                  true },
+                { "start_gcode",                     "G1 X5 F3000\nG1 X10 F3000\nG29\nG1 X20 F3000\nG1 X30 F3000\n" }
+            });
+            const std::string smooth_gcode = ::Test::slice({ TestMesh::cube_20x20x20 }, {
+                { "gcode_comments",                  true },
+                { "smooth_m73_progress",             1 },
+                { "start_gcode",                     "G1 X5 F3000\nG1 X10 F3000\nG29\nG1 X20 F3000\nG1 X30 F3000\n" }
+            });
+
+            THEN("M73 progress advances gradually only when the smooth progress flag is enabled") {
+                const std::vector<int> default_progress_values = m73_progress_values(default_gcode);
+                const std::vector<int> smooth_progress_values = m73_progress_values(smooth_gcode);
+                REQUIRE(default_progress_values.size() > 2);
+                REQUIRE(smooth_progress_values.size() > 2);
+                REQUIRE(default_progress_values[0] == 0);
+                REQUIRE(smooth_progress_values[0] == 0);
+                REQUIRE(default_progress_values[1] > smooth_progress_values[1]);
+                REQUIRE(smooth_progress_values[1] <= 2);
+            }
         }
     }
 }
