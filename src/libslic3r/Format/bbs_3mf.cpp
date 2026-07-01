@@ -7,6 +7,7 @@
 #include "../GCode.hpp"
 #include "../Geometry.hpp"
 #include "../GCode/ThumbnailData.hpp"
+#include "../GCode/Thumbnails.hpp"
 #include "../Semver.hpp"
 #include "../Time.hpp"
 
@@ -6262,40 +6263,13 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         }
 
         if (generate_small_thumbnail && thumbnail_data.is_valid()) {
-            //generate small size of thumbnail
-            std::vector<unsigned char> small_pixels;
-            small_pixels.resize(PLATE_THUMBNAIL_SMALL_WIDTH * PLATE_THUMBNAIL_SMALL_HEIGHT * 4);
-            /* step width and step height */
-            int sw = thumbnail_data.width / PLATE_THUMBNAIL_SMALL_WIDTH;
-            int sh = thumbnail_data.height / PLATE_THUMBNAIL_SMALL_HEIGHT;
-            int clampped_width = sw * PLATE_THUMBNAIL_SMALL_WIDTH;
-            int clampped_height = sh * PLATE_THUMBNAIL_SMALL_HEIGHT;
-
-            for (int i = 0; i < clampped_height; i += sh) {
-                for (int j = 0; j < clampped_width; j += sw) {
-                    int r = 0, g = 0, b = 0, a = 0;
-                    for (int m = 0; m < sh; m++) {
-                        for (int n = 0; n < sw; n++) {
-                            r += (int)thumbnail_data.pixels[4 * ((i + m) * thumbnail_data.width + j + n) + 0];
-                            g += (int)thumbnail_data.pixels[4 * ((i + m) * thumbnail_data.width + j + n) + 1];
-                            b += (int)thumbnail_data.pixels[4 * ((i + m) * thumbnail_data.width + j + n) + 2];
-                            a += (int)thumbnail_data.pixels[4 * ((i + m) * thumbnail_data.width + j + n) + 3];
-                        }
-                    }
-                    r = std::clamp(0, r / sw / sh, 255);
-                    g = std::clamp(0, g / sw / sh, 255);
-                    b = std::clamp(0, b / sw / sh, 255);
-                    a = std::clamp(0, a / sw / sh, 255);
-                    small_pixels[4 * (i / sw * PLATE_THUMBNAIL_SMALL_WIDTH + j / sh) + 0] = (unsigned char)r;
-                    small_pixels[4 * (i / sw * PLATE_THUMBNAIL_SMALL_WIDTH + j / sh) + 1] = (unsigned char)g;
-                    small_pixels[4 * (i / sw * PLATE_THUMBNAIL_SMALL_WIDTH + j / sh) + 2] = (unsigned char)b;
-                    small_pixels[4 * (i / sw * PLATE_THUMBNAIL_SMALL_WIDTH + j / sh) + 3] = (unsigned char)a;
-                    //memcpy((void*)&small_pixels[4*(i / sw * PLATE_THUMBNAIL_SMALL_WIDTH + j / sh)], thumbnail_data.pixels.data() + 4*(i * thumbnail_data.width + j), 4);
-                }
-            }
+            ThumbnailData small_thumbnail =
+                GCodeThumbnails::resize_thumbnail_fit(thumbnail_data, PLATE_THUMBNAIL_SMALL_WIDTH, PLATE_THUMBNAIL_SMALL_HEIGHT);
             size_t small_png_size = 0;
-            void* small_png_data = tdefl_write_image_to_png_file_in_memory_ex((const void*)small_pixels.data(), PLATE_THUMBNAIL_SMALL_WIDTH, PLATE_THUMBNAIL_SMALL_HEIGHT, 4, &small_png_size, MZ_DEFAULT_COMPRESSION, 1);
-            if (png_data != nullptr) {
+            void* small_png_data = tdefl_write_image_to_png_file_in_memory_ex((const void*) small_thumbnail.pixels.data(),
+                                                                               small_thumbnail.width, small_thumbnail.height, 4,
+                                                                               &small_png_size, MZ_DEFAULT_COMPRESSION, 1);
+            if (small_png_data != nullptr) {
                 std::string thumbnail_name = (boost::format("%1%_%2%_small.png") % local_path % (index + 1)).str();
                 res = mz_zip_writer_add_mem(&archive, thumbnail_name.c_str(), (const void*)small_png_data, small_png_size, MZ_NO_COMPRESSION);
                 mz_free(small_png_data);

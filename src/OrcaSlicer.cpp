@@ -22,6 +22,7 @@
 #include <cstring>
 #include <iostream>
 #include <math.h>
+#include <algorithm>
 
 #if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
 
@@ -5795,7 +5796,7 @@ int CLI::run(int argc, char **argv)
                                     }
                                     BOOST_LOG_TRIVIAL(info) << "process finished, will export gcode temporily to " << outfile << std::endl;
                                     temp_time = (long long)Slic3r::Utils::get_current_time_utc();
-                                    outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true);
+                                    outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true, true);
                                     time_using_cache = time_using_cache + ((long long)Slic3r::Utils::get_current_time_utc() - temp_time);
                                     BOOST_LOG_TRIVIAL(info) << "export_gcode finished: time_using_cache update to " << time_using_cache << " secs.";
 
@@ -5961,9 +5962,23 @@ int CLI::run(int argc, char **argv)
         }
 #endif
 
-        bool need_regenerate_thumbnail = oriented_or_arranged || regenerate_thumbnails;
-        bool need_regenerate_no_light_thumbnail = oriented_or_arranged || regenerate_thumbnails;
-        bool need_regenerate_top_thumbnail = oriented_or_arranged || regenerate_thumbnails;
+        std::string cli_thumbnail_image_path;
+        const ConfigOptionString* cli_thumbnail_image_opt = m_config.option<ConfigOptionString>("thumbnail_image");
+        if (cli_thumbnail_image_opt != nullptr && !cli_thumbnail_image_opt->value.empty()) {
+            if (boost::filesystem::exists(cli_thumbnail_image_opt->value)) {
+                cli_thumbnail_image_path = cli_thumbnail_image_opt->value;
+                BOOST_LOG_TRIVIAL(info) << boost::format("will use --thumbnail-image %1% as gcode.3mf plate thumbnail") % cli_thumbnail_image_path;
+            } else {
+                BOOST_LOG_TRIVIAL(warning) << boost::format("--thumbnail-image file does not exist, can not embed into gcode.3mf: %1%") %
+                                                  cli_thumbnail_image_opt->value;
+            }
+        }
+        const bool use_cli_thumbnail_image_for_3mf = !cli_thumbnail_image_path.empty();
+        const bool allow_cli_thumbnail_regeneration = false;
+
+        bool need_regenerate_thumbnail = allow_cli_thumbnail_regeneration && !use_cli_thumbnail_image_for_3mf && (oriented_or_arranged || regenerate_thumbnails);
+        bool need_regenerate_no_light_thumbnail = allow_cli_thumbnail_regeneration && !use_cli_thumbnail_image_for_3mf && (oriented_or_arranged || regenerate_thumbnails);
+        bool need_regenerate_top_thumbnail = allow_cli_thumbnail_regeneration && !use_cli_thumbnail_image_for_3mf && (oriented_or_arranged || regenerate_thumbnails);
         bool need_create_thumbnail_group = false, need_create_no_light_group = false, need_create_top_group = false;
 
         // get type and color for platedata
@@ -5978,12 +5993,20 @@ int CLI::run(int argc, char **argv)
         for (int i = 0; i < plate_data_list.size(); i++) {
             PlateData *plate_data = plate_data_list[i];
             bool skip_this_plate = ((plate_to_slice != 0) && (plate_to_slice != (i + 1)))?true:false;
+            const bool use_cli_thumbnail_for_this_plate = use_cli_thumbnail_image_for_3mf && !skip_this_plate;
 
             plate_data->skipped_objects = plate_skipped_objects[i];
             if (!printer_model_id.empty())
                 plate_data->printer_model_id = printer_model_id;
             if (!nozzle_diameter_str.empty())
                 plate_data->nozzle_diameters = nozzle_diameter_str;
+            if (use_cli_thumbnail_for_this_plate) {
+                plate_data->thumbnail_file = cli_thumbnail_image_path;
+                plate_data->plate_thumbnail.reset();
+                plate_data->no_light_thumbnail_file.clear();
+                plate_data->top_file.clear();
+                plate_data->pick_file.clear();
+            }
 
             for (auto it = plate_data->slice_filaments_info.begin(); it != plate_data->slice_filaments_info.end(); it++) {
                 std::string display_filament_type;
@@ -5993,18 +6016,20 @@ int CLI::run(int argc, char **argv)
             }
 
             if (!plate_data->plate_thumbnail.is_valid()) {
-                if (!oriented_or_arranged && !regenerate_thumbnails && plate_data_src.size() > i)
+                if (!use_cli_thumbnail_for_this_plate && !oriented_or_arranged && !regenerate_thumbnails && plate_data_src.size() > i)
                     plate_data->thumbnail_file = plate_data_src[i]->thumbnail_file;
                 BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s thumbnail data is invalid, check the file %2% exist or not")%(i+1) %plate_data->thumbnail_file;
                 if (plate_data->thumbnail_file.empty() || (!boost::filesystem::exists(plate_data->thumbnail_file))) {
-                    BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s thumbnail file also not there, need to regenerate")%(i+1);
-                    if (!skip_this_plate) {
+                    if (!skip_this_plate && allow_cli_thumbnail_regeneration) {
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s thumbnail file also not there, need to regenerate")%(i+1);
                         need_regenerate_thumbnail = true;
                         need_create_thumbnail_group = true;
                     }
+                    else if (!skip_this_plate)
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s thumbnail missing, skip regeneration for CLI 3MF export") % (i + 1);
                 }
                 else {
-                    if (regenerate_thumbnails) {
+                    if (regenerate_thumbnails && !use_cli_thumbnail_for_this_plate) {
                         BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s thumbnail file %2% cleared, need to regenerate")%(i+1) %plate_data->thumbnail_file;
                         plate_data->thumbnail_file.clear();
                     }
@@ -6021,16 +6046,21 @@ int CLI::run(int argc, char **argv)
                 }
             }
 
-            if (plate_data->no_light_thumbnail_file.empty()) {
+            if (use_cli_thumbnail_for_this_plate) {
+                BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1% uses --thumbnail-image, skip no_light thumbnail regeneration") % (i + 1);
+            }
+            else if (plate_data->no_light_thumbnail_file.empty()) {
                 if (!regenerate_thumbnails && (plate_data_src.size() > i)) {
                     plate_data->no_light_thumbnail_file = plate_data_src[i]->no_light_thumbnail_file;
                 }
                 if (plate_data->no_light_thumbnail_file.empty() || (!boost::filesystem::exists(plate_data->no_light_thumbnail_file))) {
-                    BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s no_light_thumbnail_file %2% also not there, need to regenerate")%(i+1)%plate_data->no_light_thumbnail_file;
-                    if (!skip_this_plate) {
+                    if (!skip_this_plate && allow_cli_thumbnail_regeneration) {
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s no_light_thumbnail_file %2% also not there, need to regenerate")%(i+1)%plate_data->no_light_thumbnail_file;
                         need_regenerate_no_light_thumbnail = true;
                         need_create_no_light_group = true;
                     }
+                    else if (!skip_this_plate)
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s no_light thumbnail missing, skip regeneration for CLI 3MF export") % (i + 1);
                 }
                 else {
                     if (regenerate_thumbnails) {
@@ -6042,18 +6072,23 @@ int CLI::run(int argc, char **argv)
                 }
             }
 
-            if (plate_data->top_file.empty() || plate_data->pick_file.empty()) {
+            if (use_cli_thumbnail_for_this_plate) {
+                BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1% uses --thumbnail-image, skip top/pick thumbnail regeneration") % (i + 1);
+            }
+            else if (plate_data->top_file.empty() || plate_data->pick_file.empty()) {
                 if (!regenerate_thumbnails && (plate_data_src.size() > i)) {
                     plate_data->top_file = plate_data_src[i]->top_file;
                     plate_data->pick_file = plate_data_src[i]->pick_file;
                 }
                 if (plate_data->top_file.empty()|| plate_data->pick_file.empty()
                     || (!boost::filesystem::exists(plate_data->top_file)) || (!boost::filesystem::exists(plate_data->pick_file))) {
-                    BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s top_file %2% also not there, need to regenerate")%(i+1)%plate_data->top_file;
-                    if (!skip_this_plate) {
+                    if (!skip_this_plate && allow_cli_thumbnail_regeneration) {
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s top_file %2% also not there, need to regenerate")%(i+1)%plate_data->top_file;
                         need_regenerate_top_thumbnail = true;
                         need_create_top_group = true;
                     }
+                    else if (!skip_this_plate)
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s top/pick thumbnails missing, skip regeneration for CLI 3MF export") % (i + 1);
                 }
                 else {
                     if (regenerate_thumbnails) {

@@ -1,7 +1,16 @@
 {
     "error_string": "Failed exporting 3mf files.",
-    "export_time": 18446744073709551615,
+    "export_time": 6447,
     "plate_index": 0,
     "prepare_time": 0,
-    "return_code": -13
+    "return_code": -13,
+    "sliced_plates": [
+        {
+            "id": 1,
+            "sliced_time": 0,
+            "sliced_time_with_cache": 0,
+            "triangle_count": 12,
+            "warning_message": ""
+        }
+    ]
 }

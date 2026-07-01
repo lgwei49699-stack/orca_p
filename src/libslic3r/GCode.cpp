@@ -1529,7 +1529,8 @@ bool GCode::is_BBL_Printer()
     return false;
 }
 
-void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* result, ThumbnailsGeneratorCallback thumbnail_cb)
+void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* result, ThumbnailsGeneratorCallback thumbnail_cb,
+                      bool embed_thumbnail_image)
 {
     PROFILE_CLEAR();
 
@@ -1591,7 +1592,7 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
     }
 
     try {
-        this->_do_export(*print, file, thumbnail_cb);
+        this->_do_export(*print, file, thumbnail_cb, embed_thumbnail_image);
         file.flush();
         if (file.is_error()) {
             file.close();
@@ -1923,7 +1924,7 @@ static BambuBedType to_bambu_bed_type(BedType type)
     return bambu_bed_type;
 }
 
-void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGeneratorCallback thumbnail_cb)
+void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGeneratorCallback thumbnail_cb, bool embed_thumbnail_image)
 {
     PROFILE_FUNC();
 
@@ -2107,7 +2108,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         
         // Embed thumbnail from image file if specified. The source image is normalized to the
         // machine thumbnail dimensions before writing to keep printer-side preview parsing stable.
-        const ConfigOption* thumbnail_opt = print.full_print_config().option("thumbnail_image");
+        const ConfigOption* thumbnail_opt = embed_thumbnail_image ? print.full_print_config().option("thumbnail_image") : nullptr;
         if (thumbnail_opt != nullptr) {
             const ConfigOptionString* thumbnail_str = dynamic_cast<const ConfigOptionString*>(thumbnail_opt);
             if (thumbnail_str != nullptr && !thumbnail_str->value.empty()) {

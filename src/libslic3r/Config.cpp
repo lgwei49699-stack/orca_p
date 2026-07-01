@@ -1582,7 +1582,11 @@ bool DynamicConfig::read_cli(int argc, const char* const argv[], t_config_option
 
         // If the option type expects a value and it was not already provided,
         // look for it in the next token.
-        if (value.empty() && optdef.type != coBool && optdef.type != coBools) {
+        if (value.empty() && optdef.type == coBool && i < argc - 1) {
+            std::string next_token = argv[i + 1];
+            if (next_token == "0" || next_token == "1")
+                value = argv[++ i];
+        } else if (value.empty() && optdef.type != coBool && optdef.type != coBools) {
             if (i == argc-1) {
                 boost::nowide::cerr << "Need values for option --" << token.c_str() << std::endl;
                 return false;

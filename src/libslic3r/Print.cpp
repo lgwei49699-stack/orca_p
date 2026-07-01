@@ -2214,7 +2214,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
 // write error into the G-code, cannot execute post-processing scripts).
 // It is up to the caller to show an error message.
 std::string Print::export_gcode(const std::string& path_template, GCodeProcessorResult* result,
-                                ThumbnailsGeneratorCallback thumbnail_cb, bool force_toolchange_for_single_extruder)
+                                ThumbnailsGeneratorCallback thumbnail_cb, bool force_toolchange_for_single_extruder,
+                                bool embed_thumbnail_image)
 {
     // output everything to a G-code file
     // The following call may die if the filename_format template substitution fails.
@@ -2235,7 +2236,7 @@ std::string Print::export_gcode(const std::string& path_template, GCodeProcessor
     //BBS: compute plate offset for gcode-generator
     const Vec3d origin = this->get_plate_origin();
     gcode.set_gcode_offset(origin(0), origin(1));
-    gcode.do_export(this, path.c_str(), result, thumbnail_cb);
+    gcode.do_export(this, path.c_str(), result, thumbnail_cb, embed_thumbnail_image);
 
     //BBS
     result->conflict_result = m_conflict_result;
