@@ -2957,6 +2957,7 @@ struct Plater::priv
     bool        is_gfd_printer() const;
     std::string gfd_current_device_type() const;
     fs::path    gfd_temp_gcode_path();
+    fs::path    gfd_temp_gcode_3mf_path();
     void        start_gfd_print_export();
     void        show_gfd_device_selection_dialog();
     bool        ensure_gfd_login();
@@ -3028,9 +3029,10 @@ struct Plater::priv
     void           gfd_save_cloud_process_records(const nlohmann::json& records) const;
     bool        gfd_send_print_command(const GFDDeviceInfo& device,
                                        const std::string&  file_url,
+                                       const std::string&  file_type,
                                        std::string&        body,
                                        std::string&        error_message) const;
-    bool        gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, const std::string& gcode_path);
+    bool        gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, const std::string& print_file_path);
     void        on_action_export_gcode(SimpleEvent&);
     void        on_action_send_gcode(SimpleEvent&);
     void        on_action_export_sliced_file(SimpleEvent&);
@@ -3128,6 +3130,7 @@ struct Plater::priv
     bool            gfd_print_export_scheduled{false};
     std::string     gfd_print_device_type;
     std::string     gfd_print_gcode_path;
+    bool            gfd_print_use_3mf_file{false};
     std::vector<GFDDeviceInfo> gfd_selected_devices;
     // BBS store machine_sn and 3mf_path for PrintJob
     PrintPrepareData m_print_job_data;
@@ -9316,6 +9319,22 @@ fs::path Plater::priv::gfd_temp_gcode_path()
     return output_path;
 }
 
+fs::path Plater::priv::gfd_temp_gcode_3mf_path()
+{
+    fs::path output_path = gfd_temp_gcode_path();
+    output_path.replace_extension(".gcode.3mf");
+    if (fs::exists(output_path)) {
+        const std::string stem = output_path.stem().string();
+        output_path            = output_path.parent_path() /
+                      fs::path((boost::format("%1%_%2%%3%") % stem % get_current_pid() % output_path.extension().string()).str());
+    }
+    BOOST_LOG_TRIVIAL(info) << "GFD temp G-code 3MF path resolved"
+                            << ", temp_dir=" << output_path.parent_path().string()
+                            << ", filename=" << output_path.filename().string()
+                            << ", full_path=" << output_path.string();
+    return output_path;
+}
+
 void Plater::priv::start_gfd_print_export()
 {
     BOOST_LOG_TRIVIAL(info) << "GFD start print export"
@@ -9341,9 +9360,16 @@ void Plater::priv::start_gfd_print_export()
 
         gfd_print_device_type = gfd_current_device_type();
         gfd_print_gcode_path  = current_plate->get_gcode_filename();
+        if (gfd_print_use_3mf_file && !boost::algorithm::iends_with(gfd_print_gcode_path, ".3mf")) {
+            BOOST_LOG_TRIVIAL(warning) << "GFD 3MF print skipped: imported file is not 3MF"
+                                       << ", file_path=" << gfd_print_gcode_path;
+            show_error(q, _L("当前导入文件不是 3MF，无法按 3MF 下发。"));
+            return;
+        }
         BOOST_LOG_TRIVIAL(info) << "GFD start print export uses imported gcode directly"
                                 << ", gcode_path=" << gfd_print_gcode_path
                                 << ", device_type=" << gfd_print_device_type
+                                << ", use_3mf_file=" << gfd_print_use_3mf_file
                                 << ", selected_devices=" << gfd_selected_devices.size();
         gfd_execute_print(gfd_selected_devices, gfd_print_gcode_path);
         return;
@@ -9370,6 +9396,37 @@ void Plater::priv::start_gfd_print_export()
         if (state & priv::UPDATE_BACKGROUND_PROCESS_INVALID) {
             BOOST_LOG_TRIVIAL(warning) << "GFD start print export skipped: background process invalid"
                                        << ", state=" << state;
+            return;
+        }
+
+        if (gfd_print_use_3mf_file) {
+            const fs::path output_path = gfd_temp_gcode_3mf_path();
+            SaveStrategy strategy = SaveStrategy::Silence | SaveStrategy::SkipModel | SaveStrategy::WithGcode | SaveStrategy::SkipAuxiliary;
+#if !BBL_RELEASE_TO_PUBLIC
+            if (wxGetApp().app_config->get("iot_environment") == ENV_PRE_HOST)
+                strategy = SaveStrategy::Silence | SaveStrategy::SplitModel | SaveStrategy::WithGcode;
+#endif
+            const int export_result = q->export_3mf(output_path, strategy, PLATE_CURRENT_IDX, nullptr);
+            if (export_result < 0 || output_path.empty() || !fs::exists(output_path)) {
+                BOOST_LOG_TRIVIAL(error) << "GFD 3MF export failed"
+                                         << ", result=" << export_result
+                                         << ", output_path=" << output_path.string();
+                show_error(q, _L("3MF 文件导出失败，无法上传打印。"));
+                return;
+            }
+
+            gfd_print_device_type = gfd_current_device_type();
+            gfd_print_gcode_path  = output_path.string();
+            exporting_status      = ExportingStatus::NOT_EXPORTING;
+            last_output_path      = gfd_print_gcode_path;
+            last_output_dir_path  = output_path.parent_path().string();
+
+            BOOST_LOG_TRIVIAL(info) << "GFD temporary 3MF export finished"
+                                    << ", output_path=" << gfd_print_gcode_path
+                                    << ", output_dir=" << last_output_dir_path
+                                    << ", device_type=" << gfd_print_device_type
+                                    << ", selected_devices=" << gfd_selected_devices.size();
+            gfd_execute_print(gfd_selected_devices, gfd_print_gcode_path);
             return;
         }
 
@@ -9451,8 +9508,8 @@ bool Plater::priv::gfd_upload_file_with_token(const std::string&       file_path
                                               std::string&             error_message) const
 {
     if (!fs::exists(file_path)) {
-        error_message = "G-code 文件不存在";
-        BOOST_LOG_TRIVIAL(error) << "GFD OBS upload skipped: G-code file does not exist"
+        error_message = "打印文件不存在";
+        BOOST_LOG_TRIVIAL(error) << "GFD OBS upload skipped: print file does not exist"
                                  << ", file_path=" << file_path;
         return false;
     }
@@ -9536,6 +9593,7 @@ bool Plater::priv::gfd_upload_file_with_token(const std::string&       file_path
 
 bool Plater::priv::gfd_send_print_command(const GFDDeviceInfo& device,
                                           const std::string&  file_url,
+                                          const std::string&  file_type,
                                           std::string&        body,
                                           std::string&        error_message) const
 {
@@ -9544,7 +9602,7 @@ bool Plater::priv::gfd_send_print_command(const GFDDeviceInfo& device,
     request_json["deviceId"]  = device.device_id;
     request_json["printSn"]   = device.device_sn;
     request_json["requestId"] = device.device_sn;
-    request_json["fileType"]  = "gcode";
+    request_json["fileType"]  = file_type;
 
     const std::string print_cmd_url = GFD::Config::device_print_cmd_url(wxGetApp().app_config);
     const std::string request_body  = request_json.dump();
@@ -9554,6 +9612,7 @@ bool Plater::priv::gfd_send_print_command(const GFDDeviceInfo& device,
                             << ", device_sn=" << device.device_sn
                             << ", device_id=" << device.device_id
                             << ", file_url=" << file_url
+                            << ", file_type=" << file_type
                             << ", body=" << request_body;
     return GFDAuthManager::perform_authenticated_request(
         [&](const std::string& token) {
@@ -9743,11 +9802,17 @@ bool Plater::priv::gfd_update_dynamic_filament_slice_param(const std::string& fi
         q);
 }
 
-bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, const std::string& gcode_path)
+bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, const std::string& print_file_path)
 {
+    const bool        use_3mf_file = gfd_print_use_3mf_file || boost::algorithm::iends_with(print_file_path, ".3mf");
+    const std::string file_suffix  = use_3mf_file ? "3mf" : "gcode";
+    const std::string file_type    = use_3mf_file ? "3mf" : "gcode";
+
     BOOST_LOG_TRIVIAL(info) << "GFD execute print begin"
                             << ", selected_devices=" << devices.size()
-                            << ", gcode_path=" << gcode_path;
+                            << ", print_file_path=" << print_file_path
+                            << ", file_suffix=" << file_suffix
+                            << ", file_type=" << file_type;
 
     if (devices.empty()) {
         BOOST_LOG_TRIVIAL(warning) << "GFD execute print skipped: no selected devices";
@@ -9763,7 +9828,7 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
 
     std::string obs_body;
     std::string error_message;
-    if (!gfd_request_obs_token("gcode", obs_body, error_message)) {
+    if (!gfd_request_obs_token(file_suffix, obs_body, error_message)) {
         show_error(q, from_u8(error_message.empty() ? "获取 OBS 上传令牌失败" : error_message));
         return false;
     }
@@ -9796,14 +9861,15 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
                             << ", has_accessid=" << obs_data.contains("accessid");
 
     std::string file_url;
-    if (!gfd_upload_file_with_token(gcode_path, obs_data, file_url, error_message)) {
-        show_error(q, from_u8(error_message.empty() ? "G-code 上传失败" : error_message));
+    if (!gfd_upload_file_with_token(print_file_path, obs_data, file_url, error_message)) {
+        show_error(q, from_u8(error_message.empty() ? "打印文件上传失败" : error_message));
         return false;
     }
 
-    BOOST_LOG_TRIVIAL(info) << "GFD G-code uploaded to OBS"
-                            << ", local_gcode_path=" << gcode_path
+    BOOST_LOG_TRIVIAL(info) << "GFD print file uploaded to OBS"
+                            << ", local_file_path=" << print_file_path
                             << ", obs_file_url=" << file_url
+                            << ", file_type=" << file_type
                             << ", selected_devices=" << devices.size();
 
     size_t      success_count = 0;
@@ -9813,7 +9879,7 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
         error_message.clear();
         BOOST_LOG_TRIVIAL(info) << boost::format("GFD send print command: mac=%1%, sn=%2%, id=%3%") % device.mac %
                                        device.device_sn % device.device_id;
-        if (!gfd_send_print_command(device, file_url, print_body, error_message)) {
+        if (!gfd_send_print_command(device, file_url, file_type, print_body, error_message)) {
             failed_message += (boost::format("%1%: %2%\n") % device.mac %
                                (error_message.empty() ? std::string("下发打印失败") : error_message))
                                   .str();
@@ -9856,7 +9922,8 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
     BOOST_LOG_TRIVIAL(info) << "GFD execute print finished"
                             << ", success_count=" << success_count
                             << ", obs_file_url=" << file_url
-                            << ", local_gcode_path=" << gcode_path;
+                            << ", local_file_path=" << print_file_path
+                            << ", file_type=" << file_type;
     MessageDialog msg_dlg(nullptr,
                           format_wxstr(_L("上传打印设备成功，共 %1% 台"), success_count),
                           _L("上传成功"),
@@ -9868,13 +9935,16 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
 void Plater::priv::show_gfd_device_selection_dialog()
 {
     gfd_print_device_type = gfd_current_device_type();
+    gfd_print_use_3mf_file = false;
     std::vector<std::string> allowed_device_types = GFD::Config::all_print_device_types();
     GFDDeviceSelectionDialog dialog(q, std::string(), gfd_print_device_type, allowed_device_types);
     if (dialog.ShowModal() == wxID_OK) {
         gfd_selected_devices = dialog.selected_devices();
+        gfd_print_use_3mf_file = dialog.use_3mf_file();
         BOOST_LOG_TRIVIAL(info) << "GFD selected devices"
                                 << ", count=" << gfd_selected_devices.size()
-                                << ", device_type=" << gfd_print_device_type;
+                                << ", device_type=" << gfd_print_device_type
+                                << ", use_3mf_file=" << gfd_print_use_3mf_file;
         for (const GFDDeviceInfo& device : gfd_selected_devices) {
             BOOST_LOG_TRIVIAL(info) << "GFD selected device detail"
                                     << ", mac=" << device.mac
@@ -9883,7 +9953,8 @@ void Plater::priv::show_gfd_device_selection_dialog()
                                     << ", status=" << device.device_status
                                     << ", status_title=" << device.status_title
                                     << ", sn=" << device.device_sn
-                                    << ", device_id=" << device.device_id;
+                                    << ", device_id=" << device.device_id
+                                    << ", use_3mf_file=" << gfd_print_use_3mf_file;
         }
         start_gfd_print_export();
     }

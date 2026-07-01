@@ -34,6 +34,7 @@ public:
 
     const std::vector<GFDDeviceInfo>& selected_devices() const { return m_selected_devices; }
     const std::string&                gcode_path() const { return m_gcode_path; }
+    bool                              use_3mf_file() const { return m_use_3mf_file; }
 
 private:
     void build();
@@ -42,7 +43,7 @@ private:
     void refresh_filter_choices(const std::string& selected_type, const std::string& selected_status);
     void refresh_table(bool apply_filters = true, bool sync_checked_keys = true);
     void reset_filters();
-    void accept_selection();
+    void accept_selection(bool use_3mf_file = false);
     void update_confirm_button_state();
     void toggle_row_checked(long row);
     void sync_checked_keys_from_table();
@@ -75,6 +76,7 @@ private:
     std::set<std::string>      m_checked_device_keys;
     bool                       m_suppress_filter_events{false};
     bool                       m_loading{false};
+    bool                       m_use_3mf_file{false};
 
     wxTextCtrl* m_mac_input{nullptr};
     wxTextCtrl* m_operator_input{nullptr};
@@ -84,6 +86,7 @@ private:
     wxStaticText* m_tip_label{nullptr};
     Button*     m_search_button{nullptr};
     Button*     m_reset_button{nullptr};
+    Button*     m_confirm_3mf_button{nullptr};
     Button*     m_confirm_button{nullptr};
 };
 

@@ -32,13 +32,16 @@ std::string lower_copy(std::string value)
 bool contains_auth_failure_text(const std::string& value)
 {
     const std::string lowered = lower_copy(value);
-    return lowered.find("token") != std::string::npos &&
-               (lowered.find("invalid") != std::string::npos || lowered.find("expired") != std::string::npos ||
-                lowered.find("fail") != std::string::npos || lowered.find("error") != std::string::npos) ||
+    return (lowered.find("token") != std::string::npos &&
+            (lowered.find("invalid") != std::string::npos || lowered.find("expired") != std::string::npos ||
+             lowered.find("fail") != std::string::npos || lowered.find("error") != std::string::npos)) ||
            lowered.find("unauthorized") != std::string::npos ||
            lowered.find("forbidden") != std::string::npos ||
            lowered.find("登录状态无效") != std::string::npos ||
+           lowered.find("登录信息失效") != std::string::npos ||
            lowered.find("请重新登录") != std::string::npos ||
+           lowered.find("请重新登陆") != std::string::npos ||
+           lowered.find("重新登陆") != std::string::npos ||
            lowered.find("token失效") != std::string::npos;
 }
 

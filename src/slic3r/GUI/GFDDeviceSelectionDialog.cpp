@@ -271,6 +271,12 @@ void GFDDeviceSelectionDialog::build()
     auto* button_sizer = new wxBoxSizer(wxHORIZONTAL);
     button_sizer->AddStretchSpacer(1);
 
+    m_confirm_3mf_button = new Button(this, _L("确认(3mf)"));
+    apply_flat_filter_button_style(m_confirm_3mf_button, true);
+    m_confirm_3mf_button->Disable();
+    m_confirm_3mf_button->Show(boost::iequals(m_default_device_type, "EP7"));
+    button_sizer->Add(m_confirm_3mf_button, 0, wxRIGHT, FromDIP(8));
+
     m_confirm_button = new Button(this, _L("确认"));
     apply_flat_filter_button_style(m_confirm_button, true);
     m_confirm_button->Disable();
@@ -287,7 +293,8 @@ void GFDDeviceSelectionDialog::bind_events()
 {
     m_search_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { load_devices(true); });
     m_reset_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { reset_filters(); });
-    m_confirm_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { accept_selection(); });
+    m_confirm_3mf_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { accept_selection(true); });
+    m_confirm_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { accept_selection(false); });
     m_mac_input->Bind(wxEVT_TEXT, [this](wxCommandEvent&) {
         if (!m_suppress_filter_events)
             refresh_table(true);
@@ -433,11 +440,12 @@ void GFDDeviceSelectionDialog::reset_filters()
     refresh_table(true, false);
 }
 
-void GFDDeviceSelectionDialog::accept_selection()
+void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
 {
     BOOST_LOG_TRIVIAL(info) << "GFD device selection confirm clicked"
                             << ", visible_rows=" << m_visible_indices.size()
-                            << ", list_items=" << (m_device_list != nullptr ? m_device_list->GetItemCount() : 0);
+                            << ", list_items=" << (m_device_list != nullptr ? m_device_list->GetItemCount() : 0)
+                            << ", use_3mf_file=" << use_3mf_file;
 
     sync_checked_keys_from_table();
 
@@ -463,6 +471,18 @@ void GFDDeviceSelectionDialog::accept_selection()
         return;
     }
 
+    if (use_3mf_file) {
+        const auto not_ep7 = std::find_if(m_selected_devices.begin(), m_selected_devices.end(), [](const GFDDeviceInfo& device) {
+            return !boost::iequals(device.device_type, "EP7");
+        });
+        if (not_ep7 != m_selected_devices.end()) {
+            BOOST_LOG_TRIVIAL(warning) << "GFD 3MF device selection confirm rejected"
+                                       << ", unsupported_device_type=" << not_ep7->device_type;
+            show_error(this, _L("3MF 下发仅支持 EP7 设备"));
+            return;
+        }
+    }
+
     for (const GFDDeviceInfo& device : m_selected_devices) {
         BOOST_LOG_TRIVIAL(info) << "GFD device selection accepted"
                                 << ", mac=" << device.mac
@@ -471,15 +491,18 @@ void GFDDeviceSelectionDialog::accept_selection()
                                 << ", status=" << device.device_status
                                 << ", status_title=" << device.status_title
                                 << ", sn=" << device.device_sn
-                                << ", device_id=" << device.device_id;
+                                << ", device_id=" << device.device_id
+                                << ", use_3mf_file=" << use_3mf_file;
     }
 
+    m_use_3mf_file = use_3mf_file;
     EndModal(wxID_OK);
 }
 
 void GFDDeviceSelectionDialog::update_confirm_button_state()
 {
     if (m_loading) {
+        m_confirm_3mf_button->Disable();
         m_confirm_button->Disable();
         return;
     }
@@ -488,12 +511,15 @@ void GFDDeviceSelectionDialog::update_confirm_button_state()
     const auto checked = checked_devices(true, &has_offline);
     bool selected_has_offline = false;
     const auto selected_rows = checked.empty() ? selected_row_devices(true, &selected_has_offline) : std::vector<GFDDeviceInfo>();
-    m_confirm_button->Enable(!checked.empty() || !selected_rows.empty());
+    const bool has_selection = !checked.empty() || !selected_rows.empty();
+    m_confirm_3mf_button->Enable(has_selection);
+    m_confirm_button->Enable(has_selection);
     BOOST_LOG_TRIVIAL(info) << "GFD device selection state updated"
                             << ", checked_online_count=" << checked.size()
                             << ", selected_row_online_count=" << selected_rows.size()
                             << ", has_offline=" << has_offline
                             << ", selected_has_offline=" << selected_has_offline
+                            << ", confirm_3mf_enabled=" << m_confirm_3mf_button->IsEnabled()
                             << ", confirm_enabled=" << m_confirm_button->IsEnabled();
 }
 
