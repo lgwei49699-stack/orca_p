@@ -23,6 +23,7 @@
 #include <iostream>
 #include <math.h>
 #include <algorithm>
+#include <cmath>
 
 #if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
 
@@ -56,6 +57,7 @@ using namespace nlohmann;
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/GCode/Thumbnails.hpp"
 #include "libslic3r/SLAPrint.hpp"
 #include "libslic3r/TriangleMesh.hpp"
@@ -155,6 +157,9 @@ typedef struct  _sliced_plate_info{
     size_t sliced_time {0};
     size_t sliced_time_with_cache {0};
     size_t triangle_count{0};
+    double total_time{0.0};
+    double total_filament_g{0.0};
+    double support_filament_g{0.0};
     std::string warning_message;
 }sliced_plate_info_t;
 
@@ -169,6 +174,16 @@ typedef struct _sliced_info {
     std::vector<std::string> downward_machines;
 }sliced_info_t;
 std::vector<PrintBase::SlicingStatus> g_slicing_warnings;
+
+static int rounded_seconds(double seconds)
+{
+    return static_cast<int>(std::round(seconds));
+}
+
+static double rounded_grams(double grams)
+{
+    return std::round(grams * 100.0) / 100.0;
+}
 
 #if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
 #define PIPE_BUFFER_SIZE 512
@@ -425,6 +440,9 @@ void record_exit_reson(std::string outputdir, int code, int plate_id, std::strin
         j["error_string"] = error_message;
         j["prepare_time"] = sliced_info.prepare_time;
         j["export_time"] = sliced_info.export_time;
+        double total_time = 0.0;
+        double total_filament_g = 0.0;
+        double support_filament_g = 0.0;
         for (size_t index = 0; index < sliced_info.sliced_plates.size(); index++)
         {
             json plate_json;
@@ -432,9 +450,19 @@ void record_exit_reson(std::string outputdir, int code, int plate_id, std::strin
             plate_json["sliced_time"] = sliced_info.sliced_plates[index].sliced_time;
             plate_json["sliced_time_with_cache"] = sliced_info.sliced_plates[index].sliced_time_with_cache;
             plate_json["triangle_count"] = sliced_info.sliced_plates[index].triangle_count;
+            plate_json["total_time"] = rounded_seconds(sliced_info.sliced_plates[index].total_time);
+            plate_json["total_filament_g"] = rounded_grams(sliced_info.sliced_plates[index].total_filament_g);
+            plate_json["support_filament_g"] = rounded_grams(sliced_info.sliced_plates[index].support_filament_g);
             plate_json["warning_message"] = sliced_info.sliced_plates[index].warning_message;
             j["sliced_plates"].push_back(plate_json);
+
+            total_time += sliced_info.sliced_plates[index].total_time;
+            total_filament_g += sliced_info.sliced_plates[index].total_filament_g;
+            support_filament_g += sliced_info.sliced_plates[index].support_filament_g;
         }
+        j["total_time"] = rounded_seconds(total_time);
+        j["total_filament_g"] = rounded_grams(total_filament_g);
+        j["support_filament_g"] = rounded_grams(support_filament_g);
         for (auto& iter: key_values)
             j[iter.first] = iter.second;
 
@@ -502,6 +530,24 @@ static bool load_cli_thumbnail_image_for_3mf(const std::string& png_file, Thumbn
     BOOST_LOG_TRIVIAL(info) << boost::format("--thumbnail-image normalized for gcode.3mf, source=%1%, source_width=%2%, source_height=%3%, width=%4%, height=%5%") %
                                    png_file % source_thumbnail.width % source_thumbnail.height % thumbnail_data.width % thumbnail_data.height;
     return true;
+}
+
+static double cli_filament_weight_g_from_volume(const GCodeProcessorResult* result, double volume, size_t extruder_id)
+{
+    if (result == nullptr || extruder_id >= result->filament_densities.size())
+        return 0.0;
+    return volume * result->filament_densities[extruder_id] * 0.001;
+}
+
+static double cli_support_filament_weight_g(const GCodeProcessorResult* result)
+{
+    if (result == nullptr)
+        return 0.0;
+
+    double support_weight_g = 0.0;
+    for (const auto& item : result->print_statistics.support_volumes_per_extruder)
+        support_weight_g += cli_filament_weight_g_from_volume(result, item.second, item.first);
+    return support_weight_g;
 }
 
 static void glfw_callback(int error_code, const char* description)
@@ -5822,6 +5868,14 @@ int CLI::run(int argc, char **argv)
                                     outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true, true);
                                     time_using_cache = time_using_cache + ((long long)Slic3r::Utils::get_current_time_utc() - temp_time);
                                     BOOST_LOG_TRIVIAL(info) << "export_gcode finished: time_using_cache update to " << time_using_cache << " secs.";
+
+                                    if (gcode_result != nullptr) {
+                                        sliced_plate_info.total_time =
+                                            gcode_result->print_statistics.modes[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].time;
+                                        sliced_plate_info.support_filament_g = cli_support_filament_weight_g(gcode_result);
+                                    }
+                                    const PrintStatistics& print_statistics = print_fff->print_statistics();
+                                    sliced_plate_info.total_filament_g = print_statistics.total_weight;
 
                                     //outfile_final = (dynamic_cast<Print*>(print))->print_statistics().finalize_output_path(outfile);
                                     //m_fff_print->export_gcode(m_temp_output_path, m_gcode_result, [this](const ThumbnailsParams& params) { return this->render_thumbnails(params); });
