@@ -7,6 +7,8 @@
 #include <jpeglib.h>
 #include <jerror.h>
 #include <vector>
+#include <algorithm>
+#include <cmath>
 #include <boost/algorithm/string.hpp>
 
 namespace Slic3r::GCodeThumbnails {
@@ -47,6 +49,98 @@ std::unique_ptr<CompressedImageBuffer> compress_thumbnail_png(const ThumbnailDat
 {
     auto out = std::make_unique<CompressedPNG>();
     out->data = tdefl_write_image_to_png_file_in_memory_ex((const void*)data.pixels.data(), data.width, data.height, 4, &out->size, MZ_DEFAULT_LEVEL, 1);
+    return out;
+}
+
+ThumbnailData resize_thumbnail(const ThumbnailData &data, unsigned int width, unsigned int height)
+{
+    ThumbnailData out;
+    if (!data.is_valid() || width == 0 || height == 0)
+        return out;
+
+    out.set(width, height);
+
+    const double x_scale = width > 1 ? double(data.width - 1) / double(width - 1) : 0.0;
+    const double y_scale = height > 1 ? double(data.height - 1) / double(height - 1) : 0.0;
+
+    for (unsigned int y = 0; y < height; ++y) {
+        const double src_y = y * y_scale;
+        const unsigned int y0 = std::min<unsigned int>(unsigned(std::floor(src_y)), data.height - 1);
+        const unsigned int y1 = std::min<unsigned int>(y0 + 1, data.height - 1);
+        const double fy = src_y - y0;
+
+        for (unsigned int x = 0; x < width; ++x) {
+            const double src_x = x * x_scale;
+            const unsigned int x0 = std::min<unsigned int>(unsigned(std::floor(src_x)), data.width - 1);
+            const unsigned int x1 = std::min<unsigned int>(x0 + 1, data.width - 1);
+            const double fx = src_x - x0;
+
+            const size_t dst_offset = 4 * (y * width + x);
+            const size_t p00 = 4 * (y0 * data.width + x0);
+            const size_t p10 = 4 * (y0 * data.width + x1);
+            const size_t p01 = 4 * (y1 * data.width + x0);
+            const size_t p11 = 4 * (y1 * data.width + x1);
+
+            for (size_t channel = 0; channel < 4; ++channel) {
+                const double top = data.pixels[p00 + channel] * (1.0 - fx) + data.pixels[p10 + channel] * fx;
+                const double bottom = data.pixels[p01 + channel] * (1.0 - fx) + data.pixels[p11 + channel] * fx;
+                const double value = top * (1.0 - fy) + bottom * fy;
+                out.pixels[dst_offset + channel] = static_cast<unsigned char>(std::clamp(std::lround(value), 0l, 255l));
+            }
+        }
+    }
+
+    return out;
+}
+
+ThumbnailData resize_thumbnail_fit(const ThumbnailData &data, unsigned int width, unsigned int height)
+{
+    ThumbnailData out;
+    if (!data.is_valid() || width == 0 || height == 0)
+        return out;
+
+    out.set(width, height);
+    std::fill(out.pixels.begin(), out.pixels.end(), 0);
+
+    const double scale = std::min(double(width) / double(data.width), double(height) / double(data.height));
+    const unsigned int fitted_width =
+        std::max(1u, std::min(width, static_cast<unsigned int>(std::lround(data.width * scale))));
+    const unsigned int fitted_height =
+        std::max(1u, std::min(height, static_cast<unsigned int>(std::lround(data.height * scale))));
+    const unsigned int x_offset = (width - fitted_width) / 2;
+    const unsigned int y_offset = (height - fitted_height) / 2;
+
+    const double x_scale = fitted_width > 1 ? double(data.width - 1) / double(fitted_width - 1) : 0.0;
+    const double y_scale = fitted_height > 1 ? double(data.height - 1) / double(fitted_height - 1) : 0.0;
+
+    for (unsigned int y = 0; y < fitted_height; ++y) {
+        const double src_y = y * y_scale;
+        const unsigned int y0 = std::min<unsigned int>(unsigned(std::floor(src_y)), data.height - 1);
+        const unsigned int y1 = std::min<unsigned int>(y0 + 1, data.height - 1);
+        const double fy = src_y - y0;
+
+        for (unsigned int x = 0; x < fitted_width; ++x) {
+            const double src_x = x * x_scale;
+            const unsigned int x0 = std::min<unsigned int>(unsigned(std::floor(src_x)), data.width - 1);
+            const unsigned int x1 = std::min<unsigned int>(x0 + 1, data.width - 1);
+            const double fx = src_x - x0;
+
+            const size_t dst_offset = 4 * ((y + y_offset) * width + x + x_offset);
+            const size_t p00 = 4 * (y0 * data.width + x0);
+            const size_t p10 = 4 * (y0 * data.width + x1);
+            const size_t p01 = 4 * (y1 * data.width + x0);
+            const size_t p11 = 4 * (y1 * data.width + x1);
+
+            for (size_t channel = 0; channel < 4; ++channel) {
+                const double top = data.pixels[p00 + channel] * (1.0 - fx) + data.pixels[p10 + channel] * fx;
+                const double bottom = data.pixels[p01 + channel] * (1.0 - fx) + data.pixels[p11 + channel] * fx;
+                const double value = top * (1.0 - fy) + bottom * fy;
+                out.pixels[dst_offset + channel] =
+                    static_cast<unsigned char>(std::clamp(std::lround(value), 0l, 255l));
+            }
+        }
+    }
+
     return out;
 }
 

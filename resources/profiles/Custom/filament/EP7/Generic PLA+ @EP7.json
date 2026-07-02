@@ -1,0 +1,56 @@
+{
+	"type": "filament",
+	"filament_id": "GFL99",
+	"setting_id": "GFSL99",
+	"name": "Generic PLA+@EP7-Series",
+	"from": "system",
+	"instantiation": "false",
+	"inherits": "fdm_filament_x5_common",
+	"additional_cooling_fan_speed": [
+		"100"
+	],
+	"filament_adhesiveness_category": [
+		"100"
+	],
+	"filament_density": [
+		"1.2"
+	],
+	"filament_max_volumetric_speed": [
+		"12"
+	],
+	"filament_type": [
+		"PLA"
+	],
+	"filament_vendor": [
+		"Generic"
+	],
+	"nozzle_temperature_initial_layer": [
+		"220"
+	],
+	"nozzle_temperature_range_high": [
+		"240"
+	],
+	"nozzle_temperature_range_low": [
+		"190"
+	],
+	"nozzle_temperature": [
+		"230"
+	],
+	"overhang_fan_threshold": [
+		"50%"
+	],
+	"slow_down_layer_time": [
+		"8"
+	],
+	"temperature_vitrification": [
+		"45"
+	],
+	"textured_cool_plate_temp_initial_layer": [
+		"45"
+	],
+	"textured_cool_plate_temp": [
+		"45"
+	],
+	"compatible_printers": []
+}
+

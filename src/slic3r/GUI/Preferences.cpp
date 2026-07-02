@@ -3,9 +3,11 @@
 #include "GUI_App.hpp"
 #include "MainFrame.hpp"
 #include "Plater.hpp"
+#include "GFDAuthManager.hpp"
 #include "MsgDialog.hpp"
 #include "I18N.hpp"
 #include "libslic3r/AppConfig.hpp"
+#include "slic3r/Utils/GFDConfig.hpp"
 #include <wx/language.h>
 #include <wx/notebook.h>
 #include "Notebook.hpp"
@@ -1528,6 +1530,15 @@ wxWindow* PreferencesDialog::create_debug_page()
                 else if (param == "product_host") {
                     app_config->set("iot_environment", ENV_PRODUCT_HOST);
                 }
+
+                if (param == "qa_host") {
+                    GFD::Config::set_environment(app_config, GFD::Config::ENV_QA);
+                } else {
+                    GFD::Config::set_environment(app_config, GFD::Config::ENV_PRODUCTION);
+                }
+
+                GFDAuthManager::clear_session(app_config);
+                app_config->save();
 
 
 

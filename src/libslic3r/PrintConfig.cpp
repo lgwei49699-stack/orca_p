@@ -4101,6 +4101,12 @@ void PrintConfigDef::init_fff_params()
     def->height = 6;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionStrings());
+
+    def = this->add("gfd_device_type", coString);
+    def->label = L("GFD device type");
+    def->tooltip = L("Internal device type for GFD printers.");
+    def->set_default_value(new ConfigOptionString());
+    def->cli = ConfigOptionDef::nocli;
     
     def = this->add("printer_model", coString);
     def->label = L("Printer type");
@@ -4380,6 +4386,16 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Disable generating of the M73: Set remaining print time in the final G-code.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("smooth_m73_progress", coInt);
+    def->label = L("Smooth M73 progress");
+    def->tooltip = L("Use a separate progress clock for M73 percent so blocking startup commands affect remaining time but do not make progress jump suddenly.");
+    def->cli = "smooth-m73-progress";
+    def->cli_params = "option";
+    def->mode = comDevelop;
+    def->min = 0;
+    def->max = 1;
+    def->set_default_value(new ConfigOptionInt(0));
 
     def = this->add("seam_position", coEnum);
     def->label = L("Seam position");

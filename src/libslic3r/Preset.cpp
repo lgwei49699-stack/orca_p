@@ -898,7 +898,7 @@ static std::vector<std::string> s_Preset_printer_options {
     "printable_area", "bed_exclude_area","bed_custom_texture", "bed_custom_model", "gcode_flavor",
     "fan_kickstart", "fan_speedup_time", "fan_speedup_overhangs",
     "single_extruder_multi_material", "manual_filament_change", "machine_start_gcode", "machine_end_gcode", "before_layer_change_gcode", "printing_by_object_gcode", "layer_change_gcode", "time_lapse_gcode", "change_filament_gcode", "change_extrusion_role_gcode",
-    "printer_model", "printer_variant", "printable_height", "extruder_clearance_radius", "extruder_clearance_height_to_lid", "extruder_clearance_height_to_rod",
+    "printer_model", "printer_variant", "gfd_device_type", "printable_height", "extruder_clearance_radius", "extruder_clearance_height_to_lid", "extruder_clearance_height_to_rod",
     "nozzle_height",
     "default_print_profile", "inherits",
     "silent_mode",
@@ -3653,6 +3653,12 @@ namespace PresetUtils {
 		}
 		return out;
 	}
+
+    std::string system_printer_gfd_device_type(const Preset& preset)
+    {
+        const VendorProfile::PrinterModel* pm = PresetUtils::system_printer_model(preset);
+        return pm != nullptr ? pm->gfd_device_type : std::string();
+    }
 
     std::string system_printer_bed_model(const Preset& preset)
     {

@@ -12,6 +12,7 @@
 #include "GCode/PrintExtents.hpp"
 #include "GCode/Thumbnails.hpp"
 #include "GCode/WipeTower.hpp"
+#include "PNGReadWrite.hpp"
 #include "ShortestPath.hpp"
 #include "Print.hpp"
 #include "Utils.hpp"
@@ -32,12 +33,15 @@
 #include <string>
 #include <utility>
 #include <string_view>
+#include <set>
 
 #include <regex>
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/find.hpp>
 #include <boost/foreach.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/filesystem/fstream.hpp>
+#include <boost/format.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/beast/core/detail/base64.hpp>
 
@@ -91,10 +95,102 @@ static const float g_min_purge_volume = 100.f;
 static const float g_purge_volume_one_time = 135.f;
 static const int g_max_flush_count = 4;
 // static const size_t g_max_label_object = 64;
+static const Vec2d g_default_thumbnail_image_size = Vec2d(140, 110);
 
 Vec2d travel_point_1;
 Vec2d travel_point_2;
 Vec2d travel_point_3;
+
+static std::vector<Vec2d> thumbnail_image_sizes_from_config(const ConfigBase &config)
+{
+    std::vector<Vec2d> sizes;
+    std::set<std::pair<unsigned int, unsigned int>> seen;
+
+    auto [thumbnails, errors] = GCodeThumbnails::make_and_check_thumbnail_list(config);
+    if (errors == enum_bitmask<ThumbnailError>()) {
+        for (const auto &[format, size] : thumbnails) {
+            const unsigned int width = static_cast<unsigned int>(std::lround(size.x()));
+            const unsigned int height = static_cast<unsigned int>(std::lround(size.y()));
+            if (width == 0 || height == 0)
+                continue;
+            if (seen.emplace(width, height).second)
+                sizes.emplace_back(Vec2d(width, height));
+        }
+    } else {
+        BOOST_LOG_TRIVIAL(warning) << "Invalid thumbnails value for --thumbnail-image:"
+                                   << GCodeThumbnails::get_error_string(errors);
+    }
+
+    if (sizes.empty())
+        sizes.emplace_back(g_default_thumbnail_image_size);
+
+    return sizes;
+}
+
+static bool decode_png_thumbnail_image(const std::string &thumbnail_image_path, ThumbnailData &thumbnail_data)
+{
+    const std::size_t size = boost::filesystem::file_size(thumbnail_image_path);
+    std::string png_buffer(size, '\0');
+
+    boost::filesystem::ifstream ifs(thumbnail_image_path, std::ios::binary);
+    if (!ifs.good())
+        return false;
+    ifs.read(png_buffer.data(), png_buffer.size());
+    ifs.close();
+
+    png::ImageColorscale img;
+    png::ReadBuf rb{png_buffer.data(), png_buffer.size()};
+    if (!png::decode_colored_png(rb, img))
+        return false;
+
+    if (img.bytes_per_pixel != 3 && img.bytes_per_pixel != 4)
+        return false;
+
+    thumbnail_data.set(static_cast<unsigned int>(img.cols), static_cast<unsigned int>(img.rows));
+    const size_t src_stride = img.cols * img.bytes_per_pixel;
+    for (size_t y = 0; y < img.rows; ++y) {
+        for (size_t x = 0; x < img.cols; ++x) {
+            const size_t src_offset = y * src_stride + x * img.bytes_per_pixel;
+            const size_t dst_offset = 4 * (y * img.cols + x);
+            thumbnail_data.pixels[dst_offset] = img.buf[src_offset];
+            thumbnail_data.pixels[dst_offset + 1] = img.buf[src_offset + 1];
+            thumbnail_data.pixels[dst_offset + 2] = img.buf[src_offset + 2];
+            thumbnail_data.pixels[dst_offset + 3] = img.bytes_per_pixel == 4 ? img.buf[src_offset + 3] : 255;
+        }
+    }
+
+    return thumbnail_data.is_valid();
+}
+
+template<typename WriteToOutput>
+static void write_png_thumbnail_block(const ThumbnailData &thumbnail_data, WriteToOutput output)
+{
+    if (!thumbnail_data.is_valid())
+        return;
+
+    auto compressed = GCodeThumbnails::compress_thumbnail(thumbnail_data, GCodeThumbnailsFormat::PNG);
+    if (!compressed || !compressed->data || compressed->size == 0)
+        return;
+
+    std::string encoded;
+    encoded.resize(boost::beast::detail::base64::encoded_size(compressed->size));
+    encoded.resize(boost::beast::detail::base64::encode((void*)encoded.data(), (const void*)compressed->data, compressed->size));
+
+    output("; THUMBNAIL_BLOCK_START\n\n;\n");
+    output((boost::format("; %s begin %dx%d %d\n") % compressed->tag() % thumbnail_data.width % thumbnail_data.height % encoded.size()).str().c_str());
+
+    static constexpr const size_t max_row_length = 78;
+    while (encoded.size() > max_row_length) {
+        output((boost::format("; %s\n") % encoded.substr(0, max_row_length)).str().c_str());
+        encoded = encoded.substr(max_row_length);
+    }
+
+    if (!encoded.empty())
+        output((boost::format("; %s\n") % encoded).str().c_str());
+
+    output((boost::format("; %s end\n") % compressed->tag()).str().c_str());
+    output("; THUMBNAIL_BLOCK_END\n\n");
+}
 
 static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
 {
@@ -1433,7 +1529,8 @@ bool GCode::is_BBL_Printer()
     return false;
 }
 
-void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* result, ThumbnailsGeneratorCallback thumbnail_cb)
+void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* result, ThumbnailsGeneratorCallback thumbnail_cb,
+                      bool embed_thumbnail_image)
 {
     PROFILE_CLEAR();
 
@@ -1495,7 +1592,7 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
     }
 
     try {
-        this->_do_export(*print, file, thumbnail_cb);
+        this->_do_export(*print, file, thumbnail_cb, embed_thumbnail_image);
         file.flush();
         if (file.is_error()) {
             file.close();
@@ -1827,7 +1924,7 @@ static BambuBedType to_bambu_bed_type(BedType type)
     return bambu_bed_type;
 }
 
-void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGeneratorCallback thumbnail_cb)
+void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGeneratorCallback thumbnail_cb, bool embed_thumbnail_image)
 {
     PROFILE_FUNC();
 
@@ -2009,50 +2106,32 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                     thumbnail_cb, print.get_plate_index(), thumbnails, [&file](const char* sz) { file.write(sz); }, [&print]() { print.throw_if_canceled(); });
         }
         
-        // Embed thumbnail from image file if specified (works for all printer types)
-        const ConfigOption* thumbnail_opt = print.full_print_config().option("thumbnail_image");
+        // Embed thumbnail from image file if specified. The source image is normalized to the
+        // machine thumbnail dimensions before writing to keep printer-side preview parsing stable.
+        const ConfigOption* thumbnail_opt = embed_thumbnail_image ? print.full_print_config().option("thumbnail_image") : nullptr;
         if (thumbnail_opt != nullptr) {
             const ConfigOptionString* thumbnail_str = dynamic_cast<const ConfigOptionString*>(thumbnail_opt);
             if (thumbnail_str != nullptr && !thumbnail_str->value.empty()) {
                 std::string thumbnail_image_path = thumbnail_str->value;
                 if (boost::filesystem::exists(thumbnail_image_path)) {
                     try {
-                        std::ifstream img_file(thumbnail_image_path, std::ios::binary);
-                        if (img_file.good()) {
-                            std::vector<unsigned char> img_data((std::istreambuf_iterator<char>(img_file)), 
-                                                               std::istreambuf_iterator<char>());
-                            img_file.close();
-                            
-                            std::string encoded;
-                            encoded.resize(boost::beast::detail::base64::encoded_size(img_data.size()));
-                            encoded.resize(boost::beast::detail::base64::encode((void*)encoded.data(), 
-                                                                                (const void*)img_data.data(), 
-                                                                                img_data.size()));
-                            
-                            int width = 300, height = 300;
-                            file.write("; THUMBNAIL_BLOCK_START\n\n;\n");
-                            file.write_format("; thumbnail begin %dx%d %d\n", width, height, (int)encoded.size());
-                            
-                            static constexpr const size_t max_row_length = 78;
-                            while (encoded.size() > max_row_length) {
-                                file.write("; ");
-                                file.write(encoded.substr(0, max_row_length).c_str());
-                                file.write("\n");
-                                encoded = encoded.substr(max_row_length);
+                        ThumbnailData source_thumbnail;
+                        if (!decode_png_thumbnail_image(thumbnail_image_path, source_thumbnail)) {
+                            BOOST_LOG_TRIVIAL(warning) << "--thumbnail-image currently supports PNG RGB/RGBA images only: " << thumbnail_image_path;
+                        } else {
+                            const std::vector<Vec2d> thumbnail_sizes = thumbnail_image_sizes_from_config(print.full_print_config());
+                            for (const Vec2d &size : thumbnail_sizes) {
+                                const unsigned int width = static_cast<unsigned int>(std::lround(size.x()));
+                                const unsigned int height = static_cast<unsigned int>(std::lround(size.y()));
+                                ThumbnailData thumbnail = GCodeThumbnails::resize_thumbnail(source_thumbnail, width, height);
+                                write_png_thumbnail_block(thumbnail, [&file](const char* sz) { file.write(sz); });
                             }
-                            
-                            if (encoded.size() > 0) {
-                                file.write("; ");
-                                file.write(encoded.c_str());
-                                file.write("\n");
-                            }
-                            
-                            file.write("; thumbnail end\n");
-                            file.write("; THUMBNAIL_BLOCK_END\n\n");
                         }
                     } catch (const std::exception& e) {
                         BOOST_LOG_TRIVIAL(warning) << "Failed to embed thumbnail: " << e.what();
                     }
+                } else {
+                    BOOST_LOG_TRIVIAL(warning) << "--thumbnail-image file does not exist: " << thumbnail_image_path;
                 }
             }
         }

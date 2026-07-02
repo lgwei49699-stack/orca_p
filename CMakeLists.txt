@@ -179,7 +179,7 @@ if (MSVC)
     # /bigobj (Increase Number of Sections in .Obj file)
     # error C3859: virtual memory range for PCH exceeded; please recompile with a command line option of '-Zm90' or greater
     # Generate symbols at every build target, even for the release.
-    add_compile_options(-bigobj -Zm520 /Zi)
+    add_compile_options(-bigobj -Zm2000 /Zi)
     # Disable STL4007: Many result_type typedefs and all argument_type, first_argument_type, and second_argument_type typedefs are deprecated in C++17.
     #FIXME Remove this line after eigen library adapts to the new C++17 adaptor rules.
     add_compile_options(-D_SILENCE_CXX17_ADAPTOR_TYPEDEFS_DEPRECATION_WARNING)
@@ -727,6 +727,10 @@ function(orcaslicer_copy_dlls target config postfix output_dlls)
             ${TOP_LEVEL_PROJECT_DIR}/deps/WebView2/lib/win-${_arch}/WebView2Loader.dll
         DESTINATION ${_out_dir})
 
+    file(COPY ${_out_dir}/libcrypto-3-x64.dll
+            ${_out_dir}/libssl-3-x64.dll
+        DESTINATION ${_out_dir})
+
     file(COPY ${CMAKE_PREFIX_PATH}/bin/occt/TKBO.dll
             ${CMAKE_PREFIX_PATH}/bin/occt/TKBRep.dll
             ${CMAKE_PREFIX_PATH}/bin/occt/TKCAF.dll
@@ -760,6 +764,8 @@ function(orcaslicer_copy_dlls target config postfix output_dlls)
         ${_out_dir}/libgmp-10.dll
         ${_out_dir}/libmpfr-4.dll
         ${_out_dir}/WebView2Loader.dll
+        ${_out_dir}/libcrypto-3-x64.dll
+        ${_out_dir}/libssl-3-x64.dll
 
         ${_out_dir}/TKBO.dll
         ${_out_dir}/TKBRep.dll

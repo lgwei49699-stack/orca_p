@@ -124,6 +124,8 @@ class ParamsPanel : public wxPanel
         wxPanel* m_current_tab { nullptr };
 
         bool m_has_object_config { false };
+        bool m_update_dialog_title { true };
+        bool m_skip_missing_global_mode_region { false };
 
         struct Highlighter
         {
@@ -167,6 +169,8 @@ class ParamsPanel : public wxPanel
 
         wxScrolledWindow* get_paged_view() { return m_page_view;}
         wxPanel*    get_current_tab() { return m_current_tab; }
+        void        set_dialog_title_enabled(bool enabled) { m_update_dialog_title = enabled; }
+        void        set_skip_missing_global_mode_region(bool skip) { m_skip_missing_global_mode_region = skip; }
 
 };
 

@@ -553,6 +553,8 @@ void ParamsPanel::set_active_tab(wxPanel* tab)
     Tab* cur_tab = dynamic_cast<Tab *> (tab);
 
     if (cur_tab == nullptr) {
+        if (m_skip_missing_global_mode_region)
+            return;
         if (!m_mode_region->GetValue()) {
             cur_tab = (Tab*) m_tab_print;
         } else if (m_tab_print_part && ((TabPrintModel*) m_tab_print_part)->has_model_config()) {
@@ -593,9 +595,11 @@ void ParamsPanel::set_active_tab(wxPanel* tab)
         //m_left_sizer->GetItem(t)->SetProportion(tab == t ? 1 : 0);
     }
     m_left_sizer->Layout();
-    if (auto dialog = dynamic_cast<wxDialog*>(GetParent())) {
-        wxString title = cur_tab->type() == Preset::TYPE_FILAMENT ? _L("Material settings") : _L("Printer settings");
-        dialog->SetTitle(title);
+    if (m_update_dialog_title) {
+        if (auto dialog = dynamic_cast<wxDialog*>(GetParent())) {
+            wxString title = cur_tab->type() == Preset::TYPE_FILAMENT ? _L("Material settings") : _L("Printer settings");
+            dialog->SetTitle(title);
+        }
     }
 
     auto tab_print = dynamic_cast<Tab *>(m_tab_print);

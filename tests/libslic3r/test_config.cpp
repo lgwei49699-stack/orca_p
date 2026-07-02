@@ -196,6 +196,31 @@ SCENARIO("Config accessor functions perform as expected.", "[Config]") {
     }
 }
 
+SCENARIO("CLI boolean options may consume an explicit 0 or 1 value.", "[Config][CLI]") {
+    GIVEN("a CLI command with an explicit boolean value") {
+        const char* argv[] = {
+            "OrcaSlicer",
+            "--min-save",
+            "1",
+            "model.stl"
+        };
+        DynamicPrintAndCLIConfig config;
+        t_config_option_keys input_files;
+        t_config_option_keys keys;
+
+        WHEN("the command line is parsed") {
+            const bool parsed = config.read_cli(4, argv, &input_files, &keys);
+
+            THEN("the value is assigned to the boolean option instead of being treated as an input file") {
+                REQUIRE(parsed);
+                REQUIRE(config.opt_bool("min_save"));
+                REQUIRE(input_files.size() == 1);
+                REQUIRE(input_files.front() == "model.stl");
+            }
+        }
+    }
+}
+
 SCENARIO("Config ini load/save interface", "[Config]") {
     WHEN("new_from_ini is called") {
 		Slic3r::DynamicPrintConfig config;

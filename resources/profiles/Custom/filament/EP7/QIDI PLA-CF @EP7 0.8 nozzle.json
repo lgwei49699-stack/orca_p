@@ -1,0 +1,27 @@
+{
+	"type": "filament",
+	"setting_id": "GFSL98",
+	"name": "QIDI PLA-CF @EP7 0.8 nozzle",
+	"from": "system",
+	"instantiation": "true",
+	"inherits": "QIDI PLA-CF@EP7-Series",
+	"additional_cooling_fan_speed_unseal": [
+		"0"
+	],
+	"additional_cooling_fan_speed": [
+		"0"
+	],
+	"filament_max_volumetric_speed": [
+		"18"
+	],
+	"pressure_advance": [
+		"0.008"
+	],
+	"slow_down_layer_time": [
+		"8"
+	],
+	"compatible_printers": [
+		"EP7 0.8 nozzle"
+	]
+}
+

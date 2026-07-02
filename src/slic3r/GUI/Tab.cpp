@@ -173,7 +173,7 @@ void Tab::create_preset_tab()
 #endif //__WINDOWS__*/
     auto panel = this;
 
-    m_preset_bundle = wxGetApp().preset_bundle;
+    m_preset_bundle = m_preset_bundle_override != nullptr ? m_preset_bundle_override : wxGetApp().preset_bundle;
 
     // Vertical sizer to hold the choice menu and the rest of the page.
 /*#ifdef __WXOSX__
@@ -200,7 +200,9 @@ void Tab::create_preset_tab()
     // BBS: model config
     if (m_type < Preset::TYPE_COUNT) {
         // preset chooser
-        m_presets_choice = new TabPresetComboBox(panel, m_type);
+        m_presets_choice = m_preset_bundle_override != nullptr ?
+                               new TabPresetComboBox(panel, m_type, m_preset_bundle_override) :
+                               new TabPresetComboBox(panel, m_type);
         // m_presets_choice->SetFont(Label::Body_10); // BBS
         m_presets_choice->set_selection_changed_function([this](int selection) {
             if (!m_presets_choice->selection_is_changed_according_to_physical_printers())
@@ -300,13 +302,12 @@ void Tab::create_preset_tab()
 
     m_search_input->Bind(wxCUSTOMEVT_EXIT_SEARCH, [this](wxCommandEvent &) {
          Freeze();
-        if (m_presets_choice) m_presets_choice->Show();
-
-        m_btn_save_preset->Show();
-        m_btn_delete_preset->Show(); // ORCA: fixes delete preset button visible while search box focused
-        m_undo_btn->Show();          // ORCA: fixes revert preset button visible while search box focused
-        m_btn_search->Show();
-        m_search_item->Hide();
+        if (!m_detached_from_app_state && m_presets_choice) m_presets_choice->Show();
+        if (!m_detached_from_app_state && m_btn_save_preset) m_btn_save_preset->Show();
+        if (!m_detached_from_app_state && m_btn_delete_preset) m_btn_delete_preset->Show(); // ORCA: fixes delete preset button visible while search box focused
+        if (m_undo_btn) m_undo_btn->Show();          // ORCA: fixes revert preset button visible while search box focused
+        if (m_btn_search) m_btn_search->Show();
+        if (m_search_item) m_search_item->Hide();
 
         m_search_item->Refresh();
         m_search_item->Update();
@@ -329,14 +330,19 @@ void Tab::create_preset_tab()
         wxEVT_BUTTON,
         [this](wxCommandEvent &) {
          Freeze();
-         if (m_presets_choice)
+         if (!m_detached_from_app_state && m_presets_choice)
              m_presets_choice->Hide();
 
-         m_btn_save_preset->Hide();
-         m_btn_delete_preset->Hide(); // ORCA: fixes delete preset button visible while search box focused
-         m_undo_btn->Hide();          // ORCA: fixes revert preset button visible while search box focused
-         m_btn_search->Hide();
-         m_search_item->Show();
+         if (!m_detached_from_app_state && m_btn_save_preset)
+             m_btn_save_preset->Hide();
+         if (!m_detached_from_app_state && m_btn_delete_preset)
+             m_btn_delete_preset->Hide(); // ORCA: fixes delete preset button visible while search box focused
+         if (m_undo_btn)
+             m_undo_btn->Hide();          // ORCA: fixes revert preset button visible while search box focused
+         if (m_btn_search)
+             m_btn_search->Hide();
+         if (m_search_item)
+             m_search_item->Show();
 
          this->GetParent()->Refresh();
          this->GetParent()->Update();
@@ -1429,6 +1435,19 @@ static wxString pad_combo_value_for_config(const DynamicPrintConfig &config)
 
 void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
 {
+    if (m_detached_from_app_state) {
+        if (opt_key == "pellet_flow_coefficient") {
+            double double_value = Preset::convert_pellet_flow_to_filament_diameter(boost::any_cast<double>(value));
+            m_config->set_key_value("filament_diameter", new ConfigOptionFloats{double_value});
+        } else if (opt_key == "filament_diameter") {
+            double double_value = Preset::convert_filament_diameter_to_pellet_flow(boost::any_cast<double>(value));
+            m_config->set_key_value("pellet_flow_coefficient", new ConfigOptionFloats{double_value});
+        }
+        update_changed_ui();
+        toggle_options();
+        return;
+    }
+
     if (wxGetApp().plater() == nullptr) {
         return;
     }
@@ -1663,8 +1682,8 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
     }
 
     if(opt_key=="layer_height"){
-        auto min_layer_height_from_nozzle=wxGetApp().preset_bundle->full_config().option<ConfigOptionFloats>("min_layer_height")->values;
-        auto max_layer_height_from_nozzle=wxGetApp().preset_bundle->full_config().option<ConfigOptionFloats>("max_layer_height")->values;
+        auto min_layer_height_from_nozzle=m_preset_bundle->full_config().option<ConfigOptionFloats>("min_layer_height")->values;
+        auto max_layer_height_from_nozzle=m_preset_bundle->full_config().option<ConfigOptionFloats>("max_layer_height")->values;
         auto layer_height_floor = *std::min_element(min_layer_height_from_nozzle.begin(), min_layer_height_from_nozzle.end());
         auto layer_height_ceil  = *std::max_element(max_layer_height_from_nozzle.begin(), max_layer_height_from_nozzle.end());
         const auto lh = m_config->opt_float("layer_height");
@@ -1911,16 +1930,19 @@ void Tab::apply_config_from_cache()
 // to update number of "filament" selection boxes when the number of extruders change.
 void Tab::on_presets_changed()
 {
+    if (m_detached_from_app_state)
+        return;
+
     if (wxGetApp().plater() == nullptr)
         return;
 
     // Instead of PostEvent (EVT_TAB_PRESETS_CHANGED) just call update_presets
     wxGetApp().plater()->sidebar().update_presets(m_type);
 
-    bool is_bbl_vendor_preset = wxGetApp().preset_bundle->is_bbl_vendor();
+    bool is_bbl_vendor_preset = m_preset_bundle->is_bbl_vendor();
     if (is_bbl_vendor_preset) {
         wxGetApp().plater()->get_partplate_list().set_render_option(true, true);
-        if (wxGetApp().preset_bundle->printers.get_edited_preset().has_cali_lines(wxGetApp().preset_bundle)) {
+        if (m_preset_bundle->printers.get_edited_preset().has_cali_lines(m_preset_bundle)) {
             wxGetApp().plater()->get_partplate_list().set_render_cali(true);
         } else {
             wxGetApp().plater()->get_partplate_list().set_render_cali(false);
@@ -2565,7 +2587,7 @@ void TabPrint::toggle_options()
     if (!m_active_page) return;
     // BBS: whether the preset is Bambu Lab printer
     if (m_preset_bundle) {
-        bool is_BBL_printer = wxGetApp().preset_bundle->is_bbl_vendor();
+        bool is_BBL_printer = m_preset_bundle->is_bbl_vendor();
         m_config_manipulation.set_is_BBL_Printer(is_BBL_printer);
     }
 
@@ -3287,6 +3309,7 @@ void TabFilament::add_filament_overrides_page()
                         }
                     }
                 }
+                evt.Skip();
             }, check_box->GetId());
 
             m_overrides_options[opt_key] = check_box;
@@ -3431,7 +3454,7 @@ void TabFilament::build()
         optgroup->append_line(line);
 
         optgroup->m_on_change = [this, optgroup](t_config_option_key opt_key, boost::any value) {
-            DynamicPrintConfig &filament_config = wxGetApp().preset_bundle->filaments.get_edited_preset().config;
+            DynamicPrintConfig &filament_config = m_preset_bundle->filaments.get_edited_preset().config;
 
             update_dirty();
             if (!m_postpone_update_ui && (opt_key == "nozzle_temperature_range_low" || opt_key == "nozzle_temperature_range_high")) {
@@ -3512,7 +3535,7 @@ void TabFilament::build()
 
         optgroup->m_on_change = [this](t_config_option_key opt_key, boost::any value)
         {
-            DynamicPrintConfig& filament_config = wxGetApp().preset_bundle->filaments.get_edited_preset().config;
+            DynamicPrintConfig& filament_config = m_preset_bundle->filaments.get_edited_preset().config;
 
             update_dirty();
             /*if (opt_key == "cool_plate_temp" || opt_key == "cool_plate_temp_initial_layer") {
@@ -3740,10 +3763,10 @@ void TabFilament::toggle_options()
     bool is_BBL_printer = false;
     if (m_preset_bundle) {
       is_BBL_printer =
-          wxGetApp().preset_bundle->is_bbl_vendor();
+          m_preset_bundle->is_bbl_vendor();
     }
 
-    auto cfg = m_preset_bundle->printers.get_edited_preset().config;
+    const DynamicPrintConfig& cfg = m_preset_bundle->printers.get_edited_preset().config;
     if (m_active_page->title() == L("Cooling")) {
       bool has_enable_overhang_bridge_fan = m_config->opt_bool("enable_overhang_bridge_fan", 0);
       for (auto el : {"overhang_fan_speed", "overhang_fan_threshold", "internal_bridge_fan_speed"}) // ORCA: Add support for separate internal bridge fan speed control
@@ -3834,7 +3857,7 @@ void TabFilament::update()
 
     m_update_cnt--;
 
-    if (m_update_cnt == 0)
+    if (!m_detached_from_app_state && m_update_cnt == 0)
         wxGetApp().mainframe->on_config_changed(m_config);
 }
 
@@ -4678,7 +4701,7 @@ void TabPrinter::toggle_options()
     //BBS: whether the preset is Bambu Lab printer
     bool is_BBL_printer = false;
     if (m_preset_bundle) {
-       is_BBL_printer = wxGetApp().preset_bundle->is_bbl_vendor();
+       is_BBL_printer = m_preset_bundle->is_bbl_vendor();
     }
 
     bool have_multiple_extruders = true;
@@ -4889,10 +4912,21 @@ void Tab::load_current_preset()
     wxTheApp->CallAfter([this]
 #endif
     {
+        update_tab_ui();
+
+        if (m_detached_from_app_state) {
+            m_opt_status_value = (m_presets->get_selected_preset_parent() ? osSystemValue : 0) | osInitValue;
+            init_options_list();
+            update_visibility();
+            update_changed_ui();
+            toggle_options();
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__<<boost::format(": exit");
+            return;
+        }
+
         // checking out if this Tab exists till this moment
         if (!wxGetApp().checked_tab(this))
             return;
-        update_tab_ui();
 
         // update show/hide tabs
         if (m_type == Slic3r::Preset::TYPE_PRINTER) {
@@ -5033,6 +5067,12 @@ void Tab::rebuild_page_tree()
 
 void Tab::update_btns_enabling()
 {
+    if (m_detached_from_app_state) {
+        if (m_btn_delete_preset != nullptr)
+            m_btn_delete_preset->Hide();
+        return;
+    }
+
     // we can delete any preset from the physical printer
     // and any user preset
     const Preset& preset = m_presets->get_edited_preset();
@@ -5345,6 +5385,8 @@ bool Tab::select_preset(std::string preset_name, bool delete_current /*=false*/,
     if (technology_changed)
         wxGetApp().mainframe->technology_changed();
     BOOST_LOG_TRIVIAL(info) << boost::format("select preset, exit");
+    if (wxGetApp().mainframe != nullptr)
+        wxGetApp().mainframe->update_gfd_config_buttons();
 
     return !canceled;
 }
@@ -5505,11 +5547,11 @@ bool Tab::update_current_page_in_background(int& item)
     if (page == nullptr || m_active_page == page)
         return false;
 
-    bool active_tab = false;
-    if (wxGetApp().mainframe != nullptr && wxGetApp().mainframe->is_active_and_shown_tab(m_parent))
-        active_tab = true;
+    const bool active_tab = m_detached_from_app_state ||
+                            (wxGetApp().mainframe != nullptr && wxGetApp().mainframe->is_active_and_shown_tab(m_parent));
+    const bool tab_shown  = m_detached_from_app_state || m_parent->is_active_and_shown_tab((wxPanel*) this);
 
-    if (!active_tab || (!m_parent->is_active_and_shown_tab((wxPanel*)this)))
+    if (!active_tab || !tab_shown)
     {
         m_is_nonsys_values = page->m_is_nonsys_values;
         m_is_modified_values = page->m_is_modified_values;
@@ -5636,7 +5678,8 @@ bool Tab::tree_sel_change_delayed(wxCommandEvent& event)
         throw_if_canceled();
 
         //BBS: GUI refactor
-        if (wxGetApp().mainframe!=nullptr && wxGetApp().mainframe->is_active_and_shown_tab(m_parent))
+        if (m_detached_from_app_state ||
+            (wxGetApp().mainframe != nullptr && wxGetApp().mainframe->is_active_and_shown_tab(m_parent)))
             activate_selected_page(throw_if_canceled);
 
         #ifdef __linux__

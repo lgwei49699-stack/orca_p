@@ -275,6 +275,8 @@ protected:
     m_highlighter;
 
 	DynamicPrintConfig 	m_cache_config;
+    PresetBundle*       m_preset_bundle_override { nullptr };
+    bool                m_detached_from_app_state { false };
 
 
 	bool				m_page_switch_running = false;
@@ -315,6 +317,8 @@ public:
     // The tab is already constructed.
     bool 		completed() const { return m_completed; }
 	virtual bool supports_printer_technology(const PrinterTechnology tech) const = 0;
+    void        set_preset_bundle_override(PresetBundle* preset_bundle) { m_preset_bundle_override = preset_bundle; }
+    void        set_detached_from_app_state(bool detached) { m_detached_from_app_state = detached; }
 
 	void		create_preset_tab();
     void        add_scaled_button(wxWindow* parent, ScalableButton** btn, const std::string& icon_name,
@@ -393,6 +397,9 @@ public:
 	DynamicPrintConfig*	get_config() { return m_config; }
     PresetCollection *  get_presets() { return m_presets; }
     TabPresetComboBox *  get_combo_box() { return m_presets_choice; }
+    ScalableButton*     search_button() const { return m_btn_search; }
+    wxWindow*           search_item() const { return m_search_item; }
+    TextInput*          search_input() const { return m_search_input; }
 
 	virtual void    on_value_change(const std::string& opt_key, const boost::any& value);
 

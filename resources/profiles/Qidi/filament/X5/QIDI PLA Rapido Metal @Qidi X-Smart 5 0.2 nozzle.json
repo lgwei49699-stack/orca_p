@@ -1,0 +1,26 @@
+{
+	"type": "filament",
+	"setting_id": "GFSL99",
+	"name": "QIDI PLA Rapido Metal @Qidi X-Smart 5 0.2 nozzle",
+	"from": "system",
+	"instantiation": "true",
+	"inherits": "QIDI PLA Rapido Metal@X-Smart 5-Series",
+	"additional_cooling_fan_speed_unseal": [
+		"0"
+	],
+	"additional_cooling_fan_speed": [
+		"0"
+	],
+	"filament_max_volumetric_speed": [
+		"2"
+	],
+	"pressure_advance": [
+		"0.038"
+	],
+	"slow_down_layer_time": [
+		"8"
+	],
+	"compatible_printers": [
+		"Qidi X-Smart 5 0.2 nozzle"
+	]
+}

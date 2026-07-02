@@ -6,6 +6,8 @@
 #include "test_data.hpp"
 
 #include <algorithm>
+#include <fstream>
+#include <boost/filesystem.hpp>
 #include <boost/regex.hpp>
 
 using namespace Slic3r;
@@ -14,6 +16,15 @@ using namespace Slic3r::Test;
 boost::regex perimeters_regex("G1 X[-0-9.]* Y[-0-9.]* E[-0-9.]* ; perimeter");
 boost::regex infill_regex("G1 X[-0-9.]* Y[-0-9.]* E[-0-9.]* ; infill");
 boost::regex skirt_regex("G1 X[-0-9.]* Y[-0-9.]* E[-0-9.]* ; skirt");
+
+static std::vector<int> m73_progress_values(const std::string& gcode)
+{
+    std::vector<int> values;
+    static const boost::regex m73_regex("(^|\\n)M73 P([0-9]+) R[0-9]+");
+    for (boost::sregex_iterator it(gcode.begin(), gcode.end(), m73_regex), end; it != end; ++it)
+        values.emplace_back(std::stoi((*it)[2].str()));
+    return values;
+}
 
 SCENARIO( "PrintGCode basic functionality", "[PrintGCode]") {
     GIVEN("A default configuration and a print test object") {
@@ -239,6 +250,41 @@ SCENARIO( "PrintGCode basic functionality", "[PrintGCode]") {
             }
         }
 
+        WHEN("CLI export forces a tool selection command for a single-extruder print") {
+            Slic3r::Print print;
+            Slic3r::Model model;
+            Slic3r::Test::init_print({TestMesh::cube_20x20x20}, print, model, {
+                { "layer_height",                    0.2 },
+                { "first_layer_height",              0.2 },
+                { "gcode_comments",                  true },
+                { "start_gcode",                     "" }
+            });
+
+            auto export_gcode = [&print](bool force_toolchange_for_single_extruder) {
+                boost::filesystem::path temp = boost::filesystem::unique_path();
+                GCodeProcessorResult result;
+                print.export_gcode(temp.string(), &result, nullptr, force_toolchange_for_single_extruder);
+                std::ifstream file(temp.string());
+                std::string gcode((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                boost::filesystem::remove(temp);
+                return gcode;
+            };
+
+            print.set_status_silent();
+            print.process();
+
+            const std::string normal_gcode = export_gcode(false);
+            const std::string cli_gcode    = export_gcode(true);
+
+            THEN("default export keeps omitting the initial T0") {
+                REQUIRE(normal_gcode.find("T0 ; change extruder") == std::string::npos);
+            }
+
+            THEN("CLI export emits the initial T0") {
+                REQUIRE(cli_gcode.find("T0 ; change extruder") != std::string::npos);
+            }
+        }
+
         WHEN("layer_num represents the layer's index from z=0") {
 			std::string gcode = ::Test::slice({ TestMesh::cube_20x20x20, TestMesh::cube_20x20x20 }, {
 				{ "complete_objects",               true },
@@ -266,6 +312,29 @@ SCENARIO( "PrintGCode basic functionality", "[PrintGCode]") {
 				REQUIRE((sscanf(gcode.data() + pos, "(%lf mm)", &z) == 1));
 				REQUIRE(z == Approx(20.));
 			}
+        }
+
+        WHEN("startup contains a long blocking calibration command") {
+            const std::string default_gcode = ::Test::slice({ TestMesh::cube_20x20x20 }, {
+                { "gcode_comments",                  true },
+                { "start_gcode",                     "G1 X5 F3000\nG1 X10 F3000\nG29\nG1 X20 F3000\nG1 X30 F3000\n" }
+            });
+            const std::string smooth_gcode = ::Test::slice({ TestMesh::cube_20x20x20 }, {
+                { "gcode_comments",                  true },
+                { "smooth_m73_progress",             1 },
+                { "start_gcode",                     "G1 X5 F3000\nG1 X10 F3000\nG29\nG1 X20 F3000\nG1 X30 F3000\n" }
+            });
+
+            THEN("M73 progress advances gradually only when the smooth progress flag is enabled") {
+                const std::vector<int> default_progress_values = m73_progress_values(default_gcode);
+                const std::vector<int> smooth_progress_values = m73_progress_values(smooth_gcode);
+                REQUIRE(default_progress_values.size() > 2);
+                REQUIRE(smooth_progress_values.size() > 2);
+                REQUIRE(default_progress_values[0] == 0);
+                REQUIRE(smooth_progress_values[0] == 0);
+                REQUIRE(default_progress_values[1] > smooth_progress_values[1]);
+                REQUIRE(smooth_progress_values[1] <= 2);
+            }
         }
     }
 }

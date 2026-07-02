@@ -22,6 +22,8 @@
 #include <cstring>
 #include <iostream>
 #include <math.h>
+#include <algorithm>
+#include <cmath>
 
 #if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
 
@@ -55,6 +57,8 @@ using namespace nlohmann;
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/GCode/Thumbnails.hpp"
 #include "libslic3r/SLAPrint.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/Format/AMF.hpp"
@@ -153,6 +157,9 @@ typedef struct  _sliced_plate_info{
     size_t sliced_time {0};
     size_t sliced_time_with_cache {0};
     size_t triangle_count{0};
+    double total_time{0.0};
+    double total_filament_g{0.0};
+    double support_filament_g{0.0};
     std::string warning_message;
 }sliced_plate_info_t;
 
@@ -167,6 +174,16 @@ typedef struct _sliced_info {
     std::vector<std::string> downward_machines;
 }sliced_info_t;
 std::vector<PrintBase::SlicingStatus> g_slicing_warnings;
+
+static int rounded_seconds(double seconds)
+{
+    return static_cast<int>(std::round(seconds));
+}
+
+static double rounded_grams(double grams)
+{
+    return std::round(grams * 100.0) / 100.0;
+}
 
 #if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
 #define PIPE_BUFFER_SIZE 512
@@ -423,6 +440,9 @@ void record_exit_reson(std::string outputdir, int code, int plate_id, std::strin
         j["error_string"] = error_message;
         j["prepare_time"] = sliced_info.prepare_time;
         j["export_time"] = sliced_info.export_time;
+        double total_time = 0.0;
+        double total_filament_g = 0.0;
+        double support_filament_g = 0.0;
         for (size_t index = 0; index < sliced_info.sliced_plates.size(); index++)
         {
             json plate_json;
@@ -430,9 +450,19 @@ void record_exit_reson(std::string outputdir, int code, int plate_id, std::strin
             plate_json["sliced_time"] = sliced_info.sliced_plates[index].sliced_time;
             plate_json["sliced_time_with_cache"] = sliced_info.sliced_plates[index].sliced_time_with_cache;
             plate_json["triangle_count"] = sliced_info.sliced_plates[index].triangle_count;
+            plate_json["total_time"] = rounded_seconds(sliced_info.sliced_plates[index].total_time);
+            plate_json["total_filament_g"] = rounded_grams(sliced_info.sliced_plates[index].total_filament_g);
+            plate_json["support_filament_g"] = rounded_grams(sliced_info.sliced_plates[index].support_filament_g);
             plate_json["warning_message"] = sliced_info.sliced_plates[index].warning_message;
             j["sliced_plates"].push_back(plate_json);
+
+            total_time += sliced_info.sliced_plates[index].total_time;
+            total_filament_g += sliced_info.sliced_plates[index].total_filament_g;
+            support_filament_g += sliced_info.sliced_plates[index].support_filament_g;
         }
+        j["total_time"] = rounded_seconds(total_time);
+        j["total_filament_g"] = rounded_grams(total_filament_g);
+        j["support_filament_g"] = rounded_grams(support_filament_g);
         for (auto& iter: key_values)
             j[iter.first] = iter.second;
 
@@ -478,6 +508,46 @@ static int decode_png_to_thumbnail(std::string png_file, ThumbnailData& thumbnai
     thumbnail_data.pixels = std::move(img.buf);
 
     return 0;
+}
+
+static bool load_cli_thumbnail_image_for_3mf(const std::string& png_file, ThumbnailData& thumbnail_data)
+{
+    ThumbnailData source_thumbnail;
+    const int decode_result = decode_png_to_thumbnail(png_file, source_thumbnail);
+    if (decode_result != 0) {
+        BOOST_LOG_TRIVIAL(warning) << boost::format("decode --thumbnail-image failed, keep original thumbnail file path: %1%, result=%2%") %
+                                          png_file % decode_result;
+        return false;
+    }
+
+    thumbnail_data = Slic3r::GCodeThumbnails::resize_thumbnail_fit(source_thumbnail, 512, 512);
+    if (!thumbnail_data.is_valid()) {
+        BOOST_LOG_TRIVIAL(warning) << boost::format("resize --thumbnail-image to 512x512 failed, keep original thumbnail file path: %1%") %
+                                          png_file;
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << boost::format("--thumbnail-image normalized for gcode.3mf, source=%1%, source_width=%2%, source_height=%3%, width=%4%, height=%5%") %
+                                   png_file % source_thumbnail.width % source_thumbnail.height % thumbnail_data.width % thumbnail_data.height;
+    return true;
+}
+
+static double cli_filament_weight_g_from_volume(const GCodeProcessorResult* result, double volume, size_t extruder_id)
+{
+    if (result == nullptr || extruder_id >= result->filament_densities.size())
+        return 0.0;
+    return volume * result->filament_densities[extruder_id] * 0.001;
+}
+
+static double cli_support_filament_weight_g(const GCodeProcessorResult* result)
+{
+    if (result == nullptr)
+        return 0.0;
+
+    double support_weight_g = 0.0;
+    for (const auto& item : result->print_statistics.support_volumes_per_extruder)
+        support_weight_g += cli_filament_weight_g_from_volume(result, item.second, item.first);
+    return support_weight_g;
 }
 
 static void glfw_callback(int error_code, const char* description)
@@ -1125,6 +1195,7 @@ int CLI::run(int argc, char **argv)
 
     bool start_gui = m_actions.empty() && !downward_check;
     if (start_gui) {
+        set_logging_level(4);
         BOOST_LOG_TRIVIAL(info) << "no action, start gui directly" << std::endl;
 #ifdef SLIC3R_GUI
     /*#if !defined(_WIN32) && !defined(__APPLE__)
@@ -1194,6 +1265,9 @@ int CLI::run(int argc, char **argv)
     std::vector<plate_obj_size_info_t> plate_obj_size_infos;
     int plate_to_slice = 0, filament_count = 0, duplicate_count = 0, real_duplicate_count = 0;
     bool first_file = true, is_bbl_3mf = false, need_arrange = true, has_thumbnails = false, up_config_to_date = false, normative_check = true, duplicate_single_object = false, use_first_fila_as_default = false, minimum_save = false, enable_timelapse = false;
+    bool obj_multicolor_auto_mapping = false;
+    std::vector<std::string> obj_multicolor_filament_colors;
+    static constexpr int obj_multicolor_flush_volume_scale_percent = 125;
     bool allow_rotations = true, skip_modified_gcodes = false, avoid_extrusion_cali_region = false, skip_useless_pick = false, allow_newer_file = false;
     Semver file_version;
     std::map<size_t, bool> orients_requirement;
@@ -1407,6 +1481,14 @@ int CLI::run(int argc, char **argv)
                 //LoadStrategy strategy = LoadStrategy::LoadModel | LoadStrategy::LoadConfig|LoadStrategy::AddDefaultInstances;
                 //if (load_aux) strategy = strategy | LoadStrategy::LoadAuxiliary;
                 model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets, &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice);
+                if (boost::algorithm::iends_with(file, ".obj")) {
+                    const ConfigOptionStrings* obj_filament_colors = config.option<ConfigOptionStrings>("filament_colour");
+                    if (obj_filament_colors && obj_filament_colors->values.size() > 1) {
+                        obj_multicolor_auto_mapping = true;
+                        obj_multicolor_filament_colors = obj_filament_colors->values;
+                        BOOST_LOG_TRIVIAL(info) << boost::format("OBJ multicolor auto mapping detected, color count %1%") % obj_filament_colors->values.size();
+                    }
+                }
                 if (is_bbl_3mf)
                 {
                     if (!first_file)
@@ -2979,6 +3061,13 @@ int CLI::run(int argc, char **argv)
         }
     }
 
+    if (obj_multicolor_auto_mapping && !obj_multicolor_filament_colors.empty()) {
+        BOOST_LOG_TRIVIAL(info) << boost::format("restore OBJ multicolor filament colors after loading filament configs, color count %1%")
+                                       % obj_multicolor_filament_colors.size();
+        ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour", true);
+        project_filament_colors_option->values = obj_multicolor_filament_colors;
+    }
+
     // CLI temperature overrides: apply after filament configs are loaded
     {
         double cli_nozzle_temp = 0, cli_nozzle_temp_initial = 0;
@@ -3008,6 +3097,19 @@ int CLI::run(int argc, char **argv)
     //compute the flush volume
     ConfigOptionStrings *selected_filament_colors_option = m_extra_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour");
+    bool restored_obj_filament_colors = false;
+    if (obj_multicolor_auto_mapping && !obj_multicolor_filament_colors.empty()) {
+        bool should_restore_obj_filament_colors = !project_filament_colors_option ||
+                                                  project_filament_colors_option->values.size() != obj_multicolor_filament_colors.size() ||
+                                                  project_filament_colors_option->values != obj_multicolor_filament_colors;
+        if (should_restore_obj_filament_colors) {
+            BOOST_LOG_TRIVIAL(info) << boost::format("restore OBJ multicolor filament colors after filament config merge, color count %1%")
+                                           % obj_multicolor_filament_colors.size();
+            project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour", true);
+            project_filament_colors_option->values = obj_multicolor_filament_colors;
+            restored_obj_filament_colors = true;
+        }
+    }
     if ((!project_filament_colors_option || (project_filament_colors_option->values.size() == 0)) && selected_filament_colors_option)
     {
         BOOST_LOG_TRIVIAL(info) << boost::format("initial project_filament_colors is null, create it due to filament_colour set in cli");
@@ -3015,10 +3117,36 @@ int CLI::run(int argc, char **argv)
         std::vector<std::string>& project_filament_colors = project_filament_colors_option->values;
         project_filament_colors.resize(filament_count, "#FFFFFF");
     }
-    if (project_filament_colors_option && (selected_filament_colors_option || !m_print_config.option<ConfigOptionFloats>("flush_volumes_matrix")))
+    const ConfigOptionFloats* existing_flush_matrix_option = m_print_config.option<ConfigOptionFloats>("flush_volumes_matrix");
+    bool need_recompute_flush_volumes = selected_filament_colors_option || restored_obj_filament_colors || obj_multicolor_auto_mapping || !existing_flush_matrix_option;
+    if (!need_recompute_flush_volumes && obj_multicolor_auto_mapping && project_filament_colors_option) {
+        const size_t project_filament_count = project_filament_colors_option->values.size();
+        const std::vector<double>& matrix_values = existing_flush_matrix_option->values;
+        const bool matrix_size_invalid = matrix_values.size() != project_filament_count * project_filament_count;
+        bool matrix_has_positive_offdiag = false;
+        if (!matrix_size_invalid) {
+            for (size_t from_idx = 0; from_idx < project_filament_count; ++from_idx) {
+                for (size_t to_idx = 0; to_idx < project_filament_count; ++to_idx) {
+                    if (from_idx != to_idx && matrix_values[project_filament_count * from_idx + to_idx] > 0.) {
+                        matrix_has_positive_offdiag = true;
+                        break;
+                    }
+                }
+                if (matrix_has_positive_offdiag)
+                    break;
+            }
+        }
+        need_recompute_flush_volumes = matrix_size_invalid || (project_filament_count > 1 && !matrix_has_positive_offdiag);
+        if (need_recompute_flush_volumes) {
+            BOOST_LOG_TRIVIAL(warning)
+                << boost::format("OBJ multicolor flush volumes are missing or zero, recomputing from filament colors. matrix_size=%1%, color_count=%2%")
+                       % matrix_values.size() % project_filament_count;
+        }
+    }
+    if (project_filament_colors_option && need_recompute_flush_volumes)
     {
         std::vector<std::string>  selected_filament_colors;
-        if (selected_filament_colors_option) {
+        if (selected_filament_colors_option && !obj_multicolor_auto_mapping) {
             selected_filament_colors = selected_filament_colors_option->values;
             //erase here
             m_extra_config.erase("filament_colour");
@@ -3044,6 +3172,9 @@ int CLI::run(int argc, char **argv)
                 }
 
             }
+        }
+        else if (selected_filament_colors_option && obj_multicolor_auto_mapping) {
+            BOOST_LOG_TRIVIAL(info) << boost::format("skip applying selected filament colors to OBJ multicolor flush calculation");
         }
 
         std::vector<std::string>  &project_filament_colors = project_filament_colors_option->values;
@@ -3083,6 +3214,13 @@ int CLI::run(int argc, char **argv)
             m_print_config.option<ConfigOptionFloat>("flush_multiplier", true)->set(new ConfigOptionFloat(1.f));
 
             const std::vector<int>& min_flush_volumes = Slic3r::GUI::get_min_flush_volumes(m_print_config);
+
+            if (obj_multicolor_auto_mapping && filament_is_support->size() != project_filament_count) {
+                BOOST_LOG_TRIVIAL(warning)
+                    << boost::format("normalize OBJ multicolor filament_is_support size from %1% to %2%")
+                           % filament_is_support->size() % project_filament_count;
+                filament_is_support->values.resize(project_filament_count, 0);
+            }
 
             if (filament_is_support->size() != project_filament_count)
             {
@@ -3129,6 +3267,10 @@ int CLI::run(int argc, char **argv)
                             }
                         }
 
+                        if (obj_multicolor_auto_mapping) {
+                            flushing_volume = std::min(Slic3r::g_max_flush_volume,
+                                                       (flushing_volume * obj_multicolor_flush_volume_scale_percent + 99) / 100);
+                        }
                         flush_vol_matrix[project_filament_count * from_idx + to_idx] = flushing_volume;
                         //flushing_volume = int(flushing_volume * get_flush_multiplier());
                     }
@@ -5723,9 +5865,17 @@ int CLI::run(int argc, char **argv)
                                     }
                                     BOOST_LOG_TRIVIAL(info) << "process finished, will export gcode temporily to " << outfile << std::endl;
                                     temp_time = (long long)Slic3r::Utils::get_current_time_utc();
-                                    outfile = print_fff->export_gcode(outfile, gcode_result, nullptr);
+                                    outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true, true);
                                     time_using_cache = time_using_cache + ((long long)Slic3r::Utils::get_current_time_utc() - temp_time);
                                     BOOST_LOG_TRIVIAL(info) << "export_gcode finished: time_using_cache update to " << time_using_cache << " secs.";
+
+                                    if (gcode_result != nullptr) {
+                                        sliced_plate_info.total_time =
+                                            gcode_result->print_statistics.modes[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].time;
+                                        sliced_plate_info.support_filament_g = cli_support_filament_weight_g(gcode_result);
+                                    }
+                                    const PrintStatistics& print_statistics = print_fff->print_statistics();
+                                    sliced_plate_info.total_filament_g = print_statistics.total_weight;
 
                                     //outfile_final = (dynamic_cast<Print*>(print))->print_statistics().finalize_output_path(outfile);
                                     //m_fff_print->export_gcode(m_temp_output_path, m_gcode_result, [this](const ThumbnailsParams& params) { return this->render_thumbnails(params); });
@@ -5889,9 +6039,23 @@ int CLI::run(int argc, char **argv)
         }
 #endif
 
-        bool need_regenerate_thumbnail = oriented_or_arranged || regenerate_thumbnails;
-        bool need_regenerate_no_light_thumbnail = oriented_or_arranged || regenerate_thumbnails;
-        bool need_regenerate_top_thumbnail = oriented_or_arranged || regenerate_thumbnails;
+        std::string cli_thumbnail_image_path;
+        const ConfigOptionString* cli_thumbnail_image_opt = m_config.option<ConfigOptionString>("thumbnail_image");
+        if (cli_thumbnail_image_opt != nullptr && !cli_thumbnail_image_opt->value.empty()) {
+            if (boost::filesystem::exists(cli_thumbnail_image_opt->value)) {
+                cli_thumbnail_image_path = cli_thumbnail_image_opt->value;
+                BOOST_LOG_TRIVIAL(info) << boost::format("will use --thumbnail-image %1% as gcode.3mf plate thumbnail") % cli_thumbnail_image_path;
+            } else {
+                BOOST_LOG_TRIVIAL(warning) << boost::format("--thumbnail-image file does not exist, can not embed into gcode.3mf: %1%") %
+                                                  cli_thumbnail_image_opt->value;
+            }
+        }
+        const bool use_cli_thumbnail_image_for_3mf = !cli_thumbnail_image_path.empty();
+        const bool allow_cli_thumbnail_regeneration = false;
+
+        bool need_regenerate_thumbnail = allow_cli_thumbnail_regeneration && !use_cli_thumbnail_image_for_3mf && (oriented_or_arranged || regenerate_thumbnails);
+        bool need_regenerate_no_light_thumbnail = allow_cli_thumbnail_regeneration && !use_cli_thumbnail_image_for_3mf && (oriented_or_arranged || regenerate_thumbnails);
+        bool need_regenerate_top_thumbnail = allow_cli_thumbnail_regeneration && !use_cli_thumbnail_image_for_3mf && (oriented_or_arranged || regenerate_thumbnails);
         bool need_create_thumbnail_group = false, need_create_no_light_group = false, need_create_top_group = false;
 
         // get type and color for platedata
@@ -5906,12 +6070,25 @@ int CLI::run(int argc, char **argv)
         for (int i = 0; i < plate_data_list.size(); i++) {
             PlateData *plate_data = plate_data_list[i];
             bool skip_this_plate = ((plate_to_slice != 0) && (plate_to_slice != (i + 1)))?true:false;
+            const bool use_cli_thumbnail_for_this_plate = use_cli_thumbnail_image_for_3mf && !skip_this_plate;
 
             plate_data->skipped_objects = plate_skipped_objects[i];
             if (!printer_model_id.empty())
                 plate_data->printer_model_id = printer_model_id;
             if (!nozzle_diameter_str.empty())
                 plate_data->nozzle_diameters = nozzle_diameter_str;
+            if (use_cli_thumbnail_for_this_plate) {
+                if (load_cli_thumbnail_image_for_3mf(cli_thumbnail_image_path, plate_data->plate_thumbnail)) {
+                    plate_data->thumbnail_file.clear();
+                    need_create_thumbnail_group = true;
+                } else {
+                    plate_data->thumbnail_file = cli_thumbnail_image_path;
+                    plate_data->plate_thumbnail.reset();
+                }
+                plate_data->no_light_thumbnail_file.clear();
+                plate_data->top_file.clear();
+                plate_data->pick_file.clear();
+            }
 
             for (auto it = plate_data->slice_filaments_info.begin(); it != plate_data->slice_filaments_info.end(); it++) {
                 std::string display_filament_type;
@@ -5921,18 +6098,20 @@ int CLI::run(int argc, char **argv)
             }
 
             if (!plate_data->plate_thumbnail.is_valid()) {
-                if (!oriented_or_arranged && !regenerate_thumbnails && plate_data_src.size() > i)
+                if (!use_cli_thumbnail_for_this_plate && !oriented_or_arranged && !regenerate_thumbnails && plate_data_src.size() > i)
                     plate_data->thumbnail_file = plate_data_src[i]->thumbnail_file;
                 BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s thumbnail data is invalid, check the file %2% exist or not")%(i+1) %plate_data->thumbnail_file;
                 if (plate_data->thumbnail_file.empty() || (!boost::filesystem::exists(plate_data->thumbnail_file))) {
-                    BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s thumbnail file also not there, need to regenerate")%(i+1);
-                    if (!skip_this_plate) {
+                    if (!skip_this_plate && allow_cli_thumbnail_regeneration) {
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s thumbnail file also not there, need to regenerate")%(i+1);
                         need_regenerate_thumbnail = true;
                         need_create_thumbnail_group = true;
                     }
+                    else if (!skip_this_plate)
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s thumbnail missing, skip regeneration for CLI 3MF export") % (i + 1);
                 }
                 else {
-                    if (regenerate_thumbnails) {
+                    if (regenerate_thumbnails && !use_cli_thumbnail_for_this_plate) {
                         BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s thumbnail file %2% cleared, need to regenerate")%(i+1) %plate_data->thumbnail_file;
                         plate_data->thumbnail_file.clear();
                     }
@@ -5949,16 +6128,21 @@ int CLI::run(int argc, char **argv)
                 }
             }
 
-            if (plate_data->no_light_thumbnail_file.empty()) {
+            if (use_cli_thumbnail_for_this_plate) {
+                BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1% uses --thumbnail-image, skip no_light thumbnail regeneration") % (i + 1);
+            }
+            else if (plate_data->no_light_thumbnail_file.empty()) {
                 if (!regenerate_thumbnails && (plate_data_src.size() > i)) {
                     plate_data->no_light_thumbnail_file = plate_data_src[i]->no_light_thumbnail_file;
                 }
                 if (plate_data->no_light_thumbnail_file.empty() || (!boost::filesystem::exists(plate_data->no_light_thumbnail_file))) {
-                    BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s no_light_thumbnail_file %2% also not there, need to regenerate")%(i+1)%plate_data->no_light_thumbnail_file;
-                    if (!skip_this_plate) {
+                    if (!skip_this_plate && allow_cli_thumbnail_regeneration) {
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s no_light_thumbnail_file %2% also not there, need to regenerate")%(i+1)%plate_data->no_light_thumbnail_file;
                         need_regenerate_no_light_thumbnail = true;
                         need_create_no_light_group = true;
                     }
+                    else if (!skip_this_plate)
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s no_light thumbnail missing, skip regeneration for CLI 3MF export") % (i + 1);
                 }
                 else {
                     if (regenerate_thumbnails) {
@@ -5970,18 +6154,23 @@ int CLI::run(int argc, char **argv)
                 }
             }
 
-            if (plate_data->top_file.empty() || plate_data->pick_file.empty()) {
+            if (use_cli_thumbnail_for_this_plate) {
+                BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1% uses --thumbnail-image, skip top/pick thumbnail regeneration") % (i + 1);
+            }
+            else if (plate_data->top_file.empty() || plate_data->pick_file.empty()) {
                 if (!regenerate_thumbnails && (plate_data_src.size() > i)) {
                     plate_data->top_file = plate_data_src[i]->top_file;
                     plate_data->pick_file = plate_data_src[i]->pick_file;
                 }
                 if (plate_data->top_file.empty()|| plate_data->pick_file.empty()
                     || (!boost::filesystem::exists(plate_data->top_file)) || (!boost::filesystem::exists(plate_data->pick_file))) {
-                    BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s top_file %2% also not there, need to regenerate")%(i+1)%plate_data->top_file;
-                    if (!skip_this_plate) {
+                    if (!skip_this_plate && allow_cli_thumbnail_regeneration) {
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s top_file %2% also not there, need to regenerate")%(i+1)%plate_data->top_file;
                         need_regenerate_top_thumbnail = true;
                         need_create_top_group = true;
                     }
+                    else if (!skip_this_plate)
+                        BOOST_LOG_TRIVIAL(info) << boost::format("thumbnails stage: plate %1%'s top/pick thumbnails missing, skip regeneration for CLI 3MF export") % (i + 1);
                 }
                 else {
                     if (regenerate_thumbnails) {
@@ -7045,6 +7234,7 @@ extern "C" {
             *a     = 0;
             });
         // Call the UTF8 main.
+        attach_console_on_demand();
         return CLI().run(argc, argv_ptrs.data());
     }
 }

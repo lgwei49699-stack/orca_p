@@ -199,6 +199,7 @@ class TabPresetComboBox : public PresetComboBox
 
 public:
     TabPresetComboBox(wxWindow *parent, Preset::Type preset_type);
+    TabPresetComboBox(wxWindow *parent, Preset::Type preset_type, PresetBundle* preset_bundle);
     ~TabPresetComboBox() {}
     void set_show_incompatible_presets(bool show_incompatible_presets) {
         show_incompatible = show_incompatible_presets;

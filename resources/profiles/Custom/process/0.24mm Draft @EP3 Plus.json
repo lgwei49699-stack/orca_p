@@ -1,0 +1,8 @@
+{
+  "type": "process",
+  "name": "0.24mm Draft @EP3 Plus",
+  "inherits": "0.24mm Draft @EP3 Pro",
+  "from": "system",
+  "setting_id": "GFD_EP3PLUS_P_024",
+  "instantiation": "true"
+}

@@ -206,6 +206,12 @@ set(SLIC3R_GUI_SOURCES
     GUI/GUI_Preview.hpp
     GUI/GUI_Utils.cpp
     GUI/GUI_Utils.hpp
+    GUI/GFDDeviceSelectionDialog.cpp
+    GUI/GFDDeviceSelectionDialog.hpp
+    GUI/GFDAuthManager.cpp
+    GUI/GFDAuthManager.hpp
+    GUI/GFDLoginDialog.cpp
+    GUI/GFDLoginDialog.hpp
     GUI/HintNotification.cpp
     GUI/HintNotification.hpp
     GUI/HMS.cpp
@@ -533,6 +539,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/Flashforge.hpp
     Utils/FontConfigHelp.cpp
     Utils/FontConfigHelp.hpp
+    Utils/GFDConfig.cpp
+    Utils/GFDConfig.hpp
     Utils/HexFile.cpp
     Utils/HexFile.hpp
     Utils/Http.cpp

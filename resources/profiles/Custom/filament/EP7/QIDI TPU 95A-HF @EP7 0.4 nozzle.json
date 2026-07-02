@@ -1,0 +1,18 @@
+{
+	"type": "filament",
+	"setting_id": "GFSR99",
+	"name": "QIDI TPU 95A-HF @EP7 0.4 nozzle",
+	"from": "system",
+	"instantiation": "true",
+	"inherits": "QIDI TPU 95A-HF@EP7-Series",
+	"additional_cooling_fan_speed": [
+		"0"
+	],
+	"additional_cooling_fan_speed_unseal": [
+		"0"
+	],
+	"compatible_printers": [
+		"EP7 0.4 nozzle"
+	]
+}
+

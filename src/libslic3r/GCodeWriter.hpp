@@ -66,6 +66,7 @@ public:
     // Prefix of the toolchange G-code line, to be used by the CoolingBuffer to separate sections of the G-code
     // printed with the same extruder.
     std::string toolchange_prefix() const;
+    void        set_force_toolchange_for_single_extruder(bool enabled) { m_force_toolchange_for_single_extruder = enabled; }
     std::string toolchange(unsigned int extruder_id);
     std::string set_speed(double F, const std::string &comment = std::string(), const std::string &cooling_marker = std::string());
     // SoftFever NOTE: the returned speed is mm/minute
@@ -169,6 +170,7 @@ public:
     bool            m_is_bbl_printers = false;
     double          m_current_speed;
     bool            m_is_first_layer = true;
+    bool            m_force_toolchange_for_single_extruder = false;
 
     enum class Acceleration {
         Travel,

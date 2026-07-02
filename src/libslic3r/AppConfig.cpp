@@ -40,10 +40,28 @@ namespace Slic3r {
 static const std::string VERSION_CHECK_URL = "https://check-version.orcaslicer.com/latest";
 static const std::string PROFILE_UPDATE_URL = "https://api.github.com/repos/OrcaSlicer/orcaslicer-profiles/releases/tags";
 static const std::string MODELS_STR = "models";
+static const std::string GFD_SECTION = "gfd";
+static const std::string GFD_ENVIRONMENT_KEY = "environment";
+static const std::string GFD_ENVIRONMENT_PRODUCTION = "production";
+static const std::string GFD_ENVIRONMENT_QA = "qa";
 
 const std::string AppConfig::SECTION_FILAMENTS = "filaments";
 const std::string AppConfig::SECTION_MATERIALS = "sla_materials";
 const std::string AppConfig::SECTION_EMBOSS_STYLE = "font";
+
+static std::string default_gfd_environment(const AppConfig& config)
+{
+    return config.get("iot_environment") == ENV_QAT_HOST ? GFD_ENVIRONMENT_QA : GFD_ENVIRONMENT_PRODUCTION;
+}
+
+static bool json_has_non_empty_gfd_environment(const json& j)
+{
+    if (!j.is_object() || !j.contains(GFD_SECTION) || !j[GFD_SECTION].is_object())
+        return false;
+
+    const json& gfd = j[GFD_SECTION];
+    return gfd.contains(GFD_ENVIRONMENT_KEY) && gfd[GFD_ENVIRONMENT_KEY].is_string() && !gfd[GFD_ENVIRONMENT_KEY].get<std::string>().empty();
+}
 
 std::string AppConfig::get_language_code()
 {
@@ -403,6 +421,10 @@ void AppConfig::set_defaults()
 //     }
 // #endif
 
+    if (get(GFD_SECTION, GFD_ENVIRONMENT_KEY).empty()) {
+        set(GFD_SECTION, GFD_ENVIRONMENT_KEY, default_gfd_environment(*this));
+    }
+
     if (get("allow_ip_resolve").empty())
         set_bool("allow_ip_resolve", true);
 
@@ -698,9 +720,13 @@ std::string AppConfig::load()
         }
     }
 
+    const bool missing_gfd_environment = !json_has_non_empty_gfd_environment(j);
+    if (missing_gfd_environment)
+        set(GFD_SECTION, GFD_ENVIRONMENT_KEY, default_gfd_environment(*this));
+
     // Override missing or keys with their defaults.
     this->set_defaults();
-    m_dirty = false;
+    m_dirty = missing_gfd_environment;
     return "";
 }
 
@@ -988,9 +1014,15 @@ std::string AppConfig::load()
         }
     }
 
+    const auto it_gfd_section = tree.find(GFD_SECTION);
+    const bool missing_gfd_environment =
+        it_gfd_section == tree.not_found() || it_gfd_section->second.get<std::string>(GFD_ENVIRONMENT_KEY, std::string()).empty();
+    if (missing_gfd_environment)
+        set(GFD_SECTION, GFD_ENVIRONMENT_KEY, default_gfd_environment(*this));
+
     // Override missing or keys with their defaults.
     this->set_defaults();
-    m_dirty = false;
+    m_dirty = missing_gfd_environment;
     return "";
 }
 

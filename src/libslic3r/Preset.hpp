@@ -63,6 +63,7 @@
 #define BBL_JSON_KEY_HOTEND_MODEL               "hotend_model"
 #define BBL_JSON_KEY_DEFAULT_MATERIALS          "default_materials"
 #define BBL_JSON_KEY_MODEL_ID                   "model_id"
+#define BBL_JSON_KEY_GFD_DEVICE_TYPE            "gfd_device_type"
 
 // Orca extension
 #define ORCA_JSON_KEY_RENAMED_FROM              "renamed_from"
@@ -117,6 +118,7 @@ public:
         std::string 			 	bed_model;
         std::string 				bed_texture;
         std::string                 hotend_model;
+        std::string                 gfd_device_type;
 
         PrinterVariant*       variant(const std::string &name) {
             for (auto &v : this->variants)
@@ -839,6 +841,7 @@ private:
 namespace PresetUtils {
 	// PrinterModel of a system profile, from which this preset is derived, or null if it is not derived from a system profile.
 	const VendorProfile::PrinterModel* system_printer_model(const Preset &preset);
+    std::string system_printer_gfd_device_type(const Preset& preset);
     std::string system_printer_bed_model(const Preset& preset);
     std::string system_printer_bed_texture(const Preset& preset);
     std::string system_printer_hotend_model(const Preset& preset);

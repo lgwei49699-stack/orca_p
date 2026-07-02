@@ -1,0 +1,21 @@
+{
+	"type": "filament",
+	"setting_id": "GFSN99",
+	"name": "QIDI PPS-GF @EP7 0.6 nozzle",
+	"from": "system",
+	"instantiation": "true",
+	"inherits": "QIDI PPS-GF@EP7-Series",
+	"pressure_advance": [
+		"0.021"
+	],
+	"additional_cooling_fan_speed": [
+		"0"
+	],
+	"additional_cooling_fan_speed_unseal": [
+		"0"
+	],
+	"compatible_printers": [
+		"EP7 0.6 nozzle"
+	]
+}
+

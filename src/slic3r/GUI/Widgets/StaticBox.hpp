@@ -24,6 +24,7 @@ public:
         long style = 0);
 
     void SetCornerRadius(double radius);
+    void SetRoundedCorners(bool top_left, bool top_right, bool bottom_right, bool bottom_left);
 
     void SetBorderWidth(int width);
 
@@ -50,6 +51,10 @@ protected:
 
 protected:
     double radius;
+    bool   round_top_left{true};
+    bool   round_top_right{true};
+    bool   round_bottom_right{true};
+    bool   round_bottom_left{true};
     int border_width = 1;
     StateHandler state_handler;
     StateColor   border_color;

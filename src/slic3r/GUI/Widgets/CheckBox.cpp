@@ -58,12 +58,19 @@ void CheckBox::Rescale()
 
 void CheckBox::update()
 {
-	SetBitmapLabel((m_half_checked ? m_half : GetValue() ? m_on : m_off).bmp());
-    SetBitmapDisabled((m_half_checked ? m_half_disabled : GetValue() ? m_on_disabled : m_off_disabled).bmp());
+    const bool checked = GetValue();
+    const wxBitmap& normal = (m_half_checked ? m_half : checked ? m_on : m_off).bmp();
+    const wxBitmap& disabled = (m_half_checked ? m_half_disabled : checked ? m_on_disabled : m_off_disabled).bmp();
+    const wxBitmap& focused = (m_half_checked ? m_half_focused : checked ? m_on_focused : m_off_focused).bmp();
+
+    SetBitmap(normal);
+    SetBitmapLabel(normal);
+    SetBitmapDisabled(disabled);
 #ifdef __WXMSW__
-    SetBitmapFocus((m_half_checked ? m_half_focused : GetValue() ? m_on_focused : m_off_focused).bmp());
+    SetBitmapFocus(focused);
 #endif
-    SetBitmapCurrent((m_half_checked ? m_half_focused : GetValue() ? m_on_focused : m_off_focused).bmp());
+    SetBitmapCurrent(focused);
+    Refresh();
 #ifdef __WXOSX__
     wxCommandEvent e(wxEVT_UPDATE_UI);
     updateBitmap(e);
