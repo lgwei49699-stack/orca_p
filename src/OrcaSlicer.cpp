@@ -56,6 +56,7 @@ using namespace nlohmann;
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/GCode/Thumbnails.hpp"
 #include "libslic3r/SLAPrint.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/Format/AMF.hpp"
@@ -479,6 +480,28 @@ static int decode_png_to_thumbnail(std::string png_file, ThumbnailData& thumbnai
     thumbnail_data.pixels = std::move(img.buf);
 
     return 0;
+}
+
+static bool load_cli_thumbnail_image_for_3mf(const std::string& png_file, ThumbnailData& thumbnail_data)
+{
+    ThumbnailData source_thumbnail;
+    const int decode_result = decode_png_to_thumbnail(png_file, source_thumbnail);
+    if (decode_result != 0) {
+        BOOST_LOG_TRIVIAL(warning) << boost::format("decode --thumbnail-image failed, keep original thumbnail file path: %1%, result=%2%") %
+                                          png_file % decode_result;
+        return false;
+    }
+
+    thumbnail_data = Slic3r::GCodeThumbnails::resize_thumbnail_fit(source_thumbnail, 512, 512);
+    if (!thumbnail_data.is_valid()) {
+        BOOST_LOG_TRIVIAL(warning) << boost::format("resize --thumbnail-image to 512x512 failed, keep original thumbnail file path: %1%") %
+                                          png_file;
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << boost::format("--thumbnail-image normalized for gcode.3mf, source=%1%, source_width=%2%, source_height=%3%, width=%4%, height=%5%") %
+                                   png_file % source_thumbnail.width % source_thumbnail.height % thumbnail_data.width % thumbnail_data.height;
+    return true;
 }
 
 static void glfw_callback(int error_code, const char* description)
@@ -6001,8 +6024,13 @@ int CLI::run(int argc, char **argv)
             if (!nozzle_diameter_str.empty())
                 plate_data->nozzle_diameters = nozzle_diameter_str;
             if (use_cli_thumbnail_for_this_plate) {
-                plate_data->thumbnail_file = cli_thumbnail_image_path;
-                plate_data->plate_thumbnail.reset();
+                if (load_cli_thumbnail_image_for_3mf(cli_thumbnail_image_path, plate_data->plate_thumbnail)) {
+                    plate_data->thumbnail_file.clear();
+                    need_create_thumbnail_group = true;
+                } else {
+                    plate_data->thumbnail_file = cli_thumbnail_image_path;
+                    plate_data->plate_thumbnail.reset();
+                }
                 plate_data->no_light_thumbnail_file.clear();
                 plate_data->top_file.clear();
                 plate_data->pick_file.clear();
