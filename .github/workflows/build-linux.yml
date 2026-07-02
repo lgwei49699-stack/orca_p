@@ -5,10 +5,11 @@ on:
     branches: 
       - 2.3.1_devloper
       - master
+      - master_github
     tags:
       - 'v*'
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, master_github ]
   workflow_dispatch:
 
 jobs:
