@@ -3032,6 +3032,7 @@ struct Plater::priv
                                        const std::string&  file_type,
                                        std::string&        body,
                                        std::string&        error_message) const;
+    bool        gfd_execute_print_url(const std::vector<GFDDeviceInfo>& devices, const std::string& file_url, const std::string& file_type);
     bool        gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, const std::string& print_file_path);
     void        on_action_export_gcode(SimpleEvent&);
     void        on_action_send_gcode(SimpleEvent&);
@@ -9802,6 +9803,90 @@ bool Plater::priv::gfd_update_dynamic_filament_slice_param(const std::string& fi
         q);
 }
 
+bool Plater::priv::gfd_execute_print_url(const std::vector<GFDDeviceInfo>& devices, const std::string& file_url, const std::string& file_type)
+{
+    BOOST_LOG_TRIVIAL(info) << "GFD execute print URL begin"
+                            << ", selected_devices=" << devices.size()
+                            << ", file_url=" << file_url
+                            << ", file_type=" << file_type;
+
+    if (devices.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD execute print URL skipped: no selected devices";
+        show_error(q, _L("请选择打印机"));
+        return false;
+    }
+
+    if (file_url.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD execute print URL skipped: empty file URL";
+        show_error(q, _L("请输入打印文件 URL"));
+        return false;
+    }
+
+    if (!ensure_gfd_login()) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD execute print URL skipped: login failed or cancelled";
+        show_error(q, _L("登录状态无效，请重新登录。"));
+        return false;
+    }
+
+    size_t      success_count = 0;
+    std::string failed_message;
+    for (const GFDDeviceInfo& device : devices) {
+        std::string print_body;
+        std::string error_message;
+        BOOST_LOG_TRIVIAL(info) << boost::format("GFD send print URL command: mac=%1%, sn=%2%, id=%3%") % device.mac %
+                                       device.device_sn % device.device_id;
+        if (!gfd_send_print_command(device, file_url, file_type, print_body, error_message)) {
+            failed_message += (boost::format("%1%: %2%\n") % device.mac %
+                               (error_message.empty() ? std::string("下发打印失败") : error_message))
+                                  .str();
+            continue;
+        }
+
+        try {
+            const nlohmann::json response = nlohmann::json::parse(print_body);
+            if (response.value("msg", std::string()) != "success") {
+                failed_message += (boost::format("%1%: %2%\n") % device.mac %
+                                   response.value("msg", std::string("下发打印失败")))
+                                      .str();
+                BOOST_LOG_TRIVIAL(error) << "GFD print URL command business failure"
+                                         << ", device_mac=" << device.mac
+                                         << ", device_sn=" << device.device_sn
+                                         << ", response=" << print_body;
+                continue;
+            }
+        } catch (...) {
+            // Keep success if the request returned 2xx but no JSON payload.
+        }
+
+        ++success_count;
+        BOOST_LOG_TRIVIAL(info) << "GFD print URL command success"
+                                << ", device_mac=" << device.mac
+                                << ", device_sn=" << device.device_sn
+                                << ", device_id=" << device.device_id
+                                << ", file_url=" << file_url;
+    }
+
+    if (!failed_message.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "GFD execute print URL completed with failures"
+                                 << ", success_count=" << success_count
+                                 << ", failed_message=" << failed_message
+                                 << ", file_url=" << file_url;
+        show_error(q, from_u8((boost::format("部分设备下发失败：\n%1%") % failed_message).str()));
+        return success_count > 0;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD execute print URL finished"
+                            << ", success_count=" << success_count
+                            << ", file_url=" << file_url
+                            << ", file_type=" << file_type;
+    MessageDialog msg_dlg(nullptr,
+                          format_wxstr(_L("测试 3MF 下发成功，共 %1% 台"), success_count),
+                          _L("下发成功"),
+                          wxOK | wxICON_INFORMATION);
+    msg_dlg.ShowModal();
+    return true;
+}
+
 bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, const std::string& print_file_path)
 {
     const bool        use_3mf_file = gfd_print_use_3mf_file || boost::algorithm::iends_with(print_file_path, ".3mf");
@@ -9941,10 +10026,12 @@ void Plater::priv::show_gfd_device_selection_dialog()
     if (dialog.ShowModal() == wxID_OK) {
         gfd_selected_devices = dialog.selected_devices();
         gfd_print_use_3mf_file = dialog.use_3mf_file();
+        const std::string test_3mf_url = dialog.test_3mf_url();
         BOOST_LOG_TRIVIAL(info) << "GFD selected devices"
                                 << ", count=" << gfd_selected_devices.size()
                                 << ", device_type=" << gfd_print_device_type
-                                << ", use_3mf_file=" << gfd_print_use_3mf_file;
+                                << ", use_3mf_file=" << gfd_print_use_3mf_file
+                                << ", test_3mf_url=" << test_3mf_url;
         for (const GFDDeviceInfo& device : gfd_selected_devices) {
             BOOST_LOG_TRIVIAL(info) << "GFD selected device detail"
                                     << ", mac=" << device.mac
@@ -9955,6 +10042,10 @@ void Plater::priv::show_gfd_device_selection_dialog()
                                     << ", sn=" << device.device_sn
                                     << ", device_id=" << device.device_id
                                     << ", use_3mf_file=" << gfd_print_use_3mf_file;
+        }
+        if (!test_3mf_url.empty()) {
+            gfd_execute_print_url(gfd_selected_devices, test_3mf_url, "3mf");
+            return;
         }
         start_gfd_print_export();
     }

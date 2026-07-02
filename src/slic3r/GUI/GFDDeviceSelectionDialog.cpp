@@ -25,6 +25,7 @@
 #include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
+#include <wx/textdlg.h>
 
 namespace Slic3r { namespace GUI {
 
@@ -99,6 +100,15 @@ void set_choice_value(wxChoice* choice, const std::string& value)
 }
 
 bool is_offline_device(const GFDDeviceInfo& device) { return lower_copy(device.device_status) == "offline"; }
+
+bool is_gcode_3mf_url(const std::string& url)
+{
+    std::string path = trim_copy(url);
+    const size_t query_pos = path.find_first_of("?#");
+    if (query_pos != std::string::npos)
+        path = path.substr(0, query_pos);
+    return boost::algorithm::iends_with(path, ".gcode.3mf");
+}
 
 wxString device_status_text(const GFDDeviceInfo& device)
 {
@@ -271,6 +281,13 @@ void GFDDeviceSelectionDialog::build()
     auto* button_sizer = new wxBoxSizer(wxHORIZONTAL);
     button_sizer->AddStretchSpacer(1);
 
+    m_test_3mf_button = new Button(this, _L("下发测试3MF"));
+    apply_flat_filter_button_style(m_test_3mf_button, true);
+    m_test_3mf_button->SetMinSize(m_test_3mf_button->FromDIP(wxSize(118, 30)));
+    m_test_3mf_button->Disable();
+    m_test_3mf_button->Show(boost::iequals(m_default_device_type, "EP7"));
+    button_sizer->Add(m_test_3mf_button, 0, wxRIGHT, FromDIP(8));
+
     m_confirm_3mf_button = new Button(this, _L("确认(3mf)"));
     apply_flat_filter_button_style(m_confirm_3mf_button, true);
     m_confirm_3mf_button->Disable();
@@ -293,6 +310,7 @@ void GFDDeviceSelectionDialog::bind_events()
 {
     m_search_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { load_devices(true); });
     m_reset_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { reset_filters(); });
+    m_test_3mf_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { accept_selection(true, true); });
     m_confirm_3mf_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { accept_selection(true); });
     m_confirm_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { accept_selection(false); });
     m_mac_input->Bind(wxEVT_TEXT, [this](wxCommandEvent&) {
@@ -440,12 +458,13 @@ void GFDDeviceSelectionDialog::reset_filters()
     refresh_table(true, false);
 }
 
-void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
+void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file, bool prompt_test_3mf_url)
 {
     BOOST_LOG_TRIVIAL(info) << "GFD device selection confirm clicked"
                             << ", visible_rows=" << m_visible_indices.size()
                             << ", list_items=" << (m_device_list != nullptr ? m_device_list->GetItemCount() : 0)
-                            << ", use_3mf_file=" << use_3mf_file;
+                            << ", use_3mf_file=" << use_3mf_file
+                            << ", prompt_test_3mf_url=" << prompt_test_3mf_url;
 
     sync_checked_keys_from_table();
 
@@ -483,6 +502,29 @@ void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
         }
     }
 
+    m_test_3mf_url.clear();
+    if (prompt_test_3mf_url) {
+        wxTextEntryDialog url_dialog(this,
+                                     _L("请输入 .gcode.3mf 文件 URL"),
+                                     _L("下发测试 3MF"),
+                                     wxEmptyString,
+                                     wxOK | wxCANCEL | wxCENTRE);
+        if (url_dialog.ShowModal() != wxID_OK)
+            return;
+
+        m_test_3mf_url = trim_copy(into_u8(url_dialog.GetValue()));
+        if (m_test_3mf_url.empty()) {
+            show_error(this, _L("请输入 .gcode.3mf 文件 URL"));
+            return;
+        }
+        if (!is_gcode_3mf_url(m_test_3mf_url)) {
+            BOOST_LOG_TRIVIAL(warning) << "GFD test 3MF URL rejected"
+                                       << ", url=" << m_test_3mf_url;
+            show_error(this, _L("测试 3MF URL 必须以 .gcode.3mf 结尾"));
+            return;
+        }
+    }
+
     for (const GFDDeviceInfo& device : m_selected_devices) {
         BOOST_LOG_TRIVIAL(info) << "GFD device selection accepted"
                                 << ", mac=" << device.mac
@@ -502,6 +544,7 @@ void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
 void GFDDeviceSelectionDialog::update_confirm_button_state()
 {
     if (m_loading) {
+        m_test_3mf_button->Disable();
         m_confirm_3mf_button->Disable();
         m_confirm_button->Disable();
         return;
@@ -512,6 +555,7 @@ void GFDDeviceSelectionDialog::update_confirm_button_state()
     bool selected_has_offline = false;
     const auto selected_rows = checked.empty() ? selected_row_devices(true, &selected_has_offline) : std::vector<GFDDeviceInfo>();
     const bool has_selection = !checked.empty() || !selected_rows.empty();
+    m_test_3mf_button->Enable(has_selection);
     m_confirm_3mf_button->Enable(has_selection);
     m_confirm_button->Enable(has_selection);
     BOOST_LOG_TRIVIAL(info) << "GFD device selection state updated"
@@ -519,6 +563,7 @@ void GFDDeviceSelectionDialog::update_confirm_button_state()
                             << ", selected_row_online_count=" << selected_rows.size()
                             << ", has_offline=" << has_offline
                             << ", selected_has_offline=" << selected_has_offline
+                            << ", test_3mf_enabled=" << m_test_3mf_button->IsEnabled()
                             << ", confirm_3mf_enabled=" << m_confirm_3mf_button->IsEnabled()
                             << ", confirm_enabled=" << m_confirm_button->IsEnabled();
 }
