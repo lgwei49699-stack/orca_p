@@ -9805,7 +9805,7 @@ bool Plater::priv::gfd_update_dynamic_filament_slice_param(const std::string& fi
 bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, const std::string& print_file_path)
 {
     const bool        use_3mf_file = gfd_print_use_3mf_file || boost::algorithm::iends_with(print_file_path, ".3mf");
-    const std::string file_suffix  = use_3mf_file ? "3mf" : "gcode";
+    const std::string file_suffix  = use_3mf_file ? "gcode.3mf" : "gcode";
     const std::string file_type    = use_3mf_file ? "3mf" : "gcode";
 
     BOOST_LOG_TRIVIAL(info) << "GFD execute print begin"
