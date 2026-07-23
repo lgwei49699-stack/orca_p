@@ -1,0 +1,11 @@
+﻿{
+  "type": "process",
+  "name": "0.24mm Draft @EPONE",
+  "inherits": "0.20mm Standard @EPONE",
+  "from": "system",
+  "setting_id": "GFD_EPONE_P_024",
+  "instantiation": "true",
+  "layer_height": "0.24",
+  "support_top_z_distance": "0.23",
+  "support_bottom_z_distance": "0.23"
+}

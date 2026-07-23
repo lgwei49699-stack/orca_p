@@ -54,7 +54,8 @@ const char *PresetBundle::ORCA_FILAMENT_LIBRARY = "OrcaFilamentLibrary";
 static bool gfd_use_printer_default_filament(const Preset& printer_preset)
 {
     const std::string printer_model = printer_preset.config.opt_string("printer_model");
-    return printer_model == "EP3" || printer_model == "EP3 Pro" || printer_model == "EP3Plus" || printer_model == "EP3 Plus" || printer_model == "EP7";
+    return printer_model == "EP3" || printer_model == "EP3 Pro" || printer_model == "EP3Plus" || printer_model == "EP3 Plus" ||
+           printer_model == "EPONE" || printer_model == "EPONE Pro" || printer_model == "EPONEPro" || printer_model == "EP7";
 }
 
 static std::string gfd_first_default_filament_profile(const Preset& printer_preset)
@@ -73,6 +74,126 @@ static Preset* gfd_install_filament_profile(AppConfig& config, PresetCollection&
     filament->is_visible = true;
     config.set(AppConfig::SECTION_FILAMENTS, filament->name, "true");
     return filament;
+}
+
+static bool gfd_install_printer_default_materials(AppConfig& config, PresetCollection& filaments, const Preset& printer_preset)
+{
+    const VendorProfile::PrinterModel* printer_model = PresetUtils::system_printer_model(printer_preset);
+    if (printer_model == nullptr)
+        return false;
+
+    bool installed_any = false;
+    for (const std::string& filament_profile : printer_model->default_materials) {
+        if (gfd_install_filament_profile(config, filaments, filament_profile) != nullptr)
+            installed_any = true;
+    }
+
+    return installed_any;
+}
+
+static std::string gfd_epone_pro_printer_name(const std::string& name)
+{
+    std::string mapped_name = name;
+    if (boost::contains(mapped_name, "EPONE Pro"))
+        return mapped_name;
+
+    if (boost::contains(mapped_name, "EPONE 0.4 nozzle")) {
+        boost::replace_all(mapped_name, "EPONE 0.4 nozzle", "EPONE Pro 0.4 nozzle");
+        return mapped_name;
+    }
+
+    if (boost::contains(mapped_name, "EPONE")) {
+        boost::replace_first(mapped_name, "EPONE", "EPONE Pro");
+        return mapped_name;
+    }
+
+    return mapped_name + " EPONE Pro";
+}
+
+static std::string gfd_epone_pro_material_name(const std::string& name, const std::unordered_map<std::string, std::string>& printer_name_map)
+{
+    for (const auto& [old_printer_name, new_printer_name] : printer_name_map) {
+        const std::string old_suffix = " @" + old_printer_name;
+        if (boost::ends_with(name, old_suffix)) {
+            std::string mapped_name = name;
+            boost::replace_last(mapped_name, old_suffix, " @" + new_printer_name);
+            return mapped_name;
+        }
+    }
+
+    if (boost::contains(name, " @EPONE Pro"))
+        return name;
+
+    if (boost::contains(name, " @EPONE")) {
+        std::string mapped_name = name;
+        boost::replace_last(mapped_name, " @EPONE", " @EPONE Pro");
+        return mapped_name;
+    }
+
+    return name + " @EPONE Pro";
+}
+
+static bool gfd_preset_name_targets_epone(const std::string& name, const std::unordered_map<std::string, std::string>& printer_name_map)
+{
+    if (boost::contains(name, " @EPONE Pro"))
+        return false;
+
+    if (boost::contains(name, " @EPONE"))
+        return true;
+
+    for (const auto& [old_printer_name, new_printer_name] : printer_name_map) {
+        (void)new_printer_name;
+        if (boost::ends_with(name, " @" + old_printer_name))
+            return true;
+    }
+
+    return false;
+}
+
+static bool gfd_preset_uses_epone_printer(const Preset& preset, const std::unordered_map<std::string, std::string>& printer_name_map)
+{
+    if (gfd_preset_name_targets_epone(preset.name, printer_name_map) || gfd_preset_name_targets_epone(preset.inherits(), printer_name_map))
+        return true;
+
+    const auto* compatible_printers = preset.config.option<ConfigOptionStrings>("compatible_printers");
+    if (compatible_printers == nullptr)
+        return false;
+
+    for (const std::string& printer_name : compatible_printers->values) {
+        if (printer_name_map.find(printer_name) != printer_name_map.end())
+            return true;
+    }
+
+    return false;
+}
+
+static bool gfd_remap_string(std::string& value, const std::unordered_map<std::string, std::string>& name_map)
+{
+    const auto it = name_map.find(value);
+    if (it == name_map.end())
+        return false;
+
+    value = it->second;
+    return true;
+}
+
+static void gfd_remap_string_list(ConfigOptionStrings* option, const std::unordered_map<std::string, std::string>& name_map)
+{
+    if (option == nullptr)
+        return;
+
+    for (std::string& value : option->values)
+        gfd_remap_string(value, name_map);
+}
+
+static std::string gfd_map_epone_material_reference(const std::string& value,
+                                                    const std::unordered_map<std::string, std::string>& printer_name_map,
+                                                    const std::unordered_map<std::string, std::string>& material_name_map)
+{
+    if (const auto it = material_name_map.find(value); it != material_name_map.end())
+        return it->second;
+
+    return gfd_preset_name_targets_epone(value, printer_name_map) ? gfd_epone_pro_material_name(value, printer_name_map) : value;
 }
 
 PresetBundle::PresetBundle()
@@ -648,12 +769,124 @@ PresetsConfigSubstitutions PresetBundle::load_user_presets(std::string user, For
         errors_cummulative += err.what();
     }
     if (!errors_cummulative.empty()) throw Slic3r::RuntimeError(errors_cummulative);
+    this->migrate_epone_user_presets_to_epone_pro();
     this->update_multi_material_filament_presets();
     this->update_compatible(PresetSelectCompatibleType::Never);
 
     set_calibrate_printer("");
 
     return PresetsConfigSubstitutions();
+}
+
+void PresetBundle::migrate_epone_user_presets_to_epone_pro()
+{
+    std::unordered_map<std::string, std::string> printer_name_map = {
+        {"EPONE 0.4 nozzle", "EPONE Pro 0.4 nozzle"}
+    };
+    std::vector<std::string> printer_sources;
+
+    for (const Preset& preset : this->printers.get_presets()) {
+        if (!preset.is_user() || preset.config.opt_string("printer_model") != "EPONE")
+            continue;
+
+        const std::string target_name = gfd_epone_pro_printer_name(preset.name);
+        if (target_name == preset.name)
+            continue;
+
+        printer_name_map.emplace(preset.name, target_name);
+        if (this->printers.find_preset(target_name, false, true) == nullptr)
+            printer_sources.emplace_back(preset.name);
+    }
+
+    std::unordered_map<std::string, std::string> print_name_map;
+    std::vector<std::string> print_sources;
+    for (const Preset& preset : this->prints.get_presets()) {
+        if (!preset.is_user() || !gfd_preset_uses_epone_printer(preset, printer_name_map))
+            continue;
+
+        const std::string target_name = gfd_epone_pro_material_name(preset.name, printer_name_map);
+        if (target_name == preset.name)
+            continue;
+
+        print_name_map.emplace(preset.name, target_name);
+        if (this->prints.find_preset(target_name, false, true) == nullptr)
+            print_sources.emplace_back(preset.name);
+    }
+
+    std::unordered_map<std::string, std::string> filament_name_map;
+    std::vector<std::string> filament_sources;
+    for (const Preset& preset : this->filaments.get_presets()) {
+        if (!preset.is_user() || !gfd_preset_uses_epone_printer(preset, printer_name_map))
+            continue;
+
+        const std::string target_name = gfd_epone_pro_material_name(preset.name, printer_name_map);
+        if (target_name == preset.name)
+            continue;
+
+        filament_name_map.emplace(preset.name, target_name);
+        if (this->filaments.find_preset(target_name, false, true) == nullptr)
+            filament_sources.emplace_back(preset.name);
+    }
+
+    auto clone_user_preset = [](PresetCollection& collection,
+                                const std::string& source_name,
+                                std::function<void(Preset&)> modifier) {
+        Preset* source = collection.find_preset(source_name, false, true);
+        if (source == nullptr)
+            return false;
+
+        std::vector<Preset const *> presets = {source};
+        std::vector<std::string> failures;
+        return collection.clone_presets(presets, failures, [&modifier](Preset& preset, Preset::Type&) {
+            modifier(preset);
+        });
+    };
+
+    size_t migrated_printers  = 0;
+    size_t migrated_prints    = 0;
+    size_t migrated_filaments = 0;
+
+    for (const std::string& source_name : printer_sources) {
+        if (clone_user_preset(this->printers, source_name, [&](Preset& preset) {
+                preset.name = printer_name_map.at(source_name);
+                preset.config.option<ConfigOptionString>("printer_model", true)->value = "EPONE Pro";
+
+                if (ConfigOptionString* default_print_profile = preset.config.option<ConfigOptionString>("default_print_profile", false))
+                    default_print_profile->value = gfd_map_epone_material_reference(default_print_profile->value, printer_name_map, print_name_map);
+
+                if (ConfigOptionStrings* default_filament_profile = preset.config.option<ConfigOptionStrings>("default_filament_profile", false)) {
+                    for (std::string& filament_name : default_filament_profile->values)
+                        filament_name = gfd_map_epone_material_reference(filament_name, printer_name_map, filament_name_map);
+                }
+            }))
+            ++migrated_printers;
+    }
+
+    for (const std::string& source_name : print_sources) {
+        if (clone_user_preset(this->prints, source_name, [&](Preset& preset) {
+                preset.name = print_name_map.at(source_name);
+                gfd_remap_string_list(preset.config.option<ConfigOptionStrings>("compatible_printers", false), printer_name_map);
+            }))
+            ++migrated_prints;
+    }
+
+    for (const std::string& source_name : filament_sources) {
+        if (clone_user_preset(this->filaments, source_name, [&](Preset& preset) {
+                preset.name = filament_name_map.at(source_name);
+                gfd_remap_string_list(preset.config.option<ConfigOptionStrings>("compatible_printers", false), printer_name_map);
+
+                if (ConfigOptionStrings* compatible_prints = preset.config.option<ConfigOptionStrings>("compatible_prints", false)) {
+                    for (std::string& print_name : compatible_prints->values)
+                        print_name = gfd_map_epone_material_reference(print_name, printer_name_map, print_name_map);
+                }
+            }))
+            ++migrated_filaments;
+    }
+
+    if (migrated_printers != 0 || migrated_prints != 0 || migrated_filaments != 0) {
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " migrated EPONE user presets to EPONE Pro: printers=" << migrated_printers
+                                << ", prints=" << migrated_prints << ", filaments=" << migrated_filaments;
+    }
 }
 
 PresetsConfigSubstitutions PresetBundle::load_user_presets(AppConfig &                                                config,
@@ -1590,6 +1823,27 @@ void PresetBundle::load_installed_filaments(AppConfig &config)
         preset.set_visible_from_appconfig(config);
 }
 
+bool PresetBundle::ensure_printer_default_filaments_visible(AppConfig &config, const Preset &printer_preset)
+{
+    if (printer_preset.printer_technology() != ptFFF)
+        return false;
+
+    const std::string printer_model = printer_preset.config.opt_string("printer_model");
+    if (printer_model == "EP7") {
+        if (!gfd_install_printer_default_materials(config, filaments, printer_preset))
+            return false;
+    } else {
+        const std::string default_filament_profile = gfd_first_default_filament_profile(printer_preset);
+        if (!gfd_use_printer_default_filament(printer_preset) ||
+            gfd_install_filament_profile(config, filaments, default_filament_profile) == nullptr)
+            return false;
+    }
+
+    for (auto &preset : filaments)
+        preset.set_visible_from_appconfig(config);
+    return true;
+}
+
 void PresetBundle::load_installed_sla_materials(AppConfig &config)
 {
     if (! config.has_section(AppConfig::SECTION_MATERIALS)) {
@@ -1625,8 +1879,7 @@ void PresetBundle::update_selections(AppConfig &config)
     filaments.select_preset_by_name_strict(initial_filament_profile_name);
     const Preset& current_printer = printers.get_selected_preset();
     const std::string default_filament_profile = gfd_first_default_filament_profile(current_printer);
-    const bool use_printer_default_filament =
-        gfd_use_printer_default_filament(current_printer) && gfd_install_filament_profile(config, filaments, default_filament_profile) != nullptr;
+    const bool use_printer_default_filament = ensure_printer_default_filaments_visible(config, current_printer);
     if (use_printer_default_filament)
         filaments.select_preset_by_name_strict(default_filament_profile);
 
@@ -1675,7 +1928,7 @@ void PresetBundle::update_selections(AppConfig &config)
     // exist.
     this->update_compatible(PresetSelectCompatibleType::Always);
     if (use_printer_default_filament) {
-        gfd_install_filament_profile(config, filaments, default_filament_profile);
+        ensure_printer_default_filaments_visible(config, current_printer);
         filaments.select_preset_by_name_strict(default_filament_profile);
         filament_presets.assign(1, filaments.get_selected_preset_name());
     }
@@ -1739,8 +1992,7 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     }
     const Preset& current_printer = printers.get_selected_preset();
     const std::string default_filament_profile = gfd_first_default_filament_profile(current_printer);
-    const bool use_printer_default_filament =
-        gfd_use_printer_default_filament(current_printer) && gfd_install_filament_profile(config, filaments, default_filament_profile) != nullptr;
+    const bool use_printer_default_filament = ensure_printer_default_filaments_visible(config, current_printer);
     if (use_printer_default_filament)
         initial_filament_profile_name = default_filament_profile;
 
@@ -1795,7 +2047,7 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     // exist.
     this->update_compatible(PresetSelectCompatibleType::Always);
     if (use_printer_default_filament) {
-        gfd_install_filament_profile(config, filaments, default_filament_profile);
+        ensure_printer_default_filaments_visible(config, current_printer);
         filaments.select_preset_by_name_strict(default_filament_profile);
         filament_presets.assign(1, filaments.get_selected_preset_name());
     }

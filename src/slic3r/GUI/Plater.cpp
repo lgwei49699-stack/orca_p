@@ -2412,6 +2412,34 @@ std::string gfd_cloud_process_base_name(const std::string& source_name, const st
     return normalized_imported_name.empty() ? "cloud_config" : normalized_imported_name;
 }
 
+std::string gfd_resolve_compatible_printer_name(const PresetBundle& bundle, const std::string& printer_preset_name)
+{
+    if (!printer_preset_name.empty()) {
+        if (const Preset* printer_preset = bundle.printers.find_preset(printer_preset_name, false); printer_preset != nullptr) {
+            const std::string parent_printer_name = printer_preset->inherits();
+            return parent_printer_name.empty() ? printer_preset->name : parent_printer_name;
+        }
+        return printer_preset_name;
+    }
+
+    const Preset& base_printer = bundle.printers.get_selected_preset_base();
+    return !base_printer.name.empty() ? base_printer.name : bundle.printers.get_selected_preset_name();
+}
+
+void gfd_bind_preset_to_printer(Preset& preset, const std::string& compatible_printer_name)
+{
+    if (compatible_printer_name.empty())
+        return;
+
+    ConfigOptionStrings* compatible_printers = preset.config.option<ConfigOptionStrings>("compatible_printers", true);
+    if (compatible_printers == nullptr)
+        return;
+
+    auto& values = compatible_printers->values;
+    if (std::find(values.begin(), values.end(), compatible_printer_name) == values.end())
+        values.insert(values.begin(), compatible_printer_name);
+}
+
 std::string gfd_cloud_related_preset_base_name(const std::string& source_name,
                                                const std::string& preset_name,
                                                const std::string& fallback_name)
@@ -8759,12 +8787,15 @@ void Plater::priv::gfd_apply_cloud_process_name(const DynamicPrintConfig& import
         return;
 
     const std::string base_target_name = gfd_cloud_process_base_name(source_name, original_name);
-    PresetBundle&     bundle                 = *wxGetApp().preset_bundle;
-    const std::string target_name            = gfd_unique_process_preset_name(bundle.prints, base_target_name);
-    const std::string before_name = bundle.prints.get_selected_preset_name();
-    const std::string current_printer_name = bundle.printers.get_selected_preset_name();
+    PresetBundle&     bundle                  = *wxGetApp().preset_bundle;
+    const std::string target_name             = gfd_unique_process_preset_name(bundle.prints, base_target_name);
+    const std::string before_name             = bundle.prints.get_selected_preset_name();
+    const std::string selected_printer_name   = bundle.printers.get_selected_preset_name();
+    const std::string compatible_printer_name = gfd_resolve_compatible_printer_name(bundle, selected_printer_name);
+    Preset            process_snapshot        = bundle.prints.get_edited_preset();
+    gfd_bind_preset_to_printer(process_snapshot, compatible_printer_name);
 
-    bundle.prints.save_current_preset(target_name, false, false);
+    bundle.prints.save_current_preset(target_name, false, false, &process_snapshot);
     if (Preset* saved_preset = bundle.prints.find_preset(target_name, false, true); saved_preset != nullptr) {
         saved_preset->is_visible    = true;
         saved_preset->is_compatible = true;
@@ -8789,7 +8820,8 @@ void Plater::priv::gfd_apply_cloud_process_name(const DynamicPrintConfig& import
                             << ", device_type=" << device_type
                             << ", original_print_settings_id=" << original_name
                             << ", base_target_print=" << base_target_name
-                            << ", compatible_printer=" << current_printer_name
+                            << ", selected_printer=" << selected_printer_name
+                            << ", compatible_printer=" << compatible_printer_name
                             << ", before_selected_print=" << before_name
                             << ", target_print=" << target_name
                             << ", after_selected_print=" << bundle.prints.get_selected_preset_name();
@@ -8959,7 +8991,7 @@ std::vector<std::string> Plater::priv::gfd_persist_imported_printer_and_filament
     const bool printer_file_exists          = !current_printer.file.empty() && fs::exists(current_printer.file);
     const std::string printer_base_name     = gfd_cloud_related_preset_base_name(source_name, printer_name, "printer");
     const std::string compatible_printer_name =
-        !restore_state.printer_preset_name.empty() ? restore_state.printer_preset_name : bundle.printers.get_selected_preset_name();
+        gfd_resolve_compatible_printer_name(bundle, restore_state.printer_preset_name);
 
     const std::vector<std::string> filament_preset_names = bundle.filament_presets;
     std::vector<std::string>       filament_base_names;
@@ -9006,6 +9038,7 @@ std::vector<std::string> Plater::priv::gfd_persist_imported_printer_and_filament
                                        << ", original_filament=" << filament_name;
             continue;
         }
+        gfd_bind_preset_to_printer(filament_snapshot, compatible_printer_name);
 
         const std::string filament_target_name = gfd_unique_preset_name(bundle.filaments, filament_base_names[index]);
 

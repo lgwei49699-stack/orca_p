@@ -1,0 +1,142 @@
+﻿{
+    "type": "machine",
+    "name": "EPONE 0.4 nozzle",
+    "from": "system",
+    "instantiation": "true",
+    "printer_technology": "FFF",
+    "deretraction_speed": [
+        "28"
+    ],
+    "extruder_colour": [
+        "#FCE94F"
+    ],
+    "extruder_offset": [
+        "0x0"
+    ],
+    "gcode_flavor": "marlin2",
+    "silent_mode": "0",
+    "support_chamber_temp_control": "0",
+    "support_air_filtration": "0",
+    "machine_max_acceleration_e": [
+        "1600"
+    ],
+    "machine_max_acceleration_extruding": [
+        "3000"
+    ],
+    "machine_max_acceleration_retracting": [
+        "1000"
+    ],
+    "machine_max_acceleration_x": [
+        "3000"
+    ],
+    "machine_max_acceleration_y": [
+        "3000"
+    ],
+    "machine_max_acceleration_z": [
+        "120"
+    ],
+    "machine_max_speed_e": [
+        "50"
+    ],
+    "machine_max_speed_x": [
+        "200"
+    ],
+    "machine_max_speed_y": [
+        "130"
+    ],
+    "machine_max_speed_z": [
+        "10"
+    ],
+    "machine_max_jerk_e": [
+        "5"
+    ],
+    "machine_max_jerk_x": [
+        "10"
+    ],
+    "machine_max_jerk_y": [
+        "10"
+    ],
+    "machine_max_jerk_z": [
+        "5"
+    ],
+    "machine_min_extruding_rate": [
+        "0"
+    ],
+    "machine_min_travel_rate": [
+        "0"
+    ],
+    "max_layer_height": [
+        "0.28"
+    ],
+    "min_layer_height": [
+        "0.08"
+    ],
+    "printable_height": "100",
+    "extruder_clearance_radius": "65",
+    "extruder_clearance_height_to_rod": "36",
+    "extruder_clearance_height_to_lid": "140",
+    "nozzle_diameter": [
+        "0.4"
+    ],
+    "printer_settings_id": "EPONE 0.4 nozzle",
+    "printer_variant": "0.4",
+    "retraction_minimum_travel": [
+        "0.8"
+    ],
+    "retract_before_wipe": [
+        "0%"
+    ],
+    "retract_when_changing_layer": [
+        "0"
+    ],
+    "retraction_length": [
+        "3"
+    ],
+    "retract_length_toolchange": [
+        "1"
+    ],
+    "z_hop": [
+        "0"
+    ],
+    "retract_restart_extra": [
+        "0"
+    ],
+    "retract_restart_extra_toolchange": [
+        "0"
+    ],
+    "retraction_speed": [
+        "28"
+    ],
+    "single_extruder_multi_material": "1",
+    "change_filament_gcode": "",
+    "wipe": [
+        "0"
+    ],
+    "z_hop_types": [
+        "Normal Lift"
+    ],
+    "before_layer_change_gcode": ";BEFORE_LAYER_CHANGE\n;[layer_z]\nG92 E0\n",
+    "default_print_profile": "0.20mm Standard @EPONE",
+    "machine_start_gcode": ";MachineType:EPONE\n;FilamentType:[filament_type]\n;InfillDensity:[sparse_infill_density]\n;Extruder0Temperature:[nozzle_temperature_initial_layer]\n;BedTemperature:[bed_temperature_initial_layer_single]\n\n;(**** start.gcode for EPONE****)\nM203 Z15\nM104 S150\nM140 S50\nG28 Z\nG28 X Y\nG1 X55 Y55 F1000\nG29\nM107\nG90\nM82\nM109 S[nozzle_temperature_initial_layer]\nM190 S[bed_temperature_initial_layer_single]\nG92 E0\nG1 X90 Y3 Z0.27 F2000\nG1 X20 Y3 Z0.27 E15 F1000\nG92 E0\nM203 Z5",
+    "machine_end_gcode": ";(**** end.gcode for EPONE****)\nM203 Z15\nM104 S0\nM140 S0\nM107\nG92 E0\nG0 E-1 F300\nG28 Z F300\nG28 X0 Y0\nG1 Y90 F1000",
+    "setting_id": "GFD_EPONE_M_04",
+    "inherits": "fdm_machine_common",
+    "printer_model": "EPONE",
+    "version": "2.3.0.3",
+    "printable_area": [
+        "0x0",
+        "100x0",
+        "100x100",
+        "0x100"
+    ],
+    "bed_mesh_min": "-0,-0",
+    "cooling_tube_length": "30",
+    "enable_filament_ramming": "0",
+    "is_custom_defined": "0",
+    "nozzle_type": "brass",
+    "purge_in_prime_tower": "0",
+    "thumbnails": "48x48/PNG",
+    "default_filament_profile": [
+        "EPONE-PLA Overhang @EPONE"
+    ]
+}

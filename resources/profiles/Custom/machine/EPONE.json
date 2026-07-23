@@ -1,0 +1,13 @@
+﻿{
+    "type": "machine_model",
+    "name": "EPONE",
+    "model_id": "EPONE",
+    "nozzle_diameter": "0.4",
+    "machine_tech": "FFF",
+    "family": "Custom",
+    "gfd_device_type": "EPONE",
+    "bed_model": "ep3_bed_model.stl",
+    "bed_texture": "ep3_bed_texture.png",
+    "hotend_model": "",
+    "default_materials": "EPONE-PLA Overhang @EPONE;Generic PLA @System"
+}

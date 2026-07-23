@@ -6,9 +6,11 @@
 #include "MainFrame.hpp"
 #include "Widgets/Button.hpp"
 #include "Widgets/CheckBox.hpp"
+#include "Widgets/RadioBox.hpp"
 #include "Widgets/TextInput.hpp"
 #include "libslic3r/AppConfig.hpp"
 #include "slic3r/Utils/GFDConfig.hpp"
+#include "GFDAuthManager.hpp"
 #include "slic3r/Utils/Http.hpp"
 
 #include <boost/beast/core/detail/base64.hpp>
@@ -18,6 +20,7 @@
 #include <openssl/err.h>
 
 #include <algorithm>
+#include <functional>
 #include <regex>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
@@ -214,6 +217,29 @@ wxWindow* resolve_verify_parent(wxWindow* preferred_parent)
     return preferred_parent;
 }
 
+wxBoxSizer* create_environment_item(wxWindow* parent,
+                                    RadioBox*& radio,
+                                    const wxString& label,
+                                    int dip_spacing,
+                                    const std::function<void()>& on_select)
+{
+    auto* item_sizer = new wxBoxSizer(wxHORIZONTAL);
+    radio            = new RadioBox(parent);
+    item_sizer->Add(radio, 0, wxALIGN_CENTER_VERTICAL);
+    item_sizer->AddSpacer(dip_spacing);
+
+    auto* text = new wxStaticText(parent, wxID_ANY, label, wxDefaultPosition, wxDefaultSize, 0);
+    text->SetFont(::Label::Body_12);
+    item_sizer->Add(text, 0, wxALIGN_CENTER_VERTICAL);
+
+    radio->Bind(wxEVT_LEFT_DOWN, [on_select](wxMouseEvent& event) {
+        on_select();
+        event.Skip(false);
+    });
+    text->Bind(wxEVT_LEFT_DOWN, [on_select](wxMouseEvent&) { on_select(); });
+    return item_sizer;
+}
+
 } // namespace
 
 GFDLoginDialog::GFDLoginDialog()
@@ -306,7 +332,7 @@ GFDLoginDialog::LoginResult GFDLoginDialog::login_with_credentials_local(const s
 void GFDLoginDialog::build()
 {
     SetBackgroundColour(*wxWHITE);
-    SetMinSize(wxSize(FromDIP(410), FromDIP(280)));
+    SetMinSize(wxSize(FromDIP(410), FromDIP(320)));
 
     auto* main_sizer = new wxBoxSizer(wxVERTICAL);
     main_sizer->AddSpacer(FromDIP(34));
@@ -334,6 +360,23 @@ void GFDLoginDialog::build()
     m_password_input->SetCornerRadius(FromDIP(6));
     password_row->Add(m_password_input, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(12));
     main_sizer->Add(password_row, 0, wxTOP | wxEXPAND, FromDIP(20));
+
+    auto* environment_row   = new wxBoxSizer(wxHORIZONTAL);
+    auto* environment_label = new wxStaticText(this, wxID_ANY, _L("环境"), wxDefaultPosition, wxDefaultSize, 0);
+    environment_label->SetFont(::Label::Body_13);
+    environment_label->SetMinSize(wxSize(FromDIP(40), -1));
+    environment_row->Add(environment_label, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(26));
+
+    auto* environment_options = new wxBoxSizer(wxHORIZONTAL);
+    environment_options->Add(create_environment_item(this, m_qa_environment_radio, _L("测试环境"), FromDIP(6),
+                                                     [this]() { select_environment(GFD::Config::ENV_QA); }),
+                             0, wxALIGN_CENTER_VERTICAL);
+    environment_options->AddSpacer(FromDIP(24));
+    environment_options->Add(create_environment_item(this, m_production_environment_radio, _L("正式环境"), FromDIP(6),
+                                                     [this]() { select_environment(GFD::Config::ENV_PRODUCTION); }),
+                             0, wxALIGN_CENTER_VERTICAL);
+    environment_row->Add(environment_options, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(12));
+    main_sizer->Add(environment_row, 0, wxTOP | wxEXPAND, FromDIP(18));
 
     auto* remember_row  = new wxBoxSizer(wxHORIZONTAL);
     m_remember_checkbox = new CheckBox(this, wxID_ANY);
@@ -381,6 +424,8 @@ void GFDLoginDialog::bind_events()
     m_cancel_button->Bind(wxEVT_BUTTON, &GFDLoginDialog::on_cancel, this);
     m_username_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, &GFDLoginDialog::on_login, this);
     m_password_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, &GFDLoginDialog::on_login, this);
+    m_qa_environment_radio->Bind(wxEVT_TOGGLEBUTTON, [this](wxCommandEvent&) { select_environment(GFD::Config::ENV_QA); });
+    m_production_environment_radio->Bind(wxEVT_TOGGLEBUTTON, [this](wxCommandEvent&) { select_environment(GFD::Config::ENV_PRODUCTION); });
 }
 
 void GFDLoginDialog::load_cached_credentials()
@@ -391,6 +436,12 @@ void GFDLoginDialog::load_cached_credentials()
     m_username_input->GetTextCtrl()->SetValue(from_u8(GFD::Config::cached_username(wxGetApp().app_config)));
     m_password_input->GetTextCtrl()->SetValue(from_u8(GFD::Config::cached_password(wxGetApp().app_config)));
     m_remember_checkbox->SetValue(GFD::Config::remember_login(wxGetApp().app_config));
+    load_environment_selection();
+}
+
+void GFDLoginDialog::load_environment_selection()
+{
+    select_environment(GFD::Config::current_environment_name(wxGetApp().app_config));
 }
 
 void GFDLoginDialog::save_cached_credentials()
@@ -407,6 +458,39 @@ void GFDLoginDialog::save_cached_credentials()
         GFD::Config::set_cached_username(wxGetApp().app_config, "");
         GFD::Config::set_cached_password(wxGetApp().app_config, "");
     }
+}
+
+void GFDLoginDialog::select_environment(const std::string& environment)
+{
+    const bool use_qa = environment == GFD::Config::ENV_QA;
+    if (m_qa_environment_radio != nullptr)
+        m_qa_environment_radio->SetValue(use_qa);
+    if (m_production_environment_radio != nullptr)
+        m_production_environment_radio->SetValue(!use_qa);
+}
+
+std::string GFDLoginDialog::selected_environment() const
+{
+    if (m_qa_environment_radio != nullptr && m_qa_environment_radio->GetValue())
+        return GFD::Config::ENV_QA;
+    return GFD::Config::ENV_PRODUCTION;
+}
+
+bool GFDLoginDialog::apply_selected_environment()
+{
+    auto* config = wxGetApp().app_config;
+    if (config == nullptr)
+        return false;
+
+    const std::string environment = selected_environment();
+    const bool        environment_changed = GFD::Config::current_environment_name(config) != environment;
+    config->set("iot_environment", environment == GFD::Config::ENV_QA ? ENV_QAT_HOST : ENV_PRODUCT_HOST);
+    GFD::Config::set_environment(config, environment);
+    if (environment_changed)
+        GFDAuthManager::clear_session(config);
+    else
+        config->save();
+    return true;
 }
 
 bool GFDLoginDialog::validate_input()
@@ -440,6 +524,13 @@ void GFDLoginDialog::on_login(wxCommandEvent&)
 {
     if (!validate_input())
         return;
+
+    if (!apply_selected_environment()) {
+        m_tip_label->SetLabel(_L("环境配置初始化失败"));
+        m_tip_label->Wrap(FromDIP(336));
+        Layout();
+        return;
+    }
 
     const std::string email    = trim_copy(into_u8(m_username_input->GetTextCtrl()->GetValue()));
     const std::string password = into_u8(m_password_input->GetTextCtrl()->GetValue());

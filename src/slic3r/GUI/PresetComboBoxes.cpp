@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <vector>
 #include <string>
+#include <unordered_set>
 #include <boost/algorithm/string.hpp>
 
 #include <wx/sizer.h>
@@ -24,6 +25,7 @@
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/Preset.hpp"
 #include "libslic3r/Color.hpp"
 
 #include "GUI.hpp"
@@ -55,6 +57,11 @@ namespace Slic3r {
 namespace GUI {
 
 #define BORDER_W 10
+
+static bool gfd_filament_displays_full_name(const std::string& printer_model)
+{
+    return printer_model == "EP7" || printer_model == "EPONE" || printer_model == "EPONE Pro" || printer_model == "EPONEPro";
+}
 
 // ---------------------------------
 // ***  PresetComboBox  ***
@@ -934,10 +941,16 @@ void PlaterPresetComboBox::show_edit_menu()
 
 wxString PlaterPresetComboBox::get_preset_name(const Preset& preset)
 {
-    if (m_type == Preset::TYPE_FILAMENT && !preset.alias.empty()) {
-        for (const Preset& other : m_collection->get_presets()) {
-            if (other.name != preset.name && other.is_visible && other.is_compatible && other.alias == preset.alias)
-                return from_u8(preset.label(true));
+    if (m_type == Preset::TYPE_FILAMENT) {
+        const std::string printer_model = m_preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+        if (gfd_filament_displays_full_name(printer_model))
+            return from_u8(preset.label(true));
+
+        if (!preset.alias.empty()) {
+            for (const Preset& other : m_collection->get_presets()) {
+                if (other.name != preset.name && other.is_visible && other.is_compatible && other.alias == preset.alias)
+                    return from_u8(preset.label(true));
+            }
         }
     }
 
@@ -997,6 +1010,20 @@ void PlaterPresetComboBox::update()
     wxString selected_user_preset;
     wxString tooltip;
     const std::deque<Preset>& presets = m_collection->get_presets();
+    std::unordered_set<std::string> ep7_allowed_system_filaments;
+    if (m_type == Preset::TYPE_FILAMENT) {
+        const Preset& current_printer = m_preset_bundle->printers.get_edited_preset();
+        if (current_printer.config.opt_string("printer_model") == "EP7") {
+            if (const VendorProfile::PrinterModel* printer_model = PresetUtils::system_printer_model(current_printer); printer_model != nullptr) {
+                for (const std::string& preset_name : printer_model->default_materials) {
+                    if (const Preset* preset = m_collection->find_preset(preset_name, false, true); preset != nullptr) {
+                        if (const Preset* base = m_collection->get_preset_base(*preset); base != nullptr)
+                            ep7_allowed_system_filaments.insert(base->name);
+                    }
+                }
+            }
+        }
+    }
 
     //BBS:  move system to the end
     /*if (!presets.front().is_visible)
@@ -1013,6 +1040,12 @@ void PlaterPresetComboBox::update()
 
         if (!preset.is_visible || (!preset.is_compatible && !is_selected))
             continue;
+
+        if (!ep7_allowed_system_filaments.empty()) {
+            const Preset* preset_base = m_collection->get_preset_base(preset);
+            if (preset_base != nullptr && ep7_allowed_system_filaments.find(preset_base->name) == ep7_allowed_system_filaments.end() && !is_selected)
+                continue;
+        }
 
         bool single_bar = false;
         if (m_type == Preset::TYPE_FILAMENT)

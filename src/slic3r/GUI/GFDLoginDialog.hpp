@@ -15,6 +15,7 @@ class wxStaticText;
 namespace Slic3r { namespace GUI {
 
 class GFDVerifyDialog;
+class RadioBox;
 
 class GFDLoginDialog : public wxDialog
 {
@@ -45,7 +46,11 @@ private:
     void build();
     void bind_events();
     void load_cached_credentials();
+    void load_environment_selection();
     void save_cached_credentials();
+    void select_environment(const std::string& environment);
+    std::string selected_environment() const;
+    bool apply_selected_environment();
 
     void on_login(wxCommandEvent& event);
     void on_cancel(wxCommandEvent& event);
@@ -64,6 +69,8 @@ private:
 private:
     TextInput*    m_username_input{nullptr};
     TextInput*    m_password_input{nullptr};
+    RadioBox*     m_qa_environment_radio{nullptr};
+    RadioBox*     m_production_environment_radio{nullptr};
     CheckBox*     m_remember_checkbox{nullptr};
     Button*       m_login_button{nullptr};
     Button*       m_cancel_button{nullptr};

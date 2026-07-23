@@ -255,6 +255,7 @@ public:
     // based on the user configuration.
     // If the "vendor" section is missing, enable all models and variants of the particular vendor.
     void                        load_installed_printers(const AppConfig &config);
+    bool                        ensure_printer_default_filaments_visible(AppConfig &config, const Preset &printer_preset);
 
     const std::string&          get_preset_name_by_alias(const Preset::Type& preset_type, const std::string& alias) const;
 
@@ -289,6 +290,7 @@ private:
     //std::pair<PresetsConfigSubstitutions, std::string> load_system_presets(ForwardCompatibilitySubstitutionRule compatibility_rule);
     //BBS: add json related logic
     std::pair<PresetsConfigSubstitutions, std::string> load_system_presets_from_json(ForwardCompatibilitySubstitutionRule compatibility_rule);
+    void                        migrate_epone_user_presets_to_epone_pro();
     // Merge one vendor's presets with the other vendor's presets, report duplicates.
     std::vector<std::string>    merge_presets(PresetBundle &&other);
     // Update renamed_from and alias maps of system profiles.

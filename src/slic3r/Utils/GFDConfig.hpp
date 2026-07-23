@@ -39,6 +39,7 @@ public:
     static constexpr const char* ENV_QA                   = "qa";
     static constexpr const char* PRODUCTION_AUTH_BASE_URL = "https://dcenter.kfb-1.com";
     static constexpr const char* PRODUCTION_API_BASE_URL  = "https://print.wisebeginner3d.com";
+    static constexpr const char* PRODUCTION_DEVICE_QUERY_URL = "https://3dmodelcenter.wisebeginner3d.com/app/print3dModel/manage/v1/md/query";
     static constexpr const char* QA_AUTH_BASE_URL         = "https://qa-datacenter.gongfudou.com";
     static constexpr const char* QA_API_BASE_URL          = "https://qa-appgw-hwsh.gongfudou.com";
 

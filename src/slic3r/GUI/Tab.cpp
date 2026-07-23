@@ -5346,6 +5346,13 @@ bool Tab::select_preset(std::string preset_name, bool delete_current /*=false*/,
         if (m_type == Preset::TYPE_PRINTER && wxGetApp().app_config->get_bool("remember_printer_config")) {
             m_preset_bundle->update_selections(*wxGetApp().app_config);
             wxGetApp().plater()->sidebar().on_filaments_change(m_preset_bundle->filament_presets.size());
+        } else if (m_type == Preset::TYPE_PRINTER) {
+            const Preset& current_printer = m_preset_bundle->printers.get_selected_preset();
+            if (m_preset_bundle->ensure_printer_default_filaments_visible(*wxGetApp().app_config, current_printer)) {
+                m_preset_bundle->update_compatible(PresetSelectCompatibleType::Always);
+                m_preset_bundle->update_multi_material_filament_presets();
+                wxGetApp().plater()->sidebar().on_filaments_change(m_preset_bundle->filament_presets.size());
+            }
         }
         load_current_preset();
 
