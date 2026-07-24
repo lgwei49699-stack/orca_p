@@ -6,6 +6,7 @@
     "upload_config": true,
     "save_config": true,
     "print": true,
+    "print_3mf": false,
     "print_device_types": []
   },
   "devices": {
@@ -15,6 +16,7 @@
       "upload_config": true,
       "save_config": true,
       "print": true,
+      "print_3mf": true,
       "print_device_types": ["EP7"]
     },
     "EP3": {
@@ -23,6 +25,7 @@
       "upload_config": true,
       "save_config": true,
       "print": true,
+      "print_3mf": false,
       "print_device_types": ["EP3"]
     },
     "EP3Pro": {
@@ -31,6 +34,7 @@
       "upload_config": true,
       "save_config": true,
       "print": true,
+      "print_3mf": false,
       "print_device_types": ["EP3Pro"]
     },
     "EP3Plus": {
@@ -39,6 +43,7 @@
       "upload_config": true,
       "save_config": true,
       "print": true,
+      "print_3mf": false,
       "print_device_types": ["EP3Plus"]
     }
   }

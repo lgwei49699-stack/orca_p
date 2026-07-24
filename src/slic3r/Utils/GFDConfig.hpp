@@ -28,6 +28,8 @@ struct ButtonVisibility
     bool upload_config  = true;
     bool save_config    = true;
     bool print          = true;
+    // Enables both normal 3MF print and test 3MF print actions for this device type.
+    bool print_3mf      = false;
     // Device types shown in the "下发打印" dialog dropdown; empty = fall back to cloud-returned types.
     std::vector<std::string> print_device_types;
 };

@@ -1,0 +1,23 @@
+name: Build Windows x64
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-deps-only:
+        description: 'Only build dependencies (bypasses caching)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-x64:
+    name: Build Windows x64
+    uses: ./.github/workflows/build_check_cache.yml
+    with:
+      os: windows-latest
+      build-deps-only: ${{ inputs.build-deps-only || false }}
+      force-build: false
+    secrets: inherit

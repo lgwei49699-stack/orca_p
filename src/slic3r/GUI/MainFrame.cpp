@@ -394,6 +394,7 @@ public:
         bind_events();
         load_device_types();
         wxGetApp().UpdateDlgDarkUI(this);
+        apply_theme();
         Freeze();
         fetch_configs_for_selected_device();
         Layout();
@@ -412,9 +413,74 @@ private:
     Button*                         m_cancel_button{nullptr};
     std::vector<GFDCloudConfigInfo> m_configs;
 
+    enum class TipStyle { Neutral, Error, Success };
+
+    wxColour window_background() const { return wxGetApp().get_window_default_clr(); }
+
+    wxColour list_background() const
+    {
+        return wxGetApp().dark_mode() ? wxColour(34, 35, 37) : wxColour(224, 224, 224);
+    }
+
+    wxColour header_background() const
+    {
+        return wxGetApp().dark_mode() ? wxColour(52, 53, 56) : wxColour(245, 245, 245);
+    }
+
+    wxColour row_background(size_t index) const
+    {
+        if (!wxGetApp().dark_mode())
+            return index % 2 == 0 ? window_background() : wxColour(250, 250, 250);
+        return index % 2 == 0 ? wxColour(43, 43, 43) : wxColour(48, 49, 52);
+    }
+
+    wxString config_file_display_name(const GFDCloudConfigInfo& config) const
+    {
+        if (!config.config_file_name.empty())
+            return from_u8(config.config_file_name);
+        if (config.config_file_url.empty())
+            return _L("未提供");
+
+        std::string display = config.config_file_url;
+        if (const size_t slash = display.find_last_of('/'); slash != std::string::npos && slash + 1 < display.size())
+            display.erase(0, slash + 1);
+        if (const size_t suffix = display.find_first_of("?#"); suffix != std::string::npos)
+            display.erase(suffix);
+        return from_u8(display.empty() ? config.config_file_url : display);
+    }
+
+    wxColour primary_text_colour() const { return wxGetApp().get_label_clr_default(); }
+
+    wxColour secondary_text_colour() const
+    {
+        return wxGetApp().dark_mode() ? wxColour(184, 188, 194) : wxColour(82, 86, 92);
+    }
+
+    void set_tip(const wxString& text, TipStyle style = TipStyle::Neutral)
+    {
+        if (m_tip_label == nullptr)
+            return;
+        m_tip_label->SetLabel(text);
+        const bool dark = wxGetApp().dark_mode();
+        if (style == TipStyle::Error)
+            m_tip_label->SetForegroundColour(dark ? wxColour(255, 132, 132) : wxColour(190, 35, 35));
+        else if (style == TipStyle::Success)
+            m_tip_label->SetForegroundColour(dark ? wxColour(91, 218, 176) : wxColour(0, 122, 94));
+        else
+            m_tip_label->SetForegroundColour(secondary_text_colour());
+    }
+
+    void apply_theme()
+    {
+        SetBackgroundColour(window_background());
+        if (m_config_list != nullptr)
+            m_config_list->SetBackgroundColour(list_background());
+        set_tip(m_tip_label != nullptr ? m_tip_label->GetLabel() : wxString{});
+    }
+
     void build()
     {
-        SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+        SetBackgroundColour(window_background());
         SetMinSize(wxSize(FromDIP(920), FromDIP(560)));
         SetSize(wxSize(FromDIP(920), FromDIP(560)));
 
@@ -438,10 +504,11 @@ private:
 
         main_sizer->AddSpacer(FromDIP(14));
 
-        m_config_list = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(872), FromDIP(390)), wxBORDER_SIMPLE | wxVSCROLL);
+        m_config_list = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(872), FromDIP(390)),
+                                             wxBORDER_SIMPLE | wxVSCROLL);
         m_config_list->SetDoubleBuffered(true);
         m_config_list->SetScrollRate(0, FromDIP(12));
-        m_config_list->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+        m_config_list->SetBackgroundColour(list_background());
         m_config_list_sizer = new wxBoxSizer(wxVERTICAL);
         m_config_list->SetSizer(m_config_list_sizer);
         main_sizer->Add(m_config_list, 1, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
@@ -450,7 +517,7 @@ private:
 
         m_tip_label = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
         m_tip_label->SetFont(::Label::Body_13);
-        m_tip_label->SetForegroundColour(wxColour(220, 38, 38));
+        m_tip_label->SetForegroundColour(secondary_text_colour());
         main_sizer->Add(m_tip_label, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
 
         auto* button_row = new wxBoxSizer(wxHORIZONTAL);
@@ -493,7 +560,7 @@ private:
             m_device_choice->SetSelection(0);
 
         if (m_tip_label != nullptr)
-            m_tip_label->SetLabel(_L("点击刷新获取当前机型的云端配置"));
+            set_tip(_L("点击刷新获取当前机型的云端配置"));
     }
 
     std::string selected_device_type() const
@@ -510,18 +577,18 @@ private:
 
         const std::string device_type = selected_device_type();
         if (device_type.empty()) {
-            m_tip_label->SetLabel(_L("未找到可用机型"));
+            set_tip(_L("未找到可用机型"), TipStyle::Error);
             return;
         }
 
-        m_tip_label->SetLabel(_L("正在获取云端配置..."));
+        set_tip(_L("正在获取云端配置..."));
         m_refresh_button->Enable(false);
         Layout();
 
         std::string error_message;
         try {
             if (m_plater == nullptr || !m_plater->fetch_cloud_configs(device_type, m_configs, error_message)) {
-                m_tip_label->SetLabel(from_u8(error_message.empty() ? "获取云端配置失败" : error_message));
+                set_tip(from_u8(error_message.empty() ? "获取云端配置失败" : error_message), TipStyle::Error);
                 m_refresh_button->Enable(true);
                 return;
             }
@@ -529,13 +596,13 @@ private:
             BOOST_LOG_TRIVIAL(error) << "GFD cloud import dialog fetch failed"
                                      << ", device_type=" << device_type
                                      << ", error=" << ex.what();
-            m_tip_label->SetLabel(from_u8(std::string("获取云端配置失败: ") + ex.what()));
+            set_tip(from_u8(std::string("获取云端配置失败: ") + ex.what()), TipStyle::Error);
             m_refresh_button->Enable(true);
             return;
         } catch (...) {
             BOOST_LOG_TRIVIAL(error) << "GFD cloud import dialog fetch failed with unknown exception"
                                      << ", device_type=" << device_type;
-            m_tip_label->SetLabel(_L("获取云端配置失败"));
+            set_tip(_L("获取云端配置失败"), TipStyle::Error);
             m_refresh_button->Enable(true);
             return;
         }
@@ -543,18 +610,19 @@ private:
         rebuild_config_rows();
 
         if (m_configs.empty())
-            m_tip_label->SetLabel(_L("当前机型暂无云端配置"));
+            set_tip(_L("当前机型暂无云端配置"));
         else
-            m_tip_label->SetLabel(wxEmptyString);
+            set_tip(wxEmptyString);
 
         m_refresh_button->Enable(true);
     }
 
-    wxStaticText* create_row_label(wxWindow* parent, const wxString& text, int min_width)
+    wxStaticText* create_row_label(wxWindow* parent, const wxString& text, int min_width, bool secondary = false)
     {
         auto* label = new wxStaticText(parent, wxID_ANY, text, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
         label->SetFont(::Label::Body_14);
         label->SetMinSize(wxSize(FromDIP(min_width), -1));
+        label->SetForegroundColour(secondary ? secondary_text_colour() : primary_text_colour());
         if (!text.empty())
             label->SetToolTip(text);
         return label;
@@ -569,8 +637,9 @@ private:
     {
         if (button == nullptr)
             return;
-        const wxColour green(0, 150, 136);
-        const wxColour hover_bg(232, 247, 245);
+        const bool     dark     = wxGetApp().dark_mode();
+        const wxColour green    = dark ? wxColour(79, 222, 197) : wxColour(0, 126, 112);
+        const wxColour hover_bg = dark ? wxColour(55, 75, 71) : wxColour(232, 247, 245);
         button->SetFont(::Label::Body_14);
         button->SetMinSize(wxSize(FromDIP(108), FromDIP(30)));
         button->SetCornerRadius(0);
@@ -584,7 +653,7 @@ private:
         ));
         button->SetBorderColor(StateColor(background));
         button->SetTextColor(StateColor(
-            std::pair<wxColour, int>(wxColour(120, 120, 120), StateColor::Disabled),
+            std::pair<wxColour, int>(dark ? wxColour(132, 136, 140) : wxColour(120, 120, 120), StateColor::Disabled),
             std::pair<wxColour, int>(green, StateColor::Hovered),
             std::pair<wxColour, int>(green, StateColor::Normal)
         ));
@@ -603,17 +672,20 @@ private:
             return;
 
         auto* header_panel = new wxPanel(m_config_list);
-        header_panel->SetBackgroundColour(wxColour(245, 245, 245));
-        header_panel->SetMinSize(wxSize(-1, FromDIP(38)));
+        header_panel->SetBackgroundColour(header_background());
+        header_panel->SetMinSize(wxSize(-1, FromDIP(42)));
         auto* row = new wxBoxSizer(wxHORIZONTAL);
         row->AddSpacer(FromDIP(8));
-        add_row_label(header_panel, row, _L("配置名称"), 120, 2);
-        add_row_label(header_panel, row, _L("机型"), 70, 1);
-        add_row_label(header_panel, row, _L("方案文件"), 230, 4);
-        add_row_label(header_panel, row, _L("备注"), 130, 2);
-        row->Add(create_row_label(header_panel, _L("操作"), 100), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+        row->Add(create_row_label(header_panel, _L("配置名称"), 120, true), 2, wxALIGN_CENTER_VERTICAL | wxRIGHT,
+                 FromDIP(8));
+        row->Add(create_row_label(header_panel, _L("机型"), 70, true), 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+        row->Add(create_row_label(header_panel, _L("方案文件"), 230, true), 4, wxALIGN_CENTER_VERTICAL | wxRIGHT,
+                 FromDIP(8));
+        row->Add(create_row_label(header_panel, _L("备注"), 130, true), 2, wxALIGN_CENTER_VERTICAL | wxRIGHT,
+                 FromDIP(8));
+        row->Add(create_row_label(header_panel, _L("操作"), 100, true), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
         header_panel->SetSizer(row);
-        m_config_list_sizer->Add(header_panel, 0, wxEXPAND);
+        m_config_list_sizer->Add(header_panel, 0, wxEXPAND | wxBOTTOM, FromDIP(1));
     }
 
     void add_config_row(size_t index)
@@ -623,16 +695,18 @@ private:
 
         const GFDCloudConfigInfo& config = m_configs[index];
         auto* row_panel = new wxPanel(m_config_list);
-        const wxColour row_bg = index % 2 == 0 ? wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW) : wxColour(250, 250, 250);
+        const wxColour row_bg = row_background(index);
         row_panel->SetBackgroundColour(row_bg);
-        row_panel->SetMinSize(wxSize(-1, FromDIP(44)));
+        row_panel->SetMinSize(wxSize(-1, FromDIP(48)));
 
         auto* row = new wxBoxSizer(wxHORIZONTAL);
         row->AddSpacer(FromDIP(8));
         add_row_label(row_panel, row, from_u8(config.name), 120, 2);
         add_row_label(row_panel, row, from_u8(config.device_type), 70, 1);
-        const std::string config_file_display = !config.config_file_url.empty() ? config.config_file_url : config.config_file_name;
-        add_row_label(row_panel, row, from_u8(config_file_display), 230, 4);
+        auto* file_label = create_row_label(row_panel, config_file_display_name(config), 230);
+        if (!config.config_file_url.empty())
+            file_label->SetToolTip(from_u8(config.config_file_url));
+        row->Add(file_label, 4, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
         add_row_label(row_panel, row, from_u8(config.info), 130, 2);
 
         auto* apply_button = new Button(row_panel, _L("设置此参数"));
@@ -641,7 +715,7 @@ private:
         row->Add(apply_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
 
         row_panel->SetSizer(row);
-        m_config_list_sizer->Add(row_panel, 0, wxEXPAND);
+        m_config_list_sizer->Add(row_panel, 0, wxEXPAND | wxBOTTOM, FromDIP(1));
     }
 
     void rebuild_config_rows()
@@ -664,7 +738,7 @@ private:
     void apply_config(size_t index)
     {
         if (index >= m_configs.size() || m_plater == nullptr) {
-            m_tip_label->SetLabel(_L("请选择要导入的云端配置"));
+            set_tip(_L("请选择要导入的云端配置"), TipStyle::Error);
             return;
         }
 
@@ -673,17 +747,17 @@ private:
                                 << ", id=" << config.id
                                 << ", name=" << config.name
                                 << ", device_type=" << config.device_type;
-        m_tip_label->SetLabel(_L("正在应用云端配置..."));
+        set_tip(_L("正在应用云端配置..."));
         m_refresh_button->Enable(false);
         Layout();
 
         const bool imported = m_plater->import_cloud_config(config);
         m_refresh_button->Enable(true);
         if (imported) {
-            m_tip_label->SetLabel(_L("云端配置已应用"));
+            set_tip(_L("云端配置已应用"), TipStyle::Success);
             EndModal(wxID_CANCEL);
         } else {
-            m_tip_label->SetLabel(_L("云端配置应用失败"));
+            set_tip(_L("云端配置应用失败"), TipStyle::Error);
         }
     }
 };

@@ -435,6 +435,7 @@ void parse_button_visibility(const json& node, ButtonVisibility& visibility)
     read_bool("upload_config", visibility.upload_config);
     read_bool("save_config", visibility.save_config);
     read_bool("print", visibility.print);
+    read_bool("print_3mf", visibility.print_3mf);
 
     if (node.contains("print_device_types")) {
         const json& types = node["print_device_types"];

@@ -110,6 +110,11 @@ bool is_gcode_3mf_url(const std::string& url)
     return boost::algorithm::iends_with(path, ".gcode.3mf");
 }
 
+bool supports_3mf_print(const std::string& device_type)
+{
+    return GFD::Config::button_visibility(device_type).print_3mf;
+}
+
 wxString device_status_text(const GFDDeviceInfo& device)
 {
     return from_u8(device.status_title.empty() ? device.device_status : device.status_title);
@@ -285,13 +290,13 @@ void GFDDeviceSelectionDialog::build()
     apply_flat_filter_button_style(m_test_3mf_button, true);
     m_test_3mf_button->SetMinSize(m_test_3mf_button->FromDIP(wxSize(118, 30)));
     m_test_3mf_button->Disable();
-    m_test_3mf_button->Show(boost::iequals(m_default_device_type, "EP7"));
+    m_test_3mf_button->Show(supports_3mf_print(m_default_device_type));
     button_sizer->Add(m_test_3mf_button, 0, wxRIGHT, FromDIP(8));
 
     m_confirm_3mf_button = new Button(this, _L("确认(3mf)"));
     apply_flat_filter_button_style(m_confirm_3mf_button, true);
     m_confirm_3mf_button->Disable();
-    m_confirm_3mf_button->Show(boost::iequals(m_default_device_type, "EP7"));
+    m_confirm_3mf_button->Show(supports_3mf_print(m_default_device_type));
     button_sizer->Add(m_confirm_3mf_button, 0, wxRIGHT, FromDIP(8));
 
     m_confirm_button = new Button(this, _L("确认"));
@@ -491,13 +496,13 @@ void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file, bool prompt_t
     }
 
     if (use_3mf_file) {
-        const auto not_ep7 = std::find_if(m_selected_devices.begin(), m_selected_devices.end(), [](const GFDDeviceInfo& device) {
-            return !boost::iequals(device.device_type, "EP7");
+        const auto unsupported_3mf_device = std::find_if(m_selected_devices.begin(), m_selected_devices.end(), [](const GFDDeviceInfo& device) {
+            return !supports_3mf_print(device.device_type);
         });
-        if (not_ep7 != m_selected_devices.end()) {
+        if (unsupported_3mf_device != m_selected_devices.end()) {
             BOOST_LOG_TRIVIAL(warning) << "GFD 3MF device selection confirm rejected"
-                                       << ", unsupported_device_type=" << not_ep7->device_type;
-            show_error(this, _L("3MF 下发仅支持 EP7 设备"));
+                                       << ", unsupported_device_type=" << unsupported_3mf_device->device_type;
+            show_error(this, _L("所选设备不支持 3MF 下发"));
             return;
         }
     }
