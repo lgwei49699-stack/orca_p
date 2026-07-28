@@ -2,6 +2,9 @@
     "error_string": "Success.",
     "export_time": 0,
     "plate_index": 0,
-    "prepare_time": 1,
-    "return_code": 0
+    "prepare_time": 0,
+    "return_code": 0,
+    "support_filament_g": 0.0,
+    "total_filament_g": 0.0,
+    "total_time": 0
 }

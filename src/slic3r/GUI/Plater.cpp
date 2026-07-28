@@ -147,6 +147,7 @@
 #include <libslic3r/miniz_extension.hpp>
 #include "WipeTowerDialog.hpp"
 #include "ObjColorDialog.hpp"
+#include "TextureImportDialog.hpp"
 
 #include "libslic3r/CustomGCode.hpp"
 #include "libslic3r/Platform.hpp"
@@ -171,6 +172,15 @@ using namespace nlohmann;
 static const std::pair<unsigned int, unsigned int> THUMBNAIL_SIZE_3MF = {512, 512};
 
 namespace Slic3r { namespace GUI {
+
+static bool has_importable_texture(const TexturedMesh& textured_mesh)
+{
+    if (textured_mesh.vertices.empty() || textured_mesh.indices.empty())
+        return false;
+
+    return std::any_of(textured_mesh.textures.begin(), textured_mesh.textures.end(),
+                       [](const TextureImage& texture) { return !texture.data.empty(); });
+}
 
 wxDEFINE_EVENT(EVT_SCHEDULE_BACKGROUND_PROCESS, SimpleEvent);
 wxDEFINE_EVENT(EVT_SLICING_UPDATE, SlicingStatusEvent);
@@ -1706,7 +1716,7 @@ void Sidebar::delete_filament()
     wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
 }
 
-void Sidebar::add_custom_filament(wxColour new_col)
+void Sidebar::add_custom_filament(wxColour new_col, const std::string& preset_name)
 {
     if (p->combos_filament.size() >= MAXIMUM_EXTRUDER_NUMBER)
         return;
@@ -1714,6 +1724,11 @@ void Sidebar::add_custom_filament(wxColour new_col)
     int         filament_count = p->combos_filament.size() + 1;
     std::string new_color      = new_col.GetAsString(wxC2S_HTML_SYNTAX).ToStdString();
     wxGetApp().preset_bundle->set_num_filaments(filament_count, new_color);
+    const size_t new_filament_index = static_cast<size_t>(filament_count - 1);
+    if (!preset_name.empty() && wxGetApp().preset_bundle->filaments.find_preset(preset_name, false) != nullptr &&
+        new_filament_index < wxGetApp().preset_bundle->filament_presets.size()) {
+        wxGetApp().preset_bundle->filament_presets[new_filament_index] = preset_name;
+    }
     wxGetApp().plater()->on_filaments_change(filament_count);
     wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
@@ -2805,6 +2820,18 @@ struct Plater::priv
     // BBS: backup & restore
     std::vector<size_t> load_files(const std::vector<fs::path>& input_files, LoadStrategy strategy, bool ask_multi = false);
     std::vector<size_t> load_model_objects(const ModelObjectPtrs& model_objects, bool allow_negative_z = false, bool split_object = false);
+
+    struct TextureImportResult
+    {
+        PaintedMesh                       painted;
+        std::vector<FilamentMatch>        matches;
+        std::vector<std::array<float, 4>> new_filament_colors;
+        std::vector<std::string>          new_filament_preset_names;
+        bool                              fallback_to_geometry_only = false;
+    };
+
+    bool run_textured_mesh_import_dialog(Model& loaded_model, TextureImportResult& result);
+    void apply_textured_mesh_import_result(const std::vector<size_t>& object_indices, const TextureImportResult& result);
 
     fs::path get_export_file_path(GUI::FileType file_type);
     wxString get_export_file(GUI::FileType file_type);
@@ -4193,7 +4220,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
     bool one_by_one    = input_files.size() == 1 || printer_technology == ptSLA /* || filaments_cnt <= 1*/;
     if (!one_by_one) {
         for (const auto& path : input_files) {
-            if (std::regex_match(path.string(), pattern_bundle)) {
+            if (std::regex_match(path.string(), pattern_bundle) || boost::algorithm::iends_with(path.string(), ".glb") ||
+                boost::algorithm::iends_with(path.string(), ".gltf")) {
                 one_by_one = true;
                 break;
             }
@@ -5035,10 +5063,30 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                 q->model().load_from(model);
                 load_auxiliary_files();
             }
+
+            TextureImportResult texture_import_result;
+            if (model.texture_mesh && has_importable_texture(*model.texture_mesh)) {
+                dlg.Hide();
+                const bool continue_import = run_textured_mesh_import_dialog(model, texture_import_result);
+                dlg.Show();
+                if (!continue_import) {
+                    q->skip_thumbnail_invalid = false;
+                    return empty_result;
+                }
+                if (texture_import_result.fallback_to_geometry_only) {
+                    MessageDialog(q, _L("Texture conversion failed. The model will be imported as geometry only."),
+                                  _L("Texture Import Warning"), wxOK | wxICON_WARNING)
+                        .ShowModal();
+                }
+            }
+
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__
                                     << boost::format(", before load_model_objects, count %1%") % model.objects.size();
             auto loaded_idxs = load_model_objects(model.objects, is_project_file);
             obj_idxs.insert(obj_idxs.end(), loaded_idxs.begin(), loaded_idxs.end());
+
+            if (!texture_import_result.painted.face_colors.empty())
+                apply_textured_mesh_import_result(loaded_idxs, texture_import_result);
 
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__ << boost::format(", finished load_model_objects");
             wxString msg = wxString::Format(_L("Loading file: %s"), from_path(real_filename));
@@ -5344,6 +5392,125 @@ std::vector<size_t> Plater::priv::load_model_objects(const ModelObjectPtrs& mode
     this->schedule_background_process();
 
     return obj_idxs;
+}
+
+bool Plater::priv::run_textured_mesh_import_dialog(Model& loaded_model, TextureImportResult& result)
+{
+    if (!loaded_model.texture_mesh || !has_importable_texture(*loaded_model.texture_mesh))
+        return true;
+
+    const std::vector<std::string> filament_colors = q->get_extruder_colors_from_plater_config();
+    std::vector<std::string>       filament_names;
+    filament_names.reserve(filament_colors.size());
+    for (size_t i = 0; i < filament_colors.size(); ++i) {
+        std::string name;
+        if (i < wxGetApp().preset_bundle->filament_presets.size()) {
+            const std::string& preset_name = wxGetApp().preset_bundle->filament_presets[i];
+            if (const Preset* preset = wxGetApp().preset_bundle->filaments.find_preset(preset_name); preset != nullptr)
+                name = preset->label(false);
+        }
+        if (name.empty())
+            name = "Filament " + std::to_string(i + 1);
+        filament_names.push_back(std::move(name));
+    }
+
+    TextureImportDialog dialog(q, loaded_model.texture_mesh, filament_colors, filament_names);
+    if (dialog.ShowModal() != wxID_OK) {
+        if (dialog.was_skipped()) {
+            loaded_model.texture_mesh.reset();
+            return true;
+        }
+        if (dialog.fallback_to_geometry_only()) {
+            result.fallback_to_geometry_only = true;
+            loaded_model.texture_mesh.reset();
+            return true;
+        }
+
+        loaded_model.texture_mesh.reset();
+        return false;
+    }
+
+    result.matches                   = dialog.get_matches();
+    result.new_filament_colors       = dialog.get_new_filament_colors();
+    result.new_filament_preset_names = dialog.get_new_filament_preset_names();
+    result.painted                   = dialog.take_painted_mesh();
+    loaded_model.texture_mesh.reset();
+
+    if (result.painted.face_colors.empty() || result.matches.empty()) {
+        result.fallback_to_geometry_only = true;
+        result.painted                   = {};
+        result.matches.clear();
+    }
+    return true;
+}
+
+void Plater::priv::apply_textured_mesh_import_result(const std::vector<size_t>& object_indices, const TextureImportResult& result)
+{
+    if (result.painted.face_colors.empty() || result.matches.empty())
+        return;
+
+    if (!result.new_filament_preset_names.empty() &&
+        result.new_filament_preset_names.size() != result.new_filament_colors.size()) {
+        BOOST_LOG_TRIVIAL(warning) << "Texture import filament preset count does not match color count";
+    }
+    for (size_t i = 0; i < result.new_filament_colors.size(); ++i) {
+        const std::array<float, 4>& color = result.new_filament_colors[i];
+        wxColour wx_color(static_cast<unsigned char>(std::clamp(color[0], 0.0f, 1.0f) * 255.0f),
+                          static_cast<unsigned char>(std::clamp(color[1], 0.0f, 1.0f) * 255.0f),
+                          static_cast<unsigned char>(std::clamp(color[2], 0.0f, 1.0f) * 255.0f));
+        const std::string preset_name = i < result.new_filament_preset_names.size() ?
+                                            result.new_filament_preset_names[i] :
+                                            std::string();
+        sidebar->add_custom_filament(wx_color, preset_name);
+    }
+
+    std::map<std::array<size_t, 3>, int> color_to_filament;
+    for (const FilamentMatch& match : result.matches) {
+        if (match.cluster_index < 0 || static_cast<size_t>(match.cluster_index) >= result.painted.cluster_colors.size() ||
+            match.filament_index < 0)
+            continue;
+        color_to_filament[result.painted.cluster_colors[match.cluster_index]] = match.filament_index + 1;
+    }
+
+    int base_filament = 0;
+    for (const auto& face_color : result.painted.face_colors) {
+        const auto match = color_to_filament.find(face_color);
+        if (match != color_to_filament.end() && (base_filament == 0 || match->second < base_filament))
+            base_filament = match->second;
+    }
+
+    for (size_t object_index : object_indices) {
+        if (object_index >= model.objects.size())
+            continue;
+
+        ModelObject* object           = model.objects[object_index];
+        ModelVolume* target_volume    = nullptr;
+        size_t       model_part_count = 0;
+        for (ModelVolume* volume : object->volumes) {
+            if (volume && volume->is_model_part()) {
+                ++model_part_count;
+                if (!target_volume)
+                    target_volume = volume;
+            }
+        }
+        if (!target_volume)
+            continue;
+        if (model_part_count > 1) {
+            BOOST_LOG_TRIVIAL(warning) << "Texture import found " << model_part_count
+                                       << " model parts; painting is applied only to the first part.";
+        }
+
+        if (apply_painted_mesh_to_volume(result.painted, result.matches, *target_volume) && base_filament > 0) {
+            target_volume->config.set("extruder", base_filament);
+            object->config.set("extruder", base_filament);
+            sidebar->obj_list()->update_objects_list_filament_column(
+                std::max<size_t>(wxGetApp().filaments_cnt(), static_cast<size_t>(base_filament)));
+        }
+        object->ensure_on_bed();
+        sidebar->obj_list()->update_info_items(object_index);
+    }
+
+    update();
 }
 
 // BBS
@@ -13719,7 +13886,7 @@ void ProjectDropDialog::on_dpi_changed(const wxRect& suggested_rect)
 // BBS: remove GCodeViewer as seperate APP logic
 bool Plater::load_files(const wxArrayString& filenames)
 {
-    const std::regex pattern_drop(".*[.](stp|step|stl|oltp|obj|amf|3mf|svg|zip)", std::regex::icase);
+    const std::regex pattern_drop(".*[.](stp|step|stl|oltp|obj|gltf|glb|amf|3mf|svg|zip)", std::regex::icase);
     const std::regex pattern_gcode_drop(".*[.](gcode|g)", std::regex::icase);
 
     std::vector<fs::path> normal_paths;

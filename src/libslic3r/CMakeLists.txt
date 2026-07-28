@@ -182,6 +182,9 @@ set(lisbslic3r_sources
     Format/AMF.hpp
     Format/bbs_3mf.cpp
     Format/bbs_3mf.hpp
+    Format/glTF.cpp
+    Format/glTF.hpp
+    Format/ResourcePathUtils.hpp
     format.hpp
     Format/OBJ.cpp
     Format/OBJ.hpp
@@ -429,6 +432,18 @@ set(lisbslic3r_sources
     Tesselate.cpp
     Tesselate.hpp
     TextConfiguration.hpp
+    TexturePainting.cpp
+    TexturePainting.hpp
+    TextureToColor/Callbacks.hpp
+    TextureToColor/CgalUtils.hpp
+    TextureToColor/ColorUtils.cpp
+    TextureToColor/ColorUtils.hpp
+    TextureToColor/KdTree.cpp
+    TextureToColor/KdTree.hpp
+    TextureToColor/Repair.hpp
+    TextureToColor/TextureToColor.cpp
+    TextureToColor/TextureToColor.hpp
+    TextureToColor/TriMesh.hpp
     Thread.cpp
     Thread.hpp
     Time.cpp
@@ -511,7 +526,7 @@ endif ()
 encoding_check(libslic3r)
 
 target_compile_definitions(libslic3r PUBLIC -DUSE_TBB -DTBB_USE_CAPTURED_EXCEPTION=0)
-target_include_directories(libslic3r PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(libslic3r PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/TextureToColor PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(libslic3r SYSTEM PUBLIC ${EXPAT_INCLUDE_DIRS})
 
 # Find the OCCT and related libraries

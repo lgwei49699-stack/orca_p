@@ -27,6 +27,8 @@
 //BBS: add stl
 #include "Format/STL.hpp"
 #include "Format/OBJ.hpp"
+#include "Format/glTF.hpp"
+#include "TexturePainting.hpp"
 
 #include <map>
 #include <memory>
@@ -1532,6 +1534,9 @@ public:
     std::shared_ptr<ModelDesignInfo> design_info = nullptr;
     std::shared_ptr<ModelInfo> model_info = nullptr;
     std::shared_ptr<ModelProfileInfo> profile_info = nullptr;
+
+    // Temporary source data used by the GUI texture-to-color import flow.
+    std::shared_ptr<TexturedMesh> texture_mesh;
 
     //makerlab information
     std::string mk_name;

@@ -4672,14 +4672,15 @@ void MainFrame::init_menubar_as_editor()
 
         // BBS
         wxMenu *import_menu = new wxMenu();
+        const wxString import_model_label = _L("Import 3MF/STL/STEP/SVG/OBJ/AMF") + "/GLB/GLTF";
 #ifndef __APPLE__
-        append_menu_item(import_menu, wxID_ANY, _L("Import 3MF/STL/STEP/SVG/OBJ/AMF") + dots + "\t" + ctrl + "I", _L("Load a model"),
+        append_menu_item(import_menu, wxID_ANY, import_model_label + dots + "\t" + ctrl + "I", _L("Load a model"),
             [this](wxCommandEvent&) { if (m_plater) {
             m_plater->add_file();
         } }, "menu_import", nullptr,
             [this](){return can_add_models(); }, this);
 #else
-        append_menu_item(import_menu, wxID_ANY, _L("Import 3MF/STL/STEP/SVG/OBJ/AMF") + dots + "\t" + ctrl + "I", _L("Load a model"),
+        append_menu_item(import_menu, wxID_ANY, import_model_label + dots + "\t" + ctrl + "I", _L("Load a model"),
             [this](wxCommandEvent&) { if (m_plater) { m_plater->add_model(); } }, "", nullptr,
             [this](){return can_add_models(); }, this);
 #endif

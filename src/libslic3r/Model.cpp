@@ -99,6 +99,7 @@ Model& Model::assign_copy(const Model &rhs)
     this->mk_version = rhs.mk_version;
     this->md_name = rhs.md_name;
     this->md_value = rhs.md_value;
+    this->texture_mesh = rhs.texture_mesh;
 
     return *this;
 }
@@ -134,6 +135,7 @@ Model& Model::assign_copy(Model &&rhs)
     this->mk_version = rhs.mk_version;
     this->md_name = rhs.md_name;
     this->md_value = rhs.md_value;
+    this->texture_mesh = std::move(rhs.texture_mesh);
     this->backup_path = std::move(rhs.backup_path);
     this->object_backup_id_map = std::move(rhs.object_backup_id_map);
     this->next_object_backup_id = rhs.next_object_backup_id;
@@ -303,6 +305,25 @@ static void update_model_extruder_count(Model& model, size_t num_filaments)
     }
 }
 
+static void add_textured_mesh_to_model(Model& model, const TexturedMesh& textured_mesh, const std::string& input_file)
+{
+    indexed_triangle_set its;
+    its.vertices.resize(textured_mesh.vertices.size());
+    for (size_t i = 0; i < textured_mesh.vertices.size(); ++i)
+        its.vertices[i] = Vec3f(textured_mesh.vertices[i][0], textured_mesh.vertices[i][1], textured_mesh.vertices[i][2]);
+
+    its.indices.resize(textured_mesh.indices.size());
+    for (size_t i = 0; i < textured_mesh.indices.size(); ++i)
+        its.indices[i] = Vec3i32(textured_mesh.indices[i][0], textured_mesh.indices[i][1], textured_mesh.indices[i][2]);
+
+    its_merge_vertices(its);
+    its_remove_degenerate_faces(its);
+    its_compactify_vertices(its);
+
+    const std::string object_name = boost::filesystem::path(input_file).filename().string();
+    model.add_object(object_name.c_str(), input_file.c_str(), std::move(TriangleMesh(std::move(its))));
+}
+
 // BBS: add part plate related logic
 // BBS: backup & restore
 // Loading model from a file, it may be a simple geometry file as STL or OBJ, however it may be a project file as well.
@@ -419,7 +440,14 @@ Model Model::read_from_file(const std::string&                                  
     else if (boost::algorithm::iends_with(input_file, ".amf"))
         //BBS: is_xxx is used for is_inches when load amf
         result = load_amf(input_file.c_str(), config, config_substitutions, &model, is_xxx);
-    else if (boost::algorithm::iends_with(input_file, ".3mf"))
+    else if (boost::algorithm::iends_with(input_file, ".glb") || boost::algorithm::iends_with(input_file, ".gltf")) {
+        auto textured_mesh = std::make_shared<TexturedMesh>();
+        result             = load_gltf(input_file, *textured_mesh, &message);
+        if (result) {
+            model.texture_mesh = textured_mesh;
+            add_textured_mesh_to_model(model, *textured_mesh, input_file);
+        }
+    } else if (boost::algorithm::iends_with(input_file, ".3mf"))
         //BBS: add part plate related logic
         // BBS: backup & restore
         //FIXME options & LoadStrategy::CheckVersion ?
@@ -438,7 +466,7 @@ Model Model::read_from_file(const std::string&                                  
     }
 #endif
     else
-        throw Slic3r::RuntimeError(_L("Unknown file format. Input file must have .stl, .obj, .amf(.xml) extension."));
+        throw Slic3r::RuntimeError(_L("Unknown file format. Input file must have .stl, .obj, .amf(.xml), .gltf or .glb extension."));
 
     if (is_cb_cancel) {
         Model empty_model;
@@ -675,6 +703,7 @@ void Model::clear_objects()
     this->objects.clear();
     object_backup_id_map.clear();
     next_object_backup_id = 1;
+    texture_mesh.reset();
 }
 
 // BBS: backup, reuse objects
@@ -963,6 +992,13 @@ void Model::convert_from_imperial_units(bool only_small_volumes)
                 v->source.is_converted_from_inches = true;
             }
         }
+    if (texture_mesh) {
+        for (auto& vertex : texture_mesh->vertices) {
+            vertex[0] *= in_to_mm;
+            vertex[1] *= in_to_mm;
+            vertex[2] *= in_to_mm;
+        }
+    }
 }
 
 static constexpr const double volume_threshold_meters = 0.008; // 0.008 = 0.2*0.2*0.2
@@ -990,6 +1026,14 @@ void Model::convert_from_meters(bool only_small_volumes)
                 v->source.is_converted_from_meters = true;
             }
         }
+    if (texture_mesh) {
+        const float scale = static_cast<float>(m_to_mm);
+        for (auto& vertex : texture_mesh->vertices) {
+            vertex[0] *= scale;
+            vertex[1] *= scale;
+            vertex[2] *= scale;
+        }
+    }
 }
 
 static constexpr const double zero_volume = 0.0000000001;
@@ -1154,6 +1198,7 @@ void Model::load_from(Model& model)
     mk_version = model.mk_version;
     md_name = model.md_name;
     md_value = model.md_value;
+    texture_mesh = std::move(model.texture_mesh);
     model.design_info.reset();
     model.model_info.reset();
     model.profile_info.reset();

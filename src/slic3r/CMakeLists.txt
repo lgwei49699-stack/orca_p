@@ -319,6 +319,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/OAuthDialog.hpp
     GUI/ObjColorDialog.cpp
     GUI/ObjColorDialog.hpp
+    GUI/TextureImportDialog.cpp
+    GUI/TextureImportDialog.hpp
     GUI/ObjectDataViewModel.cpp
     GUI/ObjectDataViewModel.hpp
     GUI/OG_CustomCtrl.cpp

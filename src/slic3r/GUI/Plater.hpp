@@ -163,7 +163,7 @@ public:
     void on_filaments_change(size_t num_filaments);
     void add_filament();
     void delete_filament();
-    void add_custom_filament(wxColour new_col);
+    void add_custom_filament(wxColour new_col, const std::string& preset_name = std::string());
     // BBS
     void on_bed_type_change(BedType bed_type);
     void load_ams_list(std::string const & device, MachineObject* obj);
