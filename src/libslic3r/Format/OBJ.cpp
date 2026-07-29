@@ -5,9 +5,14 @@
 #include "OBJ.hpp"
 #include "objparser.hpp"
 
+#include <iomanip>
+#include <limits>
+#include <set>
 #include <string>
 
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/log/trivial.hpp>
+#include <boost/nowide/fstream.hpp>
 
 #include "nlohmann/json.hpp"
 #include <boost/filesystem.hpp>
@@ -398,6 +403,114 @@ bool store_obj(const char *path, Model *model)
 {
     TriangleMesh mesh = model->mesh();
     return store_obj(path, &mesh);
+}
+
+bool store_multicolor_obj(const char *path, const Model &model, const std::vector<RGBA> &filament_colors)
+{
+    if (path == nullptr || *path == '\0' || filament_colors.empty())
+        return false;
+
+    fs::path obj_path(path);
+    if (!boost::algorithm::iends_with(obj_path.extension().string(), ".obj"))
+        obj_path.replace_extension(".obj");
+    fs::path mtl_path = obj_path;
+    mtl_path.replace_extension(".mtl");
+
+    try {
+        if (!obj_path.parent_path().empty())
+            fs::create_directories(obj_path.parent_path());
+    } catch (const fs::filesystem_error &e) {
+        BOOST_LOG_TRIVIAL(error) << "Failed creating multicolor OBJ output directory: " << e.what();
+        return false;
+    }
+
+    boost::nowide::ofstream obj_stream(obj_path.string());
+    boost::nowide::ofstream mtl_stream(mtl_path.string());
+    if (!obj_stream || !mtl_stream) {
+        BOOST_LOG_TRIVIAL(error) << "Failed opening multicolor OBJ/MTL output: " << obj_path.string();
+        return false;
+    }
+
+    obj_stream << "# OrcaSlicer multicolor OBJ\n";
+    obj_stream << "mtllib " << mtl_path.filename().string() << "\n\n";
+    obj_stream << std::setprecision(std::numeric_limits<float>::max_digits10);
+    mtl_stream << std::setprecision(6);
+
+    size_t        vertex_offset = 1;
+    size_t        group_index   = 0;
+    size_t        written_faces = 0;
+    bool          invalid_filament_id = false;
+    std::set<int> used_filaments;
+
+    auto write_group = [&](indexed_triangle_set its, const Transform3d &transform, int filament_id) {
+        if (its.indices.empty())
+            return;
+
+        if (filament_id < 1 || filament_id > static_cast<int>(filament_colors.size())) {
+            BOOST_LOG_TRIVIAL(error) << "OBJ face references filament " << filament_id
+                                     << ", but only " << filament_colors.size() << " colors are available";
+            invalid_filament_id = true;
+            return;
+        }
+        TriangleMesh mesh(std::move(its));
+        mesh.transform(transform, true);
+
+        obj_stream << "g color_group_" << group_index++ << "\n";
+        for (const Vec3f &vertex : mesh.its.vertices)
+            obj_stream << "v " << vertex.x() << " " << vertex.y() << " " << vertex.z() << "\n";
+        obj_stream << "usemtl filament_" << filament_id << "\n";
+        for (const Vec3i32 &face : mesh.its.indices) {
+            obj_stream << "f " << vertex_offset + static_cast<size_t>(face[0]) << " "
+                       << vertex_offset + static_cast<size_t>(face[1]) << " "
+                       << vertex_offset + static_cast<size_t>(face[2]) << "\n";
+        }
+        obj_stream << "\n";
+
+        vertex_offset += mesh.its.vertices.size();
+        written_faces += mesh.its.indices.size();
+        used_filaments.insert(filament_id);
+    };
+
+    for (const ModelObject *object : model.objects) {
+        for (const ModelVolume *volume : object->volumes) {
+            if (!volume || !volume->is_model_part())
+                continue;
+
+            const int base_filament = std::max(volume->extruder_id(), 1);
+            if (volume->mmu_segmentation_facets.empty()) {
+                write_group(volume->mesh().its, volume->get_matrix(), base_filament);
+                continue;
+            }
+
+            std::vector<indexed_triangle_set> facets_per_filament;
+            volume->mmu_segmentation_facets.get_facets(*volume, facets_per_filament);
+            for (size_t state = 0; state < facets_per_filament.size(); ++state) {
+                const int filament_id = state == 0 ? base_filament : static_cast<int>(state);
+                write_group(std::move(facets_per_filament[state]), volume->get_matrix(), filament_id);
+            }
+        }
+    }
+
+    for (int filament_id : used_filaments) {
+        const RGBA &color = filament_colors[static_cast<size_t>(filament_id - 1)];
+        mtl_stream << "newmtl filament_" << filament_id << "\n";
+        mtl_stream << "Ka 0 0 0\n";
+        mtl_stream << "Kd " << std::clamp(color[0], 0.f, 1.f) << " "
+                   << std::clamp(color[1], 0.f, 1.f) << " "
+                   << std::clamp(color[2], 0.f, 1.f) << "\n";
+        mtl_stream << "d 1\nillum 1\n\n";
+    }
+
+    obj_stream.flush();
+    mtl_stream.flush();
+    if (!obj_stream || !mtl_stream || written_faces == 0 || invalid_filament_id) {
+        BOOST_LOG_TRIVIAL(error) << "Failed writing multicolor OBJ/MTL or no printable faces were found";
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "Exported multicolor OBJ " << obj_path.string() << ", MTL " << mtl_path.string()
+                            << ", faces " << written_faces << ", materials " << used_filaments.size();
+    return true;
 }
 
 }; // namespace Slic3r

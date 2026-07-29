@@ -7654,6 +7654,13 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     def->cli_params = "filename.3mf";
     def->set_default_value(new ConfigOptionString("output.3mf"));
 
+    def = this->add("export_texture_obj", coString);
+    def->label = L("Export Texture OBJ");
+    def->tooltip = L("Convert a textured GLB/GLTF model and export its printable color regions as OBJ and MTL.");
+    def->cli = "export-texture-obj";
+    def->cli_params = "filename.obj";
+    def->set_default_value(new ConfigOptionString("texture_color.obj"));
+
     def = this->add("export_slicedata", coString);
     def->label = L("Export slicing data");
     def->tooltip = L("Export slicing data to a folder.");
@@ -8036,6 +8043,33 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->tooltip = L("Load filament settings from the specified file list.");
     def->cli_params = "\"filament1.json;filament2.json;...\"";
     def->set_default_value(new ConfigOptionStrings());
+
+    def = this->add("texture_color_count", coInt);
+    def->label = L("Texture Color Count");
+    def->tooltip = L("Target color count used when converting GLB/GLTF textures. 0 detects the count automatically.");
+    def->cli = "texture-color-count";
+    def->cli_params = "count";
+    def->min = 0;
+    def->max = 16;
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("texture_smooth", coFloat);
+    def->label = L("Texture Smooth Weight");
+    def->tooltip = L("Color-region boundary smoothing weight. 0 preserves boundaries; 1 applies the strongest smoothing.");
+    def->cli = "texture-smooth";
+    def->cli_params = "weight";
+    def->min = 0;
+    def->max = 1;
+    def->set_default_value(new ConfigOptionFloat(0.5));
+
+    def = this->add("texture_oversampling", coInt);
+    def->label = L("Texture Oversampling");
+    def->tooltip = L("Triangle subdivision iterations before texture sampling. 0 uses adaptive subdivision.");
+    def->cli = "texture-oversampling";
+    def->cli_params = "iterations";
+    def->min = 0;
+    def->max = 8;
+    def->set_default_value(new ConfigOptionInt(0));
 
     def = this->add("skip_objects", coInts);
     def->label = L("Skip Objects");

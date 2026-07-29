@@ -18,6 +18,7 @@
 #endif /* WIN32 */
 
 #include <cstdio>
+#include <array>
 #include <string>
 #include <cstring>
 #include <iostream>
@@ -69,6 +70,7 @@ using namespace nlohmann;
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/Time.hpp"
 #include "libslic3r/Thread.hpp"
+#include "libslic3r/TexturePainting.hpp"
 #include "libslic3r/BlacklistedLibraryCheck.hpp"
 #include "libslic3r/FlushVolCalc.hpp"
 
@@ -1268,6 +1270,9 @@ int CLI::run(int argc, char **argv)
     bool obj_multicolor_auto_mapping = false;
     std::vector<std::string> obj_multicolor_filament_colors;
     static constexpr int obj_multicolor_flush_volume_scale_percent = 125;
+    bool glb_texture_auto_mapping = false;
+    std::vector<size_t> textured_glb_model_indices;
+    TexturePaintingSettings texture_painting_settings;
     bool allow_rotations = true, skip_modified_gcodes = false, avoid_extrusion_cali_region = false, skip_useless_pick = false, allow_newer_file = false;
     Semver file_version;
     std::map<size_t, bool> orients_requirement;
@@ -1334,6 +1339,25 @@ int CLI::run(int argc, char **argv)
     ConfigOptionBool* force_machine_option = m_config.option<ConfigOptionBool>("force_machine");
     if (force_machine_option)
         force_machine = force_machine_option->value;
+
+    const bool export_texture_obj_requested =
+        std::find(m_actions.begin(), m_actions.end(), "export_texture_obj") != m_actions.end();
+    texture_painting_settings.target_colors_num = 0;
+    if (ConfigOptionInt* option = m_config.option<ConfigOptionInt>("texture_color_count"))
+        texture_painting_settings.target_colors_num = static_cast<size_t>(option->value);
+    if (ConfigOptionFloat* option = m_config.option<ConfigOptionFloat>("texture_smooth"))
+        texture_painting_settings.smooth_weight = option->value;
+    if (ConfigOptionInt* option = m_config.option<ConfigOptionInt>("texture_oversampling"))
+        texture_painting_settings.oversampling_iters = static_cast<size_t>(option->value);
+
+    if (export_texture_obj_requested) {
+        const ConfigOptionStrings* export_filament_colors = m_extra_config.option<ConfigOptionStrings>("filament_colour");
+        if (export_filament_colors && !export_filament_colors->values.empty()) {
+            BOOST_LOG_TRIVIAL(warning)
+                << "--filament-colour is ignored by --export-texture-obj; exported MTL colors follow the model color clusters";
+            m_extra_config.erase("filament_colour");
+        }
+    }
 
     ConfigOptionBool* skip_modified_gcodes_option = m_config.option<ConfigOptionBool>("skip_modified_gcodes");
     if (skip_modified_gcodes_option)
@@ -1453,6 +1477,7 @@ int CLI::run(int argc, char **argv)
                 flush_and_exit(CLI_FILE_NOTFOUND);
             }
             Model model;
+            bool convert_textured_glb = false;
             //BBS: add plate related logic
             //bool load_aux = false;
             BOOST_LOG_TRIVIAL(info) << "read model file:" << file << "\n";
@@ -1480,7 +1505,8 @@ int CLI::run(int argc, char **argv)
                 // BBS: adjust whebackup
                 //LoadStrategy strategy = LoadStrategy::LoadModel | LoadStrategy::LoadConfig|LoadStrategy::AddDefaultInstances;
                 //if (load_aux) strategy = strategy | LoadStrategy::LoadAuxiliary;
-                model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets, &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice);
+                model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets,
+                                              &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice);
                 if (boost::algorithm::iends_with(file, ".obj")) {
                     const ConfigOptionStrings* obj_filament_colors = config.option<ConfigOptionStrings>("filament_colour");
                     if (obj_filament_colors && obj_filament_colors->values.size() > 1) {
@@ -1488,6 +1514,20 @@ int CLI::run(int argc, char **argv)
                         obj_multicolor_filament_colors = obj_filament_colors->values;
                         BOOST_LOG_TRIVIAL(info) << boost::format("OBJ multicolor auto mapping detected, color count %1%") % obj_filament_colors->values.size();
                     }
+                }
+                const bool is_glb_or_gltf = boost::algorithm::iends_with(file, ".glb") || boost::algorithm::iends_with(file, ".gltf");
+                if (export_texture_obj_requested && is_glb_or_gltf) {
+                    if (!model.texture_mesh) {
+                        BOOST_LOG_TRIVIAL(error)
+                            << "GLB/GLTF texture conversion requested, but no importable texture data was loaded from " << file;
+                        record_exit_reson(outfile_dir, CLI_DATA_FILE_ERROR, 0, cli_errors[CLI_DATA_FILE_ERROR], sliced_info);
+                        flush_and_exit(CLI_DATA_FILE_ERROR);
+                    }
+                    convert_textured_glb = true;
+                    BOOST_LOG_TRIVIAL(info)
+                        << boost::format("GLB/GLTF texture conversion enabled, target colors %1%, smooth %2%, oversampling %3%")
+                               % texture_painting_settings.target_colors_num % texture_painting_settings.smooth_weight
+                               % texture_painting_settings.oversampling_iters;
                 }
                 if (is_bbl_3mf)
                 {
@@ -1861,6 +1901,8 @@ int CLI::run(int argc, char **argv)
                 }
             }
             m_models.push_back(std::move(model));
+            if (convert_textured_glb)
+                textured_glb_model_indices.push_back(m_models.size() - 1);
         }
     }
     else {
@@ -1887,6 +1929,12 @@ int CLI::run(int argc, char **argv)
         }
         model.add_default_instances();
         m_models.push_back(std::move(model));
+    }
+
+    if (export_texture_obj_requested && (textured_glb_model_indices.size() != 1 || m_models.size() != 1)) {
+        BOOST_LOG_TRIVIAL(error) << "--export-texture-obj requires one textured GLB/GLTF input file";
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
+        flush_and_exit(CLI_INVALID_PARAMS);
     }
 
     if (!is_bbl_3mf && plate_to_slice > 0)
@@ -3068,6 +3116,100 @@ int CLI::run(int argc, char **argv)
         project_filament_colors_option->values = obj_multicolor_filament_colors;
     }
 
+    if (!textured_glb_model_indices.empty()) {
+        ConfigOptionStrings* project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour", true);
+        std::vector<std::string> filament_colors;
+
+        for (size_t model_index : textured_glb_model_indices) {
+            if (model_index >= m_models.size() || !m_models[model_index].texture_mesh) {
+                BOOST_LOG_TRIVIAL(error) << boost::format("GLB texture data is missing for model index %1%") % model_index;
+                record_exit_reson(outfile_dir, CLI_DATA_FILE_ERROR, 0, cli_errors[CLI_DATA_FILE_ERROR], sliced_info);
+                flush_and_exit(CLI_DATA_FILE_ERROR);
+            }
+
+            PaintedMesh painted_mesh;
+            bool conversion_succeeded = false;
+            try {
+                conversion_succeeded = texture_to_painting(
+                    *m_models[model_index].texture_mesh,
+                    painted_mesh,
+                    texture_painting_settings,
+                    [model_index](int percent, const char* message) {
+                        BOOST_LOG_TRIVIAL(info)
+                            << boost::format("GLB texture conversion model %1%: percent=%2%, stage=%3%")
+                                   % model_index % percent % (message ? message : "");
+                    });
+            } catch (const std::exception& e) {
+                BOOST_LOG_TRIVIAL(error) << boost::format("GLB texture conversion failed for model %1%: %2%") % model_index % e.what();
+            }
+
+            if (!conversion_succeeded || painted_mesh.cluster_colors.empty()) {
+                BOOST_LOG_TRIVIAL(error) << boost::format("Failed converting GLB texture colors for model index %1%") % model_index;
+                record_exit_reson(outfile_dir, CLI_DATA_FILE_ERROR, 0, cli_errors[CLI_DATA_FILE_ERROR], sliced_info);
+                flush_and_exit(CLI_DATA_FILE_ERROR);
+            }
+
+            filament_colors.clear();
+            filament_colors.reserve(painted_mesh.cluster_colors.size());
+            std::vector<FilamentMatch> matches(painted_mesh.cluster_colors.size());
+            for (size_t index = 0; index < painted_mesh.cluster_colors.size(); ++index) {
+                const std::array<size_t, 3>& color = painted_mesh.cluster_colors[index];
+                char value[8];
+                std::snprintf(value, sizeof(value), "#%02X%02X%02X",
+                              static_cast<unsigned int>(color[0]),
+                              static_cast<unsigned int>(color[1]),
+                              static_cast<unsigned int>(color[2]));
+                filament_colors.emplace_back(value);
+                matches[index].cluster_index = static_cast<int>(index);
+                matches[index].filament_index = static_cast<int>(index);
+                matches[index].cluster_color = color;
+            }
+            BOOST_LOG_TRIVIAL(info)
+                << boost::format("Preserved %1% model cluster colors for GLB texture conversion") % filament_colors.size();
+
+            ModelObject* target_object = nullptr;
+            ModelVolume* target_volume = nullptr;
+            size_t model_part_count = 0;
+            for (ModelObject* object : m_models[model_index].objects) {
+                for (ModelVolume* volume : object->volumes) {
+                    if (volume && volume->is_model_part()) {
+                        ++model_part_count;
+                        if (!target_volume) {
+                            target_object = object;
+                            target_volume = volume;
+                        }
+                    }
+                }
+            }
+
+            if (!target_object || !target_volume || !apply_painted_mesh_to_volume(painted_mesh, matches, *target_volume)) {
+                BOOST_LOG_TRIVIAL(error) << boost::format("Failed applying GLB texture colors to model index %1%") % model_index;
+                record_exit_reson(outfile_dir, CLI_DATA_FILE_ERROR, 0, cli_errors[CLI_DATA_FILE_ERROR], sliced_info);
+                flush_and_exit(CLI_DATA_FILE_ERROR);
+            }
+            if (model_part_count > 1) {
+                BOOST_LOG_TRIVIAL(warning)
+                    << boost::format("GLB model %1% contains %2% model parts; texture painting was applied to the first part")
+                           % model_index % model_part_count;
+            }
+
+            target_volume->config.set("extruder", 1);
+            target_object->config.set("extruder", 1);
+            target_object->ensure_on_bed();
+            m_models[model_index].texture_mesh.reset();
+            glb_texture_auto_mapping = true;
+        }
+
+        if (filament_colors.empty()) {
+            BOOST_LOG_TRIVIAL(error) << "No filament colors are available after GLB texture conversion";
+            record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
+            flush_and_exit(CLI_INVALID_PARAMS);
+        }
+        project_filament_colors_option->values = filament_colors;
+        BOOST_LOG_TRIVIAL(info)
+            << boost::format("GLB texture colors applied to model, project filament color count %1%") % filament_colors.size();
+    }
+
     // CLI temperature overrides: apply after filament configs are loaded
     {
         double cli_nozzle_temp = 0, cli_nozzle_temp_initial = 0;
@@ -3118,8 +3260,9 @@ int CLI::run(int argc, char **argv)
         project_filament_colors.resize(filament_count, "#FFFFFF");
     }
     const ConfigOptionFloats* existing_flush_matrix_option = m_print_config.option<ConfigOptionFloats>("flush_volumes_matrix");
-    bool need_recompute_flush_volumes = selected_filament_colors_option || restored_obj_filament_colors || obj_multicolor_auto_mapping || !existing_flush_matrix_option;
-    if (!need_recompute_flush_volumes && obj_multicolor_auto_mapping && project_filament_colors_option) {
+    bool need_recompute_flush_volumes = selected_filament_colors_option || restored_obj_filament_colors ||
+                                        obj_multicolor_auto_mapping || glb_texture_auto_mapping || !existing_flush_matrix_option;
+    if (!need_recompute_flush_volumes && (obj_multicolor_auto_mapping || glb_texture_auto_mapping) && project_filament_colors_option) {
         const size_t project_filament_count = project_filament_colors_option->values.size();
         const std::vector<double>& matrix_values = existing_flush_matrix_option->values;
         const bool matrix_size_invalid = matrix_values.size() != project_filament_count * project_filament_count;
@@ -3139,7 +3282,8 @@ int CLI::run(int argc, char **argv)
         need_recompute_flush_volumes = matrix_size_invalid || (project_filament_count > 1 && !matrix_has_positive_offdiag);
         if (need_recompute_flush_volumes) {
             BOOST_LOG_TRIVIAL(warning)
-                << boost::format("OBJ multicolor flush volumes are missing or zero, recomputing from filament colors. matrix_size=%1%, color_count=%2%")
+                << boost::format(
+                       "Multicolor flush volumes are missing or zero, recomputing from filament colors. matrix_size=%1%, color_count=%2%")
                        % matrix_values.size() % project_filament_count;
         }
     }
@@ -3215,9 +3359,9 @@ int CLI::run(int argc, char **argv)
 
             const std::vector<int>& min_flush_volumes = Slic3r::GUI::get_min_flush_volumes(m_print_config);
 
-            if (obj_multicolor_auto_mapping && filament_is_support->size() != project_filament_count) {
+            if ((obj_multicolor_auto_mapping || glb_texture_auto_mapping) && filament_is_support->size() != project_filament_count) {
                 BOOST_LOG_TRIVIAL(warning)
-                    << boost::format("normalize OBJ multicolor filament_is_support size from %1% to %2%")
+                    << boost::format("normalize multicolor filament_is_support size from %1% to %2%")
                            % filament_is_support->size() % project_filament_count;
                 filament_is_support->values.resize(project_filament_count, 0);
             }
@@ -5436,6 +5580,37 @@ int CLI::run(int argc, char **argv)
             if (! this->export_models(IO::STL, export_stls_dir)) {
                 record_exit_reson(outfile_dir, CLI_EXPORT_STL_ERROR, 0, cli_errors[CLI_EXPORT_STL_ERROR], sliced_info);
                 flush_and_exit(CLI_EXPORT_STL_ERROR);
+            }
+        } else if (opt_key == "export_texture_obj") {
+            if (!glb_texture_auto_mapping || m_models.size() != 1) {
+                BOOST_LOG_TRIVIAL(error) << "--export-texture-obj requires one successfully converted GLB/GLTF model";
+                record_exit_reson(outfile_dir, CLI_EXPORT_OBJ_ERROR, 0, cli_errors[CLI_EXPORT_OBJ_ERROR], sliced_info);
+                flush_and_exit(CLI_EXPORT_OBJ_ERROR);
+            }
+
+            boost::filesystem::path export_path(m_config.opt_string(opt_key));
+            if (export_path.is_relative() && !outfile_dir.empty())
+                export_path = boost::filesystem::path(outfile_dir) / export_path;
+
+            const ConfigOptionStrings* colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour");
+            std::vector<RGBA> filament_colors;
+            if (colors_option)
+                filament_colors.reserve(colors_option->values.size());
+            if (colors_option) {
+                for (const std::string& color : colors_option->values) {
+                    unsigned char rgba[4] = {};
+                    if (!Slic3r::GUI::BitmapCache::parse_color4(color, rgba)) {
+                        BOOST_LOG_TRIVIAL(error) << "Invalid filament color while exporting OBJ+MTL: " << color;
+                        record_exit_reson(outfile_dir, CLI_EXPORT_OBJ_ERROR, 0, cli_errors[CLI_EXPORT_OBJ_ERROR], sliced_info);
+                        flush_and_exit(CLI_EXPORT_OBJ_ERROR);
+                    }
+                    filament_colors.push_back({rgba[0] / 255.f, rgba[1] / 255.f, rgba[2] / 255.f, rgba[3] / 255.f});
+                }
+            }
+
+            if (!store_multicolor_obj(export_path.string().c_str(), m_models.front(), filament_colors)) {
+                record_exit_reson(outfile_dir, CLI_EXPORT_OBJ_ERROR, 0, cli_errors[CLI_EXPORT_OBJ_ERROR], sliced_info);
+                flush_and_exit(CLI_EXPORT_OBJ_ERROR);
             }
         } else if (opt_key == "export_obj") {
             for (auto &model : m_models)

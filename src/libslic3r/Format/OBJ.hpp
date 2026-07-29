@@ -36,6 +36,7 @@ extern bool load_obj(const char *path, Model *model, ObjInfo &vertex_colors, std
 extern bool store_obj(const char *path, TriangleMesh *mesh);
 extern bool store_obj(const char *path, ModelObject *model);
 extern bool store_obj(const char *path, Model *model);
+extern bool store_multicolor_obj(const char *path, const Model &model, const std::vector<RGBA> &filament_colors);
 
 
 extern bool load_general_extruder_config(const std::string& config_path, GeneralExtruderConfig& config);

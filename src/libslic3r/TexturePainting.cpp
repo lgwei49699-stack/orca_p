@@ -238,6 +238,7 @@ bool texture_to_painting(
 
     tex2color::TextureToColorSettings algo_settings;
     algo_settings.target_colors_num  = settings.target_colors_num;
+    algo_settings.max_cluster_k      = 16;
     algo_settings.smooth_weight      = settings.smooth_weight;
     algo_settings.oversampling_iters = settings.oversampling_iters;
 
