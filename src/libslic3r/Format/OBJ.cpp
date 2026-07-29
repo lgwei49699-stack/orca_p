@@ -432,7 +432,7 @@ bool store_multicolor_obj(const char *path, const Model &model, const std::vecto
     }
 
     obj_stream << "# OrcaSlicer multicolor OBJ\n";
-    obj_stream << "mtllib " << mtl_path.filename().string() << "\n\n";
+    obj_stream << "mtllib " << fs::absolute(mtl_path).generic_string() << "\n\n";
     obj_stream << std::setprecision(std::numeric_limits<float>::max_digits10);
     mtl_stream << std::setprecision(6);
 
