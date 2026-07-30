@@ -44,6 +44,42 @@ struct RepairedMeshErrors {
     bool repaired() const { return degenerate_facets > 0 || edges_fixed > 0 || facets_removed > 0 || facets_reversed > 0 || backwards_edges > 0; }
 };
 
+// Detailed report for one STL import. This is intentionally separate from
+// TriangleMeshStats: ADMesh repair counters and remaining mesh errors have
+// different meanings and must not be added together as a single error count.
+struct MeshRepairReport {
+    bool     enabled                        = true;
+    bool     attempted                      = false;
+    bool     load_succeeded                 = false;
+    uint32_t original_facets                = 0;
+    uint32_t final_facets                   = 0;
+    int      initial_open_edges             = 0;
+    int      edges_fixed                    = 0;
+    int      degenerate_facets_removed      = 0;
+    int      disconnected_facets_removed    = 0;
+    int      facets_reversed                = 0;
+    int      normals_fixed                  = 0;
+    int      remaining_open_edges           = 0;
+    int      remaining_backwards_edges      = 0;
+
+    bool changed() const
+    {
+        return edges_fixed > 0 || degenerate_facets_removed > 0 || disconnected_facets_removed > 0 || facets_reversed > 0 ||
+               normals_fixed > 0;
+    }
+
+    const char *status() const
+    {
+        if (!load_succeeded)
+            return "load_failed";
+        if (!enabled)
+            return "skipped";
+        if (remaining_open_edges > 0 || remaining_backwards_edges > 0)
+            return changed() ? "partially_repaired" : "unresolved";
+        return changed() ? "repaired" : "not_needed";
+    }
+};
+
 struct TriangleMeshStats {
     // Mesh metrics.
     uint32_t      number_of_facets          = 0;
@@ -93,8 +129,9 @@ public:
     explicit TriangleMesh(const indexed_triangle_set &M);
     explicit TriangleMesh(indexed_triangle_set &&M, const RepairedMeshErrors& repaired_errors = RepairedMeshErrors());
     void clear() { this->its.clear(); this->m_stats.clear(); }
-    bool from_stl(stl_file& stl, bool repair = true);
-    bool  ReadSTLFile(const char *input_file, bool repair = true, ImportstlProgressFn stlFn = nullptr, int custom_header_length = 80);
+    bool from_stl(stl_file &stl, bool repair = true, MeshRepairReport *repair_report = nullptr);
+    bool ReadSTLFile(const char *input_file, bool repair = true, ImportstlProgressFn stlFn = nullptr, int custom_header_length = 80,
+                     MeshRepairReport *repair_report = nullptr);
     bool write_ascii(const char* output_file);
     bool write_binary(const char* output_file);
     float volume();

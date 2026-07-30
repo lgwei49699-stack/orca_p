@@ -8140,6 +8140,13 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli_params = "dir";
     def->set_default_value(new ConfigOptionString());
 
+    def = this->add("auto_repair_model", coBool);
+    def->label = L("Automatically repair imported model");
+    def->tooltip = L("Automatically repair STL mesh connectivity and normals while importing the model.");
+    def->cli = "auto-repair-model";
+    def->cli_params = "0|1";
+    def->set_default_value(new ConfigOptionBool(true));
+
     def = this->add("debug", coInt);
     def->label = L("Debug level");
     def->tooltip = L("Sets debug logging level. 0:fatal, 1:error, 2:warning, 3:info, 4:debug, 5:trace\n");

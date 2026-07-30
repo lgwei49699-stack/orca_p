@@ -165,6 +165,13 @@ typedef struct  _sliced_plate_info{
     std::string warning_message;
 }sliced_plate_info_t;
 
+typedef struct _model_repair_info {
+    std::string              input_file;
+    size_t                   model_index {0};
+    MeshRepairReport         report;
+    std::vector<std::string> output_files;
+} model_repair_info_t;
+
 typedef struct _sliced_info {
     int                 plate_count {0};
     int                 plate_to_slice {0};
@@ -174,6 +181,7 @@ typedef struct _sliced_info {
     size_t export_time;
     std::vector<std::string> upward_machines;
     std::vector<std::string> downward_machines;
+    std::vector<model_repair_info_t> model_repairs;
 }sliced_info_t;
 std::vector<PrintBase::SlicingStatus> g_slicing_warnings;
 
@@ -465,6 +473,34 @@ void record_exit_reson(std::string outputdir, int code, int plate_id, std::strin
         j["total_time"] = rounded_seconds(total_time);
         j["total_filament_g"] = rounded_grams(total_filament_g);
         j["support_filament_g"] = rounded_grams(support_filament_g);
+        for (const model_repair_info_t &repair_info : sliced_info.model_repairs) {
+            const MeshRepairReport &report = repair_info.report;
+            json repair_json;
+            repair_json["input_file"]       = repair_info.input_file;
+            repair_json["output_files"]     = repair_info.output_files;
+            repair_json["repair_enabled"]   = report.enabled;
+            repair_json["repair_attempted"] = report.attempted;
+            repair_json["load_succeeded"]   = report.load_succeeded;
+            repair_json["status"]           = report.status();
+            repair_json["before"] = {
+                {"facets", report.original_facets},
+                {"open_edges", report.initial_open_edges}
+            };
+            repair_json["repair_actions"] = {
+                {"edges_fixed", report.edges_fixed},
+                {"degenerate_facets_removed", report.degenerate_facets_removed},
+                {"disconnected_facets_removed", report.disconnected_facets_removed},
+                {"facets_reversed", report.facets_reversed},
+                {"normals_fixed", report.normals_fixed}
+            };
+            repair_json["after"] = {
+                {"facets", report.final_facets},
+                {"open_edges", report.remaining_open_edges},
+                {"backwards_edges", report.remaining_backwards_edges},
+                {"manifold", report.load_succeeded && report.remaining_open_edges == 0 && report.remaining_backwards_edges == 0}
+            };
+            j["model_repairs"].push_back(std::move(repair_json));
+        }
         for (auto& iter: key_values)
             j[iter.first] = iter.second;
 
@@ -477,6 +513,14 @@ void record_exit_reson(std::string outputdir, int code, int plate_id, std::strin
     }
     catch (...) {}
 #endif
+}
+
+static void attach_exported_model_paths(sliced_info_t &sliced_info, const std::vector<std::vector<std::string>> &exported_paths)
+{
+    for (model_repair_info_t &repair_info : sliced_info.model_repairs) {
+        if (repair_info.model_index < exported_paths.size())
+            repair_info.output_files = exported_paths[repair_info.model_index];
+    }
 }
 
 static int decode_png_to_thumbnail(std::string png_file, ThumbnailData& thumbnail_data)
@@ -1340,6 +1384,11 @@ int CLI::run(int argc, char **argv)
     if (force_machine_option)
         force_machine = force_machine_option->value;
 
+    bool auto_repair_model = true;
+    if (ConfigOptionBool* option = m_config.option<ConfigOptionBool>("auto_repair_model"))
+        auto_repair_model = option->value;
+    BOOST_LOG_TRIVIAL(info) << "auto_repair_model=" << auto_repair_model;
+
     const bool export_texture_obj_requested =
         std::find(m_actions.begin(), m_actions.end(), "export_texture_obj") != m_actions.end();
     texture_painting_settings.target_colors_num = 0;
@@ -1477,6 +1526,12 @@ int CLI::run(int argc, char **argv)
                 flush_and_exit(CLI_FILE_NOTFOUND);
             }
             Model model;
+            const bool collect_repair_report = boost::algorithm::iends_with(file, ".stl") || boost::algorithm::iends_with(file, ".oltp");
+            model_repair_info_t model_repair_info;
+            model_repair_info.input_file     = file;
+            model_repair_info.model_index    = m_models.size();
+            model_repair_info.report.enabled = auto_repair_model;
+            bool repair_report_recorded      = false;
             bool convert_textured_glb = false;
             //BBS: add plate related logic
             //bool load_aux = false;
@@ -1506,7 +1561,17 @@ int CLI::run(int argc, char **argv)
                 //LoadStrategy strategy = LoadStrategy::LoadModel | LoadStrategy::LoadConfig|LoadStrategy::AddDefaultInstances;
                 //if (load_aux) strategy = strategy | LoadStrategy::LoadAuxiliary;
                 model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets,
-                                              &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice);
+                                              &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice, nullptr,
+                                              auto_repair_model, collect_repair_report ? &model_repair_info.report : nullptr);
+                if (collect_repair_report) {
+                    sliced_info.model_repairs.push_back(model_repair_info);
+                    repair_report_recorded = true;
+                    const MeshRepairReport &report = model_repair_info.report;
+                    BOOST_LOG_TRIVIAL(info) << boost::format(
+                        "STL repair summary: input=%1%, status=%2%, facets=%3%->%4%, open_edges=%5%->%6%")
+                        % file % report.status() % report.original_facets % report.final_facets % report.initial_open_edges
+                        % report.remaining_open_edges;
+                }
                 if (boost::algorithm::iends_with(file, ".obj")) {
                     const ConfigOptionStrings* obj_filament_colors = config.option<ConfigOptionStrings>("filament_colour");
                     if (obj_filament_colors && obj_filament_colors->values.size() > 1) {
@@ -1730,6 +1795,8 @@ int CLI::run(int argc, char **argv)
                 input_index++;
             }
             catch (std::exception& e) {
+                if (collect_repair_report && !repair_report_recorded)
+                    sliced_info.model_repairs.push_back(model_repair_info);
                 boost::nowide::cerr << file << ": " << e.what() << std::endl;
                 record_exit_reson(outfile_dir, CLI_DATA_FILE_ERROR, 0, cli_errors[CLI_DATA_FILE_ERROR], sliced_info);
                 flush_and_exit(CLI_DATA_FILE_ERROR);
@@ -5569,7 +5636,10 @@ int CLI::run(int argc, char **argv)
         } else if (opt_key == "export_stl") {
             for (auto &model : m_models)
                 model.add_default_instances();
-            if (! this->export_models(IO::STL)) {
+            std::vector<std::vector<std::string>> exported_paths;
+            const bool export_succeeded = this->export_models(IO::STL, std::string(), &exported_paths);
+            attach_exported_model_paths(sliced_info, exported_paths);
+            if (!export_succeeded) {
                 record_exit_reson(outfile_dir, CLI_EXPORT_STL_ERROR, 0, cli_errors[CLI_EXPORT_STL_ERROR], sliced_info);
                 flush_and_exit(CLI_EXPORT_STL_ERROR);
             }
@@ -5577,7 +5647,10 @@ int CLI::run(int argc, char **argv)
             export_stls_dir = m_config.opt_string(opt_key);
             for (auto &model : m_models)
                 model.add_default_instances();
-            if (! this->export_models(IO::STL, export_stls_dir)) {
+            std::vector<std::vector<std::string>> exported_paths;
+            const bool export_succeeded = this->export_models(IO::STL, export_stls_dir, &exported_paths);
+            attach_exported_model_paths(sliced_info, exported_paths);
+            if (!export_succeeded) {
                 record_exit_reson(outfile_dir, CLI_EXPORT_STL_ERROR, 0, cli_errors[CLI_EXPORT_STL_ERROR], sliced_info);
                 flush_and_exit(CLI_EXPORT_STL_ERROR);
             }
@@ -7175,9 +7248,13 @@ void CLI::print_help(bool include_print_options, PrinterTechnology printer_techn
     boost::nowide::cerr.flush();
 }
 
-bool CLI::export_models(IO::ExportFormat format, std::string path_dir)
+bool CLI::export_models(IO::ExportFormat format, std::string path_dir, std::vector<std::vector<std::string>> *exported_paths)
 {
-    for (Model &model : m_models) {
+    if (exported_paths != nullptr)
+        exported_paths->assign(m_models.size(), {});
+
+    for (size_t model_index = 0; model_index < m_models.size(); ++model_index) {
+        Model &model = m_models[model_index];
         const std::string path = this->output_filepath(model, format);
         bool success = true;
         switch (format) {
@@ -7197,10 +7274,14 @@ bool CLI::export_models(IO::ExportFormat format, std::string path_dir)
                 for (ModelObject* model_object : model.objects)
                 {
                     const std::string path = this->output_filepath(*model_object, index++, format, path_dir);
+                    if (path.empty())
+                        return false;
                     success = Slic3r::store_stl(path.c_str(), model_object, true);
-                    if (success)
+                    if (success) {
                         BOOST_LOG_TRIVIAL(info) << "Model successfully exported to " << path << std::endl;
-                    else {
+                        if (exported_paths != nullptr)
+                            (*exported_paths)[model_index].push_back(path);
+                    } else {
                         boost::nowide::cerr << "Model export to " << path << " failed" << std::endl;
                         return false;
                     }
@@ -7322,8 +7403,13 @@ std::string CLI::output_filepath(const ModelObject &object, unsigned int index, 
     output_path = subdir + "/"+file_name;
 
     boost::filesystem::path subdir_path(subdir);
-    if (!boost::filesystem::exists(subdir_path))
-        boost::filesystem::create_directory(subdir_path);
+    boost::system::error_code error_code;
+    boost::filesystem::create_directories(subdir_path, error_code);
+    if (error_code) {
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": unable to create output directory " << subdir_path.string()
+                                 << ": " << error_code.message();
+        return {};
+    }
     return output_path;
 }
 

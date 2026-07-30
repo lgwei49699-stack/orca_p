@@ -55,3 +55,41 @@ SCENARIO("Reading an STL file", "[stl]") {
 		}
 	}
 }
+
+SCENARIO("STL import exposes a structured repair report", "[stl][repair]") {
+    GIVEN("automatic repair is enabled for a valid STL") {
+        Slic3r::Model      model;
+        MeshRepairReport  report;
+
+        REQUIRE(Slic3r::load_stl(stl_path("ASCII/20mmbox-LF.stl").c_str(), &model, nullptr, nullptr, 80, true, &report));
+        REQUIRE(report.enabled);
+        REQUIRE(report.attempted);
+        REQUIRE(report.load_succeeded);
+        REQUIRE(report.original_facets > 0);
+        REQUIRE(report.final_facets == model.objects.front()->volumes.front()->mesh().facets_count());
+        REQUIRE(report.remaining_open_edges == model.objects.front()->volumes.front()->mesh().stats().open_edges);
+    }
+
+    GIVEN("automatic repair is explicitly disabled") {
+        Slic3r::Model      model;
+        MeshRepairReport  report;
+
+        REQUIRE(Slic3r::load_stl(stl_path("ASCII/20mmbox-LF.stl").c_str(), &model, nullptr, nullptr, 80, false, &report));
+        REQUIRE_FALSE(report.enabled);
+        REQUIRE_FALSE(report.attempted);
+        REQUIRE(report.load_succeeded);
+        REQUIRE(std::string(report.status()) == "skipped");
+        REQUIRE(report.initial_open_edges == report.remaining_open_edges);
+    }
+
+    GIVEN("repair changes geometry but leaves open edges") {
+        MeshRepairReport report;
+        report.load_succeeded      = true;
+        report.enabled             = true;
+        report.attempted           = true;
+        report.edges_fixed         = 2;
+        report.remaining_open_edges = 3;
+
+        REQUIRE(std::string(report.status()) == "partially_repaired");
+    }
+}

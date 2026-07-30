@@ -76,11 +76,14 @@ TriangleMesh::TriangleMesh(indexed_triangle_set &&its, const RepairedMeshErrors&
 
 // #define SLIC3R_TRACE_REPAIR
 
-static void trianglemesh_repair_on_import(stl_file &stl)
+static void trianglemesh_repair_on_import(stl_file &stl, MeshRepairReport *repair_report)
 {
     // admesh fails when repairing empty meshes
     if (stl.stats.number_of_facets == 0)
         return;
+
+    if (repair_report != nullptr)
+        repair_report->attempted = true;
 
     BOOST_LOG_TRIVIAL(debug) << "TriangleMesh::repair() started";
 
@@ -94,6 +97,10 @@ static void trianglemesh_repair_on_import(stl_file &stl)
     stl.stats.facets_w_1_bad_edge = (stl.stats.connected_facets_2_edge - stl.stats.connected_facets_3_edge);
     stl.stats.facets_w_2_bad_edge = (stl.stats.connected_facets_1_edge - stl.stats.connected_facets_2_edge);
     stl.stats.facets_w_3_bad_edge = (stl.stats.number_of_facets - stl.stats.connected_facets_1_edge);
+    if (repair_report != nullptr) {
+        repair_report->initial_open_edges = stl.stats.facets_w_1_bad_edge + stl.stats.facets_w_2_bad_edge * 2 +
+                                            stl.stats.facets_w_3_bad_edge * 3;
+    }
     
     // checking nearby
     //int last_edges_fixed = 0;
@@ -175,13 +182,28 @@ static void trianglemesh_repair_on_import(stl_file &stl)
     if (auto nr_degenerated = stl.stats.degenerate_facets; stl.stats.number_of_facets > 0 && nr_degenerated > 0)
         stl_check_facets_exact(&stl);
 
+    if (repair_report != nullptr) {
+        repair_report->edges_fixed                 = stl.stats.edges_fixed;
+        repair_report->degenerate_facets_removed   = stl.stats.degenerate_facets;
+        repair_report->disconnected_facets_removed = std::max(0, stl.stats.facets_removed - stl.stats.degenerate_facets);
+        repair_report->facets_reversed             = stl.stats.facets_reversed;
+        repair_report->normals_fixed               = stl.stats.normals_fixed;
+        repair_report->remaining_backwards_edges   = stl.stats.backwards_edges;
+    }
+
     BOOST_LOG_TRIVIAL(debug) << "TriangleMesh::repair() finished";
 }
 
-bool TriangleMesh::from_stl(stl_file& stl, bool repair)
+bool TriangleMesh::from_stl(stl_file &stl, bool repair, MeshRepairReport *repair_report)
 {
+    if (repair_report != nullptr) {
+        *repair_report                  = MeshRepairReport{};
+        repair_report->enabled          = repair;
+        repair_report->original_facets  = stl.stats.original_num_facets;
+    }
+
     if (repair)
-        trianglemesh_repair_on_import(stl);
+        trianglemesh_repair_on_import(stl, repair_report);
 
 #if 0
     m_stats.number_of_facets = stl.stats.number_of_facets;
@@ -206,15 +228,29 @@ bool TriangleMesh::from_stl(stl_file& stl, bool repair)
 
     stl_generate_shared_vertices(&stl, this->its);
     fill_initial_stats(this->its, this->m_stats);
+
+    if (repair_report != nullptr) {
+        repair_report->load_succeeded       = !this->empty();
+        repair_report->final_facets         = this->m_stats.number_of_facets;
+        repair_report->remaining_open_edges = this->m_stats.open_edges;
+        if (!repair)
+            repair_report->initial_open_edges = this->m_stats.open_edges;
+    }
     return true;
 }
 
-bool TriangleMesh::ReadSTLFile(const char *input_file, bool repair, ImportstlProgressFn stlFn, int custom_header_length)
+bool TriangleMesh::ReadSTLFile(const char *input_file, bool repair, ImportstlProgressFn stlFn, int custom_header_length,
+                               MeshRepairReport *repair_report)
 {
+    if (repair_report != nullptr) {
+        *repair_report         = MeshRepairReport{};
+        repair_report->enabled = repair;
+    }
+
     stl_file stl;
     if (!stl_open(&stl, input_file, stlFn, custom_header_length))
         return false;
-    return from_stl(stl, repair);
+    return from_stl(stl, repair, repair_report);
 }
 
 bool TriangleMesh::write_ascii(const char* output_file)

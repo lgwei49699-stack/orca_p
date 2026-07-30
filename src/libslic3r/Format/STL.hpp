@@ -8,9 +8,11 @@ namespace Slic3r {
 class Model;
 class TriangleMesh;
 class ModelObject;
+struct MeshRepairReport;
 
 // Load an STL file into a provided model.
-extern bool load_stl(const char *path, Model *model, const char *object_name = nullptr, ImportstlProgressFn stlFn = nullptr, int custom_header_length = 80);
+extern bool load_stl(const char *path, Model *model, const char *object_name = nullptr, ImportstlProgressFn stlFn = nullptr,
+                     int custom_header_length = 80, bool repair = true, MeshRepairReport *repair_report = nullptr);
 
 extern bool store_stl(const char *path, TriangleMesh *mesh, bool binary);
 extern bool store_stl(const char *path, ModelObject *model_object, bool binary);

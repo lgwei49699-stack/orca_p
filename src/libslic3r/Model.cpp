@@ -339,7 +339,9 @@ Model Model::read_from_file(const std::string&                                  
                             ImportstlProgressFn                                 stlFn,
                             BBLProject *                                        project,
                             int                                                 plate_id,
-                            ObjImportColorFn                                    objFn)
+                            ObjImportColorFn                                    objFn,
+                            bool                                                repair_stl,
+                            MeshRepairReport*                                   repair_report)
 {
     Model model;
 
@@ -364,9 +366,9 @@ Model Model::read_from_file(const std::string&                                  
     bool is_cb_cancel = false;
     std::string message;
     if (boost::algorithm::iends_with(input_file, ".stl"))
-        result = load_stl(input_file.c_str(), &model, nullptr, stlFn);
+        result = load_stl(input_file.c_str(), &model, nullptr, stlFn, 80, repair_stl, repair_report);
     else if (boost::algorithm::iends_with(input_file, ".oltp"))
-        result = load_stl(input_file.c_str(), &model, nullptr, stlFn,256);
+        result = load_stl(input_file.c_str(), &model, nullptr, stlFn, 256, repair_stl, repair_report);
     else if (boost::algorithm::iends_with(input_file, ".obj")) {
         ObjInfo                 obj_info;
         result = load_obj(input_file.c_str(), &model, obj_info, message);

@@ -221,6 +221,54 @@ SCENARIO("CLI boolean options may consume an explicit 0 or 1 value.", "[Config][
     }
 }
 
+SCENARIO("CLI model auto-repair may be explicitly enabled or disabled.", "[Config][CLI]") {
+    GIVEN("the STL import repair switch is set to zero") {
+        const char* argv[] = {
+            "OrcaSlicer",
+            "--auto-repair-model",
+            "0",
+            "model.stl"
+        };
+        DynamicPrintAndCLIConfig config;
+        t_config_option_keys input_files;
+        t_config_option_keys keys;
+
+        WHEN("the command line is parsed") {
+            const bool parsed = config.read_cli(4, argv, &input_files, &keys);
+
+            THEN("zero disables repair and is not treated as an input file") {
+                REQUIRE(parsed);
+                REQUIRE_FALSE(config.opt_bool("auto_repair_model"));
+                REQUIRE(input_files.size() == 1);
+                REQUIRE(input_files.front() == "model.stl");
+            }
+        }
+    }
+
+    GIVEN("the STL import repair switch is set to one") {
+        const char* argv[] = {
+            "OrcaSlicer",
+            "--auto-repair-model",
+            "1",
+            "model.stl"
+        };
+        DynamicPrintAndCLIConfig config;
+        t_config_option_keys input_files;
+        t_config_option_keys keys;
+
+        WHEN("the command line is parsed") {
+            const bool parsed = config.read_cli(4, argv, &input_files, &keys);
+
+            THEN("one enables repair and is not treated as an input file") {
+                REQUIRE(parsed);
+                REQUIRE(config.opt_bool("auto_repair_model"));
+                REQUIRE(input_files.size() == 1);
+                REQUIRE(input_files.front() == "model.stl");
+            }
+        }
+    }
+}
+
 SCENARIO("Config ini load/save interface", "[Config]") {
     WHEN("new_from_ini is called") {
 		Slic3r::DynamicPrintConfig config;
