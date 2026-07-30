@@ -1391,6 +1391,7 @@ int CLI::run(int argc, char **argv)
 
     const bool export_texture_obj_requested =
         std::find(m_actions.begin(), m_actions.end(), "export_texture_obj") != m_actions.end();
+    const bool standalone_texture_obj_export = export_texture_obj_requested && m_actions.size() == 1;
     texture_painting_settings.target_colors_num = 0;
     if (ConfigOptionInt* option = m_config.option<ConfigOptionInt>("texture_color_count"))
         texture_painting_settings.target_colors_num = static_cast<size_t>(option->value);
@@ -3327,9 +3328,11 @@ int CLI::run(int argc, char **argv)
         project_filament_colors.resize(filament_count, "#FFFFFF");
     }
     const ConfigOptionFloats* existing_flush_matrix_option = m_print_config.option<ConfigOptionFloats>("flush_volumes_matrix");
-    bool need_recompute_flush_volumes = selected_filament_colors_option || restored_obj_filament_colors ||
-                                        obj_multicolor_auto_mapping || glb_texture_auto_mapping || !existing_flush_matrix_option;
-    if (!need_recompute_flush_volumes && (obj_multicolor_auto_mapping || glb_texture_auto_mapping) && project_filament_colors_option) {
+    bool need_recompute_flush_volumes = !standalone_texture_obj_export &&
+                                        (selected_filament_colors_option || restored_obj_filament_colors || obj_multicolor_auto_mapping ||
+                                         glb_texture_auto_mapping || !existing_flush_matrix_option);
+    if (!standalone_texture_obj_export && !need_recompute_flush_volumes &&
+        (obj_multicolor_auto_mapping || glb_texture_auto_mapping) && project_filament_colors_option) {
         const size_t project_filament_count = project_filament_colors_option->values.size();
         const std::vector<double>& matrix_values = existing_flush_matrix_option->values;
         const bool matrix_size_invalid = matrix_values.size() != project_filament_count * project_filament_count;
@@ -3354,7 +3357,11 @@ int CLI::run(int argc, char **argv)
                        % matrix_values.size() % project_filament_count;
         }
     }
-    if (project_filament_colors_option && need_recompute_flush_volumes)
+    if (standalone_texture_obj_export)
+    {
+        BOOST_LOG_TRIVIAL(info) << "Skip flush volume calculation for standalone GLB texture OBJ export";
+    }
+    else if (project_filament_colors_option && need_recompute_flush_volumes)
     {
         std::vector<std::string>  selected_filament_colors;
         if (selected_filament_colors_option && !obj_multicolor_auto_mapping) {
