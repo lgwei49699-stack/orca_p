@@ -868,12 +868,26 @@ std::string Http::url_decode(const std::string &str)
 
 std::string Http::get_filename_from_url(const std::string &url)
 {
-    int end_pos = url.find_first_of('?');
-	if (end_pos <= 0) return "";
-	std::string path_url = url.substr(0, end_pos);
-	int start_pos = path_url.find_last_of("/");
-	if (start_pos < 0) return "";
-	return path_url.substr(start_pos + 1, path_url.length() - start_pos - 1);
+    if (url.empty())
+        return "";
+
+    std::string path_url = url;
+    const size_t end_pos = path_url.find_first_of("?#");
+    if (end_pos != std::string::npos)
+        path_url.erase(end_pos);
+
+    const size_t scheme_pos = path_url.find("://");
+    if (scheme_pos != std::string::npos) {
+        const size_t path_pos = path_url.find_first_of("/\\", scheme_pos + 3);
+        if (path_pos == std::string::npos || path_pos + 1 >= path_url.size())
+            return "";
+    }
+
+    const size_t start_pos = path_url.find_last_of("/\\");
+    if (start_pos == std::string::npos || start_pos + 1 >= path_url.size())
+        return "";
+
+    return path_url.substr(start_pos + 1);
 }
 
 std::ostream& operator<<(std::ostream &os, const Http::Progress &progress)
