@@ -158,6 +158,17 @@ void apply_flat_filter_button_style(Button* button, bool primary)
     ));
 }
 
+void sync_flat_button_parent_background(Button* button)
+{
+    if (button == nullptr || button->GetParent() == nullptr)
+        return;
+
+    const wxColour parent_background = button->GetParent()->GetBackgroundColour();
+    if (parent_background.IsOk())
+        button->SetBackgroundColour(parent_background);
+    button->Refresh();
+}
+
 void apply_flat_filter_input_style(wxTextCtrl* input)
 {
     if (input == nullptr)
@@ -217,6 +228,11 @@ GFDDeviceSelectionDialog::GFDDeviceSelectionDialog(wxWindow* parent, std::string
     build();
     bind_events();
     wxGetApp().UpdateDlgDarkUI(this);
+    sync_flat_button_parent_background(m_search_button);
+    sync_flat_button_parent_background(m_reset_button);
+    sync_flat_button_parent_background(m_test_3mf_button);
+    sync_flat_button_parent_background(m_confirm_3mf_button);
+    sync_flat_button_parent_background(m_confirm_button);
     update_loading_panel_style();
     set_tip_message(_L("正在加载打印设备，请稍候..."));
     set_loading_state(true);
@@ -231,6 +247,7 @@ GFDDeviceSelectionDialog::~GFDDeviceSelectionDialog()
 
 void GFDDeviceSelectionDialog::build()
 {
+    SetBackgroundColour(*wxWHITE);
     SetSize(wxSize(FromDIP(1120), FromDIP(650)));
     SetMinSize(wxSize(FromDIP(1000), FromDIP(560)));
 

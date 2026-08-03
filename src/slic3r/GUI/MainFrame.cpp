@@ -73,9 +73,11 @@
 #include <wx/choice.h>
 #include <wx/clntdata.h>
 #include <wx/combobox.h>
+#include <wx/gauge.h>
 #include <wx/listctrl.h>
 #include <wx/grid.h>
 #include <wx/scrolwin.h>
+#include <wx/timer.h>
 
 #ifdef _WIN32
 #include <dbt.h>
@@ -85,12 +87,17 @@
 #include <slic3r/GUI/CreatePresetsDialog.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <map>
+#include <memory>
 #include <regex>
 #include <set>
+#include <thread>
 
 #include <nlohmann/json.hpp>
+
+#include "GFDAuthManager.hpp"
 
 namespace Slic3r {
 namespace GUI {
@@ -388,29 +395,49 @@ public:
     GFDCloudImportDialog(wxWindow* parent, Plater* plater)
         : wxDialog(parent, wxID_ANY, _L("云端导入"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
         , m_plater(plater)
+        , m_alive(std::make_shared<std::atomic_bool>(true))
+        , m_loading_timer(this)
     {
         SetDoubleBuffered(true);
         build();
         bind_events();
         load_device_types();
         wxGetApp().UpdateDlgDarkUI(this);
-        Freeze();
-        fetch_configs_for_selected_device();
-        Layout();
-        Thaw();
+        update_loading_panel_style();
+        set_loading_state(true);
+
+        const auto alive = m_alive;
+        wxGetApp().CallAfter([this, alive]() {
+            if (alive && alive->load())
+                fetch_configs_for_selected_device();
+        });
+    }
+
+    ~GFDCloudImportDialog() override
+    {
+        m_loading_timer.Stop();
+        if (m_alive)
+            m_alive->store(false);
     }
 
     void refresh_configs() { fetch_configs_for_selected_device(); }
 
 private:
-    Plater*                         m_plater{nullptr};
-    wxChoice*                       m_device_choice{nullptr};
-    wxScrolledWindow*               m_config_list{nullptr};
-    wxBoxSizer*                     m_config_list_sizer{nullptr};
-    wxStaticText*                   m_tip_label{nullptr};
-    Button*                         m_refresh_button{nullptr};
-    Button*                         m_cancel_button{nullptr};
-    std::vector<GFDCloudConfigInfo> m_configs;
+    Plater*                           m_plater{nullptr};
+    wxChoice*                         m_device_choice{nullptr};
+    wxScrolledWindow*                 m_config_list{nullptr};
+    wxBoxSizer*                       m_config_list_sizer{nullptr};
+    wxStaticText*                     m_tip_label{nullptr};
+    wxPanel*                          m_loading_panel{nullptr};
+    wxStaticText*                     m_loading_text{nullptr};
+    wxGauge*                          m_loading_gauge{nullptr};
+    Button*                           m_refresh_button{nullptr};
+    Button*                           m_cancel_button{nullptr};
+    std::vector<GFDCloudConfigInfo>   m_configs;
+    std::shared_ptr<std::atomic_bool> m_alive;
+    wxTimer                           m_loading_timer;
+    size_t                            m_request_generation{0};
+    bool                              m_loading{false};
 
     void build()
     {
@@ -421,7 +448,7 @@ private:
         auto* main_sizer = new wxBoxSizer(wxVERTICAL);
         main_sizer->AddSpacer(FromDIP(18));
 
-        auto* filter_row = new wxBoxSizer(wxHORIZONTAL);
+        auto* filter_row   = new wxBoxSizer(wxHORIZONTAL);
         auto* device_label = new wxStaticText(this, wxID_ANY, _L("设备机型"), wxDefaultPosition, wxDefaultSize, 0);
         device_label->SetFont(::Label::Body_14);
         filter_row->Add(device_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
@@ -438,13 +465,15 @@ private:
 
         main_sizer->AddSpacer(FromDIP(14));
 
-        m_config_list = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(872), FromDIP(390)), wxBORDER_SIMPLE | wxVSCROLL);
+        m_config_list = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(872), FromDIP(390)),
+                                             wxBORDER_SIMPLE | wxVSCROLL);
         m_config_list->SetDoubleBuffered(true);
         m_config_list->SetScrollRate(0, FromDIP(12));
         m_config_list->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
         m_config_list_sizer = new wxBoxSizer(wxVERTICAL);
         m_config_list->SetSizer(m_config_list_sizer);
         main_sizer->Add(m_config_list, 1, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+        build_loading_panel();
 
         main_sizer->AddSpacer(FromDIP(10));
 
@@ -471,16 +500,26 @@ private:
         m_cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_CANCEL); });
         m_refresh_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { fetch_configs_for_selected_device(); });
         m_device_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { fetch_configs_for_selected_device(); });
+        m_config_list->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
+            position_loading_panel();
+            event.Skip();
+        });
+        Bind(
+            wxEVT_TIMER,
+            [this](wxTimerEvent&) {
+                if (m_loading && m_loading_gauge != nullptr)
+                    m_loading_gauge->Pulse();
+            },
+            m_loading_timer.GetId());
     }
 
     void load_device_types()
     {
         std::vector<std::string> device_types = GFD::Config::local_gfd_device_types();
-        std::string current_device_type;
+        std::string              current_device_type;
         if (wxGetApp().preset_bundle != nullptr)
             current_device_type = GFD::Config::current_device_type(wxGetApp().preset_bundle->printers.get_selected_preset().config);
-        if (!current_device_type.empty() &&
-            std::find(device_types.begin(), device_types.end(), current_device_type) == device_types.end())
+        if (!current_device_type.empty() && std::find(device_types.begin(), device_types.end(), current_device_type) == device_types.end())
             device_types.insert(device_types.begin(), current_device_type);
 
         m_device_choice->Clear();
@@ -503,7 +542,7 @@ private:
                    std::string();
     }
 
-    void fetch_configs_for_selected_device()
+    void fetch_configs_for_selected_device(bool allow_auth_retry = true)
     {
         m_configs.clear();
         rebuild_config_rows();
@@ -511,43 +550,160 @@ private:
         const std::string device_type = selected_device_type();
         if (device_type.empty()) {
             m_tip_label->SetLabel(_L("未找到可用机型"));
+            set_loading_state(false);
             return;
         }
 
         m_tip_label->SetLabel(_L("正在获取云端配置..."));
-        m_refresh_button->Enable(false);
-        Layout();
+        if (m_loading_text != nullptr)
+            m_loading_text->SetLabel(_L("正在获取云端配置，请稍候..."));
+        set_loading_state(true);
 
         std::string error_message;
-        try {
-            if (m_plater == nullptr || !m_plater->fetch_cloud_configs(device_type, m_configs, error_message)) {
-                m_tip_label->SetLabel(from_u8(error_message.empty() ? "获取云端配置失败" : error_message));
-                m_refresh_button->Enable(true);
-                return;
-            }
-        } catch (const std::exception& ex) {
-            BOOST_LOG_TRIVIAL(error) << "GFD cloud import dialog fetch failed"
-                                     << ", device_type=" << device_type
-                                     << ", error=" << ex.what();
-            m_tip_label->SetLabel(from_u8(std::string("获取云端配置失败: ") + ex.what()));
-            m_refresh_button->Enable(true);
+        if (m_plater == nullptr) {
+            apply_cloud_config_response({}, "切片界面不可用");
             return;
-        } catch (...) {
-            BOOST_LOG_TRIVIAL(error) << "GFD cloud import dialog fetch failed with unknown exception"
-                                     << ", device_type=" << device_type;
-            m_tip_label->SetLabel(_L("获取云端配置失败"));
-            m_refresh_button->Enable(true);
+        }
+        if (!GFDAuthManager::ensure_logged_in(this, &error_message)) {
+            apply_cloud_config_response({}, error_message.empty() ? "获取云端配置失败" : std::move(error_message));
             return;
         }
 
+        const std::string token = GFDAuthManager::current_auth_token(wxGetApp().app_config);
+        if (token.empty()) {
+            apply_cloud_config_response({}, "登录状态无效，请重新登录");
+            return;
+        }
+
+        const std::string request_url = GFD::Config::device_slice_type_url(wxGetApp().app_config);
+        const auto        alive       = m_alive;
+        const size_t      generation  = ++m_request_generation;
+
+        std::thread([this, alive, generation, allow_auth_retry, device_type, request_url, token]() {
+            GFDCloudConfigFetchResult result;
+            try {
+                result = Plater::fetch_cloud_configs_with_token(device_type, request_url, token);
+            } catch (const std::exception& ex) {
+                result.error_message = std::string("获取云端配置失败: ") + ex.what();
+                BOOST_LOG_TRIVIAL(error) << "GFD cloud import dialog background fetch failed"
+                                         << ", device_type=" << device_type << ", error=" << ex.what();
+            } catch (...) {
+                result.error_message = "获取云端配置失败";
+                BOOST_LOG_TRIVIAL(error) << "GFD cloud import dialog background fetch failed with unknown exception"
+                                         << ", device_type=" << device_type;
+            }
+
+            wxGetApp().CallAfter([this, alive, generation, allow_auth_retry, result = std::move(result)]() mutable {
+                if (!alive || !alive->load() || generation != m_request_generation)
+                    return;
+
+                if (GFDAuthManager::is_auth_failure_response(result.status, result.body, result.error_message)) {
+                    GFDAuthManager::clear_session(wxGetApp().app_config);
+                    if (allow_auth_retry) {
+                        fetch_configs_for_selected_device(false);
+                        return;
+                    }
+                    if (result.error_message.empty())
+                        result.error_message = "登录状态无效，请重新登录";
+                }
+
+                apply_cloud_config_response(std::move(result.configs), std::move(result.error_message), result.ok);
+            });
+        }).detach();
+    }
+
+    void apply_cloud_config_response(std::vector<GFDCloudConfigInfo> configs, std::string error_message, bool request_ok = false)
+    {
+        if (!request_ok) {
+            m_configs.clear();
+            rebuild_config_rows();
+            m_tip_label->SetLabel(from_u8(error_message.empty() ? "获取云端配置失败" : error_message));
+            set_loading_state(false);
+            return;
+        }
+
+        m_configs = std::move(configs);
         rebuild_config_rows();
+        m_tip_label->SetLabel(m_configs.empty() ? _L("当前机型暂无云端配置") : wxString(wxEmptyString));
+        set_loading_state(false);
+    }
 
-        if (m_configs.empty())
-            m_tip_label->SetLabel(_L("当前机型暂无云端配置"));
-        else
-            m_tip_label->SetLabel(wxEmptyString);
+    void set_loading_state(bool loading)
+    {
+        m_loading = loading;
+        if (loading)
+            update_loading_panel_style();
 
-        m_refresh_button->Enable(true);
+        if (m_refresh_button != nullptr)
+            m_refresh_button->Enable(!loading);
+        if (m_device_choice != nullptr)
+            m_device_choice->Enable(!loading);
+        if (m_config_list != nullptr)
+            m_config_list->Enable(!loading);
+
+        if (m_loading_panel != nullptr) {
+            position_loading_panel();
+            m_loading_panel->Show(loading);
+            if (loading) {
+                m_loading_panel->Raise();
+                if (m_loading_gauge != nullptr)
+                    m_loading_gauge->Pulse();
+                if (!m_loading_timer.IsRunning())
+                    m_loading_timer.Start(120);
+            } else {
+                m_loading_timer.Stop();
+            }
+        }
+        Layout();
+    }
+
+    void build_loading_panel()
+    {
+        m_loading_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, FromDIP(wxSize(360, 56)), wxBORDER_NONE);
+        m_loading_panel->SetDoubleBuffered(true);
+
+        auto* sizer    = new wxBoxSizer(wxVERTICAL);
+        m_loading_text = new wxStaticText(m_loading_panel, wxID_ANY, _L("正在获取云端配置，请稍候..."), wxDefaultPosition, wxDefaultSize,
+                                          wxALIGN_CENTER);
+        m_loading_text->SetFont(::Label::Body_13);
+        m_loading_gauge = new wxGauge(m_loading_panel, wxID_ANY, 100, wxDefaultPosition, FromDIP(wxSize(180, 4)), wxGA_HORIZONTAL);
+
+        sizer->Add(m_loading_text, 0, wxALIGN_CENTER | wxTOP, FromDIP(8));
+        sizer->Add(m_loading_gauge, 0, wxALIGN_CENTER | wxTOP, FromDIP(10));
+        m_loading_panel->SetSizer(sizer);
+        m_loading_panel->Layout();
+        m_loading_panel->Hide();
+    }
+
+    void update_loading_panel_style()
+    {
+        if (m_loading_panel == nullptr)
+            return;
+
+        wxColour background = wxGetApp().dark_mode() ? wxColour(24, 24, 24) : wxColour(255, 255, 255);
+        if (m_config_list != nullptr && m_config_list->GetBackgroundColour().IsOk())
+            background = m_config_list->GetBackgroundColour();
+
+        const wxColour text = readable_text_colour(background);
+        m_loading_panel->SetBackgroundColour(background);
+        if (m_loading_text != nullptr) {
+            m_loading_text->SetForegroundColour(text);
+            m_loading_text->SetBackgroundColour(background);
+        }
+        m_loading_panel->Refresh();
+    }
+
+    void position_loading_panel()
+    {
+        if (m_loading_panel == nullptr || m_config_list == nullptr)
+            return;
+
+        const wxPoint list_pos   = m_config_list->GetPosition();
+        const wxSize  list_size  = m_config_list->GetSize();
+        const wxSize  panel_size = m_loading_panel->GetSize();
+        const int     panel_x    = list_pos.x + std::max(0, (list_size.x - panel_size.x) / 2);
+        const int     panel_y    = list_pos.y + std::max(0, (list_size.y - panel_size.y) / 2);
+        m_loading_panel->SetPosition(wxPoint(panel_x, panel_y));
     }
 
     wxStaticText* create_row_label(wxWindow* parent, const wxString& text, int min_width)
@@ -555,9 +711,16 @@ private:
         auto* label = new wxStaticText(parent, wxID_ANY, text, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
         label->SetFont(::Label::Body_14);
         label->SetMinSize(wxSize(FromDIP(min_width), -1));
+        label->SetForegroundColour(readable_text_colour(parent->GetBackgroundColour()));
         if (!text.empty())
             label->SetToolTip(text);
         return label;
+    }
+
+    wxColour readable_text_colour(const wxColour& background) const
+    {
+        const double luminance = 0.299 * background.Red() + 0.587 * background.Green() + 0.114 * background.Blue();
+        return luminance > 150.0 ? wxColour(28, 31, 35) : wxColour(238, 240, 242);
     }
 
     void add_row_label(wxPanel* row_panel, wxBoxSizer* row, const wxString& text, int min_width, int proportion, int border = 8)
@@ -570,7 +733,7 @@ private:
         if (button == nullptr)
             return;
         const wxColour green(0, 150, 136);
-        const wxColour hover_bg(232, 247, 245);
+        const wxColour hover_bg = wxGetApp().dark_mode() ? wxColour(38, 55, 53) : wxColour(232, 247, 245);
         button->SetFont(::Label::Body_14);
         button->SetMinSize(wxSize(FromDIP(108), FromDIP(30)));
         button->SetCornerRadius(0);
@@ -603,7 +766,8 @@ private:
             return;
 
         auto* header_panel = new wxPanel(m_config_list);
-        header_panel->SetBackgroundColour(wxColour(245, 245, 245));
+        const wxColour header_background = wxGetApp().dark_mode() ? wxColour(45, 45, 47) : wxColour(245, 245, 245);
+        header_panel->SetBackgroundColour(header_background);
         header_panel->SetMinSize(wxSize(-1, FromDIP(38)));
         auto* row = new wxBoxSizer(wxHORIZONTAL);
         row->AddSpacer(FromDIP(8));
@@ -623,7 +787,9 @@ private:
 
         const GFDCloudConfigInfo& config = m_configs[index];
         auto* row_panel = new wxPanel(m_config_list);
-        const wxColour row_bg = index % 2 == 0 ? wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW) : wxColour(250, 250, 250);
+        const bool     dark_mode = wxGetApp().dark_mode();
+        const wxColour row_bg   = dark_mode ? (index % 2 == 0 ? wxColour(28, 28, 30) : wxColour(35, 35, 37)) :
+                                              (index % 2 == 0 ? wxColour(255, 255, 255) : wxColour(250, 250, 250));
         row_panel->SetBackgroundColour(row_bg);
         row_panel->SetMinSize(wxSize(-1, FromDIP(44)));
 

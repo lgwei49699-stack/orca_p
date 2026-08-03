@@ -77,6 +77,15 @@ struct GFDCloudConfigInfo
     bool        system_config{false};
 };
 
+struct GFDCloudConfigFetchResult
+{
+    bool                            ok{false};
+    unsigned                        status{0};
+    std::string                     body;
+    std::string                     error_message;
+    std::vector<GFDCloudConfigInfo> configs;
+};
+
 class MainFrame;
 class ConfigOptionsGroup;
 class ObjectSettings;
@@ -472,6 +481,9 @@ public:
     bool upload_current_config_to_cloud(const std::string& config_name, const std::string& remarks = std::string());
     bool save_active_imported_cloud_config();
     bool fetch_cloud_configs(const std::string& device_type, std::vector<GFDCloudConfigInfo>& configs, std::string& error_message);
+    static GFDCloudConfigFetchResult fetch_cloud_configs_with_token(const std::string& device_type,
+                                                                    const std::string& request_url,
+                                                                    const std::string& token);
     bool import_cloud_config(const GFDCloudConfigInfo& config);
     bool fetch_dynamic_filament_list(std::string& body, std::string& error_message);
     bool fetch_dynamic_filament_detail(const std::string& filament_sn, std::string& body, std::string& error_message);

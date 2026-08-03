@@ -3037,13 +3037,18 @@ struct Plater::priv
                                           std::string&       error_message) const;
     bool        gfd_upload_current_config(const std::string& config_name, const std::string& remarks);
     bool        gfd_save_active_imported_cloud_config();
-    bool        gfd_fetch_cloud_configs(const std::string& device_type,
-                                        std::vector<GFDCloudConfigInfo>& configs,
-                                        std::string& error_message) const;
-    bool        gfd_download_file_to_temp(const std::string& url,
-                                          const std::string& filename_hint,
-                                          fs::path& output_path,
-                                          std::string& error_message) const;
+    static bool              gfd_fetch_cloud_configs(const std::string&               device_type,
+                                                     std::vector<GFDCloudConfigInfo>& configs,
+                                                     std::string&                     error_message,
+                                                     wxWindow*                        auth_parent,
+                                                     const std::string&               token                = std::string(),
+                                                     const std::string&               request_url_override = std::string(),
+                                                     unsigned*                        http_status          = nullptr,
+                                                     std::string*                     response_body        = nullptr);
+    bool                     gfd_download_file_to_temp(const std::string& url,
+                                                       const std::string& filename_hint,
+                                                       fs::path&          output_path,
+                                                       std::string&       error_message) const;
     bool        gfd_parse_project_settings_text(const std::string& text,
                                                 DynamicPrintConfig& config,
                                                 std::string& error_message) const;
@@ -8570,9 +8575,14 @@ bool Plater::priv::gfd_save_active_imported_cloud_config()
     return true;
 }
 
-bool Plater::priv::gfd_fetch_cloud_configs(const std::string& device_type,
+bool Plater::priv::gfd_fetch_cloud_configs(const std::string&               device_type,
                                            std::vector<GFDCloudConfigInfo>& configs,
-                                           std::string& error_message) const
+                                           std::string&                     error_message,
+                                           wxWindow*                        auth_parent,
+                                           const std::string&               token,
+                                           const std::string&               request_url_override,
+                                           unsigned*                        http_status,
+                                           std::string*                     response_body)
 {
     configs.clear();
     const std::string requested_device_type = boost::algorithm::trim_copy(device_type);
@@ -8581,44 +8591,52 @@ bool Plater::priv::gfd_fetch_cloud_configs(const std::string& device_type,
         return false;
     }
 
-    const std::string request_url = GFD::Config::device_slice_type_url(wxGetApp().app_config);
+    const std::string request_url = request_url_override.empty() ? GFD::Config::device_slice_type_url(wxGetApp().app_config) :
+                                                                   request_url_override;
     std::string       body;
 
     BOOST_LOG_TRIVIAL(info) << "GFD fetch cloud configs request"
-                            << ", url=" << request_url
-                            << ", device_type=" << requested_device_type;
+                            << ", url=" << request_url << ", device_type=" << requested_device_type;
 
-    if (!GFDAuthManager::perform_authenticated_request(
-            [&](const std::string& token) {
-                GFDHttpResult result;
-                Http::get(request_url)
-                    .header("Authorization", token)
-                    .header("Biz", "ZXBMan")
-                    .on_complete([&](std::string response_body, unsigned status) {
-                        result.body   = std::move(response_body);
-                        result.status = status;
-                        result.ok     = true;
-                        BOOST_LOG_TRIVIAL(info) << "GFD fetch cloud configs response"
-                                                << ", http_status=" << status
-                                                << ", body=" << result.body;
-                    })
-                    .on_error([&](std::string response_body, std::string error, unsigned status) {
-                        result.body          = std::move(response_body);
-                        result.status        = status;
-                        result.error_message = error.empty() ? result.body : error;
-                        result.ok            = false;
-                        BOOST_LOG_TRIVIAL(error) << "GFD fetch cloud configs request failed"
-                                                 << ", http_status=" << status
-                                                 << ", error=" << result.error_message
-                                                 << ", body=" << result.body;
-                    })
-                    .perform_sync();
-                return result;
-            },
-            body,
-            error_message,
-            q))
-        return false;
+    auto request_once = [&request_url](const std::string& auth_token) {
+        GFDHttpResult result;
+        Http::get(request_url)
+            .header("Authorization", auth_token)
+            .header("Biz", "ZXBMan")
+            .timeout_max(20)
+            .on_complete([&](std::string response, unsigned status) {
+                result.body   = std::move(response);
+                result.status = status;
+                result.ok     = true;
+                BOOST_LOG_TRIVIAL(info) << "GFD fetch cloud configs response"
+                                        << ", http_status=" << status << ", body=" << result.body;
+            })
+            .on_error([&](std::string response, std::string error, unsigned status) {
+                result.body          = std::move(response);
+                result.status        = status;
+                result.error_message = error.empty() ? result.body : error;
+                result.ok            = false;
+                BOOST_LOG_TRIVIAL(error) << "GFD fetch cloud configs request failed"
+                                         << ", http_status=" << status << ", error=" << result.error_message << ", body=" << result.body;
+            })
+            .perform_sync();
+        return result;
+    };
+
+    if (token.empty()) {
+        if (!GFDAuthManager::perform_authenticated_request(request_once, body, error_message, auth_parent))
+            return false;
+    } else {
+        GFDHttpResult result = request_once(token);
+        body                 = std::move(result.body);
+        error_message        = std::move(result.error_message);
+        if (http_status != nullptr)
+            *http_status = result.status;
+        if (response_body != nullptr)
+            *response_body = body;
+        if (!result.ok)
+            return false;
+    }
 
     auto json_string = [](const nlohmann::json& object, const char* key) -> std::string {
         if (!object.is_object())
@@ -15984,7 +16002,22 @@ bool Plater::fetch_cloud_configs(const std::string& device_type, std::vector<GFD
 {
     if (p == nullptr)
         return false;
-    return p->gfd_fetch_cloud_configs(device_type, configs, error_message);
+    return priv::gfd_fetch_cloud_configs(device_type, configs, error_message, this);
+}
+
+GFDCloudConfigFetchResult Plater::fetch_cloud_configs_with_token(const std::string& device_type,
+                                                                 const std::string& request_url,
+                                                                 const std::string& token)
+{
+    GFDCloudConfigFetchResult result;
+    if (token.empty()) {
+        result.error_message = "登录状态无效，请重新登录";
+        return result;
+    }
+
+    result.ok = priv::gfd_fetch_cloud_configs(device_type, result.configs, result.error_message, nullptr, token, request_url,
+                                              &result.status, &result.body);
+    return result;
 }
 
 bool Plater::import_cloud_config(const GFDCloudConfigInfo& config)
