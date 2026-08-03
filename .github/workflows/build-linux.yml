@@ -2,13 +2,11 @@ name: Build Linux AppImage for x86_64
 
 on:
   push:
-    branches: 
-      - 2.3.1_devloper
     tags:
-      - 'v*'
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+      - 'manual-build-linux-*'
+
+permissions:
+  contents: write
 
 jobs:
   build-linux-x86_64:
@@ -56,7 +54,7 @@ jobs:
       with:
         key: ${{ runner.os }}-24.04-ccache
         max-size: 2G
-        variant: sccache
+        variant: ccache
     
     - name: Cache dependencies
       uses: actions/cache@v4
