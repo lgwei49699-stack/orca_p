@@ -6,7 +6,6 @@
 #include <set>
 
 #include <opencv2/core.hpp>
-#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <boost/log/trivial.hpp>
@@ -24,13 +23,11 @@ static cv::Mat decode_texture_image(const TextureImage& img) {
     if (img.data.empty())
         return {};
 
-    // Raw encoded image data (PNG/JPEG) from glTF loader: width == -1
-    if (img.width <= 0 || img.height <= 0) {
-        std::vector<unsigned char> buf(img.data.begin(), img.data.end());
-        cv::Mat raw(1, static_cast<int>(buf.size()), CV_8UC1, buf.data());
-        cv::Mat decoded = cv::imdecode(raw, cv::IMREAD_COLOR);
-        return decoded;
-    }
+    // PNG/JPEG decoding for OBJ/glTF texture painting is still under development.
+    // Keep this path disabled for now so stable builds do not pull OpenCV's
+    // bundled JPEG implementation into the final executable.
+    if (img.width <= 0 || img.height <= 0)
+        return {};
 
     int cv_type = (img.channels == 4) ? CV_8UC4 : CV_8UC3;
     std::vector<unsigned char> pixel_buf(img.data.begin(), img.data.end());
