@@ -38,6 +38,7 @@ using namespace nlohmann;
 #endif
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/nowide/args.hpp>
 #include <boost/nowide/cstdlib.hpp>
@@ -1226,7 +1227,7 @@ int CLI::run(int argc, char **argv)
     //BBS: always use ForwardCompatibilitySubstitutionRule::Enable
     //const ForwardCompatibilitySubstitutionRule   config_substitution_rule = m_config.option<ConfigOptionEnum<ForwardCompatibilitySubstitutionRule>>("config_compatibility", true)->value;
     const ForwardCompatibilitySubstitutionRule   config_substitution_rule = ForwardCompatibilitySubstitutionRule::Enable;
-    const std::vector<std::string>              &load_filaments           = m_config.option<ConfigOptionStrings>("load_filaments", true)->values;
+    const std::vector<std::string>              &requested_load_filaments = m_config.option<ConfigOptionStrings>("load_filaments", true)->values;
     //skip model object logic
     const std::vector<int>                      &skip_objects             = m_config.option<ConfigOptionInts>("skip_objects", true)->values;
     std::map<int, bool>     skip_maps;
@@ -1234,6 +1235,85 @@ int CLI::run(int argc, char **argv)
     long long global_begin_time = 0, global_current_time;
     sliced_info_t sliced_info;
     std::map<std::string, std::string> record_key_values;
+    std::vector<std::string> effective_load_filaments = requested_load_filaments;
+    std::vector<std::vector<unsigned int>> model_material_slots(m_input_files.size());
+    const bool has_explicit_model_filaments = std::any_of(
+        m_model_cli_specs.begin(), m_model_cli_specs.end(),
+        [](const ModelCliSpec &spec) { return spec.filament_group.has_value(); });
+
+    if (!m_model_cli_specs.empty()) {
+        if (m_model_cli_specs.size() != m_input_files.size()) {
+            boost::nowide::cerr << "--model block count " << m_model_cli_specs.size()
+                                << " does not match positional model count " << m_input_files.size() << std::endl;
+            record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
+            flush_and_exit(CLI_INVALID_PARAMS);
+        }
+        for (size_t i = 0; i < m_model_cli_specs.size(); ++i) {
+            const std::string expected = boost::filesystem::path(m_model_cli_specs[i].model_token).filename().string();
+            const std::string actual = boost::filesystem::path(m_input_files[i]).filename().string();
+            if (expected != actual) {
+                boost::nowide::cerr << "Model block/input mismatch at index " << i << ": --model="
+                                    << m_model_cli_specs[i].model_token << ", input=" << m_input_files[i] << std::endl;
+                record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
+                flush_and_exit(CLI_INVALID_PARAMS);
+            }
+        }
+    }
+
+    if (has_explicit_model_filaments) {
+        std::map<std::string, unsigned int> slot_by_canonical_path;
+        effective_load_filaments.clear();
+        for (size_t model_index = 0; model_index < m_model_cli_specs.size(); ++model_index) {
+            std::string group;
+            if (m_model_cli_specs[model_index].filament_group.has_value())
+                group = *m_model_cli_specs[model_index].filament_group;
+            else if (!requested_load_filaments.empty())
+                group = requested_load_filaments.front();
+            else {
+                boost::nowide::cerr << "Missing --model-filaments for model index " << model_index << " ("
+                                    << m_input_files[model_index] << ")" << std::endl;
+                record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
+                flush_and_exit(CLI_INVALID_PARAMS);
+            }
+            if (group.find(',') != std::string::npos || group.find("，") != std::string::npos ||
+                group.find("；") != std::string::npos) {
+                boost::nowide::cerr << "Invalid separator in --model-filaments for model index " << model_index
+                                    << "; use ASCII ';' between filament paths" << std::endl;
+                record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
+                flush_and_exit(CLI_INVALID_PARAMS);
+            }
+
+            std::vector<std::string> paths;
+            boost::split(paths, group, boost::is_any_of(";"));
+            for (std::string &path : paths) {
+                boost::trim(path);
+                if (path.empty() || !boost::filesystem::exists(path)) {
+                    boost::nowide::cerr << "Invalid filament config in --model-filaments for model index " << model_index
+                                        << ": " << path << std::endl;
+                    record_exit_reson(outfile_dir, CLI_FILE_NOTFOUND, 0, cli_errors[CLI_FILE_NOTFOUND], sliced_info);
+                    flush_and_exit(CLI_FILE_NOTFOUND);
+                }
+                const std::string canonical_path = boost::filesystem::canonical(path).string();
+                auto [it, inserted] = slot_by_canonical_path.emplace(
+                    canonical_path, static_cast<unsigned int>(effective_load_filaments.size() + 1));
+                if (inserted)
+                    effective_load_filaments.emplace_back(canonical_path);
+                model_material_slots[model_index].emplace_back(it->second);
+            }
+        }
+        if (effective_load_filaments.size() > 16) {
+            boost::nowide::cerr << "OBJ material painting supports at most 16 global filament slots; requested "
+                                << effective_load_filaments.size() << std::endl;
+            record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
+            flush_and_exit(CLI_INVALID_PARAMS);
+        }
+        BOOST_LOG_TRIVIAL(info) << boost::format("built explicit multi-model filament catalog, models=%1%, slots=%2%")
+                                       % m_model_cli_specs.size() % effective_load_filaments.size();
+        for (size_t slot_index = 0; slot_index < effective_load_filaments.size(); ++slot_index)
+            BOOST_LOG_TRIVIAL(info) << boost::format("global filament slot %1% -> %2%")
+                                           % (slot_index + 1) % effective_load_filaments[slot_index];
+    }
+    const std::vector<std::string> &load_filaments = effective_load_filaments;
 
     ConfigOptionBool* downward_check_option = m_config.option<ConfigOptionBool>("downward_check");
     if (downward_check_option)
@@ -1472,6 +1552,11 @@ int CLI::run(int argc, char **argv)
     const std::vector<int>  clone_objects  = m_config.option<ConfigOptionInts>("clone_objects", true)->values;
     //when load objects from stl/obj, the total used filaments set
     std::set<int> used_filament_set;
+    if (has_explicit_model_filaments && !loaded_filament_ids.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "--load-filament-ids cannot be combined with --model-filaments";
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
+        flush_and_exit(CLI_INVALID_PARAMS);
+    }
     BOOST_LOG_TRIVIAL(info) << boost::format("allow_multicolor_oneplate %1%, allow_rotations %2% skip_modified_gcodes %3% avoid_extrusion_cali_region %4% loaded_filament_ids size %5%, clone_objects size %6%, skip_useless_pick %7%, allow_newer_file %8%")
         %allow_multicolor_oneplate %allow_rotations %skip_modified_gcodes %avoid_extrusion_cali_region %loaded_filament_ids.size() %clone_objects.size() %skip_useless_pick %allow_newer_file;
     if (clone_objects.size() > 0)
@@ -1561,9 +1646,12 @@ int CLI::run(int argc, char **argv)
                 // BBS: adjust whebackup
                 //LoadStrategy strategy = LoadStrategy::LoadModel | LoadStrategy::LoadConfig|LoadStrategy::AddDefaultInstances;
                 //if (load_aux) strategy = strategy | LoadStrategy::LoadAuxiliary;
+                const std::vector<unsigned int> *explicit_material_slots =
+                    has_explicit_model_filaments ? &model_material_slots[input_index] : nullptr;
                 model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets,
                                               &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice, nullptr,
-                                              auto_repair_model, collect_repair_report ? &model_repair_info.report : nullptr);
+                                              auto_repair_model, collect_repair_report ? &model_repair_info.report : nullptr,
+                                              explicit_material_slots);
                 if (collect_repair_report) {
                     sliced_info.model_repairs.push_back(model_repair_info);
                     repair_report_recorded = true;
@@ -1720,6 +1808,19 @@ int CLI::run(int argc, char **argv)
                 {
                     need_arrange = true;
                     int object_extruder_id = 0, clone_count = 1;
+                    if (has_explicit_model_filaments) {
+                        const std::vector<unsigned int> &slots = model_material_slots[input_index];
+                        for (unsigned int slot : slots)
+                            used_filament_set.emplace(static_cast<int>(slot));
+                        if (!boost::algorithm::iends_with(file, ".obj")) {
+                            if (slots.size() != 1) {
+                                BOOST_LOG_TRIVIAL(error) << boost::format("non-OBJ model %1% requires exactly one --model-filaments entry") % file;
+                                record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
+                                flush_and_exit(CLI_INVALID_PARAMS);
+                            }
+                            object_extruder_id = static_cast<int>(slots.front());
+                        }
+                    }
                     if (loaded_filament_ids.size() > input_index) {
                         if (loaded_filament_ids[input_index] > 0) {
                             if (loaded_filament_ids[input_index] > load_filaments.size()) {
@@ -1834,18 +1935,38 @@ int CLI::run(int argc, char **argv)
                     m_config.option<ConfigOptionInt>("orient")->value == 1;
                 
                 // 获取模型参数
-                const auto& model_files = model_option ? model_option->values : std::vector<std::string>();
-                const auto& model_positions = position_option ? position_option->values : std::vector<std::string>();
-                const auto& model_scales = scale_option ? scale_option->values : std::vector<std::string>();
-                const auto& model_rotates = rotate_option ? rotate_option->values : std::vector<std::string>();
-                const auto& model_supports = support_option ? support_option->values : std::vector<std::string>();
-                const auto& model_processes = process_option ? process_option->values : std::vector<std::string>();
+                std::vector<std::string> model_files = model_option ? model_option->values : std::vector<std::string>();
+                std::vector<std::string> model_positions = position_option ? position_option->values : std::vector<std::string>();
+                std::vector<std::string> model_scales = scale_option ? scale_option->values : std::vector<std::string>();
+                std::vector<std::string> model_rotates = rotate_option ? rotate_option->values : std::vector<std::string>();
+                std::vector<std::string> model_supports = support_option ? support_option->values : std::vector<std::string>();
+                std::vector<std::string> model_processes = process_option ? process_option->values : std::vector<std::string>();
+                if (!m_model_cli_specs.empty()) {
+                    model_files.clear();
+                    model_positions.clear();
+                    model_scales.clear();
+                    model_rotates.clear();
+                    model_supports.clear();
+                    model_processes.clear();
+                    for (const ModelCliSpec &spec : m_model_cli_specs) {
+                        model_files.emplace_back(spec.model_token);
+                        model_positions.emplace_back(spec.position.value_or(""));
+                        model_scales.emplace_back(spec.scale.value_or(""));
+                        model_rotates.emplace_back(spec.rotation.value_or(""));
+                        model_supports.emplace_back(spec.support.value_or(""));
+                        model_processes.emplace_back(spec.process.value_or(""));
+                    }
+                }
                 
                 // 确定模型索引
                 size_t model_idx = 0;  // 默认索引为0（单模型情况）
                 bool found_model = false;
                 
-                if (!model_files.empty()) {
+                if (!m_model_cli_specs.empty()) {
+                    model_idx = input_index - 1;
+                    found_model = model_idx < model_files.size();
+                    BOOST_LOG_TRIVIAL(info) << "Using strictly paired model parameter block at input index " << model_idx;
+                } else if (!model_files.empty()) {
                     // 多模型情况：从文件路径中提取文件名进行匹配
                     std::string filename = boost::filesystem::path(file).filename().string();
                     auto it = std::find(model_files.begin(), model_files.end(), filename);
@@ -1867,7 +1988,7 @@ int CLI::run(int argc, char **argv)
                     for (ModelObject* obj : model.objects) {
                         for (ModelInstance* instance : obj->instances) {
                             // 1. 先应用缩放
-                            if (model_idx < model_scales.size()) {
+                            if (model_idx < model_scales.size() && !model_scales[model_idx].empty()) {
                                 double scale_factor = std::stod(model_scales[model_idx]);
                                 Vec3d current_scale = instance->get_scaling_factor();
                                 Vec3d new_scale = current_scale * scale_factor;
@@ -1876,7 +1997,7 @@ int CLI::run(int argc, char **argv)
                             }
                             
                             // 2. 再应用旋转
-                            if (model_idx < model_rotates.size()) {
+                            if (model_idx < model_rotates.size() && !model_rotates[model_idx].empty()) {
                                 if (ignore_model_rotation_for_orient) {
                                     BOOST_LOG_TRIVIAL(info)
                                         << "Ignored input model rotation because orient=1 for object '"
@@ -1900,7 +2021,7 @@ int CLI::run(int argc, char **argv)
                             }
                             
                             // 3. 最后应用位置（模型地面中央位置）
-                            if (model_idx < model_positions.size()) {
+                            if (model_idx < model_positions.size() && !model_positions[model_idx].empty()) {
                                 std::string pos_str = model_positions[model_idx];
                                 // 解析位置字符串 "x,y,z"
                                 std::vector<std::string> pos_parts;
@@ -1934,7 +2055,7 @@ int CLI::run(int argc, char **argv)
                             }
 
                             // 4. 最后应用支撑设置（对象级配置）
-                            if (model_idx < model_supports.size()) {
+                            if (model_idx < model_supports.size() && !model_supports[model_idx].empty()) {
                                 std::string support_str = model_supports[model_idx];
                                 try {
                                     bool enable_support = (support_str == "1");
@@ -3433,7 +3554,8 @@ int CLI::run(int argc, char **argv)
 
             const std::vector<int>& min_flush_volumes = Slic3r::GUI::get_min_flush_volumes(m_print_config);
 
-            if ((obj_multicolor_auto_mapping || glb_texture_auto_mapping) && filament_is_support->size() != project_filament_count) {
+            if ((has_explicit_model_filaments || obj_multicolor_auto_mapping || glb_texture_auto_mapping) &&
+                filament_is_support->size() != project_filament_count) {
                 BOOST_LOG_TRIVIAL(warning)
                     << boost::format("normalize multicolor filament_is_support size from %1% to %2%")
                            % filament_is_support->size() % project_filament_count;
@@ -4326,7 +4448,8 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature = " << m_config.opt_float("cli_nozzle_temperature");
         } else if (opt_key == "cli_nozzle_temperature_initial_layer") {
             BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature_initial_layer = " << m_config.opt_float("cli_nozzle_temperature_initial_layer");
-        } else if (opt_key == "model" || opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "model_process" || opt_key == "thumbnail_image") {
+        } else if (opt_key == "model" || opt_key == "model_filaments" || opt_key == "model_position" || opt_key == "model_scale" ||
+                   opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "model_process" || opt_key == "thumbnail_image") {
             BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
             boost::nowide::cerr << "error: option not implemented yet: " << opt_key << std::endl;
@@ -7081,6 +7204,66 @@ int CLI::run(int argc, char **argv)
     return 0;
 }
 
+bool CLI::parse_model_cli_specs(int argc, char **argv)
+{
+    m_model_cli_specs.clear();
+    ModelCliSpec *current = nullptr;
+
+    const std::set<std::string> model_keys = {
+        "model", "model-filaments", "model-position", "model-scale", "model-rotate", "model-support", "model-process"
+    };
+
+    for (int i = 1; i < argc; ++i) {
+        std::string token = argv[i];
+        if (!boost::starts_with(token, "--"))
+            continue;
+
+        token.erase(0, 2);
+        std::string value;
+        const size_t equals_pos = token.find('=');
+        if (equals_pos != std::string::npos) {
+            value = token.substr(equals_pos + 1);
+            token.erase(equals_pos);
+        }
+        if (model_keys.find(token) == model_keys.end())
+            continue;
+        if (value.empty()) {
+            if (i + 1 >= argc) {
+                boost::nowide::cerr << "Missing value for --" << token << std::endl;
+                return false;
+            }
+            value = argv[++i];
+        }
+
+        if (token == "model") {
+            m_model_cli_specs.emplace_back();
+            current = &m_model_cli_specs.back();
+            current->model_token = value;
+            continue;
+        }
+        if (current == nullptr) {
+            boost::nowide::cerr << "--" << token << " must follow a --model argument" << std::endl;
+            return false;
+        }
+
+        std::optional<std::string> *target = nullptr;
+        if (token == "model-filaments") target = &current->filament_group;
+        else if (token == "model-position") target = &current->position;
+        else if (token == "model-scale") target = &current->scale;
+        else if (token == "model-rotate") target = &current->rotation;
+        else if (token == "model-support") target = &current->support;
+        else if (token == "model-process") target = &current->process;
+
+        if (target != nullptr && target->has_value()) {
+            boost::nowide::cerr << "Duplicate --" << token << " for model " << current->model_token << std::endl;
+            return false;
+        }
+        if (target != nullptr)
+            *target = value;
+    }
+    return true;
+}
+
 bool CLI::setup(int argc, char **argv)
 {
     // Detect the operating system flavor after SLIC3R_LOGLEVEL is set.
@@ -7148,6 +7331,8 @@ bool CLI::setup(int argc, char **argv)
         this->print_help();
         return false;
     }
+    if (!parse_model_cli_specs(argc, argv))
+        return false;
     // Parse actions and transform options.
     for (auto const &opt_key : opt_order) {
         if (cli_actions_config_def.has(opt_key))

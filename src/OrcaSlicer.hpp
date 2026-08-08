@@ -3,6 +3,7 @@
 
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Model.hpp"
+#include <optional>
 
 namespace Slic3r {
 
@@ -96,6 +97,16 @@ typedef struct _plate_obj_size_info {
     BoundingBoxf3 obj_bbox;
 }plate_obj_size_info_t;
 
+struct ModelCliSpec {
+    std::string                model_token;
+    std::optional<std::string> filament_group;
+    std::optional<std::string> position;
+    std::optional<std::string> scale;
+    std::optional<std::string> rotation;
+    std::optional<std::string> support;
+    std::optional<std::string> process;
+};
+
 
 class CLI {
 public:
@@ -109,8 +120,10 @@ private:
     std::vector<std::string>    m_actions;
     std::vector<std::string>    m_transforms;
     std::vector<Model>          m_models;
+    std::vector<ModelCliSpec>   m_model_cli_specs;
 
     bool setup(int argc, char **argv);
+    bool parse_model_cli_specs(int argc, char **argv);
 
     /// Prints usage of the CLI.
     void print_help(bool include_print_options = false, PrinterTechnology printer_technology = ptAny) const;

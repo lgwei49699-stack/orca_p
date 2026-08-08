@@ -7961,6 +7961,13 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli_params = "model1.stl,model2.stl,...";
     def->set_default_value(new ConfigOptionStrings());
 
+    def = this->add("model_filaments", coStrings);
+    def->label = L("Model Filaments");
+    def->tooltip = L("Semicolon-separated filament configuration paths for the current --model block, matching OBJ usemtl first-use order.");
+    def->cli = "model-filaments";
+    def->cli_params = "filament1.json;filament2.json;...";
+    def->set_default_value(new ConfigOptionStrings());
+
     def = this->add("model_position", coStrings);
     def->label = L("Model Position");
     def->tooltip = L("Specify center position (x,y,z) for each model in millimeters.");

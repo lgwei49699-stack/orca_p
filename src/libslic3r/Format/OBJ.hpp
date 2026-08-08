@@ -12,6 +12,10 @@ typedef std::function<void(std::vector<RGBA> &input_colors, bool is_single_color
 struct ObjInfo {
     std::vector<RGBA> vertex_colors;
     std::vector<RGBA> face_colors;
+    // Distinct usemtl names in first face-use order and the corresponding
+    // local material index for every triangulated face.
+    std::vector<std::string>   material_names;
+    std::vector<unsigned int>  face_material_ids;
     bool              is_single_mtl{false};
     std::vector<std::array<Vec2f,3>> uvs;
     std::string        obj_dircetory;

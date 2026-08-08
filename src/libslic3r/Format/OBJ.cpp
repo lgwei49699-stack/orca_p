@@ -255,10 +255,13 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
     size_t               num_vertices = data.coordinates.size() / OBJ_VERTEX_LENGTH;
     its.vertices.reserve(num_vertices);
     its.indices.reserve(num_faces + num_quads);
+    const bool has_material_assignments = !data.usemtls.empty();
     if (exist_mtl) {
         obj_info.is_single_mtl = data.usemtls.size() == 1 && mtl_data.new_mtl_unmap.size() == 1;
         obj_info.face_colors.reserve(num_faces + num_quads);
     }
+    if (has_material_assignments)
+        obj_info.face_material_ids.reserve(num_faces + num_quads);
     bool has_color = data.has_vertex_color;
     for (size_t i = 0; i < num_vertices; ++ i) {
         size_t j = i * OBJ_VERTEX_LENGTH;
@@ -271,6 +274,7 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
     }
     int indices[ONE_FACE_SIZE];
     int uvs[ONE_FACE_SIZE];
+    std::unordered_map<std::string, unsigned int> material_name_to_id;
     for (size_t i = 0; i < data.vertices.size();)
         if (data.vertices[i].coordIdx == -1)
             ++ i;
@@ -330,26 +334,35 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
                         obj_info.face_colors.emplace_back(face_color);
                     }
                 };
-                auto set_face_color_by_mtl = [&data, &set_face_color](int face_index) {
+                auto set_face_color_by_mtl = [&data, &set_face_color, &obj_info, &material_name_to_id](int face_index) {
+                    const auto record_material = [&obj_info, &material_name_to_id](const std::string &name) {
+                        auto [it, inserted] = material_name_to_id.emplace(name, static_cast<unsigned int>(obj_info.material_names.size()));
+                        if (inserted)
+                            obj_info.material_names.emplace_back(name);
+                        obj_info.face_material_ids.emplace_back(it->second);
+                    };
                     if (data.usemtls.size() == 1) {
+                        record_material(data.usemtls[0].name);
                         set_face_color(face_index, data.usemtls[0].name);
                     } else {
                         for (size_t k = 0; k < data.usemtls.size(); k++) {
                             auto mtl = data.usemtls[k];
                             if (face_index >= mtl.face_start && face_index <= mtl.face_end) {
+                                record_material(data.usemtls[k].name);
                                 set_face_color(face_index, data.usemtls[k].name);
-                                break;
+                                return;
                             }
                         }
+                        obj_info.face_material_ids.emplace_back(std::numeric_limits<unsigned int>::max());
                     }
                 };
-                if (exist_mtl) {
+                if (has_material_assignments) {
                     set_face_color_by_mtl(face_index);
                 }
                 if (cnt == 4) {
                     its.indices.emplace_back(indices[0], indices[2], indices[3]);
                     int face_index = its.indices.size() - 1;
-                    if (exist_mtl) {
+                    if (has_material_assignments) {
                         set_face_color_by_mtl(face_index);
                     }
                 }
