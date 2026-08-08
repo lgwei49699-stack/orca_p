@@ -1237,9 +1237,7 @@ int CLI::run(int argc, char **argv)
     std::map<std::string, std::string> record_key_values;
     std::vector<std::string> effective_load_filaments = requested_load_filaments;
     std::vector<std::vector<unsigned int>> model_material_slots(m_input_files.size());
-    const bool has_explicit_model_filaments = std::any_of(
-        m_model_cli_specs.begin(), m_model_cli_specs.end(),
-        [](const ModelCliSpec &spec) { return spec.filament_group.has_value(); });
+    const bool has_model_filament_mapping = !m_model_cli_specs.empty();
 
     if (!m_model_cli_specs.empty()) {
         if (m_model_cli_specs.size() != m_input_files.size()) {
@@ -1260,7 +1258,7 @@ int CLI::run(int argc, char **argv)
         }
     }
 
-    if (has_explicit_model_filaments) {
+    if (has_model_filament_mapping) {
         std::map<std::string, unsigned int> slot_by_canonical_path;
         effective_load_filaments.clear();
         for (size_t model_index = 0; model_index < m_model_cli_specs.size(); ++model_index) {
@@ -1270,8 +1268,9 @@ int CLI::run(int argc, char **argv)
             else if (!requested_load_filaments.empty())
                 group = requested_load_filaments.front();
             else {
-                boost::nowide::cerr << "Missing --model-filaments for model index " << model_index << " ("
-                                    << m_input_files[model_index] << ")" << std::endl;
+                boost::nowide::cerr << "Missing filament config for model index " << model_index << " ("
+                                    << m_input_files[model_index]
+                                    << "); provide --model-filaments or --load-filaments" << std::endl;
                 record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
                 flush_and_exit(CLI_INVALID_PARAMS);
             }
@@ -1287,7 +1286,42 @@ int CLI::run(int argc, char **argv)
             boost::split(paths, group, boost::is_any_of(";"));
             for (std::string &path : paths) {
                 boost::trim(path);
-                if (path.empty() || !boost::filesystem::exists(path)) {
+                if (path.empty()) {
+                    boost::nowide::cerr << "Empty filament config in --model-filaments for model index " << model_index
+                                        << std::endl;
+                    record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
+                    flush_and_exit(CLI_INVALID_PARAMS);
+                }
+            }
+
+            size_t expected_filament_count = 1;
+            if (boost::algorithm::iends_with(m_input_files[model_index], ".obj")) {
+                std::vector<std::string> material_names;
+                std::string              material_error;
+                if (!load_obj_material_names(m_input_files[model_index].c_str(), material_names, material_error)) {
+                    boost::nowide::cerr << "Failed to inspect OBJ materials for model index " << model_index << ": "
+                                        << m_input_files[model_index] << std::endl;
+                    record_exit_reson(outfile_dir, CLI_DATA_FILE_ERROR, 0, cli_errors[CLI_DATA_FILE_ERROR], sliced_info);
+                    flush_and_exit(CLI_DATA_FILE_ERROR);
+                }
+                expected_filament_count = std::max<size_t>(material_names.size(), 1);
+            }
+
+            if (paths.size() < expected_filament_count) {
+                BOOST_LOG_TRIVIAL(warning) << boost::format(
+                    "--model-filaments for model index %1% has %2% entries for %3% materials; repeating the last entry")
+                                                   % model_index % paths.size() % expected_filament_count;
+                paths.resize(expected_filament_count, paths.back());
+            } else if (paths.size() > expected_filament_count) {
+                BOOST_LOG_TRIVIAL(warning) << boost::format(
+                    "--model-filaments for model index %1% has %2% entries for %3% materials; ignoring %4% trailing entries")
+                                                   % model_index % paths.size() % expected_filament_count
+                                                   % (paths.size() - expected_filament_count);
+                paths.resize(expected_filament_count);
+            }
+
+            for (const std::string &path : paths) {
+                if (!boost::filesystem::exists(path)) {
                     boost::nowide::cerr << "Invalid filament config in --model-filaments for model index " << model_index
                                         << ": " << path << std::endl;
                     record_exit_reson(outfile_dir, CLI_FILE_NOTFOUND, 0, cli_errors[CLI_FILE_NOTFOUND], sliced_info);
@@ -1552,7 +1586,7 @@ int CLI::run(int argc, char **argv)
     const std::vector<int>  clone_objects  = m_config.option<ConfigOptionInts>("clone_objects", true)->values;
     //when load objects from stl/obj, the total used filaments set
     std::set<int> used_filament_set;
-    if (has_explicit_model_filaments && !loaded_filament_ids.empty()) {
+    if (has_model_filament_mapping && !loaded_filament_ids.empty()) {
         BOOST_LOG_TRIVIAL(error) << "--load-filament-ids cannot be combined with --model-filaments";
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
         flush_and_exit(CLI_INVALID_PARAMS);
@@ -1647,7 +1681,7 @@ int CLI::run(int argc, char **argv)
                 //LoadStrategy strategy = LoadStrategy::LoadModel | LoadStrategy::LoadConfig|LoadStrategy::AddDefaultInstances;
                 //if (load_aux) strategy = strategy | LoadStrategy::LoadAuxiliary;
                 const std::vector<unsigned int> *explicit_material_slots =
-                    has_explicit_model_filaments ? &model_material_slots[input_index] : nullptr;
+                    has_model_filament_mapping ? &model_material_slots[input_index] : nullptr;
                 model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets,
                                               &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice, nullptr,
                                               auto_repair_model, collect_repair_report ? &model_repair_info.report : nullptr,
@@ -1808,7 +1842,7 @@ int CLI::run(int argc, char **argv)
                 {
                     need_arrange = true;
                     int object_extruder_id = 0, clone_count = 1;
-                    if (has_explicit_model_filaments) {
+                    if (has_model_filament_mapping) {
                         const std::vector<unsigned int> &slots = model_material_slots[input_index];
                         for (unsigned int slot : slots)
                             used_filament_set.emplace(static_cast<int>(slot));
@@ -3554,7 +3588,7 @@ int CLI::run(int argc, char **argv)
 
             const std::vector<int>& min_flush_volumes = Slic3r::GUI::get_min_flush_volumes(m_print_config);
 
-            if ((has_explicit_model_filaments || obj_multicolor_auto_mapping || glb_texture_auto_mapping) &&
+            if ((has_model_filament_mapping || obj_multicolor_auto_mapping || glb_texture_auto_mapping) &&
                 filament_is_support->size() != project_filament_count) {
                 BOOST_LOG_TRIVIAL(warning)
                     << boost::format("normalize multicolor filament_is_support size from %1% to %2%")

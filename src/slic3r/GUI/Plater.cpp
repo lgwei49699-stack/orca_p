@@ -8544,7 +8544,7 @@ bool Plater::priv::gfd_upload_current_config(const std::string& config_name, con
             if (!device_type.empty()) {
                 std::vector<GFDCloudConfigInfo> configs;
                 std::string                     fetch_error_message;
-                if (gfd_fetch_cloud_configs(device_type, configs, fetch_error_message)) {
+                if (gfd_fetch_cloud_configs(device_type, configs, fetch_error_message, q)) {
                     const auto matched = std::find_if(configs.rbegin(), configs.rend(), [&](const GFDCloudConfigInfo& existing) {
                         return existing.device_type == device_type &&
                                existing.name == config_name &&

@@ -36,6 +36,9 @@ struct GeneralExtruderConfig
 };
 extern bool load_obj(const char *path, TriangleMesh *mesh, ObjInfo &vertex_colors, std::string &message);
 extern bool load_obj(const char *path, Model *model, ObjInfo &vertex_colors, std::string &message, const char *object_name = nullptr);
+// Read the distinct usemtl names which are actually assigned to faces, preserving
+// their first face-use order. This intentionally does not require the MTL file.
+extern bool load_obj_material_names(const char *path, std::vector<std::string> &material_names, std::string &message);
 
 extern bool store_obj(const char *path, TriangleMesh *mesh);
 extern bool store_obj(const char *path, ModelObject *model);

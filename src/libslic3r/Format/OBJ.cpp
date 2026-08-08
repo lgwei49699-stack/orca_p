@@ -180,6 +180,31 @@ std::string rgba_to_string(const RGBA& color, int precision) {
     return ss.str();
 }
 
+bool load_obj_material_names(const char *path, std::vector<std::string> &material_names, std::string &message)
+{
+    ObjParser::ObjData data;
+    material_names.clear();
+    if (!ObjParser::objparse(path, data)) {
+        BOOST_LOG_TRIVIAL(error) << "load_obj_material_names: failed to parse " << path;
+        message = _L("load_obj: failed to parse");
+        return false;
+    }
+
+    if (data.usemtls.size() == 1) {
+        material_names.emplace_back(data.usemtls.front().name);
+        return true;
+    }
+
+    std::unordered_map<std::string, bool> seen;
+    for (const ObjParser::ObjUseMtl &usemtl : data.usemtls) {
+        if (usemtl.face_end < usemtl.face_start)
+            continue;
+        if (seen.emplace(usemtl.name, true).second)
+            material_names.emplace_back(usemtl.name);
+    }
+    return true;
+}
+
 bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::string& message)
 {
     if (meshptr == nullptr)
