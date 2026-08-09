@@ -133,7 +133,19 @@ void GFDAuthManager::clear_session(AppConfig* config)
     config->save();
 }
 
-bool GFDAuthManager::ensure_logged_in(wxWindow*, std::string* error_message)
+void GFDAuthManager::logout(AppConfig* config, bool forget_credentials)
+{
+    if (config == nullptr)
+        return;
+
+    GFD::Config::clear_login_identity(config);
+    GFD::Config::clear_verify_cache(config);
+    if (forget_credentials)
+        GFD::Config::clear_cached_credentials(config);
+    config->save();
+}
+
+bool GFDAuthManager::ensure_logged_in(wxWindow* parent, std::string* error_message)
 {
     auto* config = wxGetApp().app_config;
     if (has_valid_session(config))
@@ -151,7 +163,7 @@ bool GFDAuthManager::ensure_logged_in(wxWindow*, std::string* error_message)
         return false;
     }
 
-    const bool logged_in = wxGetApp().ShowUserLogin();
+    const bool logged_in = wxGetApp().ShowGFDLogin(parent);
     if (!logged_in) {
         if (local_error.empty())
             local_error = "登录状态无效，请重新登录";

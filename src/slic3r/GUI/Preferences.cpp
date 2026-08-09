@@ -379,6 +379,119 @@ wxBoxSizer *PreferencesDialog::create_item_region_combobox(wxString title, wxWin
     return m_sizer_combox;
 }
 
+wxBoxSizer *PreferencesDialog::create_gfd_environment_combobox(wxWindow *parent)
+{
+    const std::vector<wxString> labels = {_L("正式环境"), _L("测试环境")};
+    const bool                  use_qa = GFD::Config::current_environment_name(app_config) == GFD::Config::ENV_QA;
+    auto [sizer, combobox] = create_item_combobox_base(_L("GFD 云环境"), parent,
+                                                        _L("切换 GFD 中台的正式环境或测试环境"),
+                                                        "gfd_environment", labels, use_qa ? 1 : 0);
+
+    combobox->GetDropDown().Bind(wxEVT_COMBOBOX, [this, combobox](wxCommandEvent &event) {
+        const std::string current_environment = GFD::Config::current_environment_name(app_config);
+        const int         current_selection = current_environment == GFD::Config::ENV_QA ? 1 : 0;
+        const std::string selected_environment = event.GetSelection() == 1 ? GFD::Config::ENV_QA : GFD::Config::ENV_PRODUCTION;
+        if (selected_environment == current_environment) {
+            event.Skip();
+            return;
+        }
+
+        MessageDialog confirm_dialog(this,
+                                     _L("切换 GFD 环境会退出当前账号，并立即要求重新登录。\n\n是否继续？"),
+                                     _L("切换 GFD 云环境"), wxOK | wxCANCEL | wxICON_WARNING);
+        if (confirm_dialog.ShowModal() != wxID_OK) {
+            combobox->SetSelection(current_selection);
+            return;
+        }
+
+        GFD::Config::set_environment(app_config, selected_environment);
+        GFDAuthManager::logout(app_config, false);
+        update_gfd_account_controls();
+
+        BOOST_LOG_TRIVIAL(info) << "GFD environment switched from preferences"
+                                << ", from=" << current_environment
+                                << ", to=" << selected_environment;
+        wxGetApp().ShowGFDLogin(this);
+        update_gfd_account_controls();
+        event.Skip();
+    });
+
+    return sizer;
+}
+
+wxBoxSizer *PreferencesDialog::create_gfd_account_controls(wxWindow *parent)
+{
+    auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+    sizer->Add(0, 0, 0, wxEXPAND | wxLEFT, 23);
+
+    auto* title = new wxStaticText(parent, wxID_ANY, _L("GFD 账号"), wxDefaultPosition, DESIGN_TITLE_SIZE, 0);
+    title->SetForegroundColour(DESIGN_GRAY900_COLOR);
+    title->SetFont(::Label::Body_13);
+    title->SetToolTip(_L("查看当前 GFD 登录状态，或退出后重新登录"));
+    sizer->Add(title, 0, wxALIGN_CENTER_VERTICAL | wxALL, 3);
+
+    m_gfd_account_status = new wxStaticText(parent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(180), -1),
+                                             wxST_ELLIPSIZE_END);
+    m_gfd_account_status->SetFont(::Label::Body_13);
+    sizer->Add(m_gfd_account_status, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+
+    m_gfd_login_button = new Button(parent, _L("登录"));
+    m_gfd_login_button->SetStyle(ButtonStyle::Regular, ButtonType::Window);
+    m_gfd_login_button->SetMinSize(wxSize(FromDIP(88), FromDIP(28)));
+    m_gfd_login_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+        const bool was_logged_in = GFDAuthManager::has_valid_session(app_config);
+        if (was_logged_in) {
+            MessageDialog confirm_dialog(this, _L("将退出当前 GFD 账号并重新打开登录窗口。是否继续？"),
+                                         _L("重新登录"), wxOK | wxCANCEL | wxICON_QUESTION);
+            if (confirm_dialog.ShowModal() != wxID_OK)
+                return;
+            GFDAuthManager::logout(app_config, false);
+        }
+
+        wxGetApp().ShowGFDLogin(this);
+        update_gfd_account_controls();
+    });
+    sizer->Add(m_gfd_login_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+
+    m_gfd_logout_button = new Button(parent, _L("退出登录"));
+    m_gfd_logout_button->SetStyle(ButtonStyle::Regular, ButtonType::Window);
+    m_gfd_logout_button->SetMinSize(wxSize(FromDIP(88), FromDIP(28)));
+    m_gfd_logout_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+        MessageDialog confirm_dialog(this, _L("确定退出当前 GFD 账号？已记住的账号密码会继续保留。"),
+                                     _L("退出登录"), wxOK | wxCANCEL | wxICON_QUESTION);
+        if (confirm_dialog.ShowModal() != wxID_OK)
+            return;
+
+        GFDAuthManager::logout(app_config, false);
+        update_gfd_account_controls();
+    });
+    sizer->Add(m_gfd_logout_button, 0, wxALIGN_CENTER_VERTICAL);
+
+    update_gfd_account_controls();
+    return sizer;
+}
+
+void PreferencesDialog::update_gfd_account_controls()
+{
+    if (m_gfd_account_status == nullptr || m_gfd_login_button == nullptr || m_gfd_logout_button == nullptr)
+        return;
+
+    const bool        logged_in = GFDAuthManager::has_valid_session(app_config);
+    const std::string email     = GFD::Config::user_email(app_config);
+    if (logged_in) {
+        const wxString account = email.empty() ? _L("已登录") : _L("已登录：") + wxString::FromUTF8(email);
+        m_gfd_account_status->SetLabel(account);
+        m_gfd_account_status->SetToolTip(account);
+        m_gfd_login_button->SetLabel(_L("重新登录"));
+    } else {
+        m_gfd_account_status->SetLabel(_L("未登录"));
+        m_gfd_account_status->SetToolTip(_L("当前没有有效的 GFD 登录会话"));
+        m_gfd_login_button->SetLabel(_L("登录"));
+    }
+    m_gfd_logout_button->Enable(logged_in);
+    m_gfd_account_status->GetParent()->Layout();
+}
+
 wxBoxSizer *PreferencesDialog::create_item_loglevel_combobox(wxString title, wxWindow *parent, wxString tooltip, std::vector<wxString> vlist)
 {
     wxBoxSizer *m_sizer_combox = new wxBoxSizer(wxHORIZONTAL);
@@ -1217,6 +1330,8 @@ wxWindow* PreferencesDialog::create_general_page()
     auto item_auto_arrange  = create_item_checkbox(_L("Auto arrange plate after cloning"), page, _L("Auto arrange plate after object cloning"), 50, "auto_arrange");
     auto title_presets = create_item_title(_L("Presets"), page, _L("Presets"));
     auto title_network = create_item_title(_L("Network"), page, _L("Network"));
+    auto item_gfd_environment = create_gfd_environment_combobox(page);
+    auto item_gfd_account     = create_gfd_account_controls(page);
     auto item_user_sync        = create_item_checkbox(_L("Auto sync user presets (Printer/Filament/Process)"), page, _L("User Sync"), 50, "sync_user_preset");
     auto item_system_sync        = create_item_checkbox(_L("Update built-in Presets automatically."), page, _L("System Sync"), 50, "sync_system_preset");
     auto item_save_presets = create_item_button(_L("Clear my choice on the unsaved presets."), _L("Clear"), page, L"", _L("Clear my choice on the unsaved presets."), []() {
@@ -1306,6 +1421,8 @@ wxWindow* PreferencesDialog::create_general_page()
     sizer_page->Add(item_remember_printer_config, 0, wxTOP, FromDIP(3));
     sizer_page->Add(item_save_presets, 0, wxTOP, FromDIP(3));
     sizer_page->Add(title_network, 0, wxTOP | wxEXPAND, FromDIP(20));
+    sizer_page->Add(item_gfd_environment, 0, wxTOP, FromDIP(3));
+    sizer_page->Add(item_gfd_account, 0, wxTOP, FromDIP(3));
     sizer_page->Add(item_check_stable_version_only, 0, wxTOP, FromDIP(3));
     sizer_page->Add(item_stealth_mode, 0, wxTOP, FromDIP(3));
     sizer_page->Add(item_enable_plugin, 0, wxTOP, FromDIP(3));
@@ -1531,13 +1648,6 @@ wxWindow* PreferencesDialog::create_debug_page()
                     app_config->set("iot_environment", ENV_PRODUCT_HOST);
                 }
 
-                if (param == "qa_host") {
-                    GFD::Config::set_environment(app_config, GFD::Config::ENV_QA);
-                } else {
-                    GFD::Config::set_environment(app_config, GFD::Config::ENV_PRODUCTION);
-                }
-
-                GFDAuthManager::clear_session(app_config);
                 app_config->save();
 
 

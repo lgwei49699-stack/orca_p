@@ -9,6 +9,7 @@
 
 class Button;
 class CheckBox;
+class ComboBox;
 class TextInput;
 class wxStaticText;
 
@@ -27,7 +28,7 @@ public:
         Cancelled
     };
 
-    GFDLoginDialog();
+    explicit GFDLoginDialog(wxWindow* parent = nullptr);
     ~GFDLoginDialog() override;
 
     bool run();
@@ -47,6 +48,8 @@ private:
     void bind_events();
     void load_cached_credentials();
     void load_environment_selection();
+    void load_saved_credentials_for_selected_environment();
+    void fill_saved_password(const std::string& username);
     void save_cached_credentials();
     void select_environment(const std::string& environment);
     std::string selected_environment() const;
@@ -67,7 +70,7 @@ private:
     static std::string rsa_encrypt_password(const std::string& password, const std::string& public_key_base64, std::string& error_message);
 
 private:
-    TextInput*    m_username_input{nullptr};
+    ComboBox*     m_username_input{nullptr};
     TextInput*    m_password_input{nullptr};
     RadioBox*     m_qa_environment_radio{nullptr};
     RadioBox*     m_production_environment_radio{nullptr};

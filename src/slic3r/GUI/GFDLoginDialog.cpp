@@ -6,6 +6,7 @@
 #include "MainFrame.hpp"
 #include "Widgets/Button.hpp"
 #include "Widgets/CheckBox.hpp"
+#include "Widgets/ComboBox.hpp"
 #include "Widgets/RadioBox.hpp"
 #include "Widgets/TextInput.hpp"
 #include "libslic3r/AppConfig.hpp"
@@ -134,13 +135,10 @@ bool persist_login_state(const std::string& email,
     if (wxGetApp().app_config == nullptr)
         return false;
 
-    GFD::Config::set_remember_login(wxGetApp().app_config, remember_credentials);
     if (persist_credentials && remember_credentials) {
-        GFD::Config::set_cached_username(wxGetApp().app_config, email);
-        GFD::Config::set_cached_password(wxGetApp().app_config, password);
+        GFD::Config::save_login_credential(wxGetApp().app_config, email, password);
     } else if (persist_credentials) {
-        GFD::Config::set_cached_username(wxGetApp().app_config, "");
-        GFD::Config::set_cached_password(wxGetApp().app_config, "");
+        GFD::Config::save_login_credential(wxGetApp().app_config, email, "");
     }
 
     GFD::Config::set_verify_token(wxGetApp().app_config, verify_token);
@@ -198,8 +196,10 @@ void apply_window_button_style(Button* button, ButtonStyle style)
         button->SetStyle(style, ButtonType::Choice);
 }
 
-wxWindow* login_parent_window()
+wxWindow* login_parent_window(wxWindow* preferred_parent = nullptr)
 {
+    if (preferred_parent != nullptr && preferred_parent->IsShownOnScreen())
+        return preferred_parent;
     if (wxGetApp().mainframe != nullptr)
         return static_cast<wxWindow*>(wxGetApp().mainframe);
     return wxTheApp != nullptr ? wxTheApp->GetTopWindow() : nullptr;
@@ -242,8 +242,9 @@ wxBoxSizer* create_environment_item(wxWindow* parent,
 
 } // namespace
 
-GFDLoginDialog::GFDLoginDialog()
-    : wxDialog(login_parent_window(), wxID_ANY, _L("功夫豆Orca - 登录"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX)
+GFDLoginDialog::GFDLoginDialog(wxWindow* parent)
+    : wxDialog(login_parent_window(parent), wxID_ANY, _L("功夫豆Orca - 登录"), wxDefaultPosition, wxDefaultSize,
+               wxCAPTION | wxCLOSE_BOX)
 {
     build();
     bind_events();
@@ -343,8 +344,8 @@ void GFDLoginDialog::build()
     username_label->SetMinSize(wxSize(FromDIP(40), -1));
     username_row->Add(username_label, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(26));
 
-    m_username_input = new TextInput(this, wxEmptyString, wxEmptyString, wxEmptyString, wxDefaultPosition,
-                                     wxSize(FromDIP(260), FromDIP(36)), wxTE_PROCESS_ENTER);
+    m_username_input = new ComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(260), FromDIP(36)),
+                                    0, nullptr, 0);
     m_username_input->SetCornerRadius(FromDIP(6));
     username_row->Add(m_username_input, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(12));
     main_sizer->Add(username_row, 0, wxEXPAND);
@@ -424,6 +425,9 @@ void GFDLoginDialog::bind_events()
     m_cancel_button->Bind(wxEVT_BUTTON, &GFDLoginDialog::on_cancel, this);
     m_username_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, &GFDLoginDialog::on_login, this);
     m_password_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, &GFDLoginDialog::on_login, this);
+    m_username_input->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
+        fill_saved_password(into_u8(m_username_input->GetValue()));
+    });
     m_qa_environment_radio->Bind(wxEVT_TOGGLEBUTTON, [this](wxCommandEvent&) { select_environment(GFD::Config::ENV_QA); });
     m_production_environment_radio->Bind(wxEVT_TOGGLEBUTTON, [this](wxCommandEvent&) { select_environment(GFD::Config::ENV_PRODUCTION); });
 }
@@ -433,9 +437,6 @@ void GFDLoginDialog::load_cached_credentials()
     if (wxGetApp().app_config == nullptr)
         return;
 
-    m_username_input->GetTextCtrl()->SetValue(from_u8(GFD::Config::cached_username(wxGetApp().app_config)));
-    m_password_input->GetTextCtrl()->SetValue(from_u8(GFD::Config::cached_password(wxGetApp().app_config)));
-    m_remember_checkbox->SetValue(GFD::Config::remember_login(wxGetApp().app_config));
     load_environment_selection();
 }
 
@@ -444,19 +445,57 @@ void GFDLoginDialog::load_environment_selection()
     select_environment(GFD::Config::current_environment_name(wxGetApp().app_config));
 }
 
+void GFDLoginDialog::load_saved_credentials_for_selected_environment()
+{
+    if (wxGetApp().app_config == nullptr || m_username_input == nullptr || m_password_input == nullptr || m_remember_checkbox == nullptr)
+        return;
+
+    const auto credentials = GFD::Config::saved_login_credentials(wxGetApp().app_config, selected_environment());
+    m_username_input->Clear();
+    for (const auto& credential : credentials)
+        m_username_input->Append(from_u8(credential.username));
+
+    if (credentials.empty()) {
+        m_username_input->SetValue(wxEmptyString);
+        m_password_input->GetTextCtrl()->SetValue(wxEmptyString);
+        m_remember_checkbox->SetValue(GFD::Config::remember_login(wxGetApp().app_config));
+        return;
+    }
+
+    m_username_input->SetSelection(0);
+    m_username_input->SetValue(from_u8(credentials.front().username));
+    m_password_input->GetTextCtrl()->SetValue(from_u8(credentials.front().password));
+    m_remember_checkbox->SetValue(!credentials.front().password.empty());
+}
+
+void GFDLoginDialog::fill_saved_password(const std::string& username)
+{
+    if (wxGetApp().app_config == nullptr || m_password_input == nullptr || m_remember_checkbox == nullptr)
+        return;
+
+    const std::string normalized_username = trim_copy(username);
+    const auto credentials = GFD::Config::saved_login_credentials(wxGetApp().app_config, selected_environment());
+    const auto credential_it = std::find_if(credentials.begin(), credentials.end(), [&normalized_username](const auto& credential) {
+        return credential.username == normalized_username;
+    });
+    if (credential_it != credentials.end() && !credential_it->password.empty()) {
+        m_password_input->GetTextCtrl()->SetValue(from_u8(credential_it->password));
+        m_remember_checkbox->SetValue(true);
+    }
+}
+
 void GFDLoginDialog::save_cached_credentials()
 {
     if (wxGetApp().app_config == nullptr)
         return;
 
     const bool remember = m_remember_checkbox->GetValue();
-    GFD::Config::set_remember_login(wxGetApp().app_config, remember);
+    const std::string username = trim_copy(into_u8(m_username_input->GetTextCtrl()->GetValue()));
     if (remember) {
-        GFD::Config::set_cached_username(wxGetApp().app_config, into_u8(m_username_input->GetTextCtrl()->GetValue()));
-        GFD::Config::set_cached_password(wxGetApp().app_config, into_u8(m_password_input->GetTextCtrl()->GetValue()));
+        GFD::Config::save_login_credential(wxGetApp().app_config, username,
+                                           into_u8(m_password_input->GetTextCtrl()->GetValue()), selected_environment());
     } else {
-        GFD::Config::set_cached_username(wxGetApp().app_config, "");
-        GFD::Config::set_cached_password(wxGetApp().app_config, "");
+        GFD::Config::save_login_credential(wxGetApp().app_config, username, "", selected_environment());
     }
 }
 
@@ -467,6 +506,7 @@ void GFDLoginDialog::select_environment(const std::string& environment)
         m_qa_environment_radio->SetValue(use_qa);
     if (m_production_environment_radio != nullptr)
         m_production_environment_radio->SetValue(!use_qa);
+    load_saved_credentials_for_selected_environment();
 }
 
 std::string GFDLoginDialog::selected_environment() const
@@ -484,10 +524,9 @@ bool GFDLoginDialog::apply_selected_environment()
 
     const std::string environment = selected_environment();
     const bool        environment_changed = GFD::Config::current_environment_name(config) != environment;
-    config->set("iot_environment", environment == GFD::Config::ENV_QA ? ENV_QAT_HOST : ENV_PRODUCT_HOST);
     GFD::Config::set_environment(config, environment);
     if (environment_changed)
-        GFDAuthManager::clear_session(config);
+        GFDAuthManager::logout(config, false);
     else
         config->save();
     return true;

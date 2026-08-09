@@ -111,6 +111,7 @@
 // BBS: DailyTip and UserGuide Dialog
 #include "WebDownPluginDlg.hpp"
 #include "WebGuideDialog.hpp"
+#include "WebUserLoginDialog.hpp"
 #include "GFDLoginDialog.hpp"
 #include "GFDAuthManager.hpp"
 #include "ReleaseNote.hpp"
@@ -164,6 +165,10 @@ namespace Slic3r { namespace GUI {
 class MainFrame;
 
 namespace {
+
+// This customized build uses GFD authentication only. Keep the networking
+// plug-in available for device/LAN capabilities, but disable Bambu/Orca cloud accounts.
+constexpr bool ORCA_CLOUD_ACCOUNT_ENABLED = false;
 
 bool gfd_user_login_valid(const AppConfig* config)
 {
@@ -1160,6 +1165,11 @@ void GUI_App::shutdown()
         delete login_dlg;
         login_dlg = nullptr;
     }
+    if (gfd_login_dlg != nullptr) {
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": destroy GFD login dialog");
+        delete gfd_login_dlg;
+        gfd_login_dlg = nullptr;
+    }
 
     if (m_is_recreating_gui)
         return;
@@ -1665,6 +1675,8 @@ void GUI_App::init_networking_callbacks()
                 return;
             }
             if (return_code == 5) {
+                if (!ORCA_CLOUD_ACCOUNT_ENABLED)
+                    return;
                 GUI::wxGetApp().CallAfter([this] {
                     this->request_user_logout();
                     MessageDialog msg_dlg(nullptr, _L("Login information expired. Please login again."), "", wxAPPLY | wxOK);
@@ -2398,7 +2410,8 @@ bool GUI_App::on_init_inner()
             BOOST_LOG_TRIVIAL(info) << "Skip GFD login UI because no desktop session is available.";
         } else {
             BOOST_LOG_TRIVIAL(info) << "GFD login required before loading client.";
-            if (!ShowUserLogin()) {
+            std::string login_error;
+            if (!GFDAuthManager::ensure_logged_in(nullptr, &login_error)) {
                 BOOST_LOG_TRIVIAL(info) << "GFD login canceled or failed, quit application before loading client.";
                 return false;
             }
@@ -2923,6 +2936,11 @@ bool GUI_App::on_init_network(bool try_backup)
             std::string country_code = app_config->get_country_code();
             m_agent->set_country_code(country_code);
             m_agent->start();
+            if (!ORCA_CLOUD_ACCOUNT_ENABLED && m_agent->is_user_login()) {
+                BOOST_LOG_TRIVIAL(info) << "Bambu/Orca cloud account is disabled; clearing the existing cloud session.";
+                m_agent->user_logout(true);
+                m_agent->set_user_selected_machine("");
+            }
         }
     } else {
         int result = Slic3r::NetworkAgent::unload_network_module();
@@ -3498,46 +3516,63 @@ void GUI_App::ShowDownNetPluginDlg()
     }
 }
 
-bool GUI_App::ShowUserLogin(bool show)
+void GUI_App::ShowUserLogin(bool show)
 {
+    // Bambu/Orca cloud account login. GFD authentication uses ShowGFDLogin().
+    if (!ORCA_CLOUD_ACCOUNT_ENABLED) {
+        BOOST_LOG_TRIVIAL(info) << "Ignore Bambu/Orca cloud login because it is disabled in this build.";
+        return;
+    }
+
     if (show) {
         try {
-            if (login_dlg != nullptr && login_dlg->IsShown()) {
-                login_dlg->Raise();
-                return false;
-            }
-            if (login_dlg != nullptr) {
-                delete login_dlg;
-                login_dlg = nullptr;
-            }
-
-            auto* dlg            = new GFDLoginDialog();
-            login_dlg            = dlg;
-            const bool logged_in = dlg->run();
-            if (login_dlg == dlg) {
-                delete login_dlg;
-                login_dlg = nullptr;
-            }
-            return logged_in;
-        } catch (const std::exception& ex) {
             if (login_dlg != nullptr)
                 delete login_dlg;
-            login_dlg = nullptr;
-            BOOST_LOG_TRIVIAL(error) << "ShowUserLogin failed: " << ex.what();
-            show_error(mainframe ? static_cast<wxWindow*>(mainframe) : nullptr, ex.what());
-            return false;
+            login_dlg = new ZUserLogin();
+            login_dlg->ShowModal();
         } catch (...) {
-            if (login_dlg != nullptr)
-                delete login_dlg;
-            login_dlg = nullptr;
-            BOOST_LOG_TRIVIAL(error) << "ShowUserLogin failed: unknown exception";
-            show_error(mainframe ? static_cast<wxWindow*>(mainframe) : nullptr, "Show GFD login dialog failed.");
-            return false;
+            BOOST_LOG_TRIVIAL(error) << "ShowUserLogin failed";
         }
     } else {
         if (login_dlg)
             login_dlg->EndModal(wxID_OK);
-        return true;
+    }
+}
+
+bool GUI_App::ShowGFDLogin(wxWindow* parent)
+{
+    try {
+        if (gfd_login_dlg != nullptr && gfd_login_dlg->IsShown()) {
+            gfd_login_dlg->Raise();
+            return false;
+        }
+        if (gfd_login_dlg != nullptr) {
+            delete gfd_login_dlg;
+            gfd_login_dlg = nullptr;
+        }
+
+        auto* dlg            = new GFDLoginDialog(parent);
+        gfd_login_dlg        = dlg;
+        const bool logged_in = dlg->run();
+        if (gfd_login_dlg == dlg) {
+            delete gfd_login_dlg;
+            gfd_login_dlg = nullptr;
+        }
+        return logged_in;
+    } catch (const std::exception& ex) {
+        if (gfd_login_dlg != nullptr)
+            delete gfd_login_dlg;
+        gfd_login_dlg = nullptr;
+        BOOST_LOG_TRIVIAL(error) << "ShowGFDLogin failed: " << ex.what();
+        show_error(parent != nullptr ? parent : static_cast<wxWindow*>(mainframe), ex.what());
+        return false;
+    } catch (...) {
+        if (gfd_login_dlg != nullptr)
+            delete gfd_login_dlg;
+        gfd_login_dlg = nullptr;
+        BOOST_LOG_TRIVIAL(error) << "ShowGFDLogin failed: unknown exception";
+        show_error(parent != nullptr ? parent : static_cast<wxWindow*>(mainframe), "Show GFD login dialog failed.");
+        return false;
     }
 }
 
@@ -3728,6 +3763,11 @@ wxString GUI_App::transition_tridid(int trid_id)
 // BBS
 void GUI_App::request_login(bool show_user_info)
 {
+    if (!ORCA_CLOUD_ACCOUNT_ENABLED) {
+        get_login_info();
+        return;
+    }
+
     ShowUserLogin();
 
     if (show_user_info && m_agent && m_agent->is_user_login()) {
@@ -3737,6 +3777,12 @@ void GUI_App::request_login(bool show_user_info)
 
 void GUI_App::get_login_info()
 {
+    if (!ORCA_CLOUD_ACCOUNT_ENABLED) {
+        if (mainframe != nullptr && mainframe->m_webview != nullptr)
+            mainframe->m_webview->SetLoginPanelVisibility(false);
+        return;
+    }
+
     if (m_agent) {
         if (m_agent->is_user_login()) {
             std::string login_cmd = m_agent->build_login_cmd();
@@ -3754,6 +3800,8 @@ void GUI_App::get_login_info()
 
 bool GUI_App::is_user_login()
 {
+    if (!ORCA_CLOUD_ACCOUNT_ENABLED)
+        return false;
     if (m_agent)
         return m_agent->is_user_login();
     return false;
@@ -3761,6 +3809,9 @@ bool GUI_App::is_user_login()
 
 bool GUI_App::check_login()
 {
+    if (!ORCA_CLOUD_ACCOUNT_ENABLED)
+        return false;
+
     bool result = false;
     if (m_agent)
         result = m_agent->is_user_login();
@@ -3789,8 +3840,6 @@ void GUI_App::request_user_login(int online_login)
 
 void GUI_App::request_user_logout()
 {
-    GFDAuthManager::clear_session(app_config);
-
     if (m_agent && m_agent->is_user_login()) {
         // Update data first before showing dialogs
         m_agent->user_logout(true);
