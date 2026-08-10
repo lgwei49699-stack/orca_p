@@ -341,7 +341,8 @@ Model Model::read_from_file(const std::string&                                  
                             int                                                 plate_id,
                             ObjImportColorFn                                    objFn,
                             bool                                                repair_stl,
-                            MeshRepairReport*                                   repair_report)
+                            MeshRepairReport*                                   repair_report,
+                            const std::vector<unsigned int>*                    obj_material_extruder_ids)
 {
     Model model;
 
@@ -375,7 +376,53 @@ Model Model::read_from_file(const std::string&                                  
         if (result){
             unsigned char first_extruder_id;
             bool              has_color_mapping = false;
-            if (obj_info.vertex_colors.size() > 0) {
+            if (obj_material_extruder_ids != nullptr) {
+                const std::vector<unsigned int> &material_slots = *obj_material_extruder_ids;
+                if (obj_info.material_names.empty()) {
+                    if (material_slots.size() != 1)
+                        throw Slic3r::RuntimeError("OBJ without usemtl requires exactly one --model-filaments entry: " + input_file);
+                    const unsigned int slot = material_slots.front();
+                    if (slot == 0 || slot >= CONST_FILAMENTS.size())
+                        throw Slic3r::RuntimeError("OBJ filament slot is outside the supported range 1..16: " + input_file);
+                    for (ModelObject *object : model.objects) {
+                        object->config.set("extruder", static_cast<int>(slot));
+                        for (ModelVolume *volume : object->volumes)
+                            volume->config.set("extruder", static_cast<int>(slot));
+                    }
+                } else {
+                    if (material_slots.size() != obj_info.material_names.size()) {
+                        std::ostringstream names;
+                        for (size_t i = 0; i < obj_info.material_names.size(); ++i) {
+                            if (i != 0) names << ",";
+                            names << obj_info.material_names[i];
+                        }
+                        throw Slic3r::RuntimeError("OBJ material count does not match --model-filaments for " + input_file +
+                                                   ": materials=[" + names.str() + "] expected=" +
+                                                   std::to_string(obj_info.material_names.size()) + " received=" +
+                                                   std::to_string(material_slots.size()));
+                    }
+                    for (size_t material_index = 0; material_index < obj_info.material_names.size(); ++material_index)
+                        BOOST_LOG_TRIVIAL(info) << boost::format("OBJ material binding: input=%1%, material_index=%2%, material=%3%, slot=%4%")
+                                                       % input_file % material_index % obj_info.material_names[material_index]
+                                                       % material_slots[material_index];
+                    std::vector<unsigned char> face_filament_ids;
+                    face_filament_ids.reserve(obj_info.face_material_ids.size());
+                    unsigned int max_slot = 0;
+                    for (unsigned int local_material_id : obj_info.face_material_ids) {
+                        if (local_material_id >= material_slots.size())
+                            throw Slic3r::RuntimeError("OBJ face references an unresolved usemtl material: " + input_file);
+                        const unsigned int slot = material_slots[local_material_id];
+                        if (slot == 0 || slot >= CONST_FILAMENTS.size())
+                            throw Slic3r::RuntimeError("OBJ filament slot is outside the supported range 1..16: " + input_file);
+                        face_filament_ids.emplace_back(static_cast<unsigned char>(slot));
+                        max_slot = std::max(max_slot, slot);
+                    }
+                    first_extruder_id = static_cast<unsigned char>(material_slots.front());
+                    result = obj_import_face_color_deal(face_filament_ids, first_extruder_id, &model);
+                    if (result)
+                        update_model_extruder_count(model, max_slot);
+                }
+            } else if (obj_info.vertex_colors.size() > 0) {
                 std::vector<unsigned char> vertex_filament_ids;
                 if (objFn) { // 1.result is ok and pop up a dialog
                     objFn(obj_info.vertex_colors, false, vertex_filament_ids, first_extruder_id);
@@ -3249,7 +3296,7 @@ bool Model::obj_import_face_color_deal(const std::vector<unsigned char> &face_fi
             for (size_t i = 0; i < volume->mesh().its.indices.size(); i++) {
                 auto face         = volume->mesh().its.indices[i];
                 auto filament_id = face_filament_ids[i];
-                if (filament_id <= 1) { continue; }
+                if (filament_id == first_extruder_id) { continue; }
                 std::string result;
                 get_real_filament_id(filament_id, result);
                 volume->mmu_segmentation_facets.set_triangle_from_string(i, result);

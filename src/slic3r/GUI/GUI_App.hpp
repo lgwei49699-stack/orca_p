@@ -285,6 +285,7 @@ private:
 
     // login widget
     wxDialog* login_dlg{nullptr};
+    wxDialog* gfd_login_dlg{nullptr};
 
     VersionInfo        version_info;
     VersionInfo        privacy_version_info;
@@ -429,7 +430,8 @@ public:
     wxString transition_tridid(int trid_id);
     void     ShowUserGuide();
     void     ShowDownNetPluginDlg();
-    bool     ShowUserLogin(bool show = true);
+    void     ShowUserLogin(bool show = true);
+    bool     ShowGFDLogin(wxWindow* parent = nullptr);
     void     ShowOnlyFilament();
     // BBS
     void request_login(bool show_user_info = false);

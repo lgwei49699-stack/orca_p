@@ -2195,6 +2195,128 @@ fs::path gfd_cloud_process_record_path()
     return (fs::path(Slic3r::data_dir()) / "user" / "gfd_cloud_process_records.json").make_preferred();
 }
 
+std::string gfd_json_scalar_to_string(const nlohmann::json& value)
+{
+    if (value.is_null())
+        return {};
+    if (value.is_string())
+        return value.get<std::string>();
+    if (value.is_number_integer())
+        return std::to_string(value.get<long long>());
+    if (value.is_number_unsigned())
+        return std::to_string(value.get<unsigned long long>());
+    if (value.is_number_float())
+        return std::to_string(value.get<double>());
+    if (value.is_boolean())
+        return value.get<bool>() ? "1" : "0";
+    return {};
+}
+
+std::string gfd_json_object_scalar(const nlohmann::json& object, const char* key)
+{
+    if (!object.is_object())
+        return {};
+    const auto it = object.find(key);
+    return it == object.end() ? std::string() : gfd_json_scalar_to_string(*it);
+}
+
+std::string gfd_extract_path_leaf(const std::string& value)
+{
+    std::string candidate = boost::algorithm::trim_copy(value);
+    if (candidate.empty())
+        return {};
+
+    const size_t query_pos = candidate.find_first_of("?#");
+    if (query_pos != std::string::npos)
+        candidate.erase(query_pos);
+
+    const size_t scheme_pos = candidate.find("://");
+    if (scheme_pos != std::string::npos) {
+        const size_t path_pos = candidate.find_first_of("/\\", scheme_pos + 3);
+        if (path_pos == std::string::npos)
+            return {};
+    }
+
+    const size_t separator_pos = candidate.find_last_of("/\\");
+    if (separator_pos != std::string::npos)
+        candidate.erase(0, separator_pos + 1);
+
+    return boost::algorithm::trim_copy(candidate);
+}
+
+std::string gfd_sanitize_cloud_filename(std::string value)
+{
+    static const std::string invalid_chars = "<>:\"/\\|?*";
+
+    boost::algorithm::trim(value);
+    for (char& ch : value) {
+        const unsigned char uch = static_cast<unsigned char>(ch);
+        if (uch < 32 || invalid_chars.find(ch) != std::string::npos)
+            ch = '_';
+    }
+    while (!value.empty() && value.back() == '.')
+        value.pop_back();
+
+    if (value == "." || value == "..")
+        value.clear();
+    return value;
+}
+
+std::string gfd_resolve_cloud_config_filename(const std::string& url,
+                                              const std::string& filename_hint,
+                                              const std::string& fallback_filename = "gfd_cloud_config.3mf")
+{
+    std::string filename = gfd_sanitize_cloud_filename(gfd_extract_path_leaf(filename_hint));
+    if (filename.empty())
+        filename = gfd_sanitize_cloud_filename(gfd_extract_path_leaf(url));
+    if (filename.empty())
+        filename = gfd_sanitize_cloud_filename(fallback_filename);
+    return filename;
+}
+
+std::string gfd_extract_saved_cloud_config_id(const nlohmann::json& response)
+{
+    if (std::string top_level_id = gfd_json_object_scalar(response, "id"); !top_level_id.empty())
+        return top_level_id;
+
+    if (!response.is_object())
+        return {};
+
+    const auto data_it = response.find("data");
+    if (data_it == response.end())
+        return {};
+
+    if (std::string direct_id = gfd_json_scalar_to_string(*data_it); !direct_id.empty())
+        return direct_id;
+    if (data_it->is_object())
+        return gfd_json_object_scalar(*data_it, "id");
+    if (data_it->is_array()) {
+        for (const nlohmann::json& item : *data_it) {
+            if (std::string item_id = gfd_json_scalar_to_string(item); !item_id.empty())
+                return item_id;
+            if (item.is_object()) {
+                if (std::string nested_id = gfd_json_object_scalar(item, "id"); !nested_id.empty())
+                    return nested_id;
+            }
+        }
+    }
+
+    return {};
+}
+
+fs::path gfd_make_unique_temp_file_path(fs::path path)
+{
+    if (path.empty() || !fs::exists(path))
+        return path;
+
+    const fs::path    parent_path = path.parent_path();
+    const std::string stem        = path.stem().string();
+    const std::string extension   = path.extension().string();
+    for (size_t index = 2; fs::exists(path); ++index)
+        path = parent_path / fs::path(stem + "_" + std::to_string(index) + extension);
+    return path;
+}
+
 struct GFDImportRestoreState
 {
     std::string              printer_preset_name;
@@ -8237,7 +8359,7 @@ bool Plater::priv::gfd_save_config_to_server(const std::string& config_name,
     nlohmann::json request_json;
     request_json["name"]               = config_name;
     request_json["configFileUrl"]      = file_url;
-    request_json["configFileName"]     = fs::path(file_url).filename().string();
+    request_json["configFileName"]     = gfd_resolve_cloud_config_filename(file_url, std::string());
     request_json["deviceType"]         = device_type;
     request_json["info"]               = remarks;
     request_json["sliceType"]          = "orca";
@@ -8414,6 +8536,53 @@ bool Plater::priv::gfd_upload_current_config(const std::string& config_name, con
                                      << ", response=" << save_body;
             show_error(q, from_u8(msg));
             return false;
+        }
+
+        std::string saved_cloud_config_id = gfd_extract_saved_cloud_config_id(response);
+        if (saved_cloud_config_id.empty() && wxGetApp().preset_bundle != nullptr) {
+            const std::string device_type = GFD::Config::current_device_type(wxGetApp().preset_bundle->printers.get_selected_preset().config);
+            if (!device_type.empty()) {
+                std::vector<GFDCloudConfigInfo> configs;
+                std::string                     fetch_error_message;
+                if (gfd_fetch_cloud_configs(device_type, configs, fetch_error_message, q)) {
+                    const auto matched = std::find_if(configs.rbegin(), configs.rend(), [&](const GFDCloudConfigInfo& existing) {
+                        return existing.device_type == device_type &&
+                               existing.name == config_name &&
+                               existing.config_file_url == file_url;
+                    });
+                    if (matched != configs.rend())
+                        saved_cloud_config_id = matched->id;
+                } else {
+                    BOOST_LOG_TRIVIAL(warning) << "GFD upload config could not resolve saved cloud config id from list"
+                                               << ", config_name=" << config_name
+                                               << ", device_type=" << device_type
+                                               << ", error=" << fetch_error_message;
+                }
+            }
+        }
+
+        if (!saved_cloud_config_id.empty() && wxGetApp().preset_bundle != nullptr) {
+            const std::string device_type = GFD::Config::current_device_type(wxGetApp().preset_bundle->printers.get_selected_preset().config);
+            if (!device_type.empty()) {
+                GFDCloudConfigInfo saved_config;
+                saved_config.id                   = std::move(saved_cloud_config_id);
+                saved_config.name                 = config_name;
+                saved_config.device_type          = device_type;
+                saved_config.config_file_url      = file_url;
+                saved_config.config_file_name     = gfd_resolve_cloud_config_filename(file_url, std::string());
+                saved_config.default_process_conf = project_settings_text;
+                saved_config.info                 = remarks;
+
+                gfd_last_imported_cloud_process_preset.clear();
+                gfd_record_imported_cloud_config(saved_config);
+                if (wxGetApp().mainframe != nullptr)
+                    wxGetApp().mainframe->update_gfd_config_buttons();
+            }
+        } else {
+            BOOST_LOG_TRIVIAL(warning) << "GFD upload config response missing saved cloud config id"
+                                       << ", config_name=" << config_name
+                                       << ", file_url=" << file_url
+                                       << ", body=" << save_body;
         }
     } catch (const std::exception& ex) {
         BOOST_LOG_TRIVIAL(error) << "GFD save config response parse failed"
@@ -8789,12 +8958,11 @@ bool Plater::priv::gfd_download_file_to_temp(const std::string& url,
         return false;
     }
 
-    std::string filename = filename_hint.empty() ? Http::get_filename_from_url(url) : filename_hint;
-    if (filename.empty())
-        filename = "gfd_cloud_config.3mf";
+    const std::string filename = gfd_resolve_cloud_config_filename(url, filename_hint);
     output_path = fs::temp_directory_path() / fs::path(Slic3r::fold_utf8_to_ascii(filename));
     if (output_path.extension().empty())
         output_path.replace_extension(".3mf");
+    output_path = gfd_make_unique_temp_file_path(output_path);
 
     const std::string tmp_path = output_path.string() + ".download";
 

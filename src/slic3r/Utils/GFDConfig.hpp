@@ -20,6 +20,12 @@ struct EnvironmentConfig
     std::string api_base_url;
 };
 
+struct SavedLoginCredential
+{
+    std::string username;
+    std::string password;
+};
+
 // GFD: per-device button visibility, loaded from resources/gfd_button_config.json.
 struct ButtonVisibility
 {
@@ -53,6 +59,7 @@ public:
     static constexpr const char* KEY_LOGIN_REMEMBER   = "login_remember";
     static constexpr const char* KEY_LOGIN_USERNAME   = "login_username";
     static constexpr const char* KEY_LOGIN_PASSWORD   = "login_password";
+    static constexpr const char* KEY_LOGIN_CREDENTIALS = "login_credentials_v2";
     static constexpr const char* KEY_USER_EMAIL       = "user_email";
     static constexpr const char* KEY_USER_UUID        = "user_uuid";
 
@@ -109,6 +116,8 @@ public:
     static std::string verify_expire_ts(const AppConfig* config);
     static std::string user_email(const AppConfig* config);
     static std::string user_uuid(const AppConfig* config);
+    static std::vector<SavedLoginCredential> saved_login_credentials(const AppConfig* config,
+                                                                     const std::string& environment = {});
 
     static void set_remember_login(AppConfig* config, bool remember);
     static void set_cached_username(AppConfig* config, const std::string& username);
@@ -119,9 +128,17 @@ public:
     static void set_verify_expire_ts(AppConfig* config, const std::string& expire_ts);
     static void set_user_email(AppConfig* config, const std::string& email);
     static void set_user_uuid(AppConfig* config, const std::string& uuid);
+    static void save_login_credential(AppConfig* config,
+                                      const std::string& username,
+                                      const std::string& password,
+                                      const std::string& environment = {});
+    static void remove_login_credential(AppConfig* config,
+                                        const std::string& username,
+                                        const std::string& environment = {});
 
     static void clear_verify_cache(AppConfig* config);
     static void clear_login_identity(AppConfig* config);
+    static void clear_cached_credentials(AppConfig* config);
 };
 
 } // namespace GFD

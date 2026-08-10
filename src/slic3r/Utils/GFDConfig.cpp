@@ -78,6 +78,25 @@ std::string get_value(const AppConfig* config, const char* key, const std::strin
 
 std::string configured_environment(const AppConfig* config) { return get_value(config, Config::KEY_ENVIRONMENT, Config::ENV_PRODUCTION); }
 
+std::string credential_environment(const AppConfig* config, const std::string& environment)
+{
+    return resolve_environment(environment.empty() ? configured_environment(config) : environment).name;
+}
+
+json load_login_credential_store(const AppConfig* config)
+{
+    const std::string value = get_value(config, Config::KEY_LOGIN_CREDENTIALS);
+    if (value.empty())
+        return json::object();
+
+    try {
+        json store = json::parse(value);
+        return store.is_object() ? store : json::object();
+    } catch (...) {
+        return json::object();
+    }
+}
+
 std::string config_string_value(const DynamicPrintConfig& config, const char* key)
 {
     const auto* opt = config.option<ConfigOptionString>(key);
@@ -562,11 +581,25 @@ bool Config::should_show_print_button(const DynamicPrintConfig& printer_config)
     return !current_device_type(printer_config).empty();
 }
 
-bool Config::remember_login(const AppConfig* config) { return get_value(config, KEY_LOGIN_REMEMBER, "true") == "true"; }
+bool Config::remember_login(const AppConfig* config)
+{
+    const auto credentials = saved_login_credentials(config);
+    if (!credentials.empty() && !credentials.front().password.empty())
+        return true;
+    return get_value(config, KEY_LOGIN_REMEMBER, "true") == "true";
+}
 
-std::string Config::cached_username(const AppConfig* config) { return get_value(config, KEY_LOGIN_USERNAME); }
+std::string Config::cached_username(const AppConfig* config)
+{
+    const auto credentials = saved_login_credentials(config);
+    return credentials.empty() ? std::string() : credentials.front().username;
+}
 
-std::string Config::cached_password(const AppConfig* config) { return get_value(config, KEY_LOGIN_PASSWORD); }
+std::string Config::cached_password(const AppConfig* config)
+{
+    const auto credentials = saved_login_credentials(config);
+    return credentials.empty() ? std::string() : credentials.front().password;
+}
 
 std::string Config::auth_token(const AppConfig* config) { return get_value(config, KEY_AUTH_TOKEN); }
 
@@ -578,6 +611,38 @@ std::string Config::user_email(const AppConfig* config) { return get_value(confi
 
 std::string Config::user_uuid(const AppConfig* config) { return get_value(config, KEY_USER_UUID); }
 
+std::vector<SavedLoginCredential> Config::saved_login_credentials(const AppConfig* config, const std::string& environment)
+{
+    std::vector<SavedLoginCredential> result;
+    const std::string                 env = credential_environment(config, environment);
+    const json                        store = load_login_credential_store(config);
+    const auto                        env_it = store.find(env);
+    if (env_it != store.end() && env_it->is_array()) {
+        for (const auto& item : *env_it) {
+            if (!item.is_object())
+                continue;
+            const std::string username = trim_copy(item.value("username", std::string()));
+            const std::string password = item.value("password", std::string());
+            if (username.empty())
+                continue;
+            if (std::none_of(result.begin(), result.end(), [&username](const SavedLoginCredential& credential) {
+                    return credential.username == username;
+                }))
+                result.push_back({username, password});
+        }
+    }
+
+    // One-time compatibility with the original single-account keys. They
+    // belonged to whichever environment was active when they were written.
+    if (result.empty() && env == credential_environment(config, {})) {
+        const std::string username = trim_copy(get_value(config, KEY_LOGIN_USERNAME));
+        const std::string password = get_value(config, KEY_LOGIN_PASSWORD);
+        if (get_value(config, KEY_LOGIN_REMEMBER, "true") == "true" && !username.empty() && !password.empty())
+            result.push_back({username, password});
+    }
+    return result;
+}
+
 void Config::set_remember_login(AppConfig* config, bool remember) { set_value(config, KEY_LOGIN_REMEMBER, remember ? "true" : "false"); }
 
 void Config::set_cached_username(AppConfig* config, const std::string& username) { set_value(config, KEY_LOGIN_USERNAME, username); }
@@ -586,6 +651,24 @@ void Config::set_cached_password(AppConfig* config, const std::string& password)
 
 void Config::set_environment(AppConfig* config, const std::string& environment)
 {
+    if (config == nullptr)
+        return;
+
+    // Before changing environments, attach the legacy single-account cache to
+    // the environment it originally belonged to.
+    const std::string current_env = credential_environment(config, {});
+    json              store       = load_login_credential_store(config);
+    const bool has_current_store = store.contains(current_env) && store[current_env].is_array() && !store[current_env].empty();
+    if (!has_current_store && get_value(config, KEY_LOGIN_REMEMBER, "true") == "true") {
+        const std::string username = trim_copy(get_value(config, KEY_LOGIN_USERNAME));
+        const std::string password = get_value(config, KEY_LOGIN_PASSWORD);
+        if (!username.empty() && !password.empty()) {
+            store[current_env] = json::array();
+            store[current_env].push_back({{"username", username}, {"password", password}});
+            set_value(config, KEY_LOGIN_CREDENTIALS, store.dump());
+        }
+    }
+
     set_value(config, KEY_ENVIRONMENT, lower_copy(trim_copy(environment)));
 }
 
@@ -599,6 +682,67 @@ void Config::set_user_email(AppConfig* config, const std::string& email) { set_v
 
 void Config::set_user_uuid(AppConfig* config, const std::string& uuid) { set_value(config, KEY_USER_UUID, uuid); }
 
+void Config::save_login_credential(AppConfig* config,
+                                   const std::string& username,
+                                   const std::string& password,
+                                   const std::string& environment)
+{
+    if (config == nullptr)
+        return;
+
+    const std::string normalized_username = trim_copy(username);
+    if (normalized_username.empty())
+        return;
+
+    const std::string env = credential_environment(config, environment);
+    auto              credentials = saved_login_credentials(config, env);
+    credentials.erase(std::remove_if(credentials.begin(), credentials.end(), [&normalized_username](const SavedLoginCredential& item) {
+                          return item.username == normalized_username;
+                      }),
+                      credentials.end());
+    credentials.insert(credentials.begin(), {normalized_username, password});
+    if (credentials.size() > 10)
+        credentials.resize(10);
+
+    json store = load_login_credential_store(config);
+    store[env] = json::array();
+    for (const auto& item : credentials)
+        store[env].push_back({{"username", item.username}, {"password", item.password}});
+    set_value(config, KEY_LOGIN_CREDENTIALS, store.dump());
+
+    if (env == credential_environment(config, {})) {
+        set_value(config, KEY_LOGIN_REMEMBER, password.empty() ? "false" : "true");
+        set_value(config, KEY_LOGIN_USERNAME, normalized_username);
+        set_value(config, KEY_LOGIN_PASSWORD, password);
+    }
+}
+
+void Config::remove_login_credential(AppConfig* config, const std::string& username, const std::string& environment)
+{
+    if (config == nullptr)
+        return;
+
+    const std::string normalized_username = trim_copy(username);
+    const std::string env                 = credential_environment(config, environment);
+    auto              credentials         = saved_login_credentials(config, env);
+    credentials.erase(std::remove_if(credentials.begin(), credentials.end(), [&normalized_username](const SavedLoginCredential& item) {
+                          return item.username == normalized_username;
+                      }),
+                      credentials.end());
+
+    json store = load_login_credential_store(config);
+    store[env] = json::array();
+    for (const auto& item : credentials)
+        store[env].push_back({{"username", item.username}, {"password", item.password}});
+    set_value(config, KEY_LOGIN_CREDENTIALS, store.dump());
+
+    if (env == credential_environment(config, {}) && get_value(config, KEY_LOGIN_USERNAME) == normalized_username) {
+        set_value(config, KEY_LOGIN_REMEMBER, "false");
+        set_value(config, KEY_LOGIN_USERNAME, "");
+        set_value(config, KEY_LOGIN_PASSWORD, "");
+    }
+}
+
 void Config::clear_verify_cache(AppConfig* config)
 {
     set_value(config, KEY_VERIFY_TOKEN, "");
@@ -610,6 +754,14 @@ void Config::clear_login_identity(AppConfig* config)
     set_value(config, KEY_AUTH_TOKEN, "");
     set_value(config, KEY_USER_EMAIL, "");
     set_value(config, KEY_USER_UUID, "");
+}
+
+void Config::clear_cached_credentials(AppConfig* config)
+{
+    set_value(config, KEY_LOGIN_REMEMBER, "false");
+    set_value(config, KEY_LOGIN_USERNAME, "");
+    set_value(config, KEY_LOGIN_PASSWORD, "");
+    set_value(config, KEY_LOGIN_CREDENTIALS, "");
 }
 
 }} // namespace Slic3r::GFD

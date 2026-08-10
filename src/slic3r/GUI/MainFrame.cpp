@@ -42,6 +42,7 @@
 #include "WebViewDialog.hpp"
 #include "../Utils/Process.hpp"
 #include "../Utils/GFDConfig.hpp"
+#include "../Utils/Http.hpp"
 #include "format.hpp"
 // BBS
 #include "PartPlate.hpp"
@@ -797,7 +798,14 @@ private:
         row->AddSpacer(FromDIP(8));
         add_row_label(row_panel, row, from_u8(config.name), 120, 2);
         add_row_label(row_panel, row, from_u8(config.device_type), 70, 1);
-        const std::string config_file_display = !config.config_file_url.empty() ? config.config_file_url : config.config_file_name;
+        std::string config_file_display = boost::algorithm::trim_copy(config.config_file_name);
+        if (config_file_display.empty() ||
+            config_file_display.find("://") != std::string::npos ||
+            config_file_display.find('/') != std::string::npos ||
+            config_file_display.find('\\') != std::string::npos)
+            config_file_display = Http::get_filename_from_url(!config.config_file_url.empty() ? config.config_file_url : config_file_display);
+        if (config_file_display.empty())
+            config_file_display = !config.config_file_name.empty() ? config.config_file_name : config.config_file_url;
         add_row_label(row_panel, row, from_u8(config_file_display), 230, 4);
         add_row_label(row_panel, row, from_u8(config.info), 130, 2);
 

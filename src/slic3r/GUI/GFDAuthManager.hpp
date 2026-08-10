@@ -30,6 +30,7 @@ public:
     static bool        has_valid_session(const AppConfig* config);
     static std::string current_auth_token(const AppConfig* config);
     static void        clear_session(AppConfig* config);
+    static void        logout(AppConfig* config, bool forget_credentials = false);
     static bool        ensure_logged_in(wxWindow* parent, std::string* error_message = nullptr);
     static bool        perform_authenticated_request(const RequestFn& request,
                                                      std::string&     body,
