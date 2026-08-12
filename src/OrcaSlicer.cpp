@@ -7263,6 +7263,8 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
             }
             value = argv[++i];
         }
+        if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
+            value = value.substr(1, value.size() - 2);
 
         if (token == "model") {
             m_model_cli_specs.emplace_back();
