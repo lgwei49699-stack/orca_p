@@ -1427,7 +1427,6 @@ int CLI::run(int argc, char **argv)
     bool first_file = true, is_bbl_3mf = false, need_arrange = true, has_thumbnails = false, up_config_to_date = false, normative_check = true, duplicate_single_object = false, use_first_fila_as_default = false, minimum_save = false, enable_timelapse = false;
     bool obj_multicolor_auto_mapping = false;
     std::vector<std::string> obj_multicolor_filament_colors;
-    static constexpr int obj_multicolor_flush_volume_scale_percent = 125;
     bool glb_texture_auto_mapping = false;
     std::vector<size_t> textured_glb_model_indices;
     TexturePaintingSettings texture_painting_settings;
@@ -3641,10 +3640,6 @@ int CLI::run(int argc, char **argv)
                             }
                         }
 
-                        if (obj_multicolor_auto_mapping) {
-                            flushing_volume = std::min(Slic3r::g_max_flush_volume,
-                                                       (flushing_volume * obj_multicolor_flush_volume_scale_percent + 99) / 100);
-                        }
                         flush_vol_matrix[project_filament_count * from_idx + to_idx] = flushing_volume;
                         //flushing_volume = int(flushing_volume * get_flush_multiplier());
                     }
