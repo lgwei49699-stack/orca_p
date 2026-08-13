@@ -7896,6 +7896,10 @@ void Plater::priv::on_process_completed(SlicingProcessCompletedEvent& evt)
         }
         has_error   = true;
         is_finished = true;
+    } else if (evt.success() && is_finished) {
+        // Automatic background re-slicing does not always emit on_slicing_began(),
+        // so close errors left by an earlier failed result once this result succeeds.
+        notification_manager->close_notification_of_type(NotificationType::SlicingError);
     }
     if (evt.cancelled()) {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", cancel event, status: %1%") % evt.status();

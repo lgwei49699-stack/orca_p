@@ -8,6 +8,141 @@
 
 namespace Slic3r {
 
+namespace {
+
+constexpr double DEFAULT_ARRANGE_MARGIN_MM       = 1.0;
+constexpr double NORMAL_SUPPORT_MARGIN_MM        = 2.0;
+constexpr double MAX_NORMAL_SUPPORT_MARGIN_MM    = 20.0;
+// Tree branches may move outside the model projection while avoiding the model
+// and merging near the bed. Keep the full 12 mm first-layer safety envelope for
+// models that really need tree support; unlike the old plate-wide rule this is
+// applied only to those models. Manual brim settings may exceed this value.
+constexpr double MIN_TREE_SUPPORT_MARGIN_MM      = 12.0;
+constexpr double MAX_AUTO_TREE_SUPPORT_MARGIN_MM = 12.0;
+constexpr double MAX_TREE_SUPPORT_MARGIN_MM      = 30.0;
+constexpr size_t MAX_OVERHANG_FACES_TO_INSPECT   = 20000;
+
+bool has_manual_support(const ModelObject &object)
+{
+    return object.is_fdm_support_painted() ||
+           std::any_of(object.volumes.begin(), object.volumes.end(), [](const ModelVolume *volume) {
+               return volume->is_support_enforcer();
+           });
+}
+
+bool has_arrange_overhang(const ModelInstance &instance, const DynamicPrintConfig &config)
+{
+    ModelObject *object = instance.get_object();
+    const auto *enforce_layers = object->get_config_value<ConfigOptionInt>(config, "enforce_support_layers");
+    if (enforce_layers != nullptr && enforce_layers->value > 0)
+        return true;
+
+    const auto *support_type = object->get_config_value<ConfigOptionEnum<SupportType>>(config, "support_type");
+    if (!is_auto(support_type->value))
+        return has_manual_support(*object);
+
+    if (has_manual_support(*object))
+        return true;
+
+    size_t face_count = 0;
+    for (const ModelVolume *volume : object->volumes)
+        if (volume->is_model_part())
+            face_count += volume->mesh().its.indices.size();
+    if (face_count == 0)
+        return false;
+
+    const auto *threshold_option = object->get_config_value<ConfigOptionInt>(config, "support_threshold_angle");
+    const double threshold_deg = std::clamp(threshold_option != nullptr && threshold_option->value > 0 ?
+                                                double(threshold_option->value + 1) : 30.0,
+                                            1.0, 89.0);
+    const double max_normal_z = -std::cos(Geometry::deg2rad(threshold_deg));
+    const double object_min_z = object->instance_bounding_box(instance, true).min.z();
+    const auto *first_layer_height = object->get_config_value<ConfigOptionFloat>(config, "initial_layer_print_height");
+    const double bed_tolerance = std::max(0.05, first_layer_height != nullptr ? first_layer_height->value : 0.2);
+    const size_t sample_step = std::max<size_t>(1, (face_count + MAX_OVERHANG_FACES_TO_INSPECT - 1) /
+                                                      MAX_OVERHANG_FACES_TO_INSPECT);
+
+    size_t face_offset = 0;
+    for (const ModelVolume *volume : object->volumes) {
+        if (!volume->is_model_part())
+            continue;
+
+        const indexed_triangle_set &mesh = volume->mesh().its;
+        const Transform3d transform = instance.get_matrix_no_offset() * volume->get_matrix();
+        const double orientation = transform.linear().determinant() < 0.0 ? -1.0 : 1.0;
+        const size_t first_face = (sample_step - face_offset % sample_step) % sample_step;
+        for (size_t face_index = first_face; face_index < mesh.indices.size(); face_index += sample_step) {
+            const stl_triangle_vertex_indices &face = mesh.indices[face_index];
+
+            const Vec3d p0 = transform * mesh.vertices[face[0]].cast<double>();
+            const Vec3d p1 = transform * mesh.vertices[face[1]].cast<double>();
+            const Vec3d p2 = transform * mesh.vertices[face[2]].cast<double>();
+            if (std::max({p0.z(), p1.z(), p2.z()}) <= object_min_z + bed_tolerance)
+                continue;
+
+            Vec3d normal = orientation * (p1 - p0).cross(p2 - p0);
+            const double normal_length = normal.norm();
+            if (normal_length > EPSILON && normal.z() / normal_length <= max_normal_z)
+                return true;
+        }
+        face_offset += mesh.indices.size();
+    }
+
+    return false;
+}
+
+double estimate_support_margin(const ModelInstance &instance, const DynamicPrintConfig &config, SupportType support_type)
+{
+    ModelObject *object = instance.get_object();
+    const auto *xy_distance = object->get_config_value<ConfigOptionFloat>(config, "support_object_xy_distance");
+    const double support_gap = xy_distance != nullptr ? std::max(0.0, xy_distance->value) : 0.0;
+
+    if (!is_tree(support_type)) {
+        const auto *expansion = object->get_config_value<ConfigOptionFloat>(config, "support_expansion");
+        const double support_expansion = expansion != nullptr ? std::max(0.0, expansion->value) : 0.0;
+        return std::clamp(NORMAL_SUPPORT_MARGIN_MM + support_gap + support_expansion,
+                          NORMAL_SUPPORT_MARGIN_MM, MAX_NORMAL_SUPPORT_MARGIN_MM);
+    }
+
+    const auto *style = object->get_config_value<ConfigOptionEnum<SupportMaterialStyle>>(config, "support_style");
+    const bool organic = style != nullptr && style->value == smsTreeOrganic;
+    const auto *diameter = object->get_config_value<ConfigOptionFloat>(
+        config, organic ? "tree_support_branch_diameter_organic" : "tree_support_branch_diameter");
+    const auto *diameter_angle = object->get_config_value<ConfigOptionFloat>(config, "tree_support_branch_diameter_angle");
+    const double base_radius = std::max(0.4, diameter != nullptr ? diameter->value / 2.0 : 2.5);
+    const double height = object->instance_convex_hull_bounding_box(&instance, true).size().z();
+    const double radius_growth = std::tan(Geometry::deg2rad(diameter_angle != nullptr ? diameter_angle->value : 5.0));
+    const double branch_radius = std::clamp(base_radius + std::max(0.0, height - base_radius) * radius_growth,
+                                            0.4, 10.0);
+
+    const auto *auto_brim = object->get_config_value<ConfigOptionBool>(config, "tree_support_auto_brim");
+    if (auto_brim == nullptr || auto_brim->value) {
+        const double auto_radius = branch_radius + height / std::max(branch_radius, 0.4) * 0.5;
+        const double footprint_radius = std::max(branch_radius + 2.0,
+                                                 std::min(auto_radius, MAX_AUTO_TREE_SUPPORT_MARGIN_MM));
+        return std::clamp(footprint_radius + support_gap,
+                          MIN_TREE_SUPPORT_MARGIN_MM, MAX_AUTO_TREE_SUPPORT_MARGIN_MM);
+    }
+
+    const auto *brim_width = object->get_config_value<ConfigOptionFloat>(config, "tree_support_brim_width");
+    const double footprint_radius = branch_radius + (brim_width != nullptr ? std::max(0.0, brim_width->value) : 0.0);
+    return std::clamp(footprint_radius + support_gap,
+                      MIN_TREE_SUPPORT_MARGIN_MM, MAX_TREE_SUPPORT_MARGIN_MM);
+}
+
+} // namespace
+
+double estimate_arrange_support_margin(const ModelInstance &instance, const DynamicPrintConfig &config)
+{
+    ModelObject *object = instance.get_object();
+    const auto *support_enabled = object->get_config_value<ConfigOptionBool>(config, "enable_support");
+    if (support_enabled == nullptr || !support_enabled->value || !has_arrange_overhang(instance, config))
+        return DEFAULT_ARRANGE_MARGIN_MM;
+
+    const auto *support_type = object->get_config_value<ConfigOptionEnum<SupportType>>(config, "support_type");
+    return estimate_support_margin(instance, config, support_type->value);
+}
+
 arrangement::ArrangePolygons get_arrange_polys(const Model &model, ModelInstancePtrs &instances)
 {
     size_t count = 0;
@@ -160,21 +295,7 @@ ArrangePolygon get_instance_arrange_poly(ModelInstance* instance, const Slic3r::
     // get brim width
     auto obj = instance->get_object();
 
-    ap.brim_width = 1.0;
-    // For by-layer printing, need to shrink bed a little, so the support won't go outside bed.
-    // We set it to 5mm because that's how much a normal support will grow by default.
-    // normal support 5mm, other support 22mm, no support 0mm
-    auto supp_type_ptr = obj->get_config_value<ConfigOptionBool>(config, "enable_support");
-    auto support_type_ptr = obj->get_config_value<ConfigOptionEnum<SupportType>>(config, "support_type");
-    auto support_type = support_type_ptr->value;
-    auto enable_support = supp_type_ptr->getBool();
-
-    if (enable_support && (support_type == stNormalAuto || support_type == stNormal))
-        ap.brim_width = 6.0;
-    else if (enable_support) {
-        ap.brim_width = 24.0; // 2*MAX_BRANCH_RADIUS_FIRST_LAYER
-        ap.has_tree_support = true;
-    }
+    ap.brim_width = estimate_arrange_support_margin(*instance, config);
 
     auto size = obj->instance_convex_hull_bounding_box(instance).size();
     ap.height = size.z();

@@ -863,10 +863,12 @@ public:
         const TreeModelVolumes       &volumes,
         bool                          force_tip_to_roof,
         size_t                        num_support_layers,
-        std::vector<SupportElements> &move_bounds)
+        std::vector<SupportElements> &move_bounds,
+        SupportGeneratorLayersPtr    &intermediate_layers)
     :
         InterfacePlacer(interface_placer),
-        volumes(volumes), force_tip_to_roof(force_tip_to_roof), move_bounds(move_bounds)
+        volumes(volumes), force_tip_to_roof(force_tip_to_roof), move_bounds(move_bounds),
+        intermediate_layers(intermediate_layers)
     {
         m_already_inserted.assign(num_support_layers, {});
         this->min_xy_dist = this->config.xy_distance > this->config.xy_min_distance;
@@ -880,6 +882,36 @@ public:
     bool                                                min_xy_dist;
 
 public:
+    // A tree tip inserted at layer zero has no lower layer in which a branch can
+    // grow. Convert the already sampled, collision-safe tip points into printable
+    // build-plate contact footprints instead.
+    void add_build_plate_tips(LineInformations lines)
+    {
+        // A nominal tree tip may be only one first-layer line wide. Such a disk
+        // disappears when the sheath path is inset by half the extrusion width,
+        // leaving a SupportLayer object with no islands or fills. The build-plate
+        // foot needs at least one full first-layer line as its radius so the
+        // generated footprint can contain a printable closed path.
+        const coord_t build_plate_tip_radius =
+            std::max(config.min_radius, 2 * support_parameters.first_layer_flow.scaled_width());
+        Polygons tip_footprints;
+        for (const LineInformation &line : lines)
+            for (const std::pair<Point, LineStatus> &point_data : line) {
+                Polygon footprint{m_base_circle};
+                footprint.scale(build_plate_tip_radius / m_base_radius);
+                footprint.translate(point_data.first);
+                tip_footprints.emplace_back(std::move(footprint));
+            }
+
+        if (!tip_footprints.empty())
+            add_base_build_plate(union_(tip_footprints), intermediate_layers);
+    }
+
+    void add_build_plate_area(Polygons areas)
+    {
+        add_base_build_plate(std::move(areas), intermediate_layers);
+    }
+
     // called by sample_overhang_area()
     void add_points_along_lines(
         // Insert points (tree tips or top contact interfaces) along these lines.
@@ -1006,6 +1038,7 @@ private:
 
     // Outputs
     std::vector<SupportElements>                       &move_bounds;
+    SupportGeneratorLayersPtr                          &intermediate_layers;
 
     // Temps
     coord_t m_base_radius;
@@ -1217,7 +1250,16 @@ void sample_overhang_area(
     }
 
     assert(dtt_roof <= layer_idx);
-    if (dtt_roof >= layer_idx && large_horizontal_roof)
+    if (layer_idx == 0) {
+        // A zero-height tree branch may slice to no extrusion, and the build-plate
+        // layer must be support base rather than a top interface. Wide roofs keep
+        // their collision-safe area; narrow overhangs keep sampled tree-tip sites.
+        if (large_horizontal_roof)
+            interface_placer.add_build_plate_area(std::move(overhang_area));
+        else
+            interface_placer.add_build_plate_tips(std::move(overhang_lines));
+    }
+    else if (dtt_roof >= layer_idx && large_horizontal_roof)
         // Reached buildplate when generating contact, interface and base interface layers.
         interface_placer.add_roof_build_plate(std::move(overhang_area), dtt_roof);
     else {
@@ -1253,6 +1295,7 @@ static void generate_initial_areas(
     const std::vector<Polygons>     &overhangs,
     std::vector<SupportElements>    &move_bounds,
     InterfacePlacer                 &interface_placer,
+    SupportGeneratorLayersPtr       &intermediate_layers,
     std::function<void()>            throw_on_cancel)
 {
     using                           AvoidanceType = TreeModelVolumes::AvoidanceType;
@@ -1312,17 +1355,21 @@ static void generate_initial_areas(
 
     {
         const size_t num_raft_layers     = config.raft_layers.size();
-        const size_t first_support_layer = std::max(int(num_raft_layers) - int(z_distance_delta), 1);
+        // Without a raft, low overhangs may map to support layer zero after the
+        // configured top Z gap is applied. Include that layer so sample_overhang_area()
+        // can use the existing build-plate roof path instead of dropping the overhang.
+        const size_t first_support_layer = num_raft_layers == 0 ? 0 : size_t(std::max(int(num_raft_layers) - int(z_distance_delta), 1));
         num_support_layers  = size_t(std::max(0, int(print_object.layer_count()) + int(num_raft_layers) - int(z_distance_delta)));
         raft_contact_layer_idx = generate_raft_contact(print_object, config, interface_placer);
         // Enumerate layers for which the support tips may be generated from overhangs above.
-        raw_overhangs.reserve(num_support_layers - first_support_layer);
+        raw_overhangs.reserve(num_support_layers > first_support_layer ? num_support_layers - first_support_layer : 0);
         for (size_t layer_idx = first_support_layer; layer_idx < num_support_layers; ++ layer_idx)
             if (const size_t overhang_idx = layer_idx + z_distance_delta; ! overhangs[overhang_idx].empty())
                 raw_overhangs.push_back({ layer_idx, &overhangs[overhang_idx] });
     }
 
-    RichInterfacePlacer rich_interface_placer{ interface_placer, volumes, force_tip_to_roof, num_support_layers, move_bounds };
+    RichInterfacePlacer rich_interface_placer{
+        interface_placer, volumes, force_tip_to_roof, num_support_layers, move_bounds, intermediate_layers};
 
     tbb::parallel_for(tbb::blocked_range<size_t>(0, raw_overhangs.size()),
         [&volumes, &config, &raw_overhangs, &mesh_group_settings,
@@ -3423,9 +3470,18 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
 #endif
         // ### Precalculate avoidances, collision etc.
         size_t num_support_layers = precalculate(print, overhangs, processing.first, processing.second, volumes, throw_on_cancel);
-        bool   has_support = num_support_layers > 0;
+        Polygons first_layer_extrusion_coverage;
+        if (!print_object.layers().empty())
+            for (const LayerRegion *region : print_object.layers().front()->regions()) {
+                region->perimeters.polygons_covered_by_width(first_layer_extrusion_coverage, float(SCALED_EPSILON));
+                region->fills.polygons_covered_by_width(first_layer_extrusion_coverage, float(SCALED_EPSILON));
+            }
+        const bool needs_first_layer_base = config.raft_layers.empty() && !print_object.layers().empty() &&
+                                            first_layer_extrusion_coverage.empty() &&
+                                            !print_object.layers().front()->lslices.empty();
+        bool   has_support = num_support_layers > 0 || needs_first_layer_base;
         bool   has_raft    = config.raft_layers.size() > 0;
-        num_support_layers = std::max(num_support_layers, config.raft_layers.size());
+        num_support_layers = std::max({num_support_layers, config.raft_layers.size(), needs_first_layer_base ? size_t(1) : size_t(0)});
 
         if (num_support_layers == 0)
             continue;
@@ -3476,8 +3532,8 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
 
             // ### Place tips of the support tree
             for (size_t mesh_idx : processing.second)
-                generate_initial_areas(*print.get_object(mesh_idx), volumes, config, overhangs, 
-                    move_bounds, interface_placer, throw_on_cancel);
+                generate_initial_areas(*print.get_object(mesh_idx), volumes, config, overhangs,
+                    move_bounds, interface_placer, intermediate_layers, throw_on_cancel);
             auto t_gen = std::chrono::high_resolution_clock::now();
 
 #ifdef TREESUPPORT_DEBUG_SVG
@@ -3508,6 +3564,23 @@ static void generate_support_areas(Print &print, TreeSupport* tree_support, cons
                 *print.get_object(processing.second.front()), volumes, config, move_bounds,
                 bottom_contacts, top_contacts, interface_placer, intermediate_layers, layer_storage,
                 throw_on_cancel);
+
+            if (needs_first_layer_base) {
+                // organic_draw_branches owns the intermediate layer slots and
+                // replaces them while drawing. Add this fallback afterwards so a
+                // geometric first slice that Arachne cannot extrude is replaced by
+                // a printable build-plate contact instead of an empty layer.
+                SupportGeneratorLayer *&first_base = intermediate_layers[0];
+                if (first_base == nullptr)
+                    first_base = &layer_allocate(layer_storage, SupporLayerType::Base,
+                                                 print_object.slicing_parameters(), config, 0);
+                const coord_t first_layer_margin = 2 * support_params.first_layer_flow.scaled_width();
+                append(first_base->polygons,
+                       offset(to_polygons(print_object.layers().front()->lslices), first_layer_margin, ClipperLib::jtRound));
+                first_base->polygons = union_(first_base->polygons);
+                BOOST_LOG_TRIVIAL(info) << "Tree support added a build-plate base for an unextrudable object first layer: object="
+                                        << print_object.model_object()->name << ", margin=" << unscale<double>(first_layer_margin);
+            }
 
             //tree_support->move_bounds_to_contact_nodes(move_bounds, print_object, config);
 

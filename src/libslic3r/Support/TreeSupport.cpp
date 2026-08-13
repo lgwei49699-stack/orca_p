@@ -3081,7 +3081,9 @@ std::vector<LayerHeightData> TreeSupport::plan_layer_heights()
     // add support layers according to layer_heights
     int support_layer_nr = m_raft_layers;
     for (size_t i = 0; i < layer_heights.size(); i++, support_layer_nr++) {
-        SupportLayer *ts_layer = m_object->add_tree_support_layer(support_layer_nr, layer_heights[i].print_z, layer_heights[i].height, layer_heights[i].print_z);
+        // add_tree_support_layer arguments are (id, height, print_z, slice_z).
+        SupportLayer *ts_layer = m_object->add_tree_support_layer(
+            support_layer_nr, layer_heights[i].height, layer_heights[i].print_z, layer_heights[i].print_z);
         if (ts_layer->id() > m_raft_layers) {
             SupportLayer *lower_layer = m_object->get_support_layer(ts_layer->id() - 1);
             if (lower_layer) {

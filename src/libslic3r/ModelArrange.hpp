@@ -92,6 +92,9 @@ template<>
 arrangement::ArrangePolygon get_arrange_poly(ModelInstance* inst, const DynamicPrintConfig& config);
 
 ArrangePolygon get_instance_arrange_poly(ModelInstance* instance, const DynamicPrintConfig& config);
+
+// Lightweight support-footprint estimate used by both GUI and CLI arranging.
+double estimate_arrange_support_margin(const ModelInstance &instance, const DynamicPrintConfig &config);
 }
 
 #endif // MODELARRANGE_HPP

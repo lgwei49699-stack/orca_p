@@ -3335,15 +3335,19 @@ int CLI::run(int argc, char **argv)
     if (has_model_filament_mapping) {
         const size_t slot_count = static_cast<size_t>(filament_count);
         auto filament_color_from_config = [](const DynamicPrintConfig &config) -> std::string {
-            for (const char *key : {"default_filament_colour", "filament_colour"}) {
+            for (const char *key : {"filament_colour", "default_filament_colour"}) {
                 const ConfigOptionStrings *colors = config.option<ConfigOptionStrings>(key);
                 if (colors != nullptr && !colors->values.empty() && !colors->values.front().empty())
                     return colors->values.front();
             }
             return {};
         };
-
         std::vector<std::string> normalized_colors(slot_count);
+        const ConfigOptionStrings *project_colors = m_print_config.option<ConfigOptionStrings>("filament_colour");
+        if (project_colors != nullptr) {
+            for (size_t index = 0; index < std::min(slot_count, project_colors->values.size()); ++index)
+                normalized_colors[index] = project_colors->values[index];
+        }
         for (size_t index = 0; index < load_filaments_config.size(); ++index) {
             const int filament_index = load_filaments_index[index];
             if (filament_index <= 0 || static_cast<size_t>(filament_index) > slot_count)
@@ -3352,13 +3356,34 @@ int CLI::run(int argc, char **argv)
             if (!source_color.empty())
                 normalized_colors[static_cast<size_t>(filament_index - 1)] = source_color;
         }
-        const auto fallback_color = std::find_if(normalized_colors.begin(), normalized_colors.end(),
-                                                 [](const std::string &color) { return !color.empty(); });
-        const std::string fallback = fallback_color == normalized_colors.end() ? "#FFFFFF" : *fallback_color;
-        for (std::string &color : normalized_colors) {
-            if (color.empty())
-                color = fallback;
+        if (const ConfigOptionStrings *cli_colors = m_extra_config.option<ConfigOptionStrings>("filament_colour");
+            cli_colors != nullptr) {
+            for (size_t index = 0; index < std::min(slot_count, cli_colors->values.size()); ++index) {
+                if (!cli_colors->values[index].empty())
+                    normalized_colors[index] = cli_colors->values[index];
+            }
         }
+
+        std::vector<size_t> missing_color_slots;
+        for (size_t index = 0; index < normalized_colors.size(); ++index) {
+            if (normalized_colors[index].empty())
+                missing_color_slots.emplace_back(index + 1);
+        }
+        if (!missing_color_slots.empty() && slot_count > 1) {
+            std::ostringstream missing_slots;
+            for (size_t index = 0; index < missing_color_slots.size(); ++index) {
+                if (index != 0)
+                    missing_slots << ',';
+                missing_slots << missing_color_slots[index];
+            }
+            BOOST_LOG_TRIVIAL(error) << boost::format(
+                "Missing filament_colour/default_filament_colour for explicit model filament slots: %1%; "
+                "add colors to the filament configs or pass --filament-colour") % missing_slots.str();
+            record_exit_reson(outfile_dir, CLI_CONFIG_FILE_ERROR, 0, cli_errors[CLI_CONFIG_FILE_ERROR], sliced_info);
+            flush_and_exit(CLI_CONFIG_FILE_ERROR);
+        }
+        if (slot_count == 1 && normalized_colors.front().empty())
+            normalized_colors.front() = "#FFFFFF";
 
         m_print_config.option<ConfigOptionStrings>("filament_colour", true)->values = normalized_colors;
         BOOST_LOG_TRIVIAL(info) << boost::format("normalized explicit model filament colors to %1% slots") % slot_count;

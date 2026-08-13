@@ -1415,16 +1415,27 @@ static inline ExPolygons detect_overhangs(
         // Generate overhang / contact_polygons for non-raft layers.
         const Layer &lower_layer  = *layer.lower_layer;
         const bool   has_enforcer = !annotations.enforcers_layers.empty() && !annotations.enforcers_layers[layer_id].empty();
-        // Can't directly use lower_layer.lslices, or we'll miss some very sharp tails.
-        // Filter out areas whose diameter that is smaller than extrusion_width. Do not use offset2() for this purpose!
-        // FIXME if there are multiple regions with different extrusion width, the following code may not be right.
-        float fw = float(layer.regions().front()->flow(frExternalPerimeter).scaled_width());
-        ExPolygons lower_layer_expolys;
-        for (const ExPolygon& expoly : lower_layer.lslices) {
-            if (!offset_ex(expoly, -fw / 2).empty()) {
-                lower_layer_expolys.emplace_back(expoly);
-            }
+        // A non-empty geometric slice is not necessarily a printable bearing surface. In
+        // particular, a sharp tail may produce a very narrow first slice but no perimeter
+        // or fill extrusion. Treating that slice as a full support below makes the next
+        // layers look supported and may leave both the object and support initial layers
+        // without any extrusion.
+        //
+        // Support generation runs after walls and infill, so use their actual extrusion
+        // coverage instead of approximating printability from the nominal line width. This
+        // also preserves variable-width Arachne walls that are narrower than the configured
+        // first-layer line width but still physically printable.
+        Polygons lower_layer_bearing_polygons;
+        for (const LayerRegion *lower_layerm : lower_layer.regions()) {
+            lower_layerm->perimeters.polygons_covered_by_width(lower_layer_bearing_polygons, float(SCALED_EPSILON));
+            lower_layerm->fills.polygons_covered_by_width(lower_layer_bearing_polygons, float(SCALED_EPSILON));
         }
+        const ExPolygons lower_layer_expolys = union_ex(lower_layer_bearing_polygons);
+        lower_layer_bearing_polygons         = to_polygons(lower_layer_expolys);
+
+        // Use the extrusion footprint only to decide whether an overhang needs support.
+        // Keep lower_layer_polygons for the final clipping and collision operations below,
+        // otherwise support could be generated inside the model's geometric volume.
 
         for (LayerRegion *layerm : layer.regions()) {
             // Extrusion width accounts for the roundings of the extrudates.
@@ -1451,11 +1462,12 @@ static inline ExPolygons detect_overhangs(
                     diff_polygons = diff(diff_polygons, annotations.buildplate_covered[layer_id]);
                 }
             } else if (auto_normal_support) {
-                // Get the regions needing a suport, collapse very tiny spots.
+                // Get the regions needing support, ignoring lower-layer islands that are
+                // too narrow to carry an extrusion.
                 //FIXME cache the lower layer offset if this layer has multiple regions.
                 diff_polygons = 
                     diff(layerm_polygons,
-                            expand(lower_layer_polygons, lower_layer_offset, SUPPORT_SURFACES_OFFSET_PARAMETERS));
+                            expand(lower_layer_bearing_polygons, lower_layer_offset, SUPPORT_SURFACES_OFFSET_PARAMETERS));
                 if (buildplate_only && ! annotations.buildplate_covered[layer_id].empty()) {
                     // Don't support overhangs above the top surfaces.
                     // This step is done before the contact surface is calculated by growing the overhang region.
