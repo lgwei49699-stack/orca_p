@@ -3331,7 +3331,40 @@ int CLI::run(int argc, char **argv)
         }
     }
 
-    if (obj_multicolor_auto_mapping && !obj_multicolor_filament_colors.empty()) {
+    // --model-filaments defines real spool colors; OBJ material assignments only select the slot used by each face.
+    if (has_model_filament_mapping) {
+        const size_t slot_count = static_cast<size_t>(filament_count);
+        auto filament_color_from_config = [](const DynamicPrintConfig &config) -> std::string {
+            for (const char *key : {"default_filament_colour", "filament_colour"}) {
+                const ConfigOptionStrings *colors = config.option<ConfigOptionStrings>(key);
+                if (colors != nullptr && !colors->values.empty() && !colors->values.front().empty())
+                    return colors->values.front();
+            }
+            return {};
+        };
+
+        std::vector<std::string> normalized_colors(slot_count);
+        for (size_t index = 0; index < load_filaments_config.size(); ++index) {
+            const int filament_index = load_filaments_index[index];
+            if (filament_index <= 0 || static_cast<size_t>(filament_index) > slot_count)
+                continue;
+            const std::string source_color = filament_color_from_config(load_filaments_config[index]);
+            if (!source_color.empty())
+                normalized_colors[static_cast<size_t>(filament_index - 1)] = source_color;
+        }
+        const auto fallback_color = std::find_if(normalized_colors.begin(), normalized_colors.end(),
+                                                 [](const std::string &color) { return !color.empty(); });
+        const std::string fallback = fallback_color == normalized_colors.end() ? "#FFFFFF" : *fallback_color;
+        for (std::string &color : normalized_colors) {
+            if (color.empty())
+                color = fallback;
+        }
+
+        m_print_config.option<ConfigOptionStrings>("filament_colour", true)->values = normalized_colors;
+        BOOST_LOG_TRIVIAL(info) << boost::format("normalized explicit model filament colors to %1% slots") % slot_count;
+    }
+
+    if (!has_model_filament_mapping && obj_multicolor_auto_mapping && !obj_multicolor_filament_colors.empty()) {
         BOOST_LOG_TRIVIAL(info) << boost::format("restore OBJ multicolor filament colors after loading filament configs, color count %1%")
                                        % obj_multicolor_filament_colors.size();
         ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour", true);
@@ -3462,7 +3495,7 @@ int CLI::run(int argc, char **argv)
     ConfigOptionStrings *selected_filament_colors_option = m_extra_config.option<ConfigOptionStrings>("filament_colour");
     ConfigOptionStrings *project_filament_colors_option = m_print_config.option<ConfigOptionStrings>("filament_colour");
     bool restored_obj_filament_colors = false;
-    if (obj_multicolor_auto_mapping && !obj_multicolor_filament_colors.empty()) {
+    if (!has_model_filament_mapping && obj_multicolor_auto_mapping && !obj_multicolor_filament_colors.empty()) {
         bool should_restore_obj_filament_colors = !project_filament_colors_option ||
                                                   project_filament_colors_option->values.size() != obj_multicolor_filament_colors.size() ||
                                                   project_filament_colors_option->values != obj_multicolor_filament_colors;
