@@ -17187,7 +17187,9 @@ void Plater::validate_current_plate(bool& model_fits, bool& validate_error)
     model_fits     = p->view3D->get_canvas3d()->check_volumes_outside_state() != ModelInstancePVS_Partly_Outside;
     validate_error = false;
     if (p->printer_technology == ptFFF) {
-        std::string plater_text = _u8L("An object is laid over the boundary of plate or exceeds the height limit.\n"
+        // Keep this text identical to GLCanvas3D::EWarning::ObjectClashed. Plater errors
+        // are closed by exact text match when the canvas refreshes its outside state.
+        std::string plater_text = _u8L("An object is laid over the plate boundaries or exceeds the height limit.\n"
                                        "Please solve the problem by moving it totally on or off the plate, and confirming that the height "
                                        "is within the build volume.");
         ;

@@ -69,16 +69,37 @@ TEST_CASE("Arrange support margin follows per-object support type", "[Arrange][S
     instance->get_object()->config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTreeAuto));
     const double tree_margin = estimate_arrange_support_margin(*instance, global_config);
 
-    REQUIRE(normal_margin > 1.0);
-    REQUIRE(tree_margin > normal_margin);
+    REQUIRE(normal_margin == Approx(6.0));
     REQUIRE(tree_margin == Approx(12.0));
 
+    // Arrange margins intentionally follow the upstream fixed safety envelope.
+    // Custom support geometry parameters must not silently mix radius, diameter,
+    // or support-generation offsets into the one-sided arrange margin.
     instance->get_object()->config.set("tree_support_auto_brim", false);
     instance->get_object()->config.set("tree_support_brim_width", 15.0);
     const double manual_tree_margin = estimate_arrange_support_margin(*instance, global_config);
 
-    REQUIRE(manual_tree_margin > 12.0);
-    REQUIRE(manual_tree_margin <= 30.0);
+    REQUIRE(manual_tree_margin == Approx(12.0));
+}
+
+TEST_CASE("Normal support uses the upstream fixed arrange margin", "[Arrange][Support]")
+{
+    Model model = make_model(make_cube(20.0, 20.0, 20.0));
+    ModelInstance *instance = model.objects.front()->instances.front();
+    instance->set_rotation(X, Geometry::deg2rad(15.0));
+
+    DynamicPrintConfig config = support_config(stNormalAuto);
+    config.set("support_object_xy_distance", 0.35);
+    config.set("support_expansion", 0.0);
+
+    // Reproduces gui-run-20260814-161220.log. The previous dynamic estimate was
+    // 2 + 0.35 + 0 = 2.35 mm and allowed a support extrusion to reach Y=101.199
+    // on a 101 mm bed. Normal support now keeps the upstream 6 mm allowance.
+    REQUIRE(estimate_arrange_support_margin(*instance, config) == Approx(6.0));
+
+    config.set("support_object_xy_distance", 2.0);
+    config.set("support_expansion", 8.0);
+    REQUIRE(estimate_arrange_support_margin(*instance, config) == Approx(6.0));
 }
 
 TEST_CASE("Automatic tree support keeps the full first-layer safety envelope", "[Arrange][Support]")
@@ -88,6 +109,22 @@ TEST_CASE("Automatic tree support keeps the full first-layer safety envelope", "
     instance->set_rotation(X, Geometry::deg2rad(15.0));
 
     DynamicPrintConfig config = support_config(stTreeAuto);
+
+    REQUIRE(estimate_arrange_support_margin(*instance, config) == Approx(12.0));
+}
+
+TEST_CASE("Arrange support margin detects an edge-resting cube that produces a tree support base", "[Arrange][Support]")
+{
+    Model model = make_model(make_cube(18.0, 18.0, 18.0));
+    ModelInstance *instance = model.objects.front()->instances.front();
+    // Reproduces gui-run-20260814-115336.log: the real tree-support detector
+    // classified this approximately 44.6-degree pose as a sharp tail and added
+    // a first-layer support base, although the old face-threshold precheck did not.
+    instance->set_rotation(X, Geometry::deg2rad(44.6));
+
+    DynamicPrintConfig config = support_config(stTreeAuto);
+    config.set("support_threshold_angle", 30);
+    config.set("support_remove_small_overhang", true);
 
     REQUIRE(estimate_arrange_support_margin(*instance, config) == Approx(12.0));
 }
