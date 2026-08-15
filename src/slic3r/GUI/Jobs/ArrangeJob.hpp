@@ -33,6 +33,7 @@ class ArrangeJob : public Job
 
     // BBS: add flag for whether on current part plate
     bool only_on_partplate{false};
+    bool m_current_plate_overflow{false};
 
     // clear m_selected and m_unselected, reserve space for next usage
     void clear_input();
@@ -45,7 +46,6 @@ class ArrangeJob : public Job
 
     //BBS:prepare the items from current selected partplate
     void prepare_partplate();
-    void prepare_wipe_tower();
 
     ArrangePolygon prepare_arrange_polygon(void* instance);
 

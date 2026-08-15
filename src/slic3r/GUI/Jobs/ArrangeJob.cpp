@@ -93,6 +93,7 @@ void ArrangeJob::clear_input()
     m_locked.clear();
     m_unarranged.clear();
     m_uncompatible_plates.clear();
+    m_current_plate_overflow = false;
     m_selected.reserve(count + 1 /* for optional wti */);
     m_unselected.reserve(count + 1 /* for optional wti */);
     m_unprintable.reserve(cunprint /* for optional wti */);
@@ -175,9 +176,6 @@ void ArrangeJob::prepare_selected() {
             }
         }
 
-    prepare_wipe_tower();
-
-
     // The strides have to be removed from the fixed items. For the
     // arrangeable (selected) items bed_idx is ignored and the
     // translation is irrelevant.
@@ -245,13 +243,11 @@ void ArrangeJob::prepare_all() {
         }
     }
 
-    prepare_wipe_tower();
-
     // add the virtual object into unselect list if has
     plate_list.preprocess_exclude_areas(m_unselected, MAX_NUM_PLATES);
 }
 
-arrangement::ArrangePolygon estimate_wipe_tower_info(int plate_index, std::set<int>& extruder_ids)
+arrangement::ArrangePolygon estimate_wipe_tower_info(int plate_index, const std::set<int>& extruder_ids)
 {
     PartPlateList& ppl = wxGetApp().plater()->get_partplate_list();
     const auto& full_config = wxGetApp().preset_bundle->full_config();
@@ -259,103 +255,43 @@ arrangement::ArrangePolygon estimate_wipe_tower_info(int plate_index, std::set<i
     int plate_index_valid = std::min(plate_index, plate_count - 1);
 
     // we have to estimate the depth using the extruder number of all plates
-    int extruder_size = extruder_ids.size();
+    int extruder_size = std::max<int>(1, extruder_ids.size());
 
     auto arrange_poly = ppl.get_plate(plate_index_valid)->estimate_wipe_tower_polygon(full_config, plate_index, extruder_size);
     arrange_poly.bed_idx = plate_index;
     return arrange_poly;
 }
 
-// 准备料塔。逻辑如下：
-// 1. 以下几种情况不需要料塔：
-//    1）料塔被禁用，
-//    2）逐件打印，
-//    3）不允许不同材料落在相同盘，且没有多色对象
-// 2. 以下情况需要料塔：
-//    1）某对象是多色对象；
-//    2）打开了支撑，且支撑体与接触面使用的是不同材料
-//    3）允许不同材料落在相同盘，且所有选定对象中使用了多种热床温度相同的材料
-//     （所有对象都是单色的，但不同对象的材料不同，例如：对象A使用红色PLA，对象B使用白色PLA）
-void ArrangeJob::prepare_wipe_tower()
+static int physical_bed_for_logical_bed(PartPlateList &plate_list, int logical_bed)
 {
-    bool need_wipe_tower = false;
-
-    // if wipe tower is explicitly disabled, no need to estimate
-    DynamicPrintConfig& current_config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-    auto                op = current_config.option("enable_prime_tower");
-    bool enable_prime_tower = op && op->getBool();
-    if (!enable_prime_tower || params.is_seq_print) return;
-
-    bool smooth_timelapse = false;
-    auto sop = current_config.option("timelapse_type");
-    if (sop) { smooth_timelapse = sop->getInt() == TimelapseType::tlSmooth; }
-    if (smooth_timelapse) { need_wipe_tower = true; }
-
-    // estimate if we need wipe tower for all plates:
-    // need wipe tower if some object has multiple extruders (has paint-on colors or support material)
-    for (const auto& item : m_selected) {
-        std::set<int> obj_extruders;
-        obj_extruders.insert(item.extrude_ids.begin(), item.extrude_ids.end());
-        if (obj_extruders.size() > 1) {
-            need_wipe_tower = true;
-            BOOST_LOG_TRIVIAL(info) << "arrange: need wipe tower because object " << item.name << " has multiple extruders (has paint-on colors)";
-            break;
-        }
-    }
-
-    // if multile extruders have same bed temp, we need wipe tower
-    // 允许不同材料落在相同盘，且所有选定对象中使用了多种热床温度相同的材料
-    if (params.allow_multi_materials_on_same_plate) {
-        std::map<int, std::set<int>> bedTemp2extruderIds;
-        for (const auto& item : m_selected)
-            for (auto id : item.extrude_ids) { bedTemp2extruderIds[item.bed_temp].insert(id); }
-        for (const auto& be : bedTemp2extruderIds) {
-            if (be.second.size() > 1) {
-                need_wipe_tower = true;
-                BOOST_LOG_TRIVIAL(info) << "arrange: need wipe tower because allow_multi_materials_on_same_plate=true and we have multiple extruders of same type";
-                break;
-            }
-        }
-    }
-    BOOST_LOG_TRIVIAL(info) << "arrange: need_wipe_tower=" << need_wipe_tower;
-
-
-    ArrangePolygon    wipe_tower_ap;
-    wipe_tower_ap.name = "WipeTower";
-    wipe_tower_ap.is_virt_object = true;
-    wipe_tower_ap.is_wipe_tower = true;
-    const GLCanvas3D* canvas3D = static_cast<const GLCanvas3D*>(m_plater->canvas3D());
-
-    std::set<int> extruder_ids;
-    PartPlateList& ppl = wxGetApp().plater()->get_partplate_list();
-    int plate_count = ppl.get_plate_count();
-    if (!only_on_partplate) {
-        extruder_ids = ppl.get_extruders(true);
-    }
-
-    int bedid_unlocked = 0;
-    for (int bedid = 0; bedid < MAX_NUM_PLATES; bedid++) {
-        int plate_index_valid = std::min(bedid, plate_count - 1);
-        PartPlate* pl = ppl.get_plate(plate_index_valid);
-        if(bedid<plate_count && pl->is_locked())
+    int unlocked_bed = 0;
+    for (int physical_bed = 0; physical_bed < MAX_NUM_PLATES; ++physical_bed) {
+        if (physical_bed < plate_list.get_plate_count() && plate_list.get_plate(physical_bed)->is_locked())
             continue;
-        if (auto wti = get_wipe_tower(*m_plater, bedid)) {
-            // wipe tower is already there
-            wipe_tower_ap = get_wipetower_arrange_poly(&wti);
-            wipe_tower_ap.bed_idx = bedid_unlocked;
-            m_unselected.emplace_back(wipe_tower_ap);
-        }
-        else if (need_wipe_tower) {
-            if (only_on_partplate) {
-                auto plate_extruders = pl->get_extruders(true);
-                extruder_ids.clear();
-                extruder_ids.insert(plate_extruders.begin(), plate_extruders.end());
-            }
-            wipe_tower_ap = estimate_wipe_tower_info(bedid, extruder_ids);
-            wipe_tower_ap.bed_idx = bedid_unlocked;
-            m_unselected.emplace_back(wipe_tower_ap);
-        }
-        bedid_unlocked++;
+        if (unlocked_bed == logical_bed)
+            return physical_bed;
+        ++unlocked_bed;
+    }
+    return logical_bed;
+}
+
+static void append_wipe_towers(arrangement::ArrangePolygons &unselected,
+                               const ArrangeWipeTowerPlan &plan,
+                               Plater &plater)
+{
+    PartPlateList &plate_list = plater.get_partplate_list();
+    for (const auto &[logical_bed, extruder_ids] : plan) {
+        const int physical_bed = physical_bed_for_logical_bed(plate_list, logical_bed);
+        ArrangePolygon tower;
+        if (auto existing = get_wipe_tower(plater, physical_bed))
+            tower = get_wipetower_arrange_poly(&existing);
+        else
+            tower = estimate_wipe_tower_info(physical_bed, extruder_ids);
+        tower.bed_idx = logical_bed;
+        unselected.emplace_back(std::move(tower));
+        BOOST_LOG_TRIVIAL(info) << "arrange: reserve wipe tower on logical bed " << logical_bed
+                                << ", physical bed " << physical_bed
+                                << ", extruders " << extruder_ids.size();
     }
 }
 
@@ -382,6 +318,11 @@ void ArrangeJob::prepare_partplate() {
             NotificationManager::NotificationLevel::WarningNotificationLevel, into_u8(_L("This plate is locked.\nCannot auto-arrange on this plate.")));
         return;
     }
+
+    // The user explicitly chose to keep these objects on the current plate.
+    // Cross-object material grouping is a multi-plate optimization and must not
+    // manufacture a second logical bed in this mode.
+    params.allow_multi_materials_on_same_plate = true;
 
     Model& model = m_plater->model();
 
@@ -413,10 +354,28 @@ void ArrangeJob::prepare_partplate() {
         }
     }
 
-    // BBS
-    if (auto wti = get_wipe_tower(*m_plater, current_plate_index)) {
-        ArrangePolygon&& ap = get_wipetower_arrange_poly(&wti);
-        m_unselected.emplace_back(std::move(ap));
+    // The canvas may render a tower merely because multiple filaments are
+    // configured. Reserve it only when the objects fixed to this plate really
+    // need it (or smooth timelapse requires it).
+    DynamicPrintConfig &current_config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
+    std::string wipe_tower_reason;
+    const bool need_wipe_tower = arrange_wipe_tower_needed(
+        current_config, m_selected, params, true, &wipe_tower_reason);
+    BOOST_LOG_TRIVIAL(info) << "arrange current plate: need_wipe_tower=" << need_wipe_tower
+                            << ", reason=" << wipe_tower_reason;
+    if (need_wipe_tower) {
+        if (auto wti = get_wipe_tower(*m_plater, current_plate_index)) {
+            ArrangePolygon&& ap = get_wipetower_arrange_poly(&wti);
+            ap.bed_idx = 0;
+            m_unselected.emplace_back(std::move(ap));
+        } else {
+            std::set<int> extruder_ids;
+            for (const ArrangePolygon &item : m_selected)
+                extruder_ids.insert(item.extrude_ids.begin(), item.extrude_ids.end());
+            ArrangePolygon ap = estimate_wipe_tower_info(current_plate_index, extruder_ids);
+            ap.bed_idx = 0;
+            m_unselected.emplace_back(std::move(ap));
+        }
     }
 
     // add the virtual object into unselect list if has
@@ -542,6 +501,13 @@ void ArrangeJob::process(Ctl &ctl)
         ctl.update_status(num_finished * 100 / status_range(), _u8L("Arranging") + str);
     };
 
+    const ArrangePolygons selected_without_towers = m_selected;
+    const ArrangePolygons unselected_without_towers = m_unselected;
+
+    auto run_arrange = [&]() {
+        arrangement::arrange(m_selected, m_unselected, bedpts, params);
+    };
+
     {
         BOOST_LOG_TRIVIAL(warning)<< "Arrange full params: "<< params.to_json();
         BOOST_LOG_TRIVIAL(info) << boost::format("arrange: items selected before arranging: %1%") % m_selected.size();
@@ -555,7 +521,66 @@ void ArrangeJob::process(Ctl &ctl)
             <<", bbox:"<<get_extents(item.poly).min.transpose()<<","<<get_extents(item.poly).max.transpose();
     }
 
-    arrangement::arrange(m_selected, m_unselected, bedpts, params);
+    run_arrange();
+
+    // A wipe tower is a per-bed constraint. The old implementation reserved
+    // one on every possible logical bed before any object had a bed assignment,
+    // which could turn a compact two-plate job into three sparse plates. Start
+    // from the object-only result, then add towers only to beds whose actual
+    // object/extruder composition needs one. Re-run from the same input until
+    // the tower plan and resulting bed composition agree.
+    if (!only_on_partplate) {
+        DynamicPrintConfig &current_config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
+        ArrangeWipeTowerPlan tower_plan = arrange_wipe_tower_plan(current_config, m_selected, unselected_without_towers, params);
+        constexpr size_t MAX_TOWER_PLAN_PASSES = 8;
+        bool tower_plan_stable = tower_plan.empty();
+
+        for (size_t pass = 0; !tower_plan_stable && pass < MAX_TOWER_PLAN_PASSES; ++pass) {
+            m_selected = selected_without_towers;
+            m_unselected = unselected_without_towers;
+            append_wipe_towers(m_unselected, tower_plan, *m_plater);
+            update_unselected_items_inflation(m_unselected, m_plater->config(), params);
+            run_arrange();
+
+            ArrangeWipeTowerPlan actual_plan = arrange_wipe_tower_plan(current_config, m_selected, unselected_without_towers, params);
+            tower_plan_stable = actual_plan == tower_plan;
+            BOOST_LOG_TRIVIAL(info) << "arrange: per-bed wipe tower pass " << (pass + 1)
+                                    << ", reserved beds " << tower_plan.size()
+                                    << ", actual beds " << actual_plan.size()
+                                    << ", stable " << tower_plan_stable;
+            tower_plan = std::move(actual_plan);
+        }
+
+        if (!tower_plan_stable) {
+            // Keep the dynamic optimization on the normal path, but fall back
+            // to the pre-optimization all-bed reservation if the per-bed plan
+            // oscillates. This preserves the legacy failure semantics and
+            // avoids feeding a newly-created UNARRANGED result into the old
+            // PartPlate post-processing path.
+            ArrangeWipeTowerPlan legacy_fallback_plan;
+            const std::set<int> all_extruders = partplate_list.get_extruders(true);
+            int logical_bed = 0;
+            for (int physical_bed = 0; physical_bed < MAX_NUM_PLATES; ++physical_bed) {
+                if (physical_bed < partplate_list.get_plate_count() &&
+                    partplate_list.get_plate(physical_bed)->is_locked())
+                    continue;
+                legacy_fallback_plan.emplace(logical_bed++, all_extruders);
+            }
+
+            m_selected = selected_without_towers;
+            m_unselected = unselected_without_towers;
+            append_wipe_towers(m_unselected, legacy_fallback_plan, *m_plater);
+            update_unselected_items_inflation(m_unselected, m_plater->config(), params);
+            run_arrange();
+
+            BOOST_LOG_TRIVIAL(warning)
+                << "arrange: per-bed wipe tower plan did not stabilize; fell back to legacy all-bed reservation on "
+                << legacy_fallback_plan.size() << " logical beds";
+        }
+    }
+
+    if (only_on_partplate)
+        m_current_plate_overflow = !arrange_result_fits_single_plate(m_selected);
 
     // sort by item id
     std::sort(m_selected.begin(), m_selected.end(), [](auto a, auto b) {return a.itemid < b.itemid; });
@@ -579,6 +604,7 @@ void ArrangeJob::process(Ctl &ctl)
             we_have_unpackable_items = true;
         }
     }
+    we_have_unpackable_items = we_have_unpackable_items || m_current_plate_overflow;
 
     // finalize just here.
     ctl.update_status(100,
@@ -612,6 +638,16 @@ void ArrangeJob::finalize(bool canceled, std::exception_ptr &eptr) {
 
     if (canceled || eptr)
         return;
+
+    if (only_on_partplate && m_current_plate_overflow) {
+        m_plater->get_notification_manager()->close_notification_of_type(NotificationType::ArrangeOngoing);
+        m_plater->get_notification_manager()->push_notification(
+            NotificationType::BBLPlateInfo,
+            NotificationManager::NotificationLevel::WarningNotificationLevel,
+            into_u8(_L("The objects cannot fit on the current plate with the required spacing. Their original positions were kept.")));
+        BOOST_LOG_TRIVIAL(warning) << "arrange current plate: result needs another logical bed; keep original positions";
+        return;
+    }
 
     // Unprintable items go to the last virtual bed
     int beds = 0;

@@ -6,6 +6,9 @@
 #include <libslic3r/Print.hpp>
 #include "MTUtils.hpp"
 
+#include <map>
+#include <set>
+
 namespace Slic3r {
 
 namespace {
@@ -108,6 +111,140 @@ double estimate_arrange_support_margin(const ModelInstance &instance, const Dyna
 
     const auto *support_type = object->get_config_value<ConfigOptionEnum<SupportType>>(config, "support_type");
     return support_margin(support_type->value);
+}
+
+int resolve_arrange_auto_plate_value(bool option_was_specified, int configured_value)
+{
+    return option_was_specified ? configured_value : -1;
+}
+
+bool arrange_wipe_tower_needed(const DynamicPrintConfig &config,
+                               const ArrangePolygons &selected,
+                               const ArrangeParams &params,
+                               bool selected_are_fixed_to_one_plate,
+                               std::string *reason)
+{
+    auto set_reason = [reason](const char *value) {
+        if (reason != nullptr)
+            *reason = value;
+    };
+
+    const auto *enable_prime_tower = config.option<ConfigOptionBool>("enable_prime_tower");
+    if (enable_prime_tower == nullptr || !enable_prime_tower->value) {
+        set_reason("disabled");
+        return false;
+    }
+    if (params.is_seq_print) {
+        set_reason("sequential_printing");
+        return false;
+    }
+
+    const auto *timelapse = config.option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
+    if (timelapse != nullptr && timelapse->value == TimelapseType::tlSmooth) {
+        set_reason("smooth_timelapse");
+        return true;
+    }
+
+    std::set<int> fixed_plate_extruders;
+    for (const ArrangePolygon &item : selected) {
+        const std::set<int> object_extruders(item.extrude_ids.begin(), item.extrude_ids.end());
+        if (object_extruders.size() > 1) {
+            set_reason("multi_extruder_object");
+            return true;
+        }
+        if (selected_are_fixed_to_one_plate)
+            fixed_plate_extruders.insert(item.extrude_ids.begin(), item.extrude_ids.end());
+    }
+
+    // Current-plate and assembled-plate arranging cannot split the selected
+    // objects across beds. Distinct single-extruder objects therefore still
+    // require a wipe tower when they are already fixed to the same plate.
+    if (fixed_plate_extruders.size() > 1) {
+        set_reason("fixed_plate_multi_extruder");
+        return true;
+    }
+
+    if (params.allow_multi_materials_on_same_plate) {
+        std::map<int, std::set<int>> bed_temperature_extruders;
+        for (const ArrangePolygon &item : selected)
+            for (int extruder_id : item.extrude_ids)
+                bed_temperature_extruders[item.bed_temp].insert(extruder_id);
+
+        for (const auto &[bed_temperature, extruders] : bed_temperature_extruders) {
+            (void) bed_temperature;
+            if (extruders.size() > 1) {
+                set_reason("same_bed_temperature_multi_extruder");
+                return true;
+            }
+        }
+    }
+
+    set_reason("not_required");
+    return false;
+}
+
+ArrangeWipeTowerPlan arrange_wipe_tower_plan(const DynamicPrintConfig &config,
+                                             const ArrangePolygons &arranged,
+                                             const ArrangePolygons &fixed,
+                                             const ArrangeParams &params)
+{
+    ArrangeWipeTowerPlan result;
+
+    const auto *enable_prime_tower = config.option<ConfigOptionBool>("enable_prime_tower");
+    if (enable_prime_tower == nullptr || !enable_prime_tower->value || params.is_seq_print)
+        return result;
+
+    const auto *timelapse = config.option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
+    const bool smooth_timelapse = timelapse != nullptr && timelapse->value == TimelapseType::tlSmooth;
+
+    std::set<int> used_beds;
+    std::set<int> multi_extruder_object_beds;
+    std::map<int, std::set<int>> bed_extruders;
+    std::map<int, std::map<int, std::set<int>>> bed_temperature_extruders;
+
+    auto collect = [&](const ArrangePolygons &items) {
+        for (const ArrangePolygon &item : items) {
+            if (item.is_virt_object || item.bed_idx < 0)
+                continue;
+
+            used_beds.insert(item.bed_idx);
+            const std::set<int> object_extruders(item.extrude_ids.begin(), item.extrude_ids.end());
+            if (object_extruders.size() > 1)
+                multi_extruder_object_beds.insert(item.bed_idx);
+
+            bed_extruders[item.bed_idx].insert(item.extrude_ids.begin(), item.extrude_ids.end());
+            auto &temperature_extruders = bed_temperature_extruders[item.bed_idx][item.bed_temp];
+            temperature_extruders.insert(item.extrude_ids.begin(), item.extrude_ids.end());
+        }
+    };
+
+    collect(arranged);
+    collect(fixed);
+
+    for (int bed_idx : used_beds) {
+        bool needed = smooth_timelapse || multi_extruder_object_beds.count(bed_idx) != 0;
+        // At this stage the items already have a concrete bed assignment.
+        // Even if the arranger normally separates materials, fixed objects or
+        // imported plate state may still leave multiple extruders on one bed.
+        if (!needed) {
+            for (const auto &[bed_temperature, extruders] : bed_temperature_extruders[bed_idx]) {
+                (void) bed_temperature;
+                if (extruders.size() > 1) {
+                    needed = true;
+                    break;
+                }
+            }
+        }
+        if (needed)
+            result.emplace(bed_idx, bed_extruders[bed_idx]);
+    }
+
+    return result;
+}
+
+bool arrange_result_fits_single_plate(const ArrangePolygons &arranged)
+{
+    return std::all_of(arranged.begin(), arranged.end(), [](const ArrangePolygon &item) { return item.bed_idx == 0; });
 }
 
 arrangement::ArrangePolygons get_arrange_polys(const Model &model, ModelInstancePtrs &instances)

@@ -4635,6 +4635,15 @@ int CLI::run(int argc, char **argv)
         BOOST_LOG_TRIVIAL(info) << "split_by_color: done";
     }
 
+    // Resolve auto_plate once and reuse it for arranging and transform export.
+    // The config default is 0, so option presence must be checked separately:
+    // omitted=-1 (historical multi-plate), 0=single plate, nonzero=multi-plate.
+    const bool auto_plate_specified =
+        std::find(m_transforms.begin(), m_transforms.end(), "auto_plate") != m_transforms.end();
+    const int auto_plate_value = resolve_arrange_auto_plate_value(
+        auto_plate_specified, m_config.opt_int("auto_plate"));
+    const bool force_single_plate = (auto_plate_value == 0);
+
     bool oriented_or_arranged = false;
     //BBS: add orient and arrange logic here
     for (auto& model : m_models)
@@ -4790,6 +4799,7 @@ int CLI::run(int argc, char **argv)
                 Model& model = m_models[0];
                 arrange_cfg = ArrangeParams();  // reset all params
                 get_print_sequence(cur_plate, m_print_config, arrange_cfg.is_seq_print);
+                arrange_cfg.allow_multi_materials_on_same_plate = allow_multicolor_oneplate;
 
                 //Step-1: prepare the arranged data
                 partplate_list.lock_plate(i, false);
@@ -4810,13 +4820,19 @@ int CLI::run(int argc, char **argv)
                     }
                 }
 
-                if (!arrange_cfg.is_seq_print && assemble_plate.filaments_count > 1)
+                std::string assemble_wipe_tower_reason;
+                const bool assemble_needs_wipe_tower = arrange_wipe_tower_needed(
+                    m_print_config, selected, arrange_cfg, true, &assemble_wipe_tower_reason);
+                BOOST_LOG_TRIVIAL(info) << "CLI assemble arrange: need_wipe_tower=" << assemble_needs_wipe_tower
+                                        << ", reason=" << assemble_wipe_tower_reason;
+
+                if (assemble_needs_wipe_tower)
                 {
                     //prepare the wipe tower
                     int plate_count = partplate_list.get_plate_count();
 
                     auto printer_structure_opt = m_print_config.option<ConfigOptionEnum<PrinterStructure>>("printer_structure");
-                    const float tower_brim_width = m_print_config.option<ConfigOptionFloat>("prime_tower_width", true)->value;
+                    const float tower_brim_width = m_print_config.option<ConfigOptionFloat>("prime_tower_brim_width", true)->value;
                     const float tower_margin = WIPE_TOWER_MARGIN + tower_brim_width;
 
                     // set the default position, the same with print config(left top)
@@ -4976,7 +4992,9 @@ int CLI::run(int argc, char **argv)
             while(!finished_arrange)
             {
                 arrange_cfg = ArrangeParams();  // reset all params
+                arrange_cfg.allow_multi_materials_on_same_plate = allow_multicolor_oneplate;
                 arrange_count++;
+
                 //step-0: duplicate model
                 if (duplicate_count > 0)
                 {
@@ -5064,14 +5082,28 @@ int CLI::run(int argc, char **argv)
                     //add the virtual object into unselect list if has
                     partplate_list.preprocess_exclude_areas(unselected);
 
-                    if (used_filament_set.size() > 0)
+                    std::string wipe_tower_reason;
+                    const bool need_wipe_tower = arrange_wipe_tower_needed(
+                        m_print_config, selected, arrange_cfg, force_single_plate, &wipe_tower_reason);
+                    BOOST_LOG_TRIVIAL(info) << "CLI arrange: need_wipe_tower=" << need_wipe_tower
+                                            << ", reason=" << wipe_tower_reason;
+
+                    // Multi-plate arranging defers tower placement until the
+                    // first object-only result has a concrete per-bed material
+                    // assignment. Keep the historical pre-reservation for the
+                    // explicit single-plate mode, whose overflow semantics are
+                    // intentionally different from normal multi-plate output.
+                    if (need_wipe_tower && force_single_plate)
                     {
                         //prepare the wipe tower
                         int plate_count = partplate_list.get_plate_count();
-                        int extruder_size = used_filament_set.size();
+                        std::set<int> arranged_extruders;
+                        for (const ArrangePolygon &item : selected)
+                            arranged_extruders.insert(item.extrude_ids.begin(), item.extrude_ids.end());
+                        const int extruder_size = static_cast<int>(arranged_extruders.size());
 
                         auto printer_structure_opt = m_print_config.option<ConfigOptionEnum<PrinterStructure>>("printer_structure");
-                        const float tower_brim_width      = m_print_config.option<ConfigOptionFloat>("prime_tower_width", true)->value;
+                        const float tower_brim_width      = m_print_config.option<ConfigOptionFloat>("prime_tower_brim_width", true)->value;
                         const float tower_margin          = WIPE_TOWER_MARGIN + tower_brim_width;
                         // set the default position, the same with print config(left top)
                         float x = WIPE_TOWER_DEFAULT_X_POS;
@@ -5113,6 +5145,9 @@ int CLI::run(int argc, char **argv)
                             wipe_tower_ap.bed_idx = bedid;
                             unselected.emplace_back(wipe_tower_ap);
                         }
+                    }
+                    else if (need_wipe_tower) {
+                        BOOST_LOG_TRIVIAL(info) << "CLI arrange: defer wipe tower reservation until per-bed assignment is known";
                     }
                 }
                 else {
@@ -5156,7 +5191,13 @@ int CLI::run(int argc, char **argv)
                         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": found single object mode");
                     }
 
-                    if (m_print_config.has("wipe_tower_x") && (is_smooth_timelapse || !arrange_cfg.is_seq_print || (selected.size() <= 1))) {
+                    std::string current_plate_wipe_tower_reason;
+                    const bool current_plate_needs_wipe_tower = arrange_wipe_tower_needed(
+                        m_print_config, selected, arrange_cfg, true, &current_plate_wipe_tower_reason);
+                    BOOST_LOG_TRIVIAL(info) << "CLI current-plate arrange: need_wipe_tower=" << current_plate_needs_wipe_tower
+                                            << ", reason=" << current_plate_wipe_tower_reason;
+
+                    if (m_print_config.has("wipe_tower_x") && current_plate_needs_wipe_tower) {
                         float x;
                         float y;
                         if (duplicate_count > 0) {
@@ -5285,6 +5326,9 @@ int CLI::run(int argc, char **argv)
                 arrangement::update_unselected_items_inflation(unselected, &m_print_config, arrange_cfg);
                 arrangement::update_selected_items_axis_align(selected, &m_print_config, arrange_cfg);
 
+                const ArrangePolygons selected_without_wipe_towers = selected;
+                const ArrangePolygons unselected_without_wipe_towers = unselected;
+
                 beds=get_shrink_bedpts(&m_print_config, arrange_cfg);
 
                 partplate_list.preprocess_exclude_areas(arrange_cfg.excluded_regions, 1, scale_(1));
@@ -5304,17 +5348,139 @@ int CLI::run(int argc, char **argv)
                     //boost::nowide::cout << "st=" << st << ", " << str << std::endl;
                 };
 
-                // auto_plate: -1=not specified (multi-plate, original behavior)
-                //              0=single plate, allow overflow
-                //              1=multi-plate (same as -1)
-                bool auto_plate_specified = std::find(m_transforms.begin(), m_transforms.end(), "auto_plate") != m_transforms.end();
-                int auto_plate_value = auto_plate_specified ? m_config.opt_int("auto_plate") : -1;
-                bool force_single_plate = (auto_plate_value == 0);
                 BOOST_LOG_TRIVIAL(info) << "auto_plate_value=" << auto_plate_value << " force_single_plate=" << force_single_plate;
 
                 //Step-3:do the arrange
                 BOOST_LOG_TRIVIAL(info) << boost::format("start %1% th arranging...")%arrange_count;
                 arrangement::arrange(selected, unselected, beds, arrange_cfg);
+
+                // In normal global multi-plate mode, reserve wipe towers only
+                // on beds whose actual arranged material composition needs
+                // one. Re-run from the same object-only input until the tower
+                // plan agrees with the resulting bed assignment. This mirrors
+                // the GUI path and avoids the former MAX_PLATE_COUNT blanket
+                // reservation that reduced CLI plate utilization.
+                if (duplicate_count == 0 && plate_to_slice == 0 && !force_single_plate) {
+                    auto append_cli_wipe_towers = [&](ArrangePolygons &target, const ArrangeWipeTowerPlan &plan) {
+                        if (plan.empty())
+                            return;
+
+                        const int plate_count = partplate_list.get_plate_count();
+                        auto printer_structure_opt =
+                            m_print_config.option<ConfigOptionEnum<PrinterStructure>>("printer_structure");
+                        const float tower_brim_width =
+                            m_print_config.option<ConfigOptionFloat>("prime_tower_brim_width", true)->value;
+                        const float tower_margin = WIPE_TOWER_MARGIN + tower_brim_width;
+
+                        float x = WIPE_TOWER_DEFAULT_X_POS;
+                        float y = WIPE_TOWER_DEFAULT_Y_POS;
+                        if (printer_structure_opt && printer_structure_opt->value == PrinterStructure::psI3) {
+                            x = I3_WIPE_TOWER_DEFAULT_X_POS;
+                            y = I3_WIPE_TOWER_DEFAULT_Y_POS;
+                        }
+                        x = std::max(x, tower_margin);
+                        y = std::max(y, tower_margin);
+
+                        ConfigOptionFloat wt_x_opt(x);
+                        ConfigOptionFloat wt_y_opt(y);
+                        ConfigOptionFloats *wipe_x_option =
+                            m_print_config.option<ConfigOptionFloats>("wipe_tower_x", true);
+                        ConfigOptionFloats *wipe_y_option =
+                            m_print_config.option<ConfigOptionFloats>("wipe_tower_y", true);
+
+                        auto physical_bed_for_logical_bed = [&](int logical_bed) {
+                            int unlocked_bed = 0;
+                            for (int physical_bed = 0; physical_bed < MAX_PLATE_COUNT; ++physical_bed) {
+                                if (physical_bed < plate_count && partplate_list.get_plate(physical_bed)->is_locked())
+                                    continue;
+                                if (unlocked_bed == logical_bed)
+                                    return physical_bed;
+                                ++unlocked_bed;
+                            }
+                            return logical_bed;
+                        };
+
+                        for (const auto &[logical_bed, extruder_ids] : plan) {
+                            const int physical_bed = physical_bed_for_logical_bed(logical_bed);
+                            const int plate_index_valid = std::min(physical_bed, plate_count - 1);
+                            if (physical_bed < plate_count) {
+                                wipe_x_option->set_at(&wt_x_opt, physical_bed, 0);
+                                wipe_y_option->set_at(&wt_y_opt, physical_bed, 0);
+                            }
+
+                            ArrangePolygon tower = partplate_list.get_plate(plate_index_valid)
+                                                       ->estimate_wipe_tower_polygon(
+                                                           m_print_config,
+                                                           physical_bed,
+                                                           std::max<int>(1, extruder_ids.size()),
+                                                           true);
+                            tower.bed_idx = logical_bed;
+                            target.emplace_back(std::move(tower));
+                            BOOST_LOG_TRIVIAL(info) << "CLI arrange: reserve wipe tower on logical bed "
+                                                    << logical_bed << ", physical bed " << physical_bed
+                                                    << ", extruders " << extruder_ids.size();
+                        }
+                    };
+
+                    ArrangeWipeTowerPlan tower_plan =
+                        arrange_wipe_tower_plan(m_print_config, selected, unselected_without_wipe_towers, arrange_cfg);
+                    constexpr size_t MAX_TOWER_PLAN_PASSES = 8;
+                    bool tower_plan_stable = tower_plan.empty();
+
+                    for (size_t pass = 0; !tower_plan_stable && pass < MAX_TOWER_PLAN_PASSES; ++pass) {
+                        selected = selected_without_wipe_towers;
+                        unselected = unselected_without_wipe_towers;
+                        append_cli_wipe_towers(unselected, tower_plan);
+                        arrangement::update_unselected_items_inflation(unselected, &m_print_config, arrange_cfg);
+                        arrangement::arrange(selected, unselected, beds, arrange_cfg);
+
+                        ArrangeWipeTowerPlan actual_plan =
+                            arrange_wipe_tower_plan(m_print_config, selected, unselected_without_wipe_towers, arrange_cfg);
+                        tower_plan_stable = actual_plan == tower_plan;
+                        BOOST_LOG_TRIVIAL(info) << "CLI arrange: per-bed wipe tower pass " << (pass + 1)
+                                                << ", reserved beds " << tower_plan.size()
+                                                << ", actual beds " << actual_plan.size()
+                                                << ", stable " << tower_plan_stable;
+                        tower_plan = std::move(actual_plan);
+                    }
+
+                    if (!tower_plan_stable) {
+                        // Match the legacy CLI behavior only on the exceptional
+                        // non-converging path. Normal arrangements keep the
+                        // per-bed optimization, while this fallback reserves a
+                        // tower on every available logical bed instead of
+                        // creating a new UNARRANGED state for old post-processing.
+                        std::set<int> all_extruders = used_filament_set;
+                        auto collect_extruders = [&all_extruders](const ArrangePolygons &items) {
+                            for (const ArrangePolygon &item : items)
+                                if (!item.is_virt_object)
+                                    all_extruders.insert(item.extrude_ids.begin(), item.extrude_ids.end());
+                        };
+                        collect_extruders(selected_without_wipe_towers);
+                        collect_extruders(unselected_without_wipe_towers);
+                        collect_extruders(locked_aps);
+
+                        ArrangeWipeTowerPlan legacy_fallback_plan;
+                        int logical_bed = 0;
+                        const int plate_count = partplate_list.get_plate_count();
+                        for (int physical_bed = 0; physical_bed < MAX_PLATE_COUNT; ++physical_bed) {
+                            if (physical_bed < plate_count && partplate_list.get_plate(physical_bed)->is_locked())
+                                continue;
+                            legacy_fallback_plan.emplace(logical_bed++, all_extruders);
+                        }
+
+                        selected = selected_without_wipe_towers;
+                        unselected = unselected_without_wipe_towers;
+                        append_cli_wipe_towers(unselected, legacy_fallback_plan);
+                        arrangement::update_unselected_items_inflation(unselected, &m_print_config, arrange_cfg);
+                        arrangement::arrange(selected, unselected, beds, arrange_cfg);
+
+                        BOOST_LOG_TRIVIAL(warning)
+                            << "CLI arrange: per-bed wipe tower plan did not stabilize; fell back to legacy all-bed reservation on "
+                            << legacy_fallback_plan.size() << " logical beds";
+                    }
+                }
+
                 // 单盘模式：把已排好的 selected 作为障碍物传入，避免 unprintable 与其重叠
                 // 多盘模式：空的 unselected（原始行为）
                 if (force_single_plate)
@@ -5616,12 +5782,6 @@ int CLI::run(int argc, char **argv)
             return rounded;
         };
         
-        // Get auto_plate parameter to determine how to assign plate_index
-        int auto_plate_value = 0;
-        if (m_config.has("auto_plate")) {
-            auto_plate_value = m_config.opt_int("auto_plate");
-        }
-        
         // Build a map of instance ObjectID to plate_index by iterating through all plates
         // This ensures we get the correct plate assignment after arrange
         // Note: contain_instance uses object/instance indices (not ObjectIDs), so we need to use indices
@@ -5725,8 +5885,8 @@ int CLI::run(int argc, char **argv)
                     
                     // If still not found, try to determine from position or default to plate 0
                     if (plate_idx == -1) {
-                        if (auto_plate_value == 1 && oriented_or_arranged) {
-                            // auto_plate=1: should have been assigned to a plate after arrange
+                        if (auto_plate_value != 0 && oriented_or_arranged) {
+                            // Multi-plate arrange should have assigned the instance to a plate.
                             // If not found, it might be out of bounds - check all plates by position
                             for (int i = 0; i < plate_count; i++) {
                                 Slic3r::GUI::PartPlate* plate = partplate_list.get_plate(i);
@@ -5743,12 +5903,12 @@ int CLI::run(int argc, char **argv)
                     }
                     transform["plate_index"] = plate_idx;
 
-                    // Export plate-local XY coordinates when auto-plate is enabled.
+                    // Export plate-local XY coordinates in resolved multi-plate mode.
                     // This keeps single-plate exports unchanged while avoiding multi-plate
                     // consumers mistaking world coordinates for plate-local coordinates.
                     double export_x = center_x;
                     double export_y = center_y;
-                    if (auto_plate_value == 1 && plate_idx >= 0 && plate_idx < plate_count) {
+                    if (auto_plate_value != 0 && plate_idx >= 0 && plate_idx < plate_count) {
                         if (Slic3r::GUI::PartPlate* plate = partplate_list.get_plate(plate_idx)) {
                             const Vec3d plate_origin = plate->get_origin();
                             export_x -= plate_origin.x();

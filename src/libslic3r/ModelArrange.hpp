@@ -1,6 +1,10 @@
 #ifndef MODELARRANGE_HPP
 #define MODELARRANGE_HPP
 
+#include <map>
+#include <set>
+#include <string>
+
 #include <libslic3r/Arrange.hpp>
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Model.hpp"
@@ -95,6 +99,36 @@ ArrangePolygon get_instance_arrange_poly(ModelInstance* instance, const DynamicP
 
 // Lightweight support-footprint estimate used by both GUI and CLI arranging.
 double estimate_arrange_support_margin(const ModelInstance &instance, const DynamicPrintConfig &config);
+
+// Keep the CLI's arrange and transform-export paths on the same auto-plate
+// semantics. An omitted option retains the historical multi-plate behavior.
+int resolve_arrange_auto_plate_value(bool option_was_specified, int configured_value);
+
+// Keep GUI and CLI consistent when deciding whether a wipe tower must reserve
+// space during arranging. Merely enabling the option is not sufficient: a
+// traditional single-filament print has no tool change and needs no tower.
+// selected_are_fixed_to_one_plate is true for current-plate and assembled-plate
+// arranging, where distinct single-extruder objects cannot be split apart.
+bool arrange_wipe_tower_needed(const DynamicPrintConfig &config,
+                               const ArrangePolygons &selected,
+                               const ArrangeParams &params,
+                               bool selected_are_fixed_to_one_plate,
+                               std::string *reason = nullptr);
+
+using ArrangeWipeTowerPlan = std::map<int, std::set<int>>;
+
+// Build a per-bed tower plan from an already arranged result. This avoids
+// reserving a tower on every possible logical bed before the objects have a
+// real bed assignment. The value contains the extruders used by that bed and
+// is also used to estimate the required tower depth.
+ArrangeWipeTowerPlan arrange_wipe_tower_plan(const DynamicPrintConfig &config,
+                                             const ArrangePolygons &arranged,
+                                             const ArrangePolygons &fixed,
+                                             const ArrangeParams &params);
+
+// Current-plate arranging must never silently move overflow to another logical
+// bed, because that bed is not created by the current-plate GUI operation.
+bool arrange_result_fits_single_plate(const ArrangePolygons &arranged);
 }
 
 #endif // MODELARRANGE_HPP
