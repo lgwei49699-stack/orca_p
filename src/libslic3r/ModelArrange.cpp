@@ -118,6 +118,11 @@ int resolve_arrange_auto_plate_value(bool option_was_specified, int configured_v
     return option_was_specified ? configured_value : -1;
 }
 
+bool resolve_arrange_allow_multicolor_oneplate(bool configured_value, bool split_by_color)
+{
+    return configured_value && !split_by_color;
+}
+
 bool arrange_wipe_tower_needed(const DynamicPrintConfig &config,
                                const ArrangePolygons &selected,
                                const ArrangeParams &params,

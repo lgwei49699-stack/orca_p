@@ -7888,7 +7888,7 @@ CLITransformConfigDef::CLITransformConfigDef()
 
     def = this->add("split_by_color", coBool);
     def->label = L("Split by Color");
-    def->tooltip = L("Split multi-color objects by extruder into separate objects, each placed on a separate plate.");
+    def->tooltip = L("Split multi-color objects by extruder and keep different extruders on separate plates during arranging.");
     def->cli = "split-by-color";
     def->set_default_value(new ConfigOptionBool(false));
 

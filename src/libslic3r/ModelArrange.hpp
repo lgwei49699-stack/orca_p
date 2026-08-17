@@ -104,6 +104,10 @@ double estimate_arrange_support_margin(const ModelInstance &instance, const Dyna
 // semantics. An omitted option retains the historical multi-plate behavior.
 int resolve_arrange_auto_plate_value(bool option_was_specified, int configured_value);
 
+// --split-by-color is a stronger constraint than the general CLI preference:
+// its color groups must stay on separate plates during the subsequent arrange.
+bool resolve_arrange_allow_multicolor_oneplate(bool configured_value, bool split_by_color);
+
 // Keep GUI and CLI consistent when deciding whether a wipe tower must reserve
 // space during arranging. Merely enabling the option is not sufficient: a
 // traditional single-filament print has no tool change and needs no tower.

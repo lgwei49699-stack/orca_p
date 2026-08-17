@@ -1583,7 +1583,12 @@ int CLI::run(int argc, char **argv)
     if (load_assemble_list_option)
         load_assemble_list = load_assemble_list_option->value;
 
-    bool allow_multicolor_oneplate = m_config.option<ConfigOptionBool>("allow_multicolor_oneplate", true)->value;
+    const bool split_by_color =
+        std::find(m_transforms.begin(), m_transforms.end(), "split_by_color") != m_transforms.end() && m_config.opt_bool("split_by_color");
+    bool allow_multicolor_oneplate = resolve_arrange_allow_multicolor_oneplate(
+        m_config.option<ConfigOptionBool>("allow_multicolor_oneplate", true)->value, split_by_color);
+    if (split_by_color)
+        BOOST_LOG_TRIVIAL(info) << "split_by_color: keep different extruders on separate plates during arrange";
     const std::vector<int>  loaded_filament_ids  = m_config.option<ConfigOptionInts>("load_filament_ids", true)->values;
     const std::vector<int>  clone_objects  = m_config.option<ConfigOptionInts>("clone_objects", true)->values;
     //when load objects from stl/obj, the total used filaments set
@@ -4562,8 +4567,7 @@ int CLI::run(int argc, char **argv)
     BOOST_LOG_TRIVIAL(info) << "finished model pre-process commands\n";
 
     // --split-by-color: split multi-extruder objects into single-extruder objects, assign each to a separate plate
-    if (std::find(m_transforms.begin(), m_transforms.end(), "split_by_color") != m_transforms.end() &&
-        m_config.opt_bool("split_by_color")) {
+    if (split_by_color) {
         BOOST_LOG_TRIVIAL(info) << "split_by_color: begin splitting multi-extruder objects";
         for (auto& model : m_models) {
             // Step 1: split objects that have volumes with multiple extruder IDs

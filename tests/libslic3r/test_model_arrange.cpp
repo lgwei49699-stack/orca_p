@@ -168,6 +168,14 @@ TEST_CASE("CLI auto-plate mode keeps omitted and explicit values distinct", "[Ar
     REQUIRE(resolve_arrange_auto_plate_value(true, 2) == 2);
 }
 
+TEST_CASE("CLI split-by-color keeps color groups on separate plates", "[Arrange][CLI][Color]")
+{
+    REQUIRE(resolve_arrange_allow_multicolor_oneplate(true, false));
+    REQUIRE_FALSE(resolve_arrange_allow_multicolor_oneplate(false, false));
+    REQUIRE_FALSE(resolve_arrange_allow_multicolor_oneplate(true, true));
+    REQUIRE_FALSE(resolve_arrange_allow_multicolor_oneplate(false, true));
+}
+
 TEST_CASE("Arrange reserves a wipe tower only when it is actually needed", "[Arrange][WipeTower]")
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
