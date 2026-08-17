@@ -1492,6 +1492,9 @@ int CLI::run(int argc, char **argv)
     if (arrange_spacing_option)
         arrange_spacing = arrange_spacing_option->value;
 
+    const bool ignore_wipe_tower = m_config.opt_bool("ignore_wipe_tower");
+    bool cli_arrange_wipe_tower_positions_updated = false;
+
     bool force_machine = false;
     ConfigOptionBool* force_machine_option = m_config.option<ConfigOptionBool>("force_machine");
     if (force_machine_option)
@@ -3805,6 +3808,15 @@ int CLI::run(int argc, char **argv)
         m_print_config.apply(sla_print_config, true);*/
     }
 
+    // Apply this after all process settings have been merged so the CLI flag
+    // always wins without modifying the source JSON files. Disabling the tower
+    // for both arranging and slicing avoids producing G-code whose tower could
+    // overlap an arrangement that intentionally did not reserve tower space.
+    if (ignore_wipe_tower) {
+        m_print_config.option<ConfigOptionBool>("enable_prime_tower", true)->value = false;
+        BOOST_LOG_TRIVIAL(info) << "CLI override: enable_prime_tower = false (--ignore-wipe-tower)";
+    }
+
     std::map<std::string, std::string> validity = m_print_config.validate(true);
     if (!validity.empty()) {
         if (allow_newer_file) {
@@ -4527,6 +4539,8 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "auto_plate is set to " << m_config.opt_int("auto_plate") << ", will be used during arrange process";
         } else if (opt_key == "arrange_spacing") {
             BOOST_LOG_TRIVIAL(info) << "arrange_spacing = " << m_config.opt_float("arrange_spacing") << " mm";
+        } else if (opt_key == "ignore_wipe_tower") {
+            BOOST_LOG_TRIVIAL(info) << "ignore_wipe_tower = " << m_config.opt_bool("ignore_wipe_tower");
         } else if (opt_key == "split_by_color") {
             BOOST_LOG_TRIVIAL(info) << "split_by_color = " << m_config.opt_bool("split_by_color") << ", will split multi-extruder objects before arrange";
         } else if (opt_key == "force_machine") {
@@ -5370,23 +5384,27 @@ int CLI::run(int argc, char **argv)
                             m_print_config.option<ConfigOptionEnum<PrinterStructure>>("printer_structure");
                         const float tower_brim_width =
                             m_print_config.option<ConfigOptionFloat>("prime_tower_brim_width", true)->value;
+                        const float tower_width =
+                            m_print_config.option<ConfigOptionFloat>("prime_tower_width", true)->value;
+                        const float tower_volume =
+                            m_print_config.option<ConfigOptionFloat>("prime_volume", true)->value;
                         const float tower_margin = WIPE_TOWER_MARGIN + tower_brim_width;
 
-                        float x = WIPE_TOWER_DEFAULT_X_POS;
-                        float y = WIPE_TOWER_DEFAULT_Y_POS;
+                        float preferred_x = WIPE_TOWER_DEFAULT_X_POS;
+                        float preferred_y = WIPE_TOWER_DEFAULT_Y_POS;
                         if (printer_structure_opt && printer_structure_opt->value == PrinterStructure::psI3) {
-                            x = I3_WIPE_TOWER_DEFAULT_X_POS;
-                            y = I3_WIPE_TOWER_DEFAULT_Y_POS;
+                            preferred_x = I3_WIPE_TOWER_DEFAULT_X_POS;
+                            preferred_y = I3_WIPE_TOWER_DEFAULT_Y_POS;
                         }
-                        x = std::max(x, tower_margin);
-                        y = std::max(y, tower_margin);
-
-                        ConfigOptionFloat wt_x_opt(x);
-                        ConfigOptionFloat wt_y_opt(y);
                         ConfigOptionFloats *wipe_x_option =
                             m_print_config.option<ConfigOptionFloats>("wipe_tower_x", true);
                         ConfigOptionFloats *wipe_y_option =
                             m_print_config.option<ConfigOptionFloats>("wipe_tower_y", true);
+
+                        int plate_width = 0;
+                        int plate_depth = 0;
+                        int plate_height = 0;
+                        partplate_list.get_plate_size(plate_width, plate_depth, plate_height);
 
                         auto physical_bed_for_logical_bed = [&](int logical_bed) {
                             int unlocked_bed = 0;
@@ -5403,22 +5421,44 @@ int CLI::run(int argc, char **argv)
                         for (const auto &[logical_bed, extruder_ids] : plan) {
                             const int physical_bed = physical_bed_for_logical_bed(logical_bed);
                             const int plate_index_valid = std::min(physical_bed, plate_count - 1);
-                            if (physical_bed < plate_count) {
-                                wipe_x_option->set_at(&wt_x_opt, physical_bed, 0);
-                                wipe_y_option->set_at(&wt_y_opt, physical_bed, 0);
-                            }
+                            Slic3r::GUI::PartPlate *tower_plate = partplate_list.get_plate(plate_index_valid);
+                            const Vec3d tower_size = tower_plate->estimate_wipe_tower_size(
+                                m_print_config,
+                                tower_width,
+                                tower_volume,
+                                std::max<int>(1, extruder_ids.size()),
+                                true);
+                            const float x = std::clamp(
+                                preferred_x,
+                                tower_margin,
+                                static_cast<float>(plate_width) - tower_width - tower_margin - tower_brim_width);
+                            const float y = std::clamp(
+                                preferred_y,
+                                tower_margin,
+                                static_cast<float>(plate_depth) - static_cast<float>(tower_size.y()) - tower_margin - tower_brim_width);
+                            ConfigOptionFloat wt_x_opt(x);
+                            ConfigOptionFloat wt_y_opt(y);
 
-                            ArrangePolygon tower = partplate_list.get_plate(plate_index_valid)
-                                                       ->estimate_wipe_tower_polygon(
-                                                           m_print_config,
-                                                           physical_bed,
-                                                           std::max<int>(1, extruder_ids.size()),
-                                                           true);
+                            // ConfigOptionFloats::set_at() grows the per-plate
+                            // vector when the arranger creates a new logical
+                            // bed. Keep these runtime positions for slicing;
+                            // the generic CLI defaults are applied again when
+                            // each plate config is built below.
+                            wipe_x_option->set_at(&wt_x_opt, physical_bed, 0);
+                            wipe_y_option->set_at(&wt_y_opt, physical_bed, 0);
+                            cli_arrange_wipe_tower_positions_updated = true;
+
+                            ArrangePolygon tower = tower_plate->estimate_wipe_tower_polygon(
+                                m_print_config,
+                                physical_bed,
+                                std::max<int>(1, extruder_ids.size()),
+                                true);
                             tower.bed_idx = logical_bed;
                             target.emplace_back(std::move(tower));
                             BOOST_LOG_TRIVIAL(info) << "CLI arrange: reserve wipe tower on logical bed "
                                                     << logical_bed << ", physical bed " << physical_bed
-                                                    << ", extruders " << extruder_ids.size();
+                                                    << ", extruders " << extruder_ids.size()
+                                                    << ", x=" << x << ", y=" << y;
                         }
                     };
 
@@ -5998,6 +6038,8 @@ int CLI::run(int argc, char **argv)
             //will be used during arrange process
         } else if (opt_key == "arrange_spacing") {
             //will be used during arrange process
+        } else if (opt_key == "ignore_wipe_tower") {
+            //already applied after process settings were loaded
         } else if (opt_key == "split_by_color") {
             //will be processed after model loading, before orient/arrange
         } else if (opt_key == "cli_nozzle_temperature") {
@@ -6318,6 +6360,28 @@ int CLI::run(int argc, char **argv)
                         DynamicPrintConfig new_print_config = m_print_config;
                         new_print_config.apply(*part_plate->config());
                         new_print_config.apply(m_extra_config, true);
+                        if (cli_arrange_wipe_tower_positions_updated) {
+                            // The automatic multi-plate arrangement reserves
+                            // wipe towers using per-plate positions stored in
+                            // m_print_config. m_extra_config contains the
+                            // generic CLI defaults (notably wipe_tower_y=220)
+                            // and would otherwise replace that vector here,
+                            // putting the generated tower outside small beds.
+                            const ConfigOption *runtime_wipe_x = m_print_config.option("wipe_tower_x");
+                            const ConfigOption *runtime_wipe_y = m_print_config.option("wipe_tower_y");
+                            if (runtime_wipe_x != nullptr && runtime_wipe_y != nullptr) {
+                                new_print_config.option("wipe_tower_x", true)->set(runtime_wipe_x);
+                                new_print_config.option("wipe_tower_y", true)->set(runtime_wipe_y);
+
+                                if (new_print_config.opt_bool("enable_prime_tower")) {
+                                    const auto *wipe_x = new_print_config.option<ConfigOptionFloats>("wipe_tower_x");
+                                    const auto *wipe_y = new_print_config.option<ConfigOptionFloats>("wipe_tower_y");
+                                    BOOST_LOG_TRIVIAL(info)
+                                        << "CLI slice: preserve arranged wipe tower position for plate " << (index + 1)
+                                        << ", x=" << wipe_x->get_at(index) << ", y=" << wipe_y->get_at(index);
+                                }
+                            }
+                        }
                         print->apply(model, new_print_config);
                         BOOST_LOG_TRIVIAL(info) << boost::format("set no_check to %1%:")%no_check;
                         print->set_no_check_flag(no_check);//BBS
