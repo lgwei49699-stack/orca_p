@@ -1237,7 +1237,9 @@ int CLI::run(int argc, char **argv)
     std::map<std::string, std::string> record_key_values;
     std::vector<std::string> effective_load_filaments = requested_load_filaments;
     std::vector<std::vector<unsigned int>> model_material_slots(m_input_files.size());
-    const bool has_model_filament_mapping = !m_model_cli_specs.empty();
+    const bool has_model_filament_mapping = std::any_of(
+        m_model_cli_specs.begin(), m_model_cli_specs.end(),
+        [](const ModelCliSpec &spec) { return spec.filament_group.has_value(); });
 
     if (!m_model_cli_specs.empty()) {
         if (m_model_cli_specs.size() != m_input_files.size()) {
