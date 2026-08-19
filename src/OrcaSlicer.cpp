@@ -1430,6 +1430,8 @@ int CLI::run(int argc, char **argv)
     bool glb_texture_auto_mapping = false;
     std::vector<size_t> textured_glb_model_indices;
     TexturePaintingSettings texture_painting_settings;
+    PaintedMesh standalone_texture_painted_mesh;
+    bool has_standalone_texture_painted_mesh = false;
     bool allow_rotations = true, skip_modified_gcodes = false, avoid_extrusion_cali_region = false, skip_useless_pick = false, allow_newer_file = false;
     Semver file_version;
     std::map<size_t, bool> orients_requirement;
@@ -3484,6 +3486,10 @@ int CLI::run(int argc, char **argv)
             target_volume->config.set("extruder", 1);
             target_object->config.set("extruder", 1);
             target_object->ensure_on_bed();
+            if (standalone_texture_obj_export) {
+                standalone_texture_painted_mesh     = std::move(painted_mesh);
+                has_standalone_texture_painted_mesh = true;
+            }
             m_models[model_index].texture_mesh.reset();
             glb_texture_auto_mapping = true;
         }
@@ -6104,7 +6110,8 @@ int CLI::run(int argc, char **argv)
                 }
             }
 
-            if (!store_multicolor_obj(export_path.string().c_str(), m_models.front(), filament_colors)) {
+            if (!has_standalone_texture_painted_mesh ||
+                !store_painted_mesh_obj(export_path.string().c_str(), standalone_texture_painted_mesh, filament_colors)) {
                 record_exit_reson(outfile_dir, CLI_EXPORT_OBJ_ERROR, 0, cli_errors[CLI_EXPORT_OBJ_ERROR], sliced_info);
                 flush_and_exit(CLI_EXPORT_OBJ_ERROR);
             }

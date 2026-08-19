@@ -1,14 +1,19 @@
 #include "../libslic3r.h"
 #include "../Model.hpp"
+#include "../TexturePainting.hpp"
 #include "../TriangleMesh.hpp"
 
 #include "OBJ.hpp"
 #include "objparser.hpp"
 
+#include <cstdint>
 #include <iomanip>
 #include <limits>
+#include <map>
+#include <numeric>
 #include <set>
 #include <string>
+#include <unordered_map>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/log/trivial.hpp>
@@ -470,7 +475,7 @@ bool store_multicolor_obj(const char *path, const Model &model, const std::vecto
     }
 
     obj_stream << "# OrcaSlicer multicolor OBJ\n";
-    obj_stream << "mtllib " << fs::absolute(mtl_path).generic_string() << "\n\n";
+    obj_stream << "mtllib " << mtl_path.filename().generic_string() << "\n\n";
     obj_stream << std::setprecision(std::numeric_limits<float>::max_digits10);
     mtl_stream << std::setprecision(6);
 
@@ -548,6 +553,255 @@ bool store_multicolor_obj(const char *path, const Model &model, const std::vecto
 
     BOOST_LOG_TRIVIAL(info) << "Exported multicolor OBJ " << obj_path.string() << ", MTL " << mtl_path.string()
                             << ", faces " << written_faces << ", materials " << used_filaments.size();
+    return true;
+}
+
+bool store_painted_mesh_obj(const char* path, const PaintedMesh& painted_mesh, const std::vector<RGBA>& filament_colors)
+{
+    if (path == nullptr || painted_mesh.vertices.empty() || painted_mesh.indices.empty() ||
+        painted_mesh.face_colors.size() != painted_mesh.indices.size() || painted_mesh.cluster_colors.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "Cannot export an empty or inconsistent painted mesh";
+        return false;
+    }
+    if (filament_colors.size() < painted_mesh.cluster_colors.size()) {
+        BOOST_LOG_TRIVIAL(error) << "Painted mesh has " << painted_mesh.cluster_colors.size() << " colors, but only "
+                                 << filament_colors.size() << " filament colors are available";
+        return false;
+    }
+
+    fs::path obj_path(path);
+    if (!boost::algorithm::iends_with(obj_path.extension().string(), ".obj"))
+        obj_path.replace_extension(".obj");
+    fs::path mtl_path = obj_path;
+    mtl_path.replace_extension(".mtl");
+
+    try {
+        if (!obj_path.parent_path().empty())
+            fs::create_directories(obj_path.parent_path());
+    } catch (const fs::filesystem_error& e) {
+        BOOST_LOG_TRIVIAL(error) << "Failed creating painted OBJ output directory: " << e.what();
+        return false;
+    }
+
+    boost::nowide::ofstream obj_stream(obj_path.string());
+    boost::nowide::ofstream mtl_stream(mtl_path.string());
+    if (!obj_stream || !mtl_stream) {
+        BOOST_LOG_TRIVIAL(error) << "Failed opening painted OBJ/MTL output: " << obj_path.string();
+        return false;
+    }
+
+    std::map<std::array<std::size_t, 3>, std::size_t> material_by_color;
+    for (std::size_t index = 0; index < painted_mesh.cluster_colors.size(); ++index)
+        material_by_color.emplace(painted_mesh.cluster_colors[index], index);
+
+    std::vector<std::vector<std::size_t>> faces_by_material(painted_mesh.cluster_colors.size());
+
+    std::vector<std::array<float, 3>> export_vertices = painted_mesh.vertices;
+    std::vector<std::array<int, 3>>   export_indices  = painted_mesh.indices;
+
+    std::unordered_map<std::uint64_t, std::size_t> source_edge_use_counts;
+    source_edge_use_counts.reserve(export_indices.size() * 3);
+
+    auto edge_key = [](int first, int second) {
+        const std::uint32_t low  = static_cast<std::uint32_t>(std::min(first, second));
+        const std::uint32_t high = static_cast<std::uint32_t>(std::max(first, second));
+        return (static_cast<std::uint64_t>(low) << 32) | high;
+    };
+    auto add_source_edge = [&source_edge_use_counts, &edge_key](int first, int second) {
+        ++source_edge_use_counts[edge_key(first, second)];
+    };
+
+    for (std::size_t face_index = 0; face_index < painted_mesh.indices.size(); ++face_index) {
+        const std::array<int, 3>& face = painted_mesh.indices[face_index];
+        if (face[0] < 0 || face[1] < 0 || face[2] < 0 || static_cast<std::size_t>(face[0]) >= painted_mesh.vertices.size() ||
+            static_cast<std::size_t>(face[1]) >= painted_mesh.vertices.size() ||
+            static_cast<std::size_t>(face[2]) >= painted_mesh.vertices.size()) {
+            BOOST_LOG_TRIVIAL(error) << "Painted mesh face " << face_index << " contains an invalid vertex index";
+            return false;
+        }
+
+        auto material = material_by_color.find(painted_mesh.face_colors[face_index]);
+        if (material == material_by_color.end()) {
+            BOOST_LOG_TRIVIAL(error) << "Painted mesh face " << face_index << " references an unknown cluster color";
+            return false;
+        }
+        faces_by_material[material->second].push_back(face_index);
+
+        add_source_edge(face[0], face[1]);
+        add_source_edge(face[1], face[2]);
+        add_source_edge(face[2], face[0]);
+    }
+
+    // Textured meshes commonly duplicate vertices along UV or material seams. Stitch only an
+    // unambiguous pair of boundary edges whose endpoints match exactly in reverse direction.
+    // This preserves intentionally separate or merely nearby geometry and does not add faces.
+    using Position        = std::array<float, 3>;
+    using PositionEdgeKey = std::pair<Position, Position>;
+    struct DirectedBoundaryEdge {
+        int from;
+        int to;
+    };
+
+    std::map<PositionEdgeKey, std::vector<DirectedBoundaryEdge>> boundary_edges_by_position;
+    auto collect_boundary_edge = [&](int from, int to) {
+        auto edge = source_edge_use_counts.find(edge_key(from, to));
+        if (edge == source_edge_use_counts.end() || edge->second != 1)
+            return;
+
+        const Position& from_position = export_vertices[from];
+        const Position& to_position   = export_vertices[to];
+        const PositionEdgeKey position_key = from_position < to_position ? PositionEdgeKey{from_position, to_position} :
+                                                                            PositionEdgeKey{to_position, from_position};
+        boundary_edges_by_position[position_key].push_back({from, to});
+    };
+    for (const std::array<int, 3>& face : export_indices) {
+        collect_boundary_edge(face[0], face[1]);
+        collect_boundary_edge(face[1], face[2]);
+        collect_boundary_edge(face[2], face[0]);
+    }
+
+    std::vector<int> vertex_parent(export_vertices.size());
+    std::iota(vertex_parent.begin(), vertex_parent.end(), 0);
+    auto find_root = [&vertex_parent](int vertex) {
+        int root = vertex;
+        while (vertex_parent[root] != root)
+            root = vertex_parent[root];
+        while (vertex_parent[vertex] != vertex) {
+            const int next = vertex_parent[vertex];
+            vertex_parent[vertex] = root;
+            vertex = next;
+        }
+        return root;
+    };
+    auto unite_vertices = [&vertex_parent, &find_root](int first, int second) {
+        const int first_root  = find_root(first);
+        const int second_root = find_root(second);
+        if (first_root != second_root)
+            vertex_parent[second_root] = first_root;
+    };
+
+    std::size_t stitched_edge_pairs = 0;
+    std::size_t ambiguous_edge_sets = 0;
+    for (const auto& item : boundary_edges_by_position) {
+        const std::vector<DirectedBoundaryEdge>& edges = item.second;
+        if (edges.size() != 2) {
+            if (edges.size() > 1)
+                ++ambiguous_edge_sets;
+            continue;
+        }
+
+        const DirectedBoundaryEdge& first  = edges[0];
+        const DirectedBoundaryEdge& second = edges[1];
+        if (export_vertices[first.from] != export_vertices[second.to] || export_vertices[first.to] != export_vertices[second.from]) {
+            ++ambiguous_edge_sets;
+            continue;
+        }
+
+        unite_vertices(first.from, second.to);
+        unite_vertices(first.to, second.from);
+        ++stitched_edge_pairs;
+    }
+
+    if (stitched_edge_pairs > 0) {
+        std::vector<int> root_to_compact(export_vertices.size(), -1);
+        std::vector<Position> compact_vertices;
+        compact_vertices.reserve(export_vertices.size());
+        for (std::size_t vertex = 0; vertex < export_vertices.size(); ++vertex) {
+            const int root = find_root(static_cast<int>(vertex));
+            if (root_to_compact[root] < 0) {
+                root_to_compact[root] = static_cast<int>(compact_vertices.size());
+                compact_vertices.push_back(export_vertices[root]);
+            }
+        }
+
+        bool collapsed_face = false;
+        for (std::array<int, 3>& face : export_indices) {
+            for (int& vertex : face)
+                vertex = root_to_compact[find_root(vertex)];
+            if (face[0] == face[1] || face[1] == face[2] || face[2] == face[0])
+                collapsed_face = true;
+        }
+
+        if (collapsed_face) {
+            BOOST_LOG_TRIVIAL(warning) << "Exact seam stitching would collapse a triangle; exporting the original painted mesh";
+            export_vertices = painted_mesh.vertices;
+            export_indices  = painted_mesh.indices;
+            stitched_edge_pairs = 0;
+        } else {
+            export_vertices = std::move(compact_vertices);
+        }
+    }
+
+    std::unordered_map<std::uint64_t, std::size_t> edge_use_counts;
+    edge_use_counts.reserve(export_indices.size() * 3);
+    for (const std::array<int, 3>& face : export_indices) {
+        ++edge_use_counts[edge_key(face[0], face[1])];
+        ++edge_use_counts[edge_key(face[1], face[2])];
+        ++edge_use_counts[edge_key(face[2], face[0])];
+    }
+
+    std::size_t boundary_edges    = 0;
+    std::size_t nonmanifold_edges = 0;
+    for (const auto& edge : edge_use_counts) {
+        if (edge.second == 1)
+            ++boundary_edges;
+        else if (edge.second > 2)
+            ++nonmanifold_edges;
+    }
+    BOOST_LOG_TRIVIAL(info) << "Painted mesh topology after exact seam stitching: vertices " << export_vertices.size() << ", faces "
+                            << export_indices.size() << ", stitched edge pairs " << stitched_edge_pairs << ", ambiguous edge sets "
+                            << ambiguous_edge_sets << ", boundary edges " << boundary_edges << ", nonmanifold edges " << nonmanifold_edges;
+    if (nonmanifold_edges > 0) {
+        BOOST_LOG_TRIVIAL(warning) << "Painted mesh still contains " << nonmanifold_edges
+                                   << " nonmanifold edge(s) after best-effort exact seam stitching; continuing OBJ export";
+    }
+
+    obj_stream << "# OrcaSlicer painted mesh OBJ\n";
+    obj_stream << "mtllib " << mtl_path.filename().generic_string() << "\n\n";
+    obj_stream << std::setprecision(std::numeric_limits<float>::max_digits10);
+    for (const std::array<float, 3>& vertex : export_vertices)
+        obj_stream << "v " << vertex[0] << " " << vertex[1] << " " << vertex[2] << "\n";
+    obj_stream << "\n";
+
+    std::size_t           written_faces = 0;
+    std::set<std::size_t> used_materials;
+    for (std::size_t material_index = 0; material_index < faces_by_material.size(); ++material_index) {
+        const std::vector<std::size_t>& face_indices = faces_by_material[material_index];
+        if (face_indices.empty())
+            continue;
+
+        const std::size_t filament_id = material_index + 1;
+        obj_stream << "g color_group_" << material_index << "\n";
+        obj_stream << "usemtl filament_" << filament_id << "\n";
+        for (std::size_t face_index : face_indices) {
+            const std::array<int, 3>& face = export_indices[face_index];
+            obj_stream << "f " << face[0] + 1 << " " << face[1] + 1 << " " << face[2] + 1 << "\n";
+        }
+        obj_stream << "\n";
+        written_faces += face_indices.size();
+        used_materials.insert(material_index);
+    }
+
+    mtl_stream << std::setprecision(6);
+    for (std::size_t material_index : used_materials) {
+        const std::size_t filament_id = material_index + 1;
+        const RGBA&       color       = filament_colors[material_index];
+        mtl_stream << "newmtl filament_" << filament_id << "\n";
+        mtl_stream << "Ka 0 0 0\n";
+        mtl_stream << "Kd " << std::clamp(color[0], 0.f, 1.f) << " " << std::clamp(color[1], 0.f, 1.f) << " "
+                   << std::clamp(color[2], 0.f, 1.f) << "\n";
+        mtl_stream << "d 1\nillum 1\n\n";
+    }
+
+    obj_stream.flush();
+    mtl_stream.flush();
+    if (!obj_stream || !mtl_stream || written_faces != painted_mesh.indices.size()) {
+        BOOST_LOG_TRIVIAL(error) << "Failed writing painted OBJ/MTL or not all faces were exported";
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "Exported painted OBJ " << obj_path.string() << ", MTL " << mtl_path.string() << ", faces " << written_faces
+                            << ", materials " << used_materials.size();
     return true;
 }
 

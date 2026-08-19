@@ -23,6 +23,7 @@ add_executable(${_TEST_NAME}_tests
     # test_png_io.cpp
 	test_indexed_triangle_set.cpp
 	test_model_arrange.cpp
+	test_texture_painting.cpp
     ../libnest2d/printer_parts.cpp
 	)
 
@@ -31,6 +32,7 @@ if (TARGET OpenVDB::openvdb)
 endif()
     
 target_link_libraries(${_TEST_NAME}_tests test_common libslic3r)
+target_include_directories(${_TEST_NAME}_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/libslic3r)
 set_property(TARGET ${_TEST_NAME}_tests PROPERTY FOLDER "tests")
 
 if (WIN32)

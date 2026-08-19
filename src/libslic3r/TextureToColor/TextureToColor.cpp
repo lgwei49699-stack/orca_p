@@ -534,6 +534,15 @@ bool TextureToColor(const TriMesh& texture_mesh, const std::vector<std::vector<V
     std::vector<RGB> cluster_centers;
     std::vector<RGB> clustered_face_colors = face_colors;
     std::vector<std::size_t> clustered_face_labels(face_colors.size());
+    std::vector<double> face_area_weights(color_mesh.indices.size(), 0.0);
+    tbb::parallel_for(tbb::blocked_range<std::size_t>(0, color_mesh.indices.size()), [&](const tbb::blocked_range<size_t>& range) {
+        for (std::size_t face_id = range.begin(); face_id < range.end(); ++face_id) {
+            const Vec3i32& face = color_mesh.indices[face_id];
+            const Vec3f edge_a = color_mesh.vertices[face[1]] - color_mesh.vertices[face[0]];
+            const Vec3f edge_b = color_mesh.vertices[face[2]] - color_mesh.vertices[face[0]];
+            face_area_weights[face_id] = std::max(0.5 * static_cast<double>(edge_a.cross(edge_b).norm()), std::numeric_limits<double>::epsilon());
+        }
+    });
 
     // Compute cluster centers
     if (settings.target_colors_num == 0) {
@@ -541,6 +550,7 @@ bool TextureToColor(const TriMesh& texture_mesh, const std::vector<std::vector<V
         ClusterParameters para;
         para.max_color_distance = settings.max_color_distance;
         para.max_cluster_k = settings.max_cluster_k;
+        para.sample_weights = std::move(face_area_weights);
         para.cancel_callback = cancel_callback ? [&]() { return cancel_callback(); } : std::function<bool()>{};
         cluster_centers = cluster_adaptive(face_colors, para);
         if (cancelled()) return false;
@@ -548,6 +558,7 @@ bool TextureToColor(const TriMesh& texture_mesh, const std::vector<std::vector<V
         BOOST_LOG_TRIVIAL(debug) << "TextureToColor: use cluster k-means method.";
         ClusterParameters para;
         para.cluster_k = settings.target_colors_num;
+        para.sample_weights = std::move(face_area_weights);
         para.cancel_callback = cancel_callback ? [&]() { return cancel_callback(); } : std::function<bool()>{};
         cluster_centers = cluster_k_means(face_colors, para);
         if (cancelled()) return false;

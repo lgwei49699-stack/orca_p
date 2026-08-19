@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <map>
 #include <numeric>
 
 #include <CGAL/AABB_face_graph_triangle_primitive.h>
@@ -953,10 +954,11 @@ double calc_rgb_color_difference_by_squared_rgb(const RGB& c1, const RGB& c2) {
 }
 
 // K-Means core: run FPS initialization + assign/update iterations in working space, return cluster centers
-static std::vector<ColorDouble> kmeans_core(const std::vector<ColorDouble>& working_colors, std::size_t k, std::size_t max_iter, WorkingDistFunc dist_func,
+static std::vector<ColorDouble> kmeans_core(const std::vector<ColorDouble>& working_colors, const std::vector<double>& weights, std::size_t k,
+                                            std::size_t max_iter, WorkingDistFunc dist_func,
                                             const std::function<bool()>& cancel_cb = nullptr) {
     std::vector<ColorDouble> centers = farthest_point_sampling_init(working_colors, k, dist_func);
-    std::vector<std::size_t> assignments(working_colors.size());
+    std::vector<std::size_t> assignments(working_colors.size(), std::numeric_limits<std::size_t>::max());
 
     for (std::size_t iter = 0; iter < max_iter; ++iter) {
         if (cancel_cb && cancel_cb()) return centers;
@@ -987,24 +989,25 @@ static std::vector<ColorDouble> kmeans_core(const std::vector<ColorDouble>& work
         }
 
         std::vector<ColorDouble> new_centers(k, {0.0, 0.0, 0.0});
-        std::vector<std::size_t> counts(k, 0);
+        std::vector<double>      cluster_weights(k, 0.0);
 
         for (std::size_t i = 0; i < working_colors.size(); ++i) {
             std::size_t cluster_id = assignments[i];
-            ++counts[cluster_id];
-            new_centers[cluster_id][0] += working_colors[i][0];
-            new_centers[cluster_id][1] += working_colors[i][1];
-            new_centers[cluster_id][2] += working_colors[i][2];
+            const double weight = weights[i];
+            cluster_weights[cluster_id] += weight;
+            new_centers[cluster_id][0] += working_colors[i][0] * weight;
+            new_centers[cluster_id][1] += working_colors[i][1] * weight;
+            new_centers[cluster_id][2] += working_colors[i][2] * weight;
         }
 
         for (std::size_t i = 0; i < k; ++i) {
-            if (counts[i] == 0) {
+            if (cluster_weights[i] <= 0.0) {
                 double max_min_dist = -1.0;
                 std::size_t best_idx = 0;
                 for (std::size_t p = 0; p < working_colors.size(); ++p) {
                     double nearest = std::numeric_limits<double>::max();
                     for (std::size_t c = 0; c < k; ++c) {
-                        if (c == i || counts[c] == 0) {
+                        if (c == i || cluster_weights[c] <= 0.0) {
                             continue;
                         }
                         double d = dist_func(working_colors[p], centers[c]);
@@ -1012,21 +1015,59 @@ static std::vector<ColorDouble> kmeans_core(const std::vector<ColorDouble>& work
                             nearest = d;
                         }
                     }
-                    if (nearest > max_min_dist) {
-                        max_min_dist = nearest;
+                    const double weighted_distance = nearest * weights[p];
+                    if (weighted_distance > max_min_dist) {
+                        max_min_dist = weighted_distance;
                         best_idx = p;
                     }
                 }
                 centers[i] = working_colors[best_idx];
             } else {
-                centers[i][0] = new_centers[i][0] / counts[i];
-                centers[i][1] = new_centers[i][1] / counts[i];
-                centers[i][2] = new_centers[i][2] / counts[i];
+                centers[i][0] = new_centers[i][0] / cluster_weights[i];
+                centers[i][1] = new_centers[i][1] / cluster_weights[i];
+                centers[i][2] = new_centers[i][2] / cluster_weights[i];
             }
         }
     }
 
     return centers;
+}
+
+struct WeightedUniqueColors {
+    std::vector<Color>  colors;
+    std::vector<double> weights;
+};
+
+static WeightedUniqueColors build_weighted_unique_colors(const std::vector<Color>& colors, const std::vector<double>& sample_weights)
+{
+    const bool has_sample_weights = sample_weights.size() == colors.size();
+    if (!has_sample_weights) {
+        WeightedUniqueColors result;
+        result.colors = colors;
+        std::sort(result.colors.begin(), result.colors.end());
+        result.colors.erase(std::unique(result.colors.begin(), result.colors.end()), result.colors.end());
+        result.weights.assign(result.colors.size(), 1.0);
+        return result;
+    }
+
+    std::map<Color, double> weights_by_color;
+    for (std::size_t index = 0; index < colors.size(); ++index) {
+        const double weight = std::isfinite(sample_weights[index]) && sample_weights[index] > 0.0 ? sample_weights[index] : 0.0;
+        weights_by_color[colors[index]] += weight;
+    }
+
+    double total_weight = 0.0;
+    WeightedUniqueColors result;
+    result.colors.reserve(weights_by_color.size());
+    result.weights.reserve(weights_by_color.size());
+    for (const auto& item : weights_by_color) {
+        result.colors.push_back(item.first);
+        result.weights.push_back(item.second);
+        total_weight += item.second;
+    }
+    if (total_weight <= 0.0)
+        std::fill(result.weights.begin(), result.weights.end(), 1.0);
+    return result;
 }
 
 // K-Means clustering algorithm
@@ -1044,10 +1085,8 @@ std::vector<Color> cluster_k_means(const std::vector<Color>& colors, const Clust
     // ==========================================
     // 1. Preprocessing: deduplicate + pre-convert to working space
     // ==========================================
-    std::vector<Color> unique_colors = colors;
-    std::sort(unique_colors.begin(), unique_colors.end());
-    auto last = std::unique(unique_colors.begin(), unique_colors.end());
-    unique_colors.erase(last, unique_colors.end());
+    WeightedUniqueColors weighted_colors = build_weighted_unique_colors(colors, cluster_parameters.sample_weights);
+    const std::vector<Color>& unique_colors = weighted_colors.colors;
 
 #ifdef DEBUG_FLAG
     BOOST_LOG_TRIVIAL(debug) << "Input colors: " << colors.size() << ", Unique colors: " << unique_colors.size();
@@ -1074,7 +1113,7 @@ std::vector<Color> cluster_k_means(const std::vector<Color>& colors, const Clust
     // ==========================================
     // 2. K-Means clustering
     // ==========================================
-    auto centers = kmeans_core(working_colors, k, max_iter, working_dist_func, cluster_parameters.cancel_callback);
+    auto centers = kmeans_core(working_colors, weighted_colors.weights, k, max_iter, working_dist_func, cluster_parameters.cancel_callback);
 
     // ==========================================
     // 3. Output: convert from working space back to RGB
@@ -1224,10 +1263,8 @@ std::vector<Color> cluster_adaptive(const std::vector<Color>& colors, const Clus
     // ==========================================
     // 1. Deduplicate + convert to working space
     // ==========================================
-    std::vector<Color> unique_colors = colors;
-    std::sort(unique_colors.begin(), unique_colors.end());
-    auto last = std::unique(unique_colors.begin(), unique_colors.end());
-    unique_colors.erase(last, unique_colors.end());
+    WeightedUniqueColors weighted_colors = build_weighted_unique_colors(colors, cluster_parameters.sample_weights);
+    const std::vector<Color>& unique_colors = weighted_colors.colors;
 
     BOOST_LOG_TRIVIAL(debug) << "cluster_adaptive: colors=" << colors.size()
                              << " unique=" << unique_colors.size()
@@ -1258,7 +1295,7 @@ std::vector<Color> cluster_adaptive(const std::vector<Color>& colors, const Clus
     constexpr double kRadiusPercentile = 0.99;
 
     auto calc_max_radius = [&](const std::vector<ColorDouble>& centers) -> double {
-        std::vector<double> distances(working_colors.size());
+        std::vector<std::pair<double, double>> weighted_distances(working_colors.size());
         tbb::parallel_for(tbb::blocked_range<std::size_t>(0, working_colors.size()), [&](const tbb::blocked_range<size_t>& range) {
             for (std::size_t i = range.begin(); i < range.end(); ++i) {
                 double min_dist = std::numeric_limits<double>::max();
@@ -1268,15 +1305,22 @@ std::vector<Color> cluster_adaptive(const std::vector<Color>& colors, const Clus
                         min_dist = d;
                     }
                 }
-                distances[i] = min_dist;
+                weighted_distances[i] = {min_dist, weighted_colors.weights[i]};
             }
         });
-        if (distances.empty()) {
+        if (weighted_distances.empty()) {
             return 0.0;
         }
-        std::size_t idx = std::min<std::size_t>(static_cast<std::size_t>(distances.size() * kRadiusPercentile), distances.size() - 1);
-        std::nth_element(distances.begin(), distances.begin() + idx, distances.end());
-        return distances[idx];
+        std::sort(weighted_distances.begin(), weighted_distances.end(), [](const auto& first, const auto& second) { return first.first < second.first; });
+        const double total_weight = std::accumulate(weighted_colors.weights.begin(), weighted_colors.weights.end(), 0.0);
+        const double target_weight = total_weight * kRadiusPercentile;
+        double cumulative_weight = 0.0;
+        for (const auto& item : weighted_distances) {
+            cumulative_weight += item.second;
+            if (cumulative_weight >= target_weight)
+                return item.first;
+        }
+        return weighted_distances.back().first;
     };
 
     const auto& cancel_cb = cluster_parameters.cancel_callback;
@@ -1284,7 +1328,7 @@ std::vector<Color> cluster_adaptive(const std::vector<Color>& colors, const Clus
     while (lo <= hi) {
         if (cancel_cb && cancel_cb()) return {};
         std::size_t mid = lo + (hi - lo) / 2;
-        auto centers = kmeans_core(working_colors, mid, max_iter, working_dist_func, cancel_cb);
+        auto centers = kmeans_core(working_colors, weighted_colors.weights, mid, max_iter, working_dist_func, cancel_cb);
         if (cancel_cb && cancel_cb()) return {};
         double max_radius = calc_max_radius(centers);
 
@@ -1301,7 +1345,7 @@ std::vector<Color> cluster_adaptive(const std::vector<Color>& colors, const Clus
 
     if (best_k == 0) {
         best_k = std::min<std::size_t>(max_k, unique_colors.size());
-        best_centers = kmeans_core(working_colors, best_k, max_iter, working_dist_func, cancel_cb);
+        best_centers = kmeans_core(working_colors, weighted_colors.weights, best_k, max_iter, working_dist_func, cancel_cb);
         BOOST_LOG_TRIVIAL(warning) << "cluster_adaptive: binary search found no k satisfying max_radius<="
                                    << max_color_distance << ", fallback to k=" << best_k;
     }

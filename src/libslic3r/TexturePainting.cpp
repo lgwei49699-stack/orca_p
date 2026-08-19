@@ -124,7 +124,53 @@ static void extract_painted_mesh(
     painted.cluster_colors.assign(unique_colors.begin(), unique_colors.end());
 }
 
-// Build a vertically-stacked atlas from multiple textures and remap per-face UVs.
+static float srgb_to_linear(float value)
+{
+    value = std::clamp(value, 0.0f, 1.0f);
+    return value <= 0.04045f ? value / 12.92f : std::pow((value + 0.055f) / 1.055f, 2.4f);
+}
+
+static float linear_to_srgb(float value)
+{
+    value = std::clamp(value, 0.0f, 1.0f);
+    return value <= 0.0031308f ? value * 12.92f : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+}
+
+// Move a triangle's UV axis into one repeat tile without folding an exact upper
+// boundary (1.0) back to 0.0. Normalizing all three corners together preserves
+// full-tile mappings such as [0, 1, 1] and repeated tiles such as [1, 2, 2].
+static std::array<float, 3> normalize_face_uv_axis(const std::array<float, 3>& values)
+{
+    constexpr float epsilon = 1e-6f;
+    const float min_value = *std::min_element(values.begin(), values.end());
+    const float tile_base = std::floor(min_value + epsilon);
+
+    std::array<float, 3> normalized;
+    bool fits_single_tile = true;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        normalized[index] = values[index] - tile_base;
+        if (normalized[index] < -epsilon || normalized[index] > 1.0f + epsilon)
+            fits_single_tile = false;
+    }
+
+    if (fits_single_tile) {
+        for (float& value : normalized)
+            value = std::clamp(value, 0.0f, 1.0f);
+        return normalized;
+    }
+
+    // A triangle spanning more than one repeat cannot be represented by a
+    // single atlas tile without splitting. Keep the previous repeat behavior,
+    // but preserve positive integer boundaries as the upper edge.
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        const float wrapped = values[index] - std::floor(values[index]);
+        normalized[index] = std::abs(wrapped) <= epsilon && values[index] > 0.0f ? 1.0f : wrapped;
+    }
+    return normalized;
+}
+
+// Build a vertically-stacked atlas per unique texture/baseColorFactor combination.
+// Materials without textures get a solid-color tile instead of incorrectly sampling texture 0.
 static bool build_multi_texture_atlas(
     const TexturedMesh& textured,
     cv::Mat& out_atlas,
@@ -135,65 +181,128 @@ static bool build_multi_texture_atlas(
     for (const auto& ti : textured.textures)
         decoded.push_back(decode_texture_image(ti));
 
-    // Determine atlas width (max width across all textures) and per-texture row offsets
+    using MaterialTileKey = std::pair<int, std::array<float, 4>>;
+    std::map<MaterialTileKey, std::size_t> tile_by_material;
+    std::vector<cv::Mat> tiles;
+    std::set<int> warned_texture_fallbacks;
+
+    auto make_tile = [&](int texture_index, const std::array<float, 4>& factor) {
+        cv::Mat tile;
+        if (texture_index >= 0 && static_cast<std::size_t>(texture_index) < decoded.size() && !decoded[texture_index].empty()) {
+            tile = decoded[texture_index].clone();
+            for (int row = 0; row < tile.rows; ++row) {
+                cv::Vec3b* pixels = tile.ptr<cv::Vec3b>(row);
+                for (int col = 0; col < tile.cols; ++col) {
+                    for (int bgr_channel = 0; bgr_channel < 3; ++bgr_channel) {
+                        const int rgb_channel = 2 - bgr_channel;
+                        const float source_linear = srgb_to_linear(pixels[col][bgr_channel] / 255.0f);
+                        pixels[col][bgr_channel] = static_cast<unsigned char>(
+                            std::round(linear_to_srgb(source_linear * factor[rgb_channel]) * 255.0f));
+                    }
+                }
+            }
+        } else {
+            if (texture_index >= 0 && warned_texture_fallbacks.insert(texture_index).second) {
+                if (static_cast<std::size_t>(texture_index) < decoded.size()) {
+                    BOOST_LOG_TRIVIAL(warning) << "TexturePainting: texture " << texture_index
+                                               << " could not be decoded; using its material baseColorFactor as a solid-color fallback";
+                } else {
+                    BOOST_LOG_TRIVIAL(warning) << "TexturePainting: texture index " << texture_index << " is out of range (texture count "
+                                               << decoded.size() << "); using its material baseColorFactor as a solid-color fallback";
+                }
+            }
+            tile = cv::Mat(1, 1, CV_8UC3);
+            cv::Vec3b& pixel = tile.at<cv::Vec3b>(0, 0);
+            pixel[0] = static_cast<unsigned char>(std::round(linear_to_srgb(factor[2]) * 255.0f));
+            pixel[1] = static_cast<unsigned char>(std::round(linear_to_srgb(factor[1]) * 255.0f));
+            pixel[2] = static_cast<unsigned char>(std::round(linear_to_srgb(factor[0]) * 255.0f));
+        }
+        return tile;
+    };
+
+    auto resolve_tile = [&](int texture_index, const std::array<float, 4>& factor) {
+        const MaterialTileKey key{texture_index, factor};
+        auto existing = tile_by_material.find(key);
+        if (existing != tile_by_material.end())
+            return existing->second;
+        const std::size_t tile_index = tiles.size();
+        tiles.push_back(make_tile(texture_index, factor));
+        tile_by_material.emplace(key, tile_index);
+        return tile_index;
+    };
+
+    const std::size_t material_count = std::max(textured.material_texture_map.size(), textured.material_colors.size());
+    std::vector<std::size_t> material_tiles(material_count, 0);
+    for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
+        const int texture_index = material_index < textured.material_texture_map.size() ? textured.material_texture_map[material_index] : -1;
+        const std::array<float, 4> factor = material_index < textured.material_colors.size() ? textured.material_colors[material_index] :
+                                                                                              std::array<float, 4>{1.f, 1.f, 1.f, 1.f};
+        material_tiles[material_index] = resolve_tile(texture_index, factor);
+    }
+
+    const int fallback_texture = !decoded.empty() && !decoded.front().empty() ? 0 : -1;
+    const std::size_t fallback_tile = resolve_tile(fallback_texture, {1.f, 1.f, 1.f, 1.f});
+
+    // Determine atlas width and per-tile row offsets.
     int atlas_w = 0;
     int atlas_h = 0;
-    std::vector<int> y_offsets(decoded.size(), 0);
-    for (size_t i = 0; i < decoded.size(); ++i) {
-        if (decoded[i].empty()) continue;
+    std::vector<int> y_offsets(tiles.size(), 0);
+    for (size_t i = 0; i < tiles.size(); ++i) {
+        if (tiles[i].empty()) continue;
         y_offsets[i] = atlas_h;
-        atlas_w = std::max(atlas_w, decoded[i].cols);
-        atlas_h += decoded[i].rows;
+        atlas_w = std::max(atlas_w, tiles[i].cols);
+        atlas_h += tiles[i].rows;
     }
     if (atlas_w == 0 || atlas_h == 0)
         return false;
 
     out_atlas = cv::Mat::zeros(atlas_h, atlas_w, CV_8UC3);
-    for (size_t i = 0; i < decoded.size(); ++i) {
-        if (decoded[i].empty()) continue;
-        cv::Mat roi = out_atlas(cv::Rect(0, y_offsets[i], decoded[i].cols, decoded[i].rows));
-        decoded[i].copyTo(roi);
+    for (size_t i = 0; i < tiles.size(); ++i) {
+        if (tiles[i].empty()) continue;
+        cv::Mat roi = out_atlas(cv::Rect(0, y_offsets[i], tiles[i].cols, tiles[i].rows));
+        tiles[i].copyTo(roi);
     }
 
-    // Remap UVs: for each face, shift v into the correct vertical band
+    // Remap both U and V using pixel coordinates. This keeps differently-sized textures
+    // inside their own atlas tile and avoids sampling zero-filled padding.
     const size_t nf = textured.indices.size();
-    const bool has_mapping = !textured.material_texture_map.empty();
     out_uv_coords.resize(nf);
 
     for (size_t fi = 0; fi < nf; ++fi) {
         int mat_idx = (fi < textured.material_ids.size()) ? textured.material_ids[fi] : -1;
-        int tex_idx = -1;
-        if (has_mapping && mat_idx >= 0 && static_cast<size_t>(mat_idx) < textured.material_texture_map.size())
-            tex_idx = textured.material_texture_map[mat_idx];
-        if (tex_idx < 0) tex_idx = 0;
+        const std::size_t tile_index = mat_idx >= 0 && static_cast<std::size_t>(mat_idx) < material_tiles.size() ?
+                                           material_tiles[mat_idx] : fallback_tile;
+        const int y_off = y_offsets[tile_index];
+        const int tw = tiles[tile_index].cols;
+        const int th = tiles[tile_index].rows;
 
-        int y_off = 0;
-        int th = atlas_h;
-        if (tex_idx >= 0 && static_cast<size_t>(tex_idx) < decoded.size() && !decoded[tex_idx].empty()) {
-            y_off = y_offsets[tex_idx];
-            th = decoded[tex_idx].rows;
-        }
-
-        out_uv_coords[fi].resize(3);
+        std::array<float, 3> face_u{};
+        std::array<float, 3> face_v{};
         for (int vi = 0; vi < 3; ++vi) {
-            float u = 0.f, v = 0.f;
             if (textured.has_face_uvs()) {
                 int uv_idx = textured.uv_indices[fi][vi];
                 if (uv_idx >= 0 && static_cast<size_t>(uv_idx) < textured.uv_coords.size()) {
-                    u = textured.uv_coords[uv_idx][0];
-                    v = textured.uv_coords[uv_idx][1];
+                    face_u[vi] = textured.uv_coords[uv_idx][0];
+                    face_v[vi] = textured.uv_coords[uv_idx][1];
                 }
             } else {
                 int vtx_idx = textured.indices[fi][vi];
                 if (vtx_idx >= 0 && static_cast<size_t>(vtx_idx) < textured.uvs.size()) {
-                    u = textured.uvs[vtx_idx][0];
-                    v = textured.uvs[vtx_idx][1];
+                    face_u[vi] = textured.uvs[vtx_idx][0];
+                    face_v[vi] = textured.uvs[vtx_idx][1];
                 }
             }
-            // Wrap to [0,1) then remap into atlas vertical band
-            v = v - std::floor(v);
-            float v_atlas = (y_off + v * th) / static_cast<float>(atlas_h);
-            out_uv_coords[fi][vi] = Vec2f(u, v_atlas);
+        }
+        face_u = normalize_face_uv_axis(face_u);
+        face_v = normalize_face_uv_axis(face_v);
+
+        out_uv_coords[fi].resize(3);
+        for (int vi = 0; vi < 3; ++vi) {
+            const float atlas_x = face_u[vi] * std::max(tw - 1, 0);
+            const float atlas_y = y_off + face_v[vi] * std::max(th - 1, 0);
+            const float u_atlas = atlas_w > 1 ? atlas_x / static_cast<float>(atlas_w - 1) : 0.0f;
+            const float v_atlas = atlas_h > 1 ? atlas_y / static_cast<float>(atlas_h - 1) : 0.0f;
+            out_uv_coords[fi][vi] = Vec2f(u_atlas, v_atlas);
         }
     }
     return true;
@@ -213,7 +322,7 @@ bool texture_to_painting(
     tex2color::TriMesh input_mesh;
     std::vector<std::vector<Vec2f>> uv_coords;
 
-    const bool multi_tex = textured.textures.size() > 1 && !textured.material_texture_map.empty();
+    const bool multi_tex = !textured.material_texture_map.empty();
 
     if (multi_tex) {
         if (!build_multi_texture_atlas(textured, texture, uv_coords))
