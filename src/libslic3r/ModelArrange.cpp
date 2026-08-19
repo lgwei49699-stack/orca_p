@@ -6,7 +6,251 @@
 #include <libslic3r/Print.hpp>
 #include "MTUtils.hpp"
 
+#include <map>
+#include <set>
+
 namespace Slic3r {
+
+namespace {
+
+constexpr double DEFAULT_ARRANGE_MARGIN_MM = 1.0;
+// Match the upstream safety allowance: normal supports may grow about 5 mm
+// beyond the model projection, with 1 mm retained as the arrange safety gap.
+constexpr double NORMAL_SUPPORT_MARGIN_MM = 6.0;
+// Upstream represents the maximum first-layer tree-support footprint as a
+// 24 mm diameter and converts it to a 12 mm one-sided arrange margin. Keep the
+// derivation visible while storing only the final margin in ArrangePolygon.
+constexpr double TREE_SUPPORT_FIRST_LAYER_DIAMETER_MM = 24.0;
+constexpr double TREE_SUPPORT_MARGIN_MM = TREE_SUPPORT_FIRST_LAYER_DIAMETER_MM / 2.0;
+constexpr size_t MAX_OVERHANG_FACES_TO_INSPECT = 20000;
+
+bool has_manual_support(const ModelObject &object)
+{
+    return object.is_fdm_support_painted() ||
+           std::any_of(object.volumes.begin(), object.volumes.end(), [](const ModelVolume *volume) {
+               return volume->is_support_enforcer();
+           });
+}
+
+bool has_arrange_overhang(const ModelInstance &instance, const DynamicPrintConfig &config)
+{
+    ModelObject *object = instance.get_object();
+    const auto *enforce_layers = object->get_config_value<ConfigOptionInt>(config, "enforce_support_layers");
+    if (enforce_layers != nullptr && enforce_layers->value > 0)
+        return true;
+
+    const auto *support_type = object->get_config_value<ConfigOptionEnum<SupportType>>(config, "support_type");
+    if (!is_auto(support_type->value))
+        return has_manual_support(*object);
+
+    if (has_manual_support(*object))
+        return true;
+
+    size_t face_count = 0;
+    for (const ModelVolume *volume : object->volumes)
+        if (volume->is_model_part())
+            face_count += volume->mesh().its.indices.size();
+    if (face_count == 0)
+        return false;
+
+    const double object_min_z = object->instance_bounding_box(instance, true).min.z();
+    const auto *first_layer_height = object->get_config_value<ConfigOptionFloat>(config, "initial_layer_print_height");
+    const double bed_tolerance = std::max(0.05, first_layer_height != nullptr ? first_layer_height->value : 0.2);
+    const size_t sample_step = std::max<size_t>(1, (face_count + MAX_OVERHANG_FACES_TO_INSPECT - 1) /
+                                                      MAX_OVERHANG_FACES_TO_INSPECT);
+
+    size_t face_offset = 0;
+    for (const ModelVolume *volume : object->volumes) {
+        if (!volume->is_model_part())
+            continue;
+
+        const indexed_triangle_set &mesh = volume->mesh().its;
+        const Transform3d transform = instance.get_matrix_no_offset() * volume->get_matrix();
+        const double orientation = transform.linear().determinant() < 0.0 ? -1.0 : 1.0;
+        const size_t first_face = (sample_step - face_offset % sample_step) % sample_step;
+        for (size_t face_index = first_face; face_index < mesh.indices.size(); face_index += sample_step) {
+            const stl_triangle_vertex_indices &face = mesh.indices[face_index];
+
+            const Vec3d p0 = transform * mesh.vertices[face[0]].cast<double>();
+            const Vec3d p1 = transform * mesh.vertices[face[1]].cast<double>();
+            const Vec3d p2 = transform * mesh.vertices[face[2]].cast<double>();
+            if (std::max({p0.z(), p1.z(), p2.z()}) <= object_min_z + bed_tolerance)
+                continue;
+
+            Vec3d normal = orientation * (p1 - p0).cross(p2 - p0);
+            const double normal_length = normal.norm();
+            // The real support generators detect overhangs from adjacent slices and may
+            // additionally classify an edge-resting object's narrow initial layers as a
+            // sharp tail. A face-angle threshold alone therefore misses objects such as a
+            // cube tilted by about 45 degrees: its downward face is shallower than the
+            // configured threshold, while tree support still creates a build-plate base.
+            // Ignore downward faces that lie entirely on the bed, but conservatively keep
+            // the support footprint for every downward-facing surface above the bed.
+            if (normal_length > EPSILON && normal.z() < -EPSILON)
+                return true;
+        }
+        face_offset += mesh.indices.size();
+    }
+
+    return false;
+}
+
+double support_margin(SupportType support_type)
+{
+    return is_tree(support_type) ? TREE_SUPPORT_MARGIN_MM : NORMAL_SUPPORT_MARGIN_MM;
+}
+
+} // namespace
+
+double estimate_arrange_support_margin(const ModelInstance &instance, const DynamicPrintConfig &config)
+{
+    ModelObject *object = instance.get_object();
+    const auto *support_enabled = object->get_config_value<ConfigOptionBool>(config, "enable_support");
+    if (support_enabled == nullptr || !support_enabled->value || !has_arrange_overhang(instance, config))
+        return DEFAULT_ARRANGE_MARGIN_MM;
+
+    const auto *support_type = object->get_config_value<ConfigOptionEnum<SupportType>>(config, "support_type");
+    return support_margin(support_type->value);
+}
+
+int resolve_arrange_auto_plate_value(bool option_was_specified, int configured_value)
+{
+    return option_was_specified ? configured_value : -1;
+}
+
+bool resolve_arrange_allow_multicolor_oneplate(bool configured_value, bool split_by_color)
+{
+    return configured_value && !split_by_color;
+}
+
+bool arrange_wipe_tower_needed(const DynamicPrintConfig &config,
+                               const ArrangePolygons &selected,
+                               const ArrangeParams &params,
+                               bool selected_are_fixed_to_one_plate,
+                               std::string *reason)
+{
+    auto set_reason = [reason](const char *value) {
+        if (reason != nullptr)
+            *reason = value;
+    };
+
+    const auto *enable_prime_tower = config.option<ConfigOptionBool>("enable_prime_tower");
+    if (enable_prime_tower == nullptr || !enable_prime_tower->value) {
+        set_reason("disabled");
+        return false;
+    }
+    if (params.is_seq_print) {
+        set_reason("sequential_printing");
+        return false;
+    }
+
+    const auto *timelapse = config.option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
+    if (timelapse != nullptr && timelapse->value == TimelapseType::tlSmooth) {
+        set_reason("smooth_timelapse");
+        return true;
+    }
+
+    std::set<int> fixed_plate_extruders;
+    for (const ArrangePolygon &item : selected) {
+        const std::set<int> object_extruders(item.extrude_ids.begin(), item.extrude_ids.end());
+        if (object_extruders.size() > 1) {
+            set_reason("multi_extruder_object");
+            return true;
+        }
+        if (selected_are_fixed_to_one_plate)
+            fixed_plate_extruders.insert(item.extrude_ids.begin(), item.extrude_ids.end());
+    }
+
+    // Current-plate and assembled-plate arranging cannot split the selected
+    // objects across beds. Distinct single-extruder objects therefore still
+    // require a wipe tower when they are already fixed to the same plate.
+    if (fixed_plate_extruders.size() > 1) {
+        set_reason("fixed_plate_multi_extruder");
+        return true;
+    }
+
+    if (params.allow_multi_materials_on_same_plate) {
+        std::map<int, std::set<int>> bed_temperature_extruders;
+        for (const ArrangePolygon &item : selected)
+            for (int extruder_id : item.extrude_ids)
+                bed_temperature_extruders[item.bed_temp].insert(extruder_id);
+
+        for (const auto &[bed_temperature, extruders] : bed_temperature_extruders) {
+            (void) bed_temperature;
+            if (extruders.size() > 1) {
+                set_reason("same_bed_temperature_multi_extruder");
+                return true;
+            }
+        }
+    }
+
+    set_reason("not_required");
+    return false;
+}
+
+ArrangeWipeTowerPlan arrange_wipe_tower_plan(const DynamicPrintConfig &config,
+                                             const ArrangePolygons &arranged,
+                                             const ArrangePolygons &fixed,
+                                             const ArrangeParams &params)
+{
+    ArrangeWipeTowerPlan result;
+
+    const auto *enable_prime_tower = config.option<ConfigOptionBool>("enable_prime_tower");
+    if (enable_prime_tower == nullptr || !enable_prime_tower->value || params.is_seq_print)
+        return result;
+
+    const auto *timelapse = config.option<ConfigOptionEnum<TimelapseType>>("timelapse_type");
+    const bool smooth_timelapse = timelapse != nullptr && timelapse->value == TimelapseType::tlSmooth;
+
+    std::set<int> used_beds;
+    std::set<int> multi_extruder_object_beds;
+    std::map<int, std::set<int>> bed_extruders;
+    std::map<int, std::map<int, std::set<int>>> bed_temperature_extruders;
+
+    auto collect = [&](const ArrangePolygons &items) {
+        for (const ArrangePolygon &item : items) {
+            if (item.is_virt_object || item.bed_idx < 0)
+                continue;
+
+            used_beds.insert(item.bed_idx);
+            const std::set<int> object_extruders(item.extrude_ids.begin(), item.extrude_ids.end());
+            if (object_extruders.size() > 1)
+                multi_extruder_object_beds.insert(item.bed_idx);
+
+            bed_extruders[item.bed_idx].insert(item.extrude_ids.begin(), item.extrude_ids.end());
+            auto &temperature_extruders = bed_temperature_extruders[item.bed_idx][item.bed_temp];
+            temperature_extruders.insert(item.extrude_ids.begin(), item.extrude_ids.end());
+        }
+    };
+
+    collect(arranged);
+    collect(fixed);
+
+    for (int bed_idx : used_beds) {
+        bool needed = smooth_timelapse || multi_extruder_object_beds.count(bed_idx) != 0;
+        // At this stage the items already have a concrete bed assignment.
+        // Even if the arranger normally separates materials, fixed objects or
+        // imported plate state may still leave multiple extruders on one bed.
+        if (!needed) {
+            for (const auto &[bed_temperature, extruders] : bed_temperature_extruders[bed_idx]) {
+                (void) bed_temperature;
+                if (extruders.size() > 1) {
+                    needed = true;
+                    break;
+                }
+            }
+        }
+        if (needed)
+            result.emplace(bed_idx, bed_extruders[bed_idx]);
+    }
+
+    return result;
+}
+
+bool arrange_result_fits_single_plate(const ArrangePolygons &arranged)
+{
+    return std::all_of(arranged.begin(), arranged.end(), [](const ArrangePolygon &item) { return item.bed_idx == 0; });
+}
 
 arrangement::ArrangePolygons get_arrange_polys(const Model &model, ModelInstancePtrs &instances)
 {
@@ -160,21 +404,7 @@ ArrangePolygon get_instance_arrange_poly(ModelInstance* instance, const Slic3r::
     // get brim width
     auto obj = instance->get_object();
 
-    ap.brim_width = 1.0;
-    // For by-layer printing, need to shrink bed a little, so the support won't go outside bed.
-    // We set it to 5mm because that's how much a normal support will grow by default.
-    // normal support 5mm, other support 22mm, no support 0mm
-    auto supp_type_ptr = obj->get_config_value<ConfigOptionBool>(config, "enable_support");
-    auto support_type_ptr = obj->get_config_value<ConfigOptionEnum<SupportType>>(config, "support_type");
-    auto support_type = support_type_ptr->value;
-    auto enable_support = supp_type_ptr->getBool();
-
-    if (enable_support && (support_type == stNormalAuto || support_type == stNormal))
-        ap.brim_width = 6.0;
-    else if (enable_support) {
-        ap.brim_width = 24.0; // 2*MAX_BRANCH_RADIUS_FIRST_LAYER
-        ap.has_tree_support = true;
-    }
+    ap.brim_width = estimate_arrange_support_margin(*instance, config);
 
     auto size = obj->instance_convex_hull_bounding_box(instance).size();
     ap.height = size.z();

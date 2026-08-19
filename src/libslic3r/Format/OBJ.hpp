@@ -7,6 +7,7 @@ namespace Slic3r {
 class TriangleMesh;
 class Model;
 class ModelObject;
+struct PaintedMesh;
 typedef std::function<void(std::vector<RGBA> &input_colors, bool is_single_color, std::vector<unsigned char> &filament_ids, unsigned char &first_extruder_id)> ObjImportColorFn;
 // Load an OBJ file into a provided model.
 struct ObjInfo {
@@ -44,6 +45,7 @@ extern bool store_obj(const char *path, TriangleMesh *mesh);
 extern bool store_obj(const char *path, ModelObject *model);
 extern bool store_obj(const char *path, Model *model);
 extern bool store_multicolor_obj(const char *path, const Model &model, const std::vector<RGBA> &filament_colors);
+extern bool store_painted_mesh_obj(const char *path, const PaintedMesh &painted_mesh, const std::vector<RGBA> &filament_colors);
 
 
 extern bool load_general_extruder_config(const std::string& config_path, GeneralExtruderConfig& config);

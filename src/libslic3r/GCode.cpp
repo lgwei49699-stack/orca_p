@@ -1292,8 +1292,53 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
         // Check that there are extrusions on the very first layer. The case with empty
         // first layer may result in skirt/brim in the air and maybe other issues.
         if (layers_to_print.size() == 1u) {
-            if (!has_extrusions)
+            if (!has_extrusions) {
+                const Layer        *object_layer  = layer_to_print.object_layer;
+                const SupportLayer *support_layer = layer_to_print.support_layer;
+                size_t              perimeter_entities = 0;
+                size_t              fill_entities      = 0;
+                if (object_layer) {
+                    for (const LayerRegion *region : object_layer->regions()) {
+                        perimeter_entities += region->perimeters.entities.size();
+                        fill_entities      += region->fills.entities.size();
+                    }
+                }
+                const ModelObject *model_object    = object.model_object();
+                const double       nozzle_diameter = object.print()->config().nozzle_diameter.get_at(0);
+                BOOST_LOG_TRIVIAL(error)
+                    << "Empty initial layer detected: print_object_id=" << object.id().id
+                    << ", model_object_id=" << (model_object ? model_object->id().id : 0)
+                    << ", model_object=" << (model_object ? model_object->name : std::string("<null>"))
+                    << ", support={enabled:" << object.config().enable_support.value
+                    << ", type:" << int(object.config().support_type.value)
+                    << ", style:" << int(object.config().support_style.value)
+                    << ", remove_small_overhang:" << object.config().support_remove_small_overhang.value
+                    << ", top_z_distance:" << object.config().support_top_z_distance.value << "}"
+                    << ", first_layer_path_config={nozzle:" << nozzle_diameter
+                    << ", line_width:" << object.print()->config().initial_layer_line_width.get_abs_value(nozzle_diameter)
+                    << ", min_bead_width:" << object.config().initial_layer_min_bead_width.value
+                    << ", min_feature_size:" << object.config().min_feature_size.value
+                    << ", min_length_factor:" << object.config().min_length_factor.value << "}"
+                    << ", object_layers=" << object.layers().size()
+                    << ", support_layers=" << object.support_layers().size()
+                    << ", object_first={present:" << (object_layer != nullptr)
+                    << ", print_z:" << (object_layer ? object_layer->print_z : -1.)
+                    << ", height:" << (object_layer ? object_layer->height : -1.)
+                    << ", slices:" << (object_layer ? object_layer->lslices.size() : 0)
+                    << ", perimeter_entities:" << perimeter_entities
+                    << ", fill_entities:" << fill_entities
+                    << ", extrusions:" << (object_layer && object_layer->has_extrusions()) << "}"
+                    << ", support_first={present:" << (support_layer != nullptr)
+                    << ", print_z:" << (support_layer ? support_layer->print_z : -1.)
+                    << ", height:" << (support_layer ? support_layer->height : -1.)
+                    << ", islands:" << (support_layer ? support_layer->support_islands.size() : 0)
+                    << ", fills:" << (support_layer ? support_layer->support_fills.entities.size() : 0) << "}";
+                if (object.config().enable_support.value)
+                    throw Slic3r::SlicingError(
+                        _(L("One object has an empty initial layer even though supports are enabled. Please re-orient it, cut a flat bottom, or use a raft.")),
+                        object.id().id);
                 throw Slic3r::SlicingError(_(L("One object has empty initial layer and can't be printed. Please Cut the bottom or enable supports.")), object.id().id);
+            }
         }
 
         // In case there are extrusions on this layer, check there is a layer to lay it on.

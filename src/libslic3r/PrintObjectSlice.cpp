@@ -847,15 +847,21 @@ static inline void apply_mm_segmentation(PrintObject &print_object, ThrowOnCance
 {
     // Returns MM segmentation based on painting in MM segmentation gizmo
     std::vector<std::vector<ExPolygons>> segmentation = multi_material_segmentation_by_painting(print_object, throw_on_cancel);
-    assert(segmentation.size() == print_object.layer_count());
+    if (segmentation.size() != print_object.layer_count())
+        throw Slic3r::SlicingError(L("Multi-material segmentation layer count does not match the sliced model."));
+
+    const size_t num_extruders = print_object.print()->config().filament_diameter.size();
+    if (std::any_of(segmentation.begin(), segmentation.end(), [num_extruders](const std::vector<ExPolygons> &layer) {
+            return layer.size() != num_extruders;
+        }))
+        throw Slic3r::SlicingError(L("Multi-material segmentation count does not match the configured filament slots."));
+
     tbb::parallel_for(
         tbb::blocked_range<size_t>(0, segmentation.size(), std::max(segmentation.size() / 128, size_t(1))),
-        [&print_object, &segmentation, throw_on_cancel](const tbb::blocked_range<size_t> &range) {
+        [&print_object, &segmentation, num_extruders, throw_on_cancel](const tbb::blocked_range<size_t> &range) {
             const auto  &layer_ranges   = print_object.shared_regions()->layer_ranges;
             double       z              = print_object.get_layer(int(range.begin()))->slice_z;
             auto         it_layer_range = layer_range_first(layer_ranges, z);
-            // BBS
-            const size_t num_extruders = print_object.print()->config().filament_diameter.size();
 
             struct ByExtruder {
                 ExPolygons  expolygons;

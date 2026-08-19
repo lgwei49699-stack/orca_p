@@ -3,6 +3,8 @@
 #include "Callbacks.hpp"
 #include "TriMesh.hpp"
 
+#include <vector>
+
 namespace Slic3r { namespace tex2color {
 
 namespace color_utils {
@@ -32,6 +34,10 @@ struct ClusterParameters {
     std::size_t max_cluster_k = 32;  // Max cluster count upper bound for adaptive algorithm
 
     std::size_t max_iter = 50;  // Maximum number of iterations
+
+    // Optional per-sample weights. Texture conversion supplies physical face areas so large
+    // surface regions influence palette selection more than isolated texture noise.
+    std::vector<double> sample_weights;
 
     std::function<bool()> cancel_callback;  // Optional cancellation check; returns true when the caller requests abort
 };

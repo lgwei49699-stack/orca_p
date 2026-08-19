@@ -713,6 +713,17 @@ public:
         this->add_roof_unguarded(std::move(overhang_areas), 0, std::min(dtt_roof, this->support_parameters.num_top_interface_layers));
     }
 
+    void add_base_build_plate(Polygons &&base_areas, SupportGeneratorLayersPtr &intermediate_layers)
+    {
+        if (base_areas.empty())
+            return;
+        std::lock_guard<std::mutex> lock(m_mutex_layer_storage);
+        SupportGeneratorLayer *&layer = intermediate_layers[0];
+        if (layer == nullptr)
+            layer = &layer_allocate_unguarded(layer_storage, SupporLayerType::Base, slicing_parameters, config, 0);
+        append(layer->polygons, std::move(base_areas));
+    }
+
     void add_roof_unguarded(Polygons &&new_roofs, const size_t insert_layer_idx, const size_t dtt_roof)
     {
         assert(support_parameters.has_top_contacts);

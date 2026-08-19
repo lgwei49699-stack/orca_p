@@ -7856,6 +7856,12 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli_params = "spacing";
     def->set_default_value(new ConfigOptionFloat(0.f));
 
+    def = this->add("ignore_wipe_tower", coBool);
+    def->label = L("Ignore Wipe Tower");
+    def->tooltip = L("Disable the wipe tower for CLI arranging and slicing, regardless of loaded process settings.");
+    def->cli = "ignore-wipe-tower";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("cli_nozzle_temperature", coFloat);
     def->label = L("CLI Nozzle Temperature");
     def->tooltip = L("Override nozzle temperature for all filament slots (layers after initial). Applied after --load-filaments.");
@@ -7882,7 +7888,7 @@ CLITransformConfigDef::CLITransformConfigDef()
 
     def = this->add("split_by_color", coBool);
     def->label = L("Split by Color");
-    def->tooltip = L("Split multi-color objects by extruder into separate objects, each placed on a separate plate.");
+    def->tooltip = L("Split multi-color objects by extruder and keep different extruders on separate plates during arranging.");
     def->cli = "split-by-color";
     def->set_default_value(new ConfigOptionBool(false));
 
