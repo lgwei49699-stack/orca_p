@@ -3756,7 +3756,7 @@ void PrintObject::combine_infill()
             for (size_t layer_idx = 0; layer_idx < m_layers.size(); ++ layer_idx) {
                 m_print->throw_if_canceled();
                 const Layer *layer = m_layers[layer_idx];
-                if (layer->id() == 0)
+                if (m_slicing_params.model_layer_id(layer->id()) == 0)
                     // Skip first print layer (which may not be first layer in array because of raft).
                     continue;
                 // Check whether the combination of this layer with the lower layers' buffer

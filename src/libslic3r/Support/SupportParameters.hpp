@@ -60,7 +60,7 @@ struct SupportParameters {
                 print_config.nozzle_diameter.get_at(object_config.support_interface_filament.value - 1);
             const RaftPhasePlan raft_plan = build_cura_raft_phase_plan(
                 resolve_cura_raft_plan_config(
-                    print_config, object_config, support_nozzle, interface_nozzle, slicing_params.soluble_interface));
+                    print_config, object_config, support_nozzle, interface_nozzle));
             assert(raft_plan.validate());
 
             const RaftPhaseLayer &base_layer = *raft_plan.find_layer(RaftPhase::Base, 0);

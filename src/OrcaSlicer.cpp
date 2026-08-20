@@ -65,6 +65,7 @@ using namespace nlohmann;
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/Format/AMF.hpp"
 #include "libslic3r/Format/3mf.hpp"
+#include "libslic3r/Format/bbs_3mf.hpp"
 #include "libslic3r/Format/STL.hpp"
 #include "libslic3r/Format/OBJ.hpp"
 #include "libslic3r/Format/SL1.hpp"
@@ -134,7 +135,7 @@ std::map<int, std::string> cli_errors = {
     {CLI_OBJECT_ARRANGE_FAILED, "An error occurred when auto-arranging object(s)."},
     {CLI_OBJECT_ORIENT_FAILED, "An error occurred when auto-orienting object(s)."},
     {CLI_MODIFIED_PARAMS_TO_PRINTER, "Found modified parameter in printer preset in the 3mf file, which should not be changed."},
-        {CLI_FILE_VERSION_NOT_SUPPORTED, "Unsupported 3MF version. Please make sure the 3MF file was created with the official version of Bambu Studio, not a beta version."},
+    {CLI_FILE_VERSION_NOT_SUPPORTED, "Unsupported 3MF version or required feature. Please update OrcaSlicer before opening this project."},
     {CLI_NO_SUITABLE_OBJECTS, "One of the plate is empty or has no object fully inside it. Please check that the 3mf contains no empty plate in Orca Slicer before uploading."},
     {CLI_VALIDATE_ERROR, "There are some incorrect slicing parameters in the 3mf. Please verify the slicing of all plates in Orca Slicer before uploading."},
     {CLI_OBJECTS_PARTLY_INSIDE, "Some objects are located over the boundary of the heated bed."},
@@ -1940,6 +1941,13 @@ int CLI::run(int argc, char **argv)
                 config += std::move(m_print_config);
                 m_print_config = std::move(config);
                 input_index++;
+            }
+            catch (const Slic3r::UnsupportedRequired3mfFeatureError &e) {
+                if (collect_repair_report && !repair_report_recorded)
+                    sliced_info.model_repairs.push_back(model_repair_info);
+                boost::nowide::cerr << file << ": " << e.what() << std::endl;
+                record_exit_reson(outfile_dir, CLI_FILE_VERSION_NOT_SUPPORTED, 0, cli_errors[CLI_FILE_VERSION_NOT_SUPPORTED], sliced_info);
+                flush_and_exit(CLI_FILE_VERSION_NOT_SUPPORTED);
             }
             catch (std::exception& e) {
                 if (collect_repair_report && !repair_report_recorded)

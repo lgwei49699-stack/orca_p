@@ -4,6 +4,7 @@
 #include "PresetHints.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/Slicing.hpp"
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
@@ -3066,38 +3067,57 @@ void TabPrint::build()
         optgroup->append_single_option_line("support_remove_small_overhang", "support_settings_support#remove-small-overhangs");
         //optgroup->append_single_option_line("enforce_support_layers", "support_settings_support");
 
-        optgroup = page->new_optgroup(L("Raft"), L"param_raft");
+        optgroup = page->new_optgroup(L("Raft common"), L"param_raft");
         optgroup->append_single_option_line("raft_mode", "support_settings_raft");
         optgroup->append_single_option_line("raft_layers", "support_settings_raft");
         optgroup->append_single_option_line("raft_contact_distance", "support_settings_raft");
         optgroup->append_single_option_line("raft_airgap", "support_settings_raft");
         optgroup->append_single_option_line("raft_layer_0_z_overlap", "support_settings_raft");
-        optgroup->append_single_option_line("raft_base_layers", "support_settings_raft");
-        optgroup->append_single_option_line("raft_interface_layers", "support_settings_raft");
-        optgroup->append_single_option_line("raft_surface_layers", "support_settings_raft");
-
-        optgroup = page->new_optgroup(L("Raft advanced"), L"param_raft");
         optgroup->append_single_option_line("raft_angle", "support_settings_raft");
         optgroup->append_single_option_line("raft_angle_increment", "support_settings_raft");
-        optgroup->append_single_option_line("raft_base_layer_height", "support_settings_raft");
-        optgroup->append_single_option_line("raft_base_line_width", "support_settings_raft");
-        optgroup->append_single_option_line("raft_base_line_spacing", "support_settings_raft");
+
+        const auto append_raft_auto_option = [this](const ConfigOptionsGroupShp &group, const char *key) {
+            Line line = group->create_single_option_line(key, "support_settings_raft");
+            line.append_widget([this, key](wxWindow *parent) {
+                auto *resolved = new wxStaticText(parent, wxID_ANY, wxEmptyString);
+                resolved->SetFont(wxGetApp().normal_font());
+                resolved->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#6B6B6B")));
+                m_raft_auto_resolved_labels[key] = wxWeakRef<wxStaticText>(resolved);
+
+                auto *sizer = new wxBoxSizer(wxHORIZONTAL);
+                sizer->Add(resolved, 0, wxALIGN_CENTER_VERTICAL);
+                return sizer;
+            });
+            group->append_line(line);
+        };
+
+        optgroup = page->new_optgroup(L("Raft base"), L"param_raft");
+        optgroup->append_single_option_line("raft_base_layers", "support_settings_raft");
+        append_raft_auto_option(optgroup, "raft_base_layer_height");
+        append_raft_auto_option(optgroup, "raft_base_line_width");
+        append_raft_auto_option(optgroup, "raft_base_line_spacing");
         optgroup->append_single_option_line("raft_base_flow", "support_settings_raft");
         optgroup->append_single_option_line("raft_base_speed", "support_settings_raft");
         optgroup->append_single_option_line("raft_base_fan_speed", "support_settings_raft");
         optgroup->append_single_option_line("raft_base_wall_count", "support_settings_raft");
         optgroup->append_single_option_line("raft_base_margin", "support_settings_raft");
-        optgroup->append_single_option_line("raft_interface_layer_height", "support_settings_raft");
-        optgroup->append_single_option_line("raft_interface_line_width", "support_settings_raft");
-        optgroup->append_single_option_line("raft_interface_line_spacing", "support_settings_raft");
+
+        optgroup = page->new_optgroup(L("Raft interface"), L"param_raft");
+        optgroup->append_single_option_line("raft_interface_layers", "support_settings_raft");
+        append_raft_auto_option(optgroup, "raft_interface_layer_height");
+        append_raft_auto_option(optgroup, "raft_interface_line_width");
+        append_raft_auto_option(optgroup, "raft_interface_line_spacing");
         optgroup->append_single_option_line("raft_interface_flow", "support_settings_raft");
         optgroup->append_single_option_line("raft_interface_speed", "support_settings_raft");
         optgroup->append_single_option_line("raft_interface_fan_speed", "support_settings_raft");
         optgroup->append_single_option_line("raft_interface_wall_count", "support_settings_raft");
         optgroup->append_single_option_line("raft_interface_margin", "support_settings_raft");
-        optgroup->append_single_option_line("raft_surface_layer_height", "support_settings_raft");
-        optgroup->append_single_option_line("raft_surface_line_width", "support_settings_raft");
-        optgroup->append_single_option_line("raft_surface_line_spacing", "support_settings_raft");
+
+        optgroup = page->new_optgroup(L("Raft surface"), L"param_raft");
+        optgroup->append_single_option_line("raft_surface_layers", "support_settings_raft");
+        append_raft_auto_option(optgroup, "raft_surface_layer_height");
+        append_raft_auto_option(optgroup, "raft_surface_line_width");
+        append_raft_auto_option(optgroup, "raft_surface_line_spacing");
         optgroup->append_single_option_line("raft_surface_flow", "support_settings_raft");
         optgroup->append_single_option_line("raft_surface_speed", "support_settings_raft");
         optgroup->append_single_option_line("raft_surface_fan_speed", "support_settings_raft");
@@ -3288,6 +3308,7 @@ void TabPrint::reload_config()
 {
     this->compatible_widget_reload(m_compatible_printers);
     Tab::reload_config();
+    update_raft_auto_resolved_labels();
 }
 
 void TabPrint::update_description_lines()
@@ -3339,6 +3360,88 @@ void TabPrint::toggle_options()
         }
         cb->SetValue(n);
     }
+
+    update_raft_auto_resolved_labels();
+}
+
+void TabPrint::update_raft_auto_resolved_labels()
+{
+    if (m_raft_auto_resolved_labels.empty() || m_preset_bundle == nullptr || m_config == nullptr)
+        return;
+
+    bool layout_changed = false;
+    const auto set_label_visibility = [&layout_changed](wxStaticText *label, const wxString &text, bool show) {
+        if (label->GetLabel() != text) {
+            label->SetLabel(text);
+            layout_changed = true;
+        }
+        if (label->IsShown() != show) {
+            label->Show(show);
+            layout_changed = true;
+        }
+    };
+
+    if (has_mixed_raft_auto_inputs()) {
+        for (const auto &item : m_raft_auto_resolved_labels)
+            if (wxStaticText *label = item.second.get())
+                set_label_visibility(label, wxEmptyString, false);
+        if (layout_changed) {
+            if (m_active_page != nullptr)
+                m_active_page->refresh();
+            m_parent->Layout();
+        }
+        return;
+    }
+
+    DynamicPrintConfig full_config = m_preset_bundle->full_config();
+    full_config.apply(*m_config, true);
+
+    PrintConfig print_config;
+    print_config.apply(full_config, true);
+    PrintObjectConfig object_config;
+    object_config.apply(full_config, true);
+
+    if (print_config.nozzle_diameter.values.empty())
+        return;
+
+    const coordf_t support_nozzle   = print_config.nozzle_diameter.get_at(object_config.support_filament.value - 1);
+    const coordf_t interface_nozzle = print_config.nozzle_diameter.get_at(object_config.support_interface_filament.value - 1);
+    const RaftPlanConfig resolved = resolve_cura_raft_plan_config(print_config, object_config, support_nozzle, interface_nozzle);
+    const bool use_cura_raft = object_config.raft_mode.value == RaftMode::CuraV1;
+
+    const auto update_label = [this, &full_config, use_cura_raft, &set_label_visibility](const char *key, double value) {
+        const auto label_it = m_raft_auto_resolved_labels.find(key);
+        if (label_it == m_raft_auto_resolved_labels.end() || label_it->second.get() == nullptr)
+            return;
+
+        wxStaticText *label = label_it->second.get();
+        const bool is_auto = full_config.opt_float(key) <= EPSILON;
+        wxString text;
+        if (use_cura_raft && is_auto)
+            text = _(L("Resolved:")) + " " + double_to_string(value, 3) + " mm";
+        set_label_visibility(label, text, use_cura_raft && is_auto);
+    };
+
+    update_label("raft_base_layer_height", resolved.base_config.layer_height);
+    update_label("raft_base_line_width", resolved.base_config.line_width);
+    update_label("raft_base_line_spacing", resolved.base_config.line_spacing);
+    update_label("raft_interface_layer_height", resolved.interface_config.layer_height);
+    update_label("raft_interface_line_width", resolved.interface_config.line_width);
+    update_label("raft_interface_line_spacing", resolved.interface_config.line_spacing);
+    update_label("raft_surface_layer_height", resolved.surface_config.layer_height);
+    update_label("raft_surface_line_width", resolved.surface_config.line_width);
+    update_label("raft_surface_line_spacing", resolved.surface_config.line_spacing);
+
+    if (layout_changed) {
+        if (m_active_page != nullptr)
+            m_active_page->refresh();
+        m_parent->Layout();
+    }
+}
+
+void TabPrint::refresh_raft_auto_resolved_labels()
+{
+    update_raft_auto_resolved_labels();
 }
 
 void TabPrint::update()
@@ -3384,6 +3487,7 @@ void TabPrint::update()
 
 void TabPrint::clear_pages()
 {
+    m_raft_auto_resolved_labels.clear();
     Tab::clear_pages();
 
     m_recommended_thin_wall_thickness_description_line = nullptr;
@@ -3553,6 +3657,18 @@ void TabPrintModel::update_model_config()
             }
         }
     }
+}
+
+bool TabPrintModel::has_mixed_raft_auto_inputs() const
+{
+    for (const char *key : {"raft_mode", "layer_height", "line_width", "support_filament", "support_interface_filament",
+                            "raft_base_layer_height", "raft_base_line_width", "raft_base_line_spacing",
+                            "raft_interface_layer_height", "raft_interface_line_width", "raft_interface_line_spacing",
+                            "raft_surface_layer_height", "raft_surface_line_width", "raft_surface_line_spacing"}) {
+        if (std::find(m_null_keys.begin(), m_null_keys.end(), key) != m_null_keys.end())
+            return true;
+    }
+    return false;
 }
 
 void TabPrintModel::reset_model_config()
@@ -5583,6 +5699,14 @@ void TabPrinter::update_fff()
     }
 
     toggle_options();
+
+    if (auto *print_tab = dynamic_cast<TabPrint *>(wxGetApp().get_tab(Preset::TYPE_PRINT)); print_tab != nullptr)
+        print_tab->refresh_raft_auto_resolved_labels();
+    for (Tab *tab : wxGetApp().model_tabs_list)
+        if (auto *print_tab = dynamic_cast<TabPrint *>(tab); print_tab != nullptr)
+            print_tab->refresh_raft_auto_resolved_labels();
+    if (auto *print_tab = dynamic_cast<TabPrint *>(wxGetApp().get_plate_tab()); print_tab != nullptr)
+        print_tab->refresh_raft_auto_resolved_labels();
 }
 
 void TabPrinter::update_sla()

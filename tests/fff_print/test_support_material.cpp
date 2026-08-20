@@ -431,6 +431,135 @@ TEST_CASE("Cura V1 overlap stays below a thin second model layer", "[SupportMate
             print.objects().front()->slicing_parameters().min_layer_height - EPSILON);
 }
 
+TEST_CASE("Cura V1 model features use model-local layer ids above the raft", "[SupportMaterial][Raft][CuraV1][LayerId]")
+{
+    REQUIRE(SlicingParameters::model_layer_id(5, true, 5) == 0);
+    REQUIRE(SlicingParameters::model_layer_id(6, true, 5) == 1);
+    REQUIRE(SlicingParameters::model_layer_id(5, false, 5) == 5);
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.6}));
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    config.set("layer_height", 0.2);
+    config.set("initial_layer_print_height", 0.3);
+    config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.6, false));
+    config.set("inner_wall_line_width", 0.42);
+    config.set("outer_wall_line_width", 0.42);
+    config.set("raft_airgap", 0.2);
+    config.set("raft_base_layers", 1);
+    config.set("raft_interface_layers", 1);
+    config.set("raft_surface_layers", 1);
+    config.set("raft_base_layer_height", 0.2);
+    config.set("raft_interface_layer_height", 0.2);
+    config.set("raft_surface_layer_height", 0.2);
+    config.set("raft_base_line_width", 0.4);
+    config.set("raft_interface_line_width", 0.4);
+    config.set("raft_surface_line_width", 0.4);
+    config.set("raft_base_line_spacing", 0.8);
+    config.set("raft_interface_line_spacing", 0.8);
+    config.set("raft_surface_line_spacing", 0.4);
+    config.set("support_filament", 1);
+    config.set("support_interface_filament", 1);
+    config.set("support_top_z_distance", 0.2);
+    config.set("wall_loops", 1);
+    config.set("bottom_shell_layers", 0);
+    config.set("top_shell_layers", 0);
+    config.set_key_value("sparse_infill_density", new ConfigOptionPercent(20.));
+    config.set("infill_combination", true);
+    config.set_key_value("infill_combination_max_layer_height", new ConfigOptionFloatOrPercent(0.6, false));
+    // The template evaluator indexes PrintObject::layers(). A physical raft
+    // offset used here would walk past this intentionally short model.
+    config.set("sparse_infill_rotate_template", std::string("0,90!"));
+    config.set_key_value("seam_slope_type", new ConfigOptionEnum<SeamScarfType>(SeamScarfType::All));
+    config.set("seam_slope_conditional", false);
+    config.set("seam_slope_min_length", 5.);
+    config.set("seam_slope_steps", 5);
+    config.set("machine_start_gcode", std::string("G90\nM83\nG92 E0"));
+    config.set("before_layer_change_gcode", std::string("G92 E0"));
+
+    // Synthetic full configs contain enum-vector defaults without their
+    // serialization maps. Normal presets provide these maps.
+    for (const std::string &key : config.keys()) {
+        const auto *enum_option = dynamic_cast<const ConfigOptionEnumsGeneric *>(config.option(key));
+        const ConfigOptionDef *option_def = print_config_def.get(key);
+        if (enum_option != nullptr && enum_option->keys_map == nullptr && option_def != nullptr && option_def->enum_keys_map != nullptr) {
+            auto *mapped_option = new ConfigOptionEnumsGeneric(option_def->enum_keys_map);
+            mapped_option->values = enum_option->values;
+            config.set_key_value(key, mapped_option);
+        }
+    }
+
+    Model model;
+    ModelObject *model_object = model.add_object();
+    model_object->name = "short Cura raft model-layer semantics cube";
+    model_object->add_volume(make_cube(20., 20., 0.8));
+    ModelInstance *instance = model_object->add_instance();
+    instance->set_offset(Vec3d(100., 100., 0.));
+    model_object->ensure_on_bed();
+
+    Print print;
+    print.auto_assign_extruders(model_object);
+    print.apply(model, config);
+    const StringObjectException validation = print.validate();
+    INFO("validation error: " << validation.string << "; key: " << validation.opt_key);
+    REQUIRE(validation.string.empty());
+    print.set_status_silent();
+    print.process();
+
+    const PrintObject *object = print.objects().front();
+    REQUIRE(object->slicing_parameters().raft_layers() == 3);
+    REQUIRE(object->layers().size() >= 3);
+    REQUIRE(object->slicing_parameters().model_layer_id(object->layers()[0]->id()) == 0);
+    REQUIRE(object->slicing_parameters().model_layer_id(object->layers()[1]->id()) == 1);
+
+    // Combined sparse infill must not consume the first model layer.
+    const ExtrusionEntityCollection &first_layer_fills = object->layers()[0]->get_region(0)->fills;
+    REQUIRE(std::any_of(first_layer_fills.entities.begin(), first_layer_fills.entities.end(),
+                        [](const ExtrusionEntity *entity) { return entity->role() == erInternalInfill; }));
+
+    const boost::filesystem::path gcode_path =
+        boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orca-raft-layer-id-%%%%-%%%%.gcode");
+    set_resources_dir((boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() / "resources").string());
+    GCodeProcessorResult gcode_result;
+    print.export_gcode(gcode_path.string(), &gcode_result, nullptr);
+    std::ifstream gcode_stream(gcode_path.string());
+    const std::string gcode((std::istreambuf_iterator<char>(gcode_stream)), std::istreambuf_iterator<char>());
+
+    const auto layer_marker_position = [&gcode](double print_z, size_t offset = 0) {
+        std::ostringstream compact_marker;
+        compact_marker << ";Z:" << print_z;
+        size_t position = gcode.find(compact_marker.str(), offset);
+        if (position == std::string::npos) {
+            std::ostringstream verbose_marker;
+            verbose_marker << "; Z_HEIGHT: " << print_z;
+            position = gcode.find(verbose_marker.str(), offset);
+        }
+        return position;
+    };
+    const auto layer_section = [&gcode, &layer_marker_position](double print_z, double next_print_z) {
+        const size_t begin = layer_marker_position(print_z);
+        REQUIRE(begin != std::string::npos);
+        const size_t end = layer_marker_position(next_print_z, begin + 1);
+        REQUIRE(end != std::string::npos);
+        return gcode.substr(begin, end - begin);
+    };
+    const auto has_sloped_extrusion = [](const std::string &section) {
+        std::istringstream lines(section);
+        for (std::string line; std::getline(lines, line);)
+            if (line.rfind("G1 ", 0) == 0 && line.find('E') != std::string::npos && line.find('Z') != std::string::npos)
+                return true;
+        return false;
+    };
+
+    const std::string first_model_layer_gcode =
+        layer_section(object->layers()[0]->print_z, object->layers()[1]->print_z);
+    const std::string second_model_layer_gcode =
+        layer_section(object->layers()[1]->print_z, object->layers()[2]->print_z);
+    REQUIRE_FALSE(has_sloped_extrusion(first_model_layer_gcode));
+    REQUIRE(has_sloped_extrusion(second_model_layer_gcode));
+    boost::filesystem::remove(gcode_path);
+}
+
 TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[SupportMaterial][Raft][CuraV1][GCode]")
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
@@ -1174,3 +1303,167 @@ SCENARIO("SupportMaterial: Checking bridge speed", "[SupportMaterial]")
 }
 
 #endif
+
+TEST_CASE("Cura V1 raft air gap is independent from ordinary support Top Z distance", "[SupportMaterial][Raft][CuraV1][Airgap]")
+{
+    const ConfigOptionDef *airgap_def = print_config_def.get("raft_airgap");
+    REQUIRE(airgap_def != nullptr);
+    REQUIRE(airgap_def->mode == comAdvanced);
+    REQUIRE(airgap_def->tooltip.find("independent of the ordinary support Top Z distance") != std::string::npos);
+
+    PrintConfig print_config;
+    print_config.nozzle_diameter.values                 = {0.4};
+    print_config.min_layer_height.values                = {0.08};
+    print_config.max_layer_height.values                = {0.32};
+    print_config.initial_layer_print_height.value       = 0.42;
+    print_config.independent_support_layer_height.value = false;
+
+    PrintObjectConfig object_config;
+    object_config.layer_height.value                = 0.2;
+    object_config.raft_mode.value                   = RaftMode::CuraV1;
+    object_config.raft_airgap.value                 = 0.27;
+    object_config.raft_layer_0_z_overlap.value      = 0.1;
+    object_config.raft_base_layers.value            = 1;
+    object_config.raft_interface_layers.value       = 2;
+    object_config.raft_surface_layers.value         = 2;
+    object_config.raft_base_layer_height.value      = 0.3;
+    object_config.raft_interface_layer_height.value = 0.3;
+    object_config.raft_surface_layer_height.value   = 0.2;
+    object_config.raft_base_line_width.value        = 0.6;
+    object_config.raft_interface_line_width.value   = 0.6;
+    object_config.raft_surface_line_width.value     = 0.42;
+    object_config.support_filament.value            = 1;
+    object_config.support_interface_filament.value  = 1;
+
+    object_config.support_top_z_distance.value = 0.2;
+    const SlicingParameters detachable =
+        SlicingParameters::create_from_config(print_config, object_config, 10.1, {1}, Vec3d::Ones());
+    REQUIRE(detachable.valid);
+    REQUIRE_FALSE(detachable.soluble_interface);
+    REQUIRE(detachable.gap_raft_object == Approx(0.27));
+
+    object_config.support_top_z_distance.value = 0.;
+    const SlicingParameters soluble =
+        SlicingParameters::create_from_config(print_config, object_config, 10.1, {1}, Vec3d::Ones());
+    REQUIRE(soluble.valid);
+    REQUIRE(soluble.soluble_interface);
+    REQUIRE(soluble.gap_raft_object == Approx(0.27));
+    REQUIRE(soluble.object_print_z_min == Approx(1.57));
+    REQUIRE(object_config.raft_airgap.value == Approx(0.27));
+
+    object_config.support_top_z_distance.value = 0.2;
+    object_config.raft_airgap.value = 0.;
+    const SlicingParameters explicit_zero_gap =
+        SlicingParameters::create_from_config(print_config, object_config, 10.1, {1}, Vec3d::Ones());
+    REQUIRE(explicit_zero_gap.valid);
+    REQUIRE_FALSE(explicit_zero_gap.soluble_interface);
+    REQUIRE(explicit_zero_gap.gap_raft_object == Approx(0.));
+    REQUIRE(explicit_zero_gap.object_print_z_min == Approx(1.3));
+
+    object_config.raft_mode.value              = RaftMode::Legacy;
+    object_config.raft_airgap.value            = 0.27;
+    object_config.raft_layers.value            = 3;
+    object_config.raft_contact_distance.value  = 0.4;
+    object_config.support_top_z_distance.value = 0.2;
+    const SlicingParameters legacy =
+        SlicingParameters::create_from_config(print_config, object_config, 10.1, {1}, Vec3d::Ones());
+    REQUIRE(legacy.valid);
+    REQUIRE_FALSE(legacy.cura_raft_mode);
+    REQUIRE(legacy.gap_raft_object == Approx(0.4));
+    REQUIRE(object_config.raft_airgap.value == Approx(0.27));
+
+    object_config.raft_mode.value = RaftMode::CuraV1;
+    const SlicingParameters cura_again =
+        SlicingParameters::create_from_config(print_config, object_config, 10.1, {1}, Vec3d::Ones());
+    REQUIRE(cura_again.valid);
+    REQUIRE(cura_again.cura_raft_mode);
+    REQUIRE(cura_again.gap_raft_object == Approx(0.27));
+}
+
+TEST_CASE("Cura V1 exposes surface tuning without promoting phase internals", "[SupportMaterial][Raft][CuraV1][ConfigMode]")
+{
+    for (const char *key : {"raft_surface_line_width", "raft_surface_line_spacing", "raft_surface_speed"}) {
+        const ConfigOptionDef *def = print_config_def.get(key);
+        CAPTURE(key);
+        REQUIRE(def != nullptr);
+        REQUIRE(def->mode == comAdvanced);
+    }
+
+    // Keep at least one representative phase-internal control behind Developer mode.
+    const ConfigOptionDef *base_line_width = print_config_def.get("raft_base_line_width");
+    REQUIRE(base_line_width != nullptr);
+    REQUIRE(base_line_width->mode == comDevelop);
+
+    for (const char *key : {"raft_base_layer_height", "raft_base_line_width", "raft_base_line_spacing",
+                            "raft_interface_layer_height", "raft_interface_line_width", "raft_interface_line_spacing",
+                            "raft_surface_layer_height", "raft_surface_line_width", "raft_surface_line_spacing"}) {
+        const ConfigOptionDef *def = print_config_def.get(key);
+        CAPTURE(key);
+        REQUIRE(def != nullptr);
+        REQUIRE(def->gui_type == ConfigOptionDef::GUIType::f_enum_open);
+        REQUIRE(def->enum_values == std::vector<std::string>{"0"});
+        REQUIRE(def->enum_labels.size() == 1);
+        REQUIRE(def->enum_labels.front() == "Auto");
+    }
+
+    for (const char *key : {"raft_airgap", "raft_layer_0_z_overlap", "raft_base_flow", "raft_base_speed",
+                            "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin", "raft_interface_flow",
+                            "raft_interface_speed", "raft_interface_fan_speed", "raft_interface_wall_count",
+                            "raft_interface_margin", "raft_surface_flow", "raft_surface_speed", "raft_surface_fan_speed",
+                            "raft_surface_wall_count", "raft_surface_margin", "raft_base_layers", "raft_interface_layers",
+                            "raft_surface_layers"}) {
+        const ConfigOptionDef *def = print_config_def.get(key);
+        CAPTURE(key);
+        REQUIRE(def != nullptr);
+        REQUIRE(def->gui_type != ConfigOptionDef::GUIType::f_enum_open);
+    }
+}
+
+TEST_CASE("Cura V1 resolves only phase geometry zero values as Auto", "[SupportMaterial][Raft][CuraV1][Auto]")
+{
+    PrintConfig print_config;
+    PrintObjectConfig object_config;
+    object_config.layer_height.value = 0.2;
+    object_config.line_width.value = 0.;
+    object_config.raft_base_layer_height.value = 0.;
+    object_config.raft_base_line_width.value = 0.;
+    object_config.raft_base_line_spacing.value = 0.;
+    object_config.raft_interface_layer_height.value = 0.;
+    object_config.raft_interface_line_width.value = 0.;
+    object_config.raft_interface_line_spacing.value = 0.;
+    object_config.raft_surface_layer_height.value = 0.;
+    object_config.raft_surface_line_width.value = 0.;
+    object_config.raft_surface_line_spacing.value = 0.;
+
+    const RaftPlanConfig automatic = resolve_cura_raft_plan_config(print_config, object_config, 0.4, 0.6);
+    REQUIRE(automatic.base_config.layer_height == Approx(0.3));
+    REQUIRE(automatic.base_config.line_width == Approx(0.6));
+    REQUIRE(automatic.base_config.line_spacing == Approx(1.5));
+    REQUIRE(automatic.interface_config.layer_height == Approx(0.45));
+    REQUIRE(automatic.interface_config.line_width == Approx(0.9));
+    REQUIRE(automatic.interface_config.line_spacing == Approx(2.25));
+    REQUIRE(automatic.surface_config.layer_height == Approx(0.2));
+    REQUIRE(automatic.surface_config.line_width == Approx(0.63));
+    REQUIRE(automatic.surface_config.line_spacing == Approx(0.63));
+
+    object_config.raft_base_layer_height.value = 0.21;
+    object_config.raft_base_line_width.value = 0.51;
+    object_config.raft_base_line_spacing.value = 1.21;
+    object_config.raft_interface_layer_height.value = 0.22;
+    object_config.raft_interface_line_width.value = 0.52;
+    object_config.raft_interface_line_spacing.value = 1.22;
+    object_config.raft_surface_layer_height.value = 0.23;
+    object_config.raft_surface_line_width.value = 0.53;
+    object_config.raft_surface_line_spacing.value = 0.54;
+
+    const RaftPlanConfig explicit_values = resolve_cura_raft_plan_config(print_config, object_config, 0.4, 0.6);
+    REQUIRE(explicit_values.base_config.layer_height == Approx(0.21));
+    REQUIRE(explicit_values.base_config.line_width == Approx(0.51));
+    REQUIRE(explicit_values.base_config.line_spacing == Approx(1.21));
+    REQUIRE(explicit_values.interface_config.layer_height == Approx(0.22));
+    REQUIRE(explicit_values.interface_config.line_width == Approx(0.52));
+    REQUIRE(explicit_values.interface_config.line_spacing == Approx(1.22));
+    REQUIRE(explicit_values.surface_config.layer_height == Approx(0.23));
+    REQUIRE(explicit_values.surface_config.line_width == Approx(0.53));
+    REQUIRE(explicit_values.surface_config.line_spacing == Approx(0.54));
+}

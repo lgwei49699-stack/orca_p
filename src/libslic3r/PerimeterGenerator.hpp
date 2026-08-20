@@ -7,6 +7,7 @@
 #include "Flow.hpp"
 #include "Polygon.hpp"
 #include "PrintConfig.hpp"
+#include "Slicing.hpp"
 #include "SurfaceCollection.hpp"
 
 #include <algorithm>
@@ -152,9 +153,8 @@ public:
     // restores model-layer semantics above its independently generated raft.
     int model_layer_id() const
     {
-        return object_config->raft_mode.value == RaftMode::CuraV1 ?
-                   layer_id - int(raft_layer_count()) :
-                   layer_id;
+        return int(SlicingParameters::model_layer_id(size_t(layer_id), object_config->raft_mode.value == RaftMode::CuraV1,
+                                                     raft_layer_count()));
     }
 
     bool is_first_model_layer() const { return model_layer_id() == 0; }

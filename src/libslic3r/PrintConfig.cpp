@@ -4210,7 +4210,7 @@ void PrintConfigDef::init_fff_params()
     def->set_default_value(new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
 
     auto add_cura_raft_float = [this](const char *key, const char *label, const char *tooltip, const char *unit, double min,
-                                      double max, double default_value, ConfigOptionMode mode) {
+                                      double max, double default_value, ConfigOptionMode mode) -> ConfigOptionDef * {
         ConfigOptionDef *raft_def = this->add(key, coFloat);
         raft_def->label = label;
         raft_def->category = L("Support");
@@ -4221,6 +4221,15 @@ void PrintConfigDef::init_fff_params()
         raft_def->max = max;
         raft_def->mode = mode;
         raft_def->set_default_value(new ConfigOptionFloat(default_value));
+        return raft_def;
+    };
+
+    auto add_cura_raft_auto_float = [&add_cura_raft_float](const char *key, const char *label, const char *tooltip, const char *unit,
+                                                           double min, double max, double default_value, ConfigOptionMode mode) {
+        ConfigOptionDef *raft_def = add_cura_raft_float(key, label, tooltip, unit, min, max, default_value, mode);
+        raft_def->gui_type = ConfigOptionDef::GUIType::f_enum_open;
+        raft_def->enum_values.emplace_back("0");
+        raft_def->enum_labels.emplace_back(L("Auto"));
     };
 
     auto add_cura_raft_int = [this](const char *key, const char *label, const char *tooltip, const char *unit, int min, int max,
@@ -4252,7 +4261,8 @@ void PrintConfigDef::init_fff_params()
 
     add_cura_raft_float("raft_airgap", L("Raft air gap"),
                         L("Exact Z gap between the final raft surface and the first model layer in Cura-style mode. "
-                          "It is not rounded to the normal layer height."),
+                          "It is not rounded to the normal layer height and is independent of the ordinary support Top Z distance. "
+                          "Use zero only with a compatible soluble or breakaway Surface material."),
                         "mm", 0.0, 10.0, 0.27, comAdvanced);
     add_cura_raft_float("raft_layer_0_z_overlap", L("Initial model layer Z overlap"),
                         L("Shift model layers above the first model layer down by this amount to compensate for material lost across the "
@@ -4277,15 +4287,16 @@ void PrintConfigDef::init_fff_params()
                           "lines."),
                         "°", 0.0, 360.0, 90.0, comDevelop);
 
-    add_cura_raft_float("raft_base_layer_height", L("Raft base layer height"),
-                        L("Layer height of the Base phase. Zero automatically derives it from the nozzle and initial-layer settings."),
-                        "mm", 0.0, 2.0, 0.0, comDevelop);
-    add_cura_raft_float("raft_base_line_width", L("Raft base line width"),
-                        L("Absolute extrusion width of Base lines. Zero automatically derives it from the active nozzle diameter."),
-                        "mm", 0.0, 10.0, 0.0, comDevelop);
-    add_cura_raft_float("raft_base_line_spacing", L("Raft base line spacing"),
-                        L("Center-to-center spacing of Base lines. Zero automatically derives it from the resolved Base line width."),
-                        "mm", 0.0, 100.0, 0.0, comDevelop);
+    add_cura_raft_auto_float("raft_base_layer_height", L("Raft base layer height"),
+                             L("Layer height of the Base phase. Auto uses the larger of the normal model layer height and 75% of the "
+                               "support/raft base nozzle diameter."),
+                             "mm", 0.0, 2.0, 0.0, comDevelop);
+    add_cura_raft_auto_float("raft_base_line_width", L("Raft base line width"),
+                             L("Absolute extrusion width of Base lines. Zero automatically derives it from the active nozzle diameter."),
+                             "mm", 0.0, 10.0, 0.0, comDevelop);
+    add_cura_raft_auto_float("raft_base_line_spacing", L("Raft base line spacing"),
+                             L("Center-to-center spacing of Base lines. Zero automatically derives it from the resolved Base line width."),
+                             "mm", 0.0, 100.0, 0.0, comDevelop);
     add_cura_raft_percent("raft_base_flow", L("Raft base flow"),
                           L("Material flow of the Base phase relative to the resolved extrusion flow."), 10.0, 200.0, 105.0, comDevelop);
     add_cura_raft_float("raft_base_speed", L("Raft base speed"), L("Print speed of the Base phase."), "mm/s", 0.1, 500.0, 10.0, comDevelop);
@@ -4296,16 +4307,18 @@ void PrintConfigDef::init_fff_params()
     add_cura_raft_float("raft_base_margin", L("Raft base margin"),
                         L("Additional XY margin around the model footprint for the Base phase."), "mm", 0.0, 100.0, 3.0, comDevelop);
 
-    add_cura_raft_float("raft_interface_layer_height", L("Raft interface layer height"),
-                        L("Layer height of the Interface phase. Zero automatically derives it from the nozzle and normal-layer settings."),
-                        "mm", 0.0, 2.0, 0.0, comDevelop);
-    add_cura_raft_float("raft_interface_line_width", L("Raft interface line width"),
-                        L("Absolute extrusion width of Interface lines. Zero automatically derives it from the active nozzle diameter."),
-                        "mm", 0.0, 10.0, 0.0, comDevelop);
-    add_cura_raft_float("raft_interface_line_spacing", L("Raft interface line spacing"),
-                        L("Center-to-center spacing of Interface lines. Zero automatically derives it from the resolved Interface line "
-                          "width."),
-                        "mm", 0.0, 100.0, 0.0, comDevelop);
+    add_cura_raft_auto_float("raft_interface_layer_height", L("Raft interface layer height"),
+                             L("Layer height of the Interface phase. Zero automatically derives it from the nozzle and normal-layer "
+                               "settings."),
+                             "mm", 0.0, 2.0, 0.0, comDevelop);
+    add_cura_raft_auto_float("raft_interface_line_width", L("Raft interface line width"),
+                             L("Absolute extrusion width of Interface lines. Zero automatically derives it from the active nozzle "
+                               "diameter."),
+                             "mm", 0.0, 10.0, 0.0, comDevelop);
+    add_cura_raft_auto_float("raft_interface_line_spacing", L("Raft interface line spacing"),
+                             L("Center-to-center spacing of Interface lines. Zero automatically derives it from the resolved Interface "
+                               "line width."),
+                             "mm", 0.0, 100.0, 0.0, comDevelop);
     add_cura_raft_percent("raft_interface_flow", L("Raft interface flow"),
                           L("Material flow of the Interface phase relative to the resolved extrusion flow."), 10.0, 200.0, 95.0,
                           comDevelop);
@@ -4318,20 +4331,22 @@ void PrintConfigDef::init_fff_params()
     add_cura_raft_float("raft_interface_margin", L("Raft interface margin"),
                         L("Additional XY margin around the model footprint for the Interface phase."), "mm", 0.0, 100.0, 1.0, comDevelop);
 
-    add_cura_raft_float("raft_surface_layer_height", L("Raft surface layer height"),
-                        L("Layer height of the dense Surface phase. Zero automatically derives it from the normal model layer height."),
-                        "mm", 0.0, 2.0, 0.0, comDevelop);
-    add_cura_raft_float("raft_surface_line_width", L("Raft surface line width"),
-                        L("Absolute extrusion width of Surface lines. Zero automatically derives it from the active nozzle diameter."),
-                        "mm", 0.0, 10.0, 0.0, comDevelop);
-    add_cura_raft_float("raft_surface_line_spacing", L("Raft surface line spacing"),
-                        L("Center-to-center spacing of Surface lines. Zero makes it equal to the resolved Surface line width for a solid "
-                          "top."),
-                        "mm", 0.0, 100.0, 0.0, comDevelop);
+    add_cura_raft_auto_float("raft_surface_layer_height", L("Raft surface layer height"),
+                             L("Layer height of the dense Surface phase. Zero automatically derives it from the normal model layer "
+                               "height."),
+                             "mm", 0.0, 2.0, 0.0, comDevelop);
+    add_cura_raft_auto_float("raft_surface_line_width", L("Raft surface line width"),
+                             L("Absolute extrusion width of Surface lines. Auto uses the resolved default line width; if that is also "
+                               "zero, it uses 105% of the support/raft interface nozzle diameter."),
+                             "mm", 0.0, 10.0, 0.0, comAdvanced);
+    add_cura_raft_auto_float("raft_surface_line_spacing", L("Raft surface line spacing"),
+                             L("Center-to-center spacing of Surface lines. Zero makes it equal to the resolved Surface line width for a "
+                               "solid top."),
+                             "mm", 0.0, 100.0, 0.0, comAdvanced);
     add_cura_raft_percent("raft_surface_flow", L("Raft surface flow"),
                           L("Material flow of the Surface phase relative to the resolved extrusion flow."), 10.0, 200.0, 100.0, comDevelop);
     add_cura_raft_float("raft_surface_speed", L("Raft surface speed"), L("Print speed of the Surface phase."), "mm/s", 0.1, 500.0, 60.0,
-                        comDevelop);
+                        comAdvanced);
     add_cura_raft_percent("raft_surface_fan_speed", L("Raft surface fan speed"),
                           L("Part-cooling fan speed during the Surface phase."), 0.0, 100.0, 0.0, comDevelop);
     add_cura_raft_int("raft_surface_wall_count", L("Raft surface wall count"),
@@ -5129,7 +5144,8 @@ void PrintConfigDef::init_fff_params()
     def->label = L("Top Z distance");
     def->min = 0;
     def->category = L("Support");
-    def->tooltip = L("The Z gap between the top support interface and object.");
+    def->tooltip = L("The Z gap between the top support interface and the object. Zero means direct contact and should only be used with "
+                     "a compatible soluble or breakaway support interface. This setting does not control the Cura-style raft air gap.");
     def->sidetext = "mm";	// milimeters, don't need translation
 //    def->min = 0;
 #if 0

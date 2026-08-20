@@ -61,8 +61,7 @@ coordf_t Slicing::max_layer_height_from_nozzle(const DynamicPrintConfig &print_c
 }
 
 RaftPlanConfig resolve_cura_raft_plan_config(const PrintConfig &print_config, const PrintObjectConfig &object_config,
-                                              coordf_t support_nozzle_diameter, coordf_t interface_nozzle_diameter,
-                                              bool soluble_interface)
+                                              coordf_t support_nozzle_diameter, coordf_t interface_nozzle_diameter)
 {
     const auto positive_or = [](double value, double fallback) { return value > EPSILON ? value : fallback; };
     const auto absolute_width_or = [](const ConfigOptionFloatOrPercent &option, double nozzle_diameter, double fallback) {
@@ -85,7 +84,7 @@ RaftPlanConfig resolve_cura_raft_plan_config(const PrintConfig &print_config, co
 
     RaftPlanConfig config;
     config.first_base_layer_height = base_height;
-    config.airgap = soluble_interface ? 0. : std::max(0., object_config.raft_airgap.value);
+    config.airgap = std::max(0., object_config.raft_airgap.value);
     // The overlap reduces the second model-layer Z step. Keep that step positive even for hand-edited configs.
     config.overlap = std::clamp(object_config.raft_layer_0_z_overlap.value, 0., std::max(0., layer_height - EPSILON));
     config.angle = object_config.raft_angle.value;
@@ -149,7 +148,7 @@ SlicingParameters SlicingParameters::create_from_config(
     const bool use_cura_raft = object_config.raft_mode.value == RaftMode::CuraV1;
     const RaftPhasePlan cura_raft_plan = use_cura_raft ?
         build_cura_raft_phase_plan(resolve_cura_raft_plan_config(print_config, object_config, support_material_extruder_dmr,
-                                                                  support_material_interface_extruder_dmr, soluble_interface)) :
+                                                                  support_material_interface_extruder_dmr)) :
         RaftPhasePlan();
 
     SlicingParameters params;
@@ -191,8 +190,12 @@ SlicingParameters SlicingParameters::create_from_config(
     params.min_layer_height = std::min(params.min_layer_height, params.layer_height);
     params.max_layer_height = std::max(params.max_layer_height, params.layer_height);
 
+    if (use_cura_raft)
+        params.gap_raft_object = cura_raft_plan.airgap;
+
     if (! soluble_interface) {
-        params.gap_raft_object    = use_cura_raft ? cura_raft_plan.airgap : object_config.raft_contact_distance.value;
+        if (!use_cura_raft)
+            params.gap_raft_object = object_config.raft_contact_distance.value;
         //BBS
         params.gap_object_support = object_config.support_bottom_z_distance.value; 
         params.gap_support_object = object_config.support_top_z_distance.value;

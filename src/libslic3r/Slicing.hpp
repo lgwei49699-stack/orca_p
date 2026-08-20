@@ -24,8 +24,7 @@ class ModelObject;
 class DynamicPrintConfig;
 
 RaftPlanConfig resolve_cura_raft_plan_config(const PrintConfig &print_config, const PrintObjectConfig &object_config,
-                                              coordf_t support_nozzle_diameter, coordf_t interface_nozzle_diameter,
-                                              bool soluble_interface);
+                                              coordf_t support_nozzle_diameter, coordf_t interface_nozzle_diameter);
 
 // Parameters to guide object slicing and support generation.
 // The slicing parameters account for a raft and whether the 1st object layer is printed with a normal or a bridging flow
@@ -46,6 +45,19 @@ struct SlicingParameters
     bool        has_raft() const { return raft_layers() > 0; }
     size_t      raft_layers() const { return base_raft_layers + interface_raft_layers; }
     size_t      interface_phase_raft_layers() const { return interface_raft_layers - surface_raft_layers; }
+
+    // Layer::id() includes the raft layer offset. Cura V1 keeps model
+    // features indexed from the first object layer, while Legacy preserves
+    // its historical raw layer numbering.
+    static size_t model_layer_id(size_t raw_layer_id, bool cura_raft_mode, size_t raft_layer_count)
+    {
+        return cura_raft_mode && raw_layer_id >= raft_layer_count ? raw_layer_id - raft_layer_count : raw_layer_id;
+    }
+
+    size_t model_layer_id(size_t raw_layer_id) const
+    {
+        return model_layer_id(raw_layer_id, cura_raft_mode, raft_layers());
+    }
 
     RaftPhase raft_phase(size_t layer_id) const
     {
@@ -149,7 +161,7 @@ struct SlicingParameters
     coordf_t    raft_phase_interface_top_z { 0 };
     coordf_t    raft_interface_top_z { 0 };
     coordf_t    raft_contact_top_z { 0 };
-    // In case of a soluble interface, object_print_z_min == raft_contact_top_z, otherwise there is a gap between the raft and the 1st object layer.
+    // Legacy soluble interfaces place the object directly on the raft. Cura V1 instead uses its explicit raft air gap.
     coordf_t 	object_print_z_min { 0 };
     // This value of maximum print Z is scaled by shrinkage compensation in the Z-axis.
     coordf_t 	object_print_z_max { 0 };

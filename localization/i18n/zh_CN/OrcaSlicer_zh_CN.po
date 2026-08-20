@@ -12762,6 +12762,338 @@ msgid ""
 msgstr ""
 "模型会在相应层数的支撑上抬高进行打印。使用该功能通常用于打印ABS时翘曲。"
 
+#: src/libslic3r/PrintConfig.cpp:4200
+msgid "Raft mode"
+msgstr "筏层模式"
+
+#: src/libslic3r/PrintConfig.cpp:4202
+msgid ""
+"Select the raft implementation. Legacy preserves the existing OrcaSlicer "
+"raft behavior and settings. Cura-style v1 is a new opt-in mode that uses the "
+"independent Base, Interface, and Surface settings below."
+msgstr ""
+"选择筏层实现方式。传统模式保留 OrcaSlicer 现有的筏层行为和设置。Cura 风格 v1 是"
+"一种新的可选模式，使用下方相互独立的基底、过渡和表面阶段设置。"
+
+#: src/libslic3r/PrintConfig.cpp:4207
+msgid "Legacy"
+msgstr "传统模式"
+
+#: src/libslic3r/PrintConfig.cpp:4208
+msgid "Cura-style v1 (new)"
+msgstr "Cura 风格 v1（新增）"
+
+#: src/slic3r/GUI/Tab.cpp:3069
+msgid "Raft common"
+msgstr "筏层通用设置"
+
+#: src/slic3r/GUI/Tab.cpp:3078
+msgid "Raft base"
+msgstr "筏层基底阶段"
+
+#: src/slic3r/GUI/Tab.cpp:3089
+msgid "Raft interface"
+msgstr "筏层过渡阶段"
+
+#: src/slic3r/GUI/Tab.cpp:3100
+msgid "Raft surface"
+msgstr "筏层表面阶段"
+
+#: src/slic3r/GUI/Tab.cpp
+msgid "Resolved:"
+msgstr "解析值："
+
+#: src/libslic3r/PrintConfig.cpp:4262
+msgid "Raft air gap"
+msgstr "筏层气隙"
+
+#: src/libslic3r/PrintConfig.cpp:4263
+msgid ""
+"Exact Z gap between the final raft surface and the first model layer in Cura-"
+"style mode. It is not rounded to the normal layer height and is independent "
+"of the ordinary support Top Z distance. Use zero only with a compatible "
+"soluble or breakaway Surface material."
+msgstr ""
+"Cura 风格模式下，最终筏层表面与模型首层之间的精确 Z 间隙。该值不会按常规层高"
+"取整，并且与普通支撑的顶部 Z 间距相互独立。仅在使用兼容的可溶性或易剥离表面阶"
+"段材料时才将其设为零。"
+
+#: src/libslic3r/PrintConfig.cpp:4267
+msgid "Initial model layer Z overlap"
+msgstr "模型首层 Z 重叠量"
+
+#: src/libslic3r/PrintConfig.cpp:4268
+msgid ""
+"Shift model layers above the first model layer down by this amount to "
+"compensate for material lost across the raft air gap."
+msgstr "将模型首层之上的各层向下移动此距离，以补偿材料跨越筏层气隙时的损失。"
+
+#: src/libslic3r/PrintConfig.cpp:4272
+msgid "Raft base layers"
+msgstr "筏层基底层数"
+
+#: src/libslic3r/PrintConfig.cpp:4273
+msgid ""
+"Number of build-plate-facing Base layers in Cura-style mode. At least one "
+"Base layer is required."
+msgstr "Cura 风格模式中靠近构建板的基底阶段层数。基底阶段至少需要一层。"
+
+#: src/libslic3r/PrintConfig.cpp:4275
+msgid "Raft interface layers"
+msgstr "筏层过渡层数"
+
+#: src/libslic3r/PrintConfig.cpp:4276
+msgid ""
+"Number of transitional Interface layers between the Base and Surface phases "
+"in Cura-style mode."
+msgstr "Cura 风格模式中位于基底阶段与表面阶段之间的过渡阶段层数。"
+
+#: src/libslic3r/PrintConfig.cpp:4278
+msgid "Raft surface layers"
+msgstr "筏层表面层数"
+
+#: src/libslic3r/PrintConfig.cpp:4279
+msgid ""
+"Number of dense Surface layers directly below the model in Cura-style mode. "
+"At least one Surface layer is required."
+msgstr "Cura 风格模式中模型正下方的致密表面阶段层数。表面阶段至少需要一层。"
+
+#: src/libslic3r/PrintConfig.cpp:4283
+msgid "Raft pattern angle"
+msgstr "筏层图案角度"
+
+#: src/libslic3r/PrintConfig.cpp:4284
+msgid "Pattern angle of the first Cura-style raft layer on the horizontal plane."
+msgstr "第一层 Cura 风格筏层图案在水平面内的角度。"
+
+#: src/libslic3r/PrintConfig.cpp:4285
+msgid "Raft angle increment"
+msgstr "筏层角度增量"
+
+#: src/libslic3r/PrintConfig.cpp:4286
+msgid ""
+"Rotation added for each subsequent Cura-style raft layer. A value of 90 "
+"degrees alternates 45 and 135 degree lines."
+msgstr "每增加一层 Cura 风格筏层时叠加的旋转角度。设为 90 度时，线条会在 45 度与 135 度之间交替。"
+
+#: src/libslic3r/PrintConfig.cpp:4290
+msgid "Raft base layer height"
+msgstr "筏层基底层高"
+
+#: src/libslic3r/PrintConfig.cpp:4291
+msgid ""
+"Layer height of the Base phase. Auto uses the larger of the normal model "
+"layer height and 75% of the support/raft base nozzle diameter."
+msgstr "基底阶段的层高。自动模式取常规模型层高与支撑/筏层基底喷嘴直径的 75% 中的较大值。"
+
+#: src/libslic3r/PrintConfig.cpp:4294
+msgid "Raft base line width"
+msgstr "筏层基底线宽"
+
+#: src/libslic3r/PrintConfig.cpp:4295
+msgid ""
+"Absolute extrusion width of Base lines. Zero automatically derives it from "
+"the active nozzle diameter."
+msgstr "基底线条的绝对挤出线宽。设为零时，根据当前喷嘴直径自动计算。"
+
+#: src/libslic3r/PrintConfig.cpp:4297
+msgid "Raft base line spacing"
+msgstr "筏层基底线间距"
+
+#: src/libslic3r/PrintConfig.cpp:4298
+msgid ""
+"Center-to-center spacing of Base lines. Zero automatically derives it from "
+"the resolved Base line width."
+msgstr "基底线条之间的中心距。设为零时，根据解析后的基底线宽自动计算。"
+
+#: src/libslic3r/PrintConfig.cpp:4300
+msgid "Raft base flow"
+msgstr "筏层基底流量"
+
+#: src/libslic3r/PrintConfig.cpp:4301
+msgid "Material flow of the Base phase relative to the resolved extrusion flow."
+msgstr "基底阶段的材料流量相对于解析后挤出流量的比例。"
+
+#: src/libslic3r/PrintConfig.cpp:4302
+msgid "Raft base speed"
+msgstr "筏层基底速度"
+
+#: src/libslic3r/PrintConfig.cpp:4302
+msgid "Print speed of the Base phase."
+msgstr "基底阶段的打印速度。"
+
+#: src/libslic3r/PrintConfig.cpp:4303
+msgid "Raft base fan speed"
+msgstr "筏层基底风扇速度"
+
+#: src/libslic3r/PrintConfig.cpp:4304
+msgid "Part-cooling fan speed during the Base phase."
+msgstr "基底阶段的部件冷却风扇速度。"
+
+#: src/libslic3r/PrintConfig.cpp:4305
+msgid "Raft base wall count"
+msgstr "筏层基底墙层数"
+
+#: src/libslic3r/PrintConfig.cpp:4306
+msgid "Number of contours around the linear Base pattern."
+msgstr "线性基底图案外围的轮廓层数。"
+
+#: src/libslic3r/PrintConfig.cpp:4306 src/libslic3r/PrintConfig.cpp:4330
+#: src/libslic3r/PrintConfig.cpp:4353
+msgid "walls"
+msgstr "墙层"
+
+#: src/libslic3r/PrintConfig.cpp:4307
+msgid "Raft base margin"
+msgstr "筏层基底外扩量"
+
+#: src/libslic3r/PrintConfig.cpp:4308
+msgid "Additional XY margin around the model footprint for the Base phase."
+msgstr "基底阶段在模型投影轮廓周围增加的 XY 外扩距离。"
+
+#: src/libslic3r/PrintConfig.cpp:4310
+msgid "Raft interface layer height"
+msgstr "筏层过渡层高"
+
+#: src/libslic3r/PrintConfig.cpp:4311
+msgid ""
+"Layer height of the Interface phase. Zero automatically derives it from the "
+"nozzle and normal-layer settings."
+msgstr "过渡阶段的层高。设为零时，根据喷嘴和常规层高设置自动计算。"
+
+#: src/libslic3r/PrintConfig.cpp:4314
+msgid "Raft interface line width"
+msgstr "筏层过渡线宽"
+
+#: src/libslic3r/PrintConfig.cpp:4315
+msgid ""
+"Absolute extrusion width of Interface lines. Zero automatically derives it "
+"from the active nozzle diameter."
+msgstr "过渡线条的绝对挤出线宽。设为零时，根据当前喷嘴直径自动计算。"
+
+#: src/libslic3r/PrintConfig.cpp:4318
+msgid "Raft interface line spacing"
+msgstr "筏层过渡线间距"
+
+#: src/libslic3r/PrintConfig.cpp:4319
+msgid ""
+"Center-to-center spacing of Interface lines. Zero automatically derives it "
+"from the resolved Interface line width."
+msgstr "过渡线条之间的中心距。设为零时，根据解析后的过渡线宽自动计算。"
+
+#: src/libslic3r/PrintConfig.cpp:4322
+msgid "Raft interface flow"
+msgstr "筏层过渡流量"
+
+#: src/libslic3r/PrintConfig.cpp:4323
+msgid "Material flow of the Interface phase relative to the resolved extrusion flow."
+msgstr "过渡阶段的材料流量相对于解析后挤出流量的比例。"
+
+#: src/libslic3r/PrintConfig.cpp:4325
+msgid "Raft interface speed"
+msgstr "筏层过渡速度"
+
+#: src/libslic3r/PrintConfig.cpp:4325
+msgid "Print speed of the Interface phase."
+msgstr "过渡阶段的打印速度。"
+
+#: src/libslic3r/PrintConfig.cpp:4327
+msgid "Raft interface fan speed"
+msgstr "筏层过渡风扇速度"
+
+#: src/libslic3r/PrintConfig.cpp:4328
+msgid "Part-cooling fan speed during the Interface phase."
+msgstr "过渡阶段的部件冷却风扇速度。"
+
+#: src/libslic3r/PrintConfig.cpp:4329
+msgid "Raft interface wall count"
+msgstr "筏层过渡墙层数"
+
+#: src/libslic3r/PrintConfig.cpp:4330
+msgid "Number of contours around the linear Interface pattern."
+msgstr "线性过渡图案外围的轮廓层数。"
+
+#: src/libslic3r/PrintConfig.cpp:4331
+msgid "Raft interface margin"
+msgstr "筏层过渡外扩量"
+
+#: src/libslic3r/PrintConfig.cpp:4332
+msgid "Additional XY margin around the model footprint for the Interface phase."
+msgstr "过渡阶段在模型投影轮廓周围增加的 XY 外扩距离。"
+
+#: src/libslic3r/PrintConfig.cpp:4334
+msgid "Raft surface layer height"
+msgstr "筏层表面层高"
+
+#: src/libslic3r/PrintConfig.cpp:4335
+msgid ""
+"Layer height of the dense Surface phase. Zero automatically derives it from "
+"the normal model layer height."
+msgstr "致密表面阶段的层高。设为零时，根据常规模型层高自动计算。"
+
+#: src/libslic3r/PrintConfig.cpp:4338
+msgid "Raft surface line width"
+msgstr "筏层表面线宽"
+
+#: src/libslic3r/PrintConfig.cpp:4339
+msgid ""
+"Absolute extrusion width of Surface lines. Auto uses the resolved default "
+"line width; if that is also zero, it uses 105% of the support/raft interface "
+"nozzle diameter."
+msgstr ""
+"表面线条的绝对挤出线宽。自动模式使用解析后的默认线宽；如果默认线宽也为零，则使"
+"用支撑/筏层过渡阶段所用喷嘴直径的 105%。"
+
+#: src/libslic3r/PrintConfig.cpp:4342
+msgid "Raft surface line spacing"
+msgstr "筏层表面线间距"
+
+#: src/libslic3r/PrintConfig.cpp:4343
+msgid ""
+"Center-to-center spacing of Surface lines. Zero makes it equal to the "
+"resolved Surface line width for a solid top."
+msgstr "表面线条之间的中心距。设为零时，该值等于解析后的表面线宽，以形成实心顶面。"
+
+#: src/libslic3r/PrintConfig.cpp:4346
+msgid "Raft surface flow"
+msgstr "筏层表面流量"
+
+#: src/libslic3r/PrintConfig.cpp:4347
+msgid "Material flow of the Surface phase relative to the resolved extrusion flow."
+msgstr "表面阶段的材料流量相对于解析后挤出流量的比例。"
+
+#: src/libslic3r/PrintConfig.cpp:4348
+msgid "Raft surface speed"
+msgstr "筏层表面速度"
+
+#: src/libslic3r/PrintConfig.cpp:4348
+msgid "Print speed of the Surface phase."
+msgstr "表面阶段的打印速度。"
+
+#: src/libslic3r/PrintConfig.cpp:4350
+msgid "Raft surface fan speed"
+msgstr "筏层表面风扇速度"
+
+#: src/libslic3r/PrintConfig.cpp:4351
+msgid "Part-cooling fan speed during the Surface phase."
+msgstr "表面阶段的部件冷却风扇速度。"
+
+#: src/libslic3r/PrintConfig.cpp:4352
+msgid "Raft surface wall count"
+msgstr "筏层表面墙层数"
+
+#: src/libslic3r/PrintConfig.cpp:4353
+msgid "Number of contours around the dense Surface pattern."
+msgstr "致密表面图案外围的轮廓层数。"
+
+#: src/libslic3r/PrintConfig.cpp:4354
+msgid "Raft surface margin"
+msgstr "筏层表面外扩量"
+
+#: src/libslic3r/PrintConfig.cpp:4355
+msgid "Additional XY margin around the model footprint for the Surface phase."
+msgstr "表面阶段在模型投影轮廓周围增加的 XY 外扩距离。"
+
 msgid ""
 "The G-code path is generated after simplifying the contour of models to "
 "avoid too many points and G-code lines. Smaller value means higher "

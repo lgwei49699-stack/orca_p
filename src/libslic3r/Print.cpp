@@ -1054,7 +1054,6 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
 {
     std::vector<unsigned int> extruders = this->extruders();
     unsigned int nozzles = m_config.nozzle_diameter.size();
-
     if (m_objects.empty())
         return {std::string()};
 
@@ -1376,7 +1375,7 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
             return validate_extrusion_width_for_nozzles(
                 config, opt_key, layer_height, min_nozzle_diameter, max_nozzle_diameter, err_msg);
         };
-        auto model_nozzle_range = [this, min_nozzle_diameter, max_nozzle_diameter](const PrintObject &object) {
+        auto model_extruders_for_object = [this](const PrintObject &object) {
             std::vector<unsigned int> model_extruders;
             for (const PrintRegion &region : object.all_regions())
                 region.collect_object_printing_extruders(*this, model_extruders);
@@ -1394,6 +1393,11 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                 }
             }
             sort_remove_duplicates(model_extruders);
+            return model_extruders;
+        };
+        auto model_nozzle_range = [this, min_nozzle_diameter, max_nozzle_diameter,
+                                   &model_extruders_for_object](const PrintObject &object) {
+            const std::vector<unsigned int> model_extruders = model_extruders_for_object(object);
             if (model_extruders.empty())
                 return std::make_pair(min_nozzle_diameter, max_nozzle_diameter);
 
@@ -1516,7 +1520,7 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                 const coordf_t interface_nozzle =
                     m_config.nozzle_diameter.get_at(object->config().support_interface_filament.value - 1);
                 const RaftPhasePlan raft_plan = build_cura_raft_phase_plan(resolve_cura_raft_plan_config(
-                    m_config, object->config(), support_nozzle, interface_nozzle, object->config().support_top_z_distance.value == 0.));
+                    m_config, object->config(), support_nozzle, interface_nozzle));
                 for (const RaftPhaseLayer &raft_layer : raft_plan.layers) {
                     const bool base_phase = raft_layer.phase == RaftPhase::Base;
                     const coordf_t nozzle = base_phase ? support_nozzle : interface_nozzle;

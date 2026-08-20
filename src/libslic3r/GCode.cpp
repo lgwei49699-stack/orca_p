@@ -3805,9 +3805,7 @@ LayerResult GCode::process_layer(
             if (! object_layer)
                 object_layer = l.object_layer;
             const SlicingParameters &slicing_params = l.object_layer->object()->slicing_parameters();
-            size_t local_layer_id = l.object_layer->id();
-            if (slicing_params.cura_raft_mode && local_layer_id >= slicing_params.raft_layers())
-                local_layer_id -= slicing_params.raft_layers();
+            const size_t local_layer_id = slicing_params.model_layer_id(l.object_layer->id());
             // Multiple objects may contribute to the same physical print Z.
             // The minimum local id conservatively keeps every material's early
             // model-layer fan restriction active and is independent of order.
@@ -4896,7 +4894,7 @@ std::string GCode::extrude_loop(ExtrusionLoop loop, std::string description, dou
     bool enable_seam_slope = ((seam_scarf_type == SeamScarfType::External && !is_hole) || seam_scarf_type == SeamScarfType::All) &&
         !m_config.spiral_mode &&
         (loop.role() == erExternalPerimeter || (loop.role() == erPerimeter && m_config.seam_slope_inner_walls)) &&
-        layer_id() > 0;
+        m_layer != nullptr && m_layer->object()->slicing_parameters().model_layer_id(m_layer->id()) > 0;
     const auto nozzle_diameter = EXTRUDER_CONFIG(nozzle_diameter);
     if (enable_seam_slope && m_config.seam_slope_conditional.value) {
         enable_seam_slope = loop.is_smooth(m_config.scarf_angle_threshold.value * M_PI / 180., nozzle_diameter);
@@ -5617,8 +5615,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     }
     else if (!on_cura_raft_layer && m_config.slow_down_layers > 1) {
         int motion_layer_id = layer_id();
-        if (m_config.raft_mode.value == RaftMode::CuraV1 && current_support_layer == nullptr && m_layer != nullptr)
-            motion_layer_id -= int(m_layer->object()->slicing_parameters().raft_layers());
+        if (current_support_layer == nullptr && m_layer != nullptr)
+            motion_layer_id = int(m_layer->object()->slicing_parameters().model_layer_id(m_layer->id()));
         if (motion_layer_id > 0 && motion_layer_id < m_config.slow_down_layers) {
             const auto first_layer_speed =
                 is_perimeter(path.role())

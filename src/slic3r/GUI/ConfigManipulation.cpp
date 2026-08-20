@@ -739,28 +739,48 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     toggle_field("support_filament", have_support_material || have_skirt);
 
     // Legacy and Cura-style raft settings intentionally have disjoint consumers.
-    // Keep the mode and layer-count controls editable so a disabled raft can be enabled again.
+    // Only show the settings for the selected mode, while preserving the hidden values
+    // so switching modes restores the user's previous tuning.
     toggle_field("raft_layers", !use_cura_raft);
+    toggle_line("raft_layers", !use_cura_raft);
     toggle_line("raft_contact_distance", !use_cura_raft && have_legacy_raft && !have_support_soluble);
 
-    for (const char *key : {"raft_base_layers", "raft_interface_layers", "raft_surface_layers"})
+    for (const char *key : {"raft_base_layers", "raft_interface_layers", "raft_surface_layers"}) {
+        toggle_line(key, use_cura_raft);
         toggle_field(key, use_cura_raft);
+    }
 
-    for (const char *key : {"raft_airgap", "raft_layer_0_z_overlap", "raft_angle", "raft_angle_increment"})
+    // Cura-style raft contact is independent of the ordinary support Top Z distance.
+    toggle_line("raft_airgap", use_cura_raft);
+    toggle_field("raft_airgap", have_cura_raft);
+
+    // Top Z remains meaningful for ordinary support and for the legacy raft's
+    // soluble-interface convention, but not for a Cura-style raft by itself.
+    toggle_field("support_top_z_distance", config->opt_bool("enable_support") || (!use_cura_raft && have_legacy_raft));
+
+    for (const char *key : {"raft_layer_0_z_overlap", "raft_angle", "raft_angle_increment"}) {
+        toggle_line(key, use_cura_raft);
         toggle_field(key, have_cura_raft);
+    }
 
     for (const char *key : {"raft_base_layer_height", "raft_base_line_width", "raft_base_line_spacing", "raft_base_flow", "raft_base_speed",
-                            "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin"})
+                            "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin"}) {
+        toggle_line(key, use_cura_raft);
         toggle_field(key, have_cura_raft && cura_raft_base_layers > 0);
+    }
 
     for (const char *key : {"raft_interface_layer_height", "raft_interface_line_width", "raft_interface_line_spacing",
                             "raft_interface_flow", "raft_interface_speed", "raft_interface_fan_speed", "raft_interface_wall_count",
-                            "raft_interface_margin"})
+                            "raft_interface_margin"}) {
+        toggle_line(key, use_cura_raft);
         toggle_field(key, have_cura_raft && cura_raft_interface_layers > 0);
+    }
 
     for (const char *key : {"raft_surface_layer_height", "raft_surface_line_width", "raft_surface_line_spacing", "raft_surface_flow",
-                            "raft_surface_speed", "raft_surface_fan_speed", "raft_surface_wall_count", "raft_surface_margin"})
+                            "raft_surface_speed", "raft_surface_fan_speed", "raft_surface_wall_count", "raft_surface_margin"}) {
+        toggle_line(key, use_cura_raft);
         toggle_field(key, have_cura_raft && cura_raft_surface_layers > 0);
+    }
 
     // Orca: Raft, grid, snug and organic supports use these two parameters to control the size & density of the "brim"/flange
     const bool have_legacy_raft_or_support = config->opt_bool("enable_support") || (!use_cura_raft && have_legacy_raft);
