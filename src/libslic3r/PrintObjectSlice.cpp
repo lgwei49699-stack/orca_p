@@ -2,6 +2,8 @@
 
 #include <tbb/parallel_for.h>
 
+#include <algorithm>
+
 #include "ClipperUtils.hpp"
 #include "ElephantFootCompensation.hpp"
 #include "I18N.hpp"
@@ -29,12 +31,24 @@ LayerPtrs new_layers(
     out.reserve(object_layers.size());
     auto     id   = int(print_object->slicing_parameters().raft_layers());
     coordf_t zmin = print_object->slicing_parameters().object_print_z_min;
+    coordf_t layer_0_z_overlap = print_object->slicing_parameters().raft_layer_0_z_overlap;
+    if (object_layers.size() >= 4) {
+        // A height range or adaptive profile may make the second model layer
+        // thinner than the nominal layer height used by the resolver. Keep the
+        // first-to-second physical Z step printable instead of merely positive.
+        const coordf_t second_layer_height = object_layers[3] - object_layers[2];
+        const coordf_t minimum_z_step = std::min(second_layer_height, print_object->slicing_parameters().min_layer_height);
+        layer_0_z_overlap = std::min(layer_0_z_overlap, std::max(0., second_layer_height - minimum_z_step));
+    }
     Layer   *prev = nullptr;
     for (size_t i_layer = 0; i_layer < object_layers.size(); i_layer += 2) {
         coordf_t lo = object_layers[i_layer];
         coordf_t hi = object_layers[i_layer + 1];
         coordf_t slice_z = 0.5 * (lo + hi);
-        Layer *layer = new Layer(id ++, print_object, hi - lo, hi + zmin, slice_z);
+        // Cura V1 keeps the first model layer at the configured airgap, then lowers
+        // all following model layers by the explicit overlap to recover bottom quality.
+        const coordf_t z_overlap = i_layer == 0 ? 0. : layer_0_z_overlap;
+        Layer *layer = new Layer(id ++, print_object, hi - lo, hi + zmin - z_overlap, slice_z);
         out.emplace_back(layer);
         if (prev != nullptr) {
             prev->upper_layer = layer;
@@ -1227,7 +1241,7 @@ void PrintObject::slice_volumes()
         const size_t num_extruders = print->config().filament_diameter.size();
         const auto   xy_hole_scaled = (num_extruders > 1 && this->is_mm_painted()) ? scaled<float>(0.f) : scaled<float>(m_config.xy_hole_compensation.value);
         const auto   xy_contour_scaled            = (num_extruders > 1 && this->is_mm_painted()) ? scaled<float>(0.f) : scaled<float>(m_config.xy_contour_compensation.value);
-        const float  elephant_foot_compensation_scaled = (m_config.raft_layers == 0) ?
+        const float  elephant_foot_compensation_scaled = !this->has_raft() ?
         	// Only enable Elephant foot compensation if printing directly on the print bed.
             float(scale_(m_config.elefant_foot_compensation.value)) :
         	0.f;

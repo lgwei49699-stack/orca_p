@@ -323,23 +323,31 @@ public:
     
         if (slicing_params.raft_layers() > 0) {
             // Fill in raft_layers with the heights of the layers below the first object layer.
-            // First layer
-            double z = slicing_params.first_print_layer_height;
-            this->raft_layers.emplace_back(z);
-            // Raft base layers
-            for (size_t i = 1; i < slicing_params.base_raft_layers; ++ i) {
-                z += slicing_params.base_raft_layer_height;
+            double z = 0.;
+            if (slicing_params.cura_raft_mode) {
+                for (size_t raft_layer_id = 0; raft_layer_id < slicing_params.raft_layers(); ++ raft_layer_id) {
+                    z = slicing_params.raft_layer_print_z(raft_layer_id);
+                    this->raft_layers.emplace_back(z);
+                }
+            } else {
+                // First layer
+                z = slicing_params.first_print_layer_height;
                 this->raft_layers.emplace_back(z);
-            }
-            // Raft interface layers
-            for (size_t i = 0; i + 1 < slicing_params.interface_raft_layers; ++ i) {
-                z += slicing_params.interface_raft_layer_height;
-                this->raft_layers.emplace_back(z);
-            }
-            // Raft contact layer
-            if (slicing_params.raft_layers() > 1) {
-                z = slicing_params.raft_contact_top_z;
-                this->raft_layers.emplace_back(z);
+                // Raft base layers
+                for (size_t i = 1; i < slicing_params.base_raft_layers; ++ i) {
+                    z += slicing_params.base_raft_layer_height;
+                    this->raft_layers.emplace_back(z);
+                }
+                // Raft interface layers
+                for (size_t i = 0; i + 1 < slicing_params.interface_raft_layers; ++ i) {
+                    z += slicing_params.interface_raft_layer_height;
+                    this->raft_layers.emplace_back(z);
+                }
+                // Raft contact layer
+                if (slicing_params.raft_layers() > 1) {
+                    z = slicing_params.raft_contact_top_z;
+                    this->raft_layers.emplace_back(z);
+                }
             }
             if (double dist_to_go = slicing_params.object_print_z_min - z; dist_to_go > EPSILON) {
                 // Layers between the raft contacts and bottom of the object.

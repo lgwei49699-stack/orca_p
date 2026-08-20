@@ -3428,6 +3428,13 @@ Plater::priv::priv(Plater* q, MainFrame* main_frame)
            "layer_height", "initial_layer_print_height", "min_layer_height", "max_layer_height", "brim_width", "wall_loops",
            "wall_filament", "sparse_infill_density", "sparse_infill_filament", "top_shell_layers", "enable_support", "support_filament",
            "support_interface_filament", "support_top_z_distance", "support_bottom_z_distance", "raft_layers", "wipe_tower_rotation_angle",
+           "raft_mode", "raft_airgap", "raft_layer_0_z_overlap", "raft_base_layers", "raft_interface_layers", "raft_surface_layers",
+           "raft_angle", "raft_angle_increment", "raft_base_layer_height", "raft_base_line_width", "raft_base_line_spacing",
+           "raft_base_flow", "raft_base_speed", "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin",
+           "raft_interface_layer_height", "raft_interface_line_width", "raft_interface_line_spacing", "raft_interface_flow",
+           "raft_interface_speed", "raft_interface_fan_speed", "raft_interface_wall_count", "raft_interface_margin",
+           "raft_surface_layer_height", "raft_surface_line_width", "raft_surface_line_spacing", "raft_surface_flow", "raft_surface_speed",
+           "raft_surface_fan_speed", "raft_surface_wall_count", "raft_surface_margin",
            "wipe_tower_cone_angle", "wipe_tower_extra_spacing", "wipe_tower_extra_flow", "wipe_tower_max_purge_speed",
            "wipe_tower_wall_type", "wipe_tower_extra_rib_length", "wipe_tower_rib_width", "wipe_tower_fillet_wall", "wipe_tower_filament",
            "best_object_pos"}))

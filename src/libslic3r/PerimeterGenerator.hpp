@@ -9,6 +9,8 @@
 #include "PrintConfig.hpp"
 #include "SurfaceCollection.hpp"
 
+#include <algorithm>
+
 namespace Slic3r {
 struct FuzzySkinConfig
 {
@@ -135,6 +137,27 @@ public:
     //BBS
     double      smaller_width_ext_mm3_per_mm()   const { return m_ext_mm3_per_mm_smaller_width; }
     Polygons    lower_slices_polygons() const { return m_lower_slices_polygons; }
+
+    size_t raft_layer_count() const
+    {
+        if (object_config->raft_mode.value == RaftMode::CuraV1) {
+            return size_t(std::max(0, object_config->raft_base_layers.value)) +
+                   size_t(std::max(0, object_config->raft_interface_layers.value)) +
+                   size_t(std::max(0, object_config->raft_surface_layers.value));
+        }
+        return size_t(std::max(0, object_config->raft_layers.value));
+    }
+
+    // Preserve Legacy's historical raw layer numbering. Cura V1 explicitly
+    // restores model-layer semantics above its independently generated raft.
+    int model_layer_id() const
+    {
+        return object_config->raft_mode.value == RaftMode::CuraV1 ?
+                   layer_id - int(raft_layer_count()) :
+                   layer_id;
+    }
+
+    bool is_first_model_layer() const { return model_layer_id() == 0; }
 
 private:
     std::vector<Polygons>     generate_lower_polygons_series(float width);

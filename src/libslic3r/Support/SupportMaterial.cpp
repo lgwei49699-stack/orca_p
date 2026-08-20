@@ -1587,7 +1587,10 @@ static inline std::tuple<Polygons, Polygons, double> detect_contacts(
     if (layer_id == 0)
     {
         // Expand for better stability.
-        contact_polygons = object_config.raft_expansion.value > 0 ? expand(overhang_polygons, scaled<float>(object_config.raft_expansion.value)) : overhang_polygons;
+        const double raft_contact_expansion = object_config.raft_mode.value == RaftMode::CuraV1 ?
+            object_config.raft_surface_margin.value : object_config.raft_expansion.value;
+        contact_polygons = raft_contact_expansion > 0 ?
+            expand(overhang_polygons, scaled<float>(raft_contact_expansion)) : overhang_polygons;
     }
     else if (!layer.regions().empty())
     {

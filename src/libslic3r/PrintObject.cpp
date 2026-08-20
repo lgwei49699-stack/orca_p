@@ -685,7 +685,7 @@ void PrintObject::estimate_curled_extrusions()
             float support_flow_width = support_material_flow(this, this->config().layer_height).width();
             SupportSpotsGenerator::Params params{this->print()->m_config.filament_type.values,
                                                  float(this->print()->default_object_config().inner_wall_acceleration.getFloat()),
-                                                 this->config().raft_layers.getInt(), this->config().brim_type.value,
+                                                 int(this->slicing_parameters().raft_layers()), this->config().brim_type.value,
                                                  float(this->config().brim_width.getFloat())};
             SupportSpotsGenerator::estimate_malformations(this->layers(), params);
             m_print->throw_if_canceled();
@@ -950,6 +950,38 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "mmu_segmented_region_interlocking_depth"
             || opt_key == "raft_layers"
             || opt_key == "raft_contact_distance"
+            || opt_key == "raft_mode"
+            || opt_key == "raft_airgap"
+            || opt_key == "raft_layer_0_z_overlap"
+            || opt_key == "raft_base_layers"
+            || opt_key == "raft_interface_layers"
+            || opt_key == "raft_surface_layers"
+            || opt_key == "raft_angle"
+            || opt_key == "raft_angle_increment"
+            || opt_key == "raft_base_layer_height"
+            || opt_key == "raft_base_line_width"
+            || opt_key == "raft_base_line_spacing"
+            || opt_key == "raft_base_flow"
+            || opt_key == "raft_base_speed"
+            || opt_key == "raft_base_fan_speed"
+            || opt_key == "raft_base_wall_count"
+            || opt_key == "raft_base_margin"
+            || opt_key == "raft_interface_layer_height"
+            || opt_key == "raft_interface_line_width"
+            || opt_key == "raft_interface_line_spacing"
+            || opt_key == "raft_interface_flow"
+            || opt_key == "raft_interface_speed"
+            || opt_key == "raft_interface_fan_speed"
+            || opt_key == "raft_interface_wall_count"
+            || opt_key == "raft_interface_margin"
+            || opt_key == "raft_surface_layer_height"
+            || opt_key == "raft_surface_line_width"
+            || opt_key == "raft_surface_line_spacing"
+            || opt_key == "raft_surface_flow"
+            || opt_key == "raft_surface_speed"
+            || opt_key == "raft_surface_fan_speed"
+            || opt_key == "raft_surface_wall_count"
+            || opt_key == "raft_surface_margin"
             || opt_key == "slice_closing_radius"
             || opt_key == "slicing_mode"
             || opt_key == "slowdown_for_curled_perimeters"

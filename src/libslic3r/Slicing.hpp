@@ -12,6 +12,7 @@
 #include "libslic3r.h"
 #include "Utils.hpp"
 #include "Point.hpp"
+#include "Support/RaftPlan.hpp"
 
 namespace Slic3r
 {
@@ -21,6 +22,10 @@ class PrintObjectConfig;
 class ModelConfig;
 class ModelObject;
 class DynamicPrintConfig;
+
+RaftPlanConfig resolve_cura_raft_plan_config(const PrintConfig &print_config, const PrintObjectConfig &object_config,
+                                              coordf_t support_nozzle_diameter, coordf_t interface_nozzle_diameter,
+                                              bool soluble_interface);
 
 // Parameters to guide object slicing and support generation.
 // The slicing parameters account for a raft and whether the 1st object layer is printed with a normal or a bridging flow
@@ -40,9 +45,44 @@ struct SlicingParameters
     // Has any raft layers?
     bool        has_raft() const { return raft_layers() > 0; }
     size_t      raft_layers() const { return base_raft_layers + interface_raft_layers; }
+    size_t      interface_phase_raft_layers() const { return interface_raft_layers - surface_raft_layers; }
+
+    RaftPhase raft_phase(size_t layer_id) const
+    {
+        assert(layer_id < raft_layers());
+        if (layer_id < base_raft_layers)
+            return RaftPhase::Base;
+        if (layer_id < raft_layers() - surface_raft_layers)
+            return RaftPhase::Interface;
+        return RaftPhase::Surface;
+    }
+
+    coordf_t raft_layer_height(size_t layer_id) const
+    {
+        assert(layer_id < raft_layers());
+        if (layer_id == 0)
+            return first_print_layer_height;
+        switch (raft_phase(layer_id)) {
+        case RaftPhase::Base:      return base_raft_layer_height;
+        case RaftPhase::Interface: return interface_raft_layer_height;
+        case RaftPhase::Surface:   return surface_raft_layer_height;
+        }
+        return 0.;
+    }
+
+    coordf_t raft_layer_print_z(size_t layer_id) const
+    {
+        assert(layer_id < raft_layers());
+        coordf_t print_z = 0.;
+        for (size_t id = 0; id <= layer_id; ++id)
+            print_z += raft_layer_height(id);
+        return print_z;
+    }
+
+    bool is_first_object_layer_id(size_t layer_id) const { return layer_id == raft_layers(); }
 
     // Is the 1st object layer height fixed, or could it be varied?
-    bool        first_object_layer_height_fixed()  const { return ! has_raft() || first_object_layer_bridging; }
+    bool        first_object_layer_height_fixed() const { return cura_raft_mode || ! has_raft() || first_object_layer_bridging; }
 
     // Height of the object to be printed. This value does not contain the raft height.
     coordf_t    object_print_z_height() const { return object_print_z_max - object_print_z_min; }
@@ -57,11 +97,18 @@ struct SlicingParameters
     size_t      base_raft_layers { 0 };
     // Number of interface layers including the contact layer.
     size_t      interface_raft_layers { 0 };
+    // Number of Surface layers included in interface_raft_layers. Legacy mode keeps this at zero.
+    size_t      surface_raft_layers { 0 };
 
-    // Layer heights of the raft (base, interface and a contact layer).
+    // Layer heights of the raft (base, interface, Surface and a contact layer).
     coordf_t    base_raft_layer_height { 0 };
     coordf_t    interface_raft_layer_height { 0 };
+    coordf_t    surface_raft_layer_height { 0 };
     coordf_t    contact_raft_layer_height { 0 };
+
+    // Cura V1 keeps the model first-layer identity and uses an explicit three-phase raft schedule.
+    bool        cura_raft_mode { false };
+    coordf_t    raft_layer_0_z_overlap { 0 };
 
 	// The regular layer height, applied for all but the first layer, if not overridden by layer ranges
 	// or by the variable layer thickness table.
@@ -98,6 +145,8 @@ struct SlicingParameters
     // If printed without a raft, object_print_z_min = 0 and object_print_z_max = object height.
     // Otherwise object_print_z_min is equal to the raft height.
     coordf_t    raft_base_top_z { 0 };
+    // Top of the explicit Interface phase in Cura V1. In legacy mode this equals raft_interface_top_z.
+    coordf_t    raft_phase_interface_top_z { 0 };
     coordf_t    raft_interface_top_z { 0 };
     coordf_t    raft_contact_top_z { 0 };
     // In case of a soluble interface, object_print_z_min == raft_contact_top_z, otherwise there is a gap between the raft and the 1st object layer.
@@ -120,9 +169,13 @@ inline bool equal_layering(const SlicingParameters &sp1, const SlicingParameters
     assert(sp2.valid);
     return  sp1.base_raft_layers                    == sp2.base_raft_layers                     &&
             sp1.interface_raft_layers               == sp2.interface_raft_layers                &&
+            sp1.surface_raft_layers                 == sp2.surface_raft_layers                  &&
             sp1.base_raft_layer_height              == sp2.base_raft_layer_height               &&
             sp1.interface_raft_layer_height         == sp2.interface_raft_layer_height          &&
+            sp1.surface_raft_layer_height           == sp2.surface_raft_layer_height            &&
             sp1.contact_raft_layer_height           == sp2.contact_raft_layer_height            &&
+            sp1.cura_raft_mode                      == sp2.cura_raft_mode                       &&
+            sp1.raft_layer_0_z_overlap              == sp2.raft_layer_0_z_overlap               &&
             sp1.layer_height                        == sp2.layer_height                         &&
             sp1.min_layer_height                    == sp2.min_layer_height                     &&
             sp1.max_layer_height                    == sp2.max_layer_height                     &&
@@ -139,6 +192,7 @@ inline bool equal_layering(const SlicingParameters &sp1, const SlicingParameters
             sp1.gap_support_object                  == sp2.gap_support_object                   &&
 #endif
             sp1.raft_base_top_z                     == sp2.raft_base_top_z                      &&
+            sp1.raft_phase_interface_top_z          == sp2.raft_phase_interface_top_z           &&
             sp1.raft_interface_top_z                == sp2.raft_interface_top_z                 &&
             sp1.raft_contact_top_z                  == sp2.raft_contact_top_z                   &&
             sp1.object_print_z_min                  == sp2.object_print_z_min;

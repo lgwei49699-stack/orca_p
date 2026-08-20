@@ -3067,8 +3067,42 @@ void TabPrint::build()
         //optgroup->append_single_option_line("enforce_support_layers", "support_settings_support");
 
         optgroup = page->new_optgroup(L("Raft"), L"param_raft");
+        optgroup->append_single_option_line("raft_mode", "support_settings_raft");
         optgroup->append_single_option_line("raft_layers", "support_settings_raft");
         optgroup->append_single_option_line("raft_contact_distance", "support_settings_raft");
+        optgroup->append_single_option_line("raft_airgap", "support_settings_raft");
+        optgroup->append_single_option_line("raft_layer_0_z_overlap", "support_settings_raft");
+        optgroup->append_single_option_line("raft_base_layers", "support_settings_raft");
+        optgroup->append_single_option_line("raft_interface_layers", "support_settings_raft");
+        optgroup->append_single_option_line("raft_surface_layers", "support_settings_raft");
+
+        optgroup = page->new_optgroup(L("Raft advanced"), L"param_raft");
+        optgroup->append_single_option_line("raft_angle", "support_settings_raft");
+        optgroup->append_single_option_line("raft_angle_increment", "support_settings_raft");
+        optgroup->append_single_option_line("raft_base_layer_height", "support_settings_raft");
+        optgroup->append_single_option_line("raft_base_line_width", "support_settings_raft");
+        optgroup->append_single_option_line("raft_base_line_spacing", "support_settings_raft");
+        optgroup->append_single_option_line("raft_base_flow", "support_settings_raft");
+        optgroup->append_single_option_line("raft_base_speed", "support_settings_raft");
+        optgroup->append_single_option_line("raft_base_fan_speed", "support_settings_raft");
+        optgroup->append_single_option_line("raft_base_wall_count", "support_settings_raft");
+        optgroup->append_single_option_line("raft_base_margin", "support_settings_raft");
+        optgroup->append_single_option_line("raft_interface_layer_height", "support_settings_raft");
+        optgroup->append_single_option_line("raft_interface_line_width", "support_settings_raft");
+        optgroup->append_single_option_line("raft_interface_line_spacing", "support_settings_raft");
+        optgroup->append_single_option_line("raft_interface_flow", "support_settings_raft");
+        optgroup->append_single_option_line("raft_interface_speed", "support_settings_raft");
+        optgroup->append_single_option_line("raft_interface_fan_speed", "support_settings_raft");
+        optgroup->append_single_option_line("raft_interface_wall_count", "support_settings_raft");
+        optgroup->append_single_option_line("raft_interface_margin", "support_settings_raft");
+        optgroup->append_single_option_line("raft_surface_layer_height", "support_settings_raft");
+        optgroup->append_single_option_line("raft_surface_line_width", "support_settings_raft");
+        optgroup->append_single_option_line("raft_surface_line_spacing", "support_settings_raft");
+        optgroup->append_single_option_line("raft_surface_flow", "support_settings_raft");
+        optgroup->append_single_option_line("raft_surface_speed", "support_settings_raft");
+        optgroup->append_single_option_line("raft_surface_fan_speed", "support_settings_raft");
+        optgroup->append_single_option_line("raft_surface_wall_count", "support_settings_raft");
+        optgroup->append_single_option_line("raft_surface_margin", "support_settings_raft");
 
         optgroup = page->new_optgroup(L("Support filament"), L"param_support_filament");
         optgroup->append_single_option_line("support_filament", "support_settings_filament#base");

@@ -1334,6 +1334,25 @@ int PartPlate::picking_id_component(int idx) const
     return this->m_plate_index * GRABBER_COUNT + idx;
 }
 
+static bool has_support_or_raft(const ConfigBase &global_config, const ConfigBase *object_overrides = nullptr)
+{
+    auto resolved_option = [&global_config, object_overrides](const char *key) {
+        if (object_overrides != nullptr)
+            if (const ConfigOption *option = object_overrides->option(key); option != nullptr)
+                return option;
+        return global_config.option(key);
+    };
+
+    if (resolved_option("enable_support")->getBool())
+        return true;
+
+    if (RaftMode(resolved_option("raft_mode")->getInt()) == RaftMode::CuraV1)
+        return resolved_option("raft_base_layers")->getInt() + resolved_option("raft_interface_layers")->getInt() +
+                   resolved_option("raft_surface_layers")->getInt() >
+               0;
+    return resolved_option("raft_layers")->getInt() > 0;
+}
+
 std::vector<int> PartPlate::get_extruders(bool conside_custom_gcode) const
 {
 	std::vector<int> plate_extruders;
@@ -1352,8 +1371,6 @@ std::vector<int> PartPlate::get_extruders(bool conside_custom_gcode) const
 	int glb_wall_extr = glb_config.opt_int("wall_filament");
 	int glb_sparse_infill_extr = glb_config.opt_int("sparse_infill_filament");
 	int glb_solid_infill_extr = glb_config.opt_int("solid_infill_filament");
-	bool glb_support = glb_config.opt_bool("enable_support");
-    glb_support |= glb_config.opt_int("raft_layers") > 0;
 
 	for (int obj_idx = 0; obj_idx < m_model->objects.size(); obj_idx++) {
 		if (!contain_instance_totally(obj_idx, 0))
@@ -1373,17 +1390,7 @@ std::vector<int> PartPlate::get_extruders(bool conside_custom_gcode) const
 			}
 		}
 
-		bool obj_support = false;
-		const ConfigOption* obj_support_opt = mo->config.option("enable_support");
-        const ConfigOption *obj_raft_opt    = mo->config.option("raft_layers");
-		if (obj_support_opt != nullptr || obj_raft_opt != nullptr) {
-            if (obj_support_opt != nullptr)
-				obj_support = obj_support_opt->getBool();
-            if (obj_raft_opt != nullptr)
-				obj_support |= obj_raft_opt->getInt() > 0;
-        }
-		else
-			obj_support = glb_support;
+                const bool obj_support = has_support_or_raft(glb_config, &mo->config.get());
 
         if (obj_support) {
             int                 obj_support_intf_extr = 0;
@@ -1465,8 +1472,6 @@ std::vector<int> PartPlate::get_extruders_under_cli(bool conside_custom_gcode, D
 	int glb_sparse_infill_extr = full_config.opt_int("sparse_infill_filament");
 	int glb_solid_infill_extr = full_config.opt_int("solid_infill_filament");
 
-    bool glb_support = full_config.opt_bool("enable_support");
-    glb_support |= full_config.opt_int("raft_layers") > 0;
 
     for (std::set<std::pair<int, int>>::iterator it = obj_to_instance_set.begin(); it != obj_to_instance_set.end(); ++it)
     {
@@ -1494,17 +1499,7 @@ std::vector<int> PartPlate::get_extruders_under_cli(bool conside_custom_gcode, D
                 }
             }
 
-            bool obj_support = false;
-            const ConfigOption* obj_support_opt = object->config.option("enable_support");
-            const ConfigOption *obj_raft_opt    = object->config.option("raft_layers");
-            if (obj_support_opt != nullptr || obj_raft_opt != nullptr) {
-                if (obj_support_opt != nullptr)
-                    obj_support = obj_support_opt->getBool();
-                if (obj_raft_opt != nullptr)
-                    obj_support |= obj_raft_opt->getInt() > 0;
-            }
-            else
-                obj_support = glb_support;
+            const bool obj_support = has_support_or_raft(full_config, &object->config.get());
 
             if (!obj_support)
                 continue;

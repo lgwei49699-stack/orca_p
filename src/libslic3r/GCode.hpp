@@ -156,6 +156,15 @@ struct LayerResult {
     // It is used for the pressure equalizer because it needs to buffer one layer back.
     bool        nop_layer_result { false };
 
+    // Cooling uses the object's model-local layer id. In Cura V1 mode the
+    // first model layer follows the raft physically, but is still layer 0 for
+    // the filament fan ramp. When several objects share a print Z, the lowest
+    // local id is used so early-layer fan restrictions win deterministically.
+    size_t      cooling_layer_id { 0 };
+    // Cura V1 raft layers emit their own phase fan commands. Keep those
+    // commands intact while CoolingBuffer still performs layer-time slowdown.
+    bool        preserve_cooling_fan_commands { false };
+
     static LayerResult make_nop_layer_result() { return {"", std::numeric_limits<coord_t>::max(), false, false, true}; }
 };
 
@@ -535,6 +544,10 @@ private:
     const Layer*                        m_layer;
     // m_layer is an object layer and it is being printed over raft surface.
     bool                                m_object_layer_over_raft;
+    // Cura V1 phase fan overrides are emitted once per object and physical raft layer.
+    const PrintObject*                  m_last_cura_raft_fan_object { nullptr };
+    size_t                              m_last_cura_raft_fan_layer_id { size_t(-1) };
+    int                                 m_last_cura_raft_fan_speed { -1 };
     //double                              m_volumetric_speed;
     // Support for the extrusion role markers. Which marker is active?
     ExtrusionRole                       m_last_extrusion_role;
@@ -611,6 +624,14 @@ private:
     // On the first printing layer. This flag triggers first layer speeds.
     //BBS
     bool    on_first_layer() const { return m_layer != nullptr && m_layer->id() == 0 && abs(m_layer->bottom_z()) < EPSILON; }
+    // Cura V1 keeps the first object layer distinct from the physical first
+    // layer occupied by the raft base. Motion settings follow the model-first
+    // semantic, while temperatures intentionally keep using on_first_layer().
+    bool    use_initial_layer_motion() const
+    {
+        return this->on_first_layer() ||
+               (m_object_layer_over_raft && m_config.raft_mode.value == RaftMode::CuraV1);
+    }
     int layer_id() const {
         if (m_layer == nullptr)
             return -1;

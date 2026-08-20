@@ -24,7 +24,10 @@ Flow LayerRegion::flow(FlowRole role) const
 
 Flow LayerRegion::flow(FlowRole role, double layer_height) const
 {
-    return m_region->flow(*m_layer->object(), role, layer_height, m_layer->id() == 0);
+    const SlicingParameters &slicing_params = m_layer->object()->slicing_parameters();
+    const bool first_model_layer = m_layer->id() == 0 ||
+                                   (slicing_params.cura_raft_mode && slicing_params.is_first_object_layer_id(m_layer->id()));
+    return m_region->flow(*m_layer->object(), role, layer_height, first_model_layer);
 }
 
 Flow LayerRegion::bridging_flow(FlowRole role, bool thick_bridge) const

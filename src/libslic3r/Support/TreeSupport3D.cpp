@@ -1064,7 +1064,8 @@ int generate_raft_contact(
             -- raft_contact_layer_idx;
         // Create the raft contact layer.
         const ExPolygons &lslices   = print_object.get_layer(0)->lslices;
-        double            expansion = print_object.config().raft_expansion.value;
+        double expansion = print_object.config().raft_mode.value == RaftMode::CuraV1 ?
+                               print_object.config().raft_surface_margin.value : print_object.config().raft_expansion.value;
         interface_placer.add_roof_unguarded(expansion > 0 ? expand(lslices, scaled<float>(expansion)) : to_polygons(lslices), raft_contact_layer_idx, 0);
     }
     return raft_contact_layer_idx;
@@ -1084,13 +1085,15 @@ void finalize_raft_contact(
             top_contacts[i] = nullptr;
             move_bounds[i].clear();
         }
-        if (raft_contact_layer_idx >= 0 && print_object.config().raft_expansion.value > 0) {
+        const double raft_contact_expansion = print_object.config().raft_mode.value == RaftMode::CuraV1 ?
+            print_object.config().raft_surface_margin.value : print_object.config().raft_expansion.value;
+        if (raft_contact_layer_idx >= 0 && raft_contact_expansion > 0) {
             // If any tips at first_tree_layer now are completely inside the expanded raft layer, remove them as well before they are propagated to the ground.
             Polygons &raft_polygons = top_contacts[raft_contact_layer_idx]->polygons;
             EdgeGrid::Grid grid(get_extents(raft_polygons).inflated(SCALED_EPSILON));
             grid.create(raft_polygons, Polylines{}, coord_t(scale_(10.)));
             SupportElements &first_layer_move_bounds = move_bounds[first_tree_layer];
-            double threshold = scaled<double>(print_object.config().raft_expansion.value) * 2.;
+            double threshold = scaled<double>(raft_contact_expansion) * 2.;
             first_layer_move_bounds.erase(std::remove_if(first_layer_move_bounds.begin(), first_layer_move_bounds.end(),
                 [&grid, threshold](const SupportElement &el) {
                     coordf_t dist;

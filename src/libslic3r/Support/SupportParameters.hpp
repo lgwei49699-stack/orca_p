@@ -1,9 +1,13 @@
 #ifndef slic3r_SupportParameters_hpp_
 #define slic3r_SupportParameters_hpp_
 
+#include <tuple>
+#include <utility>
+
 #include <boost/log/trivial.hpp>
 #include "../libslic3r.h"
 #include "../Flow.hpp"
+#include "../Slicing.hpp"
 
 namespace Slic3r {
 struct SupportParameters {
@@ -13,6 +17,8 @@ struct SupportParameters {
         const PrintConfig& print_config = object.print()->config();
         const PrintObjectConfig& object_config = object.config();
         const SlicingParameters& slicing_params = object.slicing_parameters();
+
+        this->cura_raft_mode = slicing_params.cura_raft_mode;
 
 	    this->soluble_interface = slicing_params.soluble_interface;
 	    this->soluble_interface_non_soluble_base =
@@ -48,7 +54,53 @@ struct SupportParameters {
         this->support_material_interface_flow = Slic3r::support_material_interface_flow(&object, float(slicing_params.layer_height));
     	this->raft_interface_flow                = support_material_interface_flow;
 
-        this->ironing = object_config.support_ironing;
+        if (this->cura_raft_mode) {
+            const coordf_t support_nozzle = print_config.nozzle_diameter.get_at(object_config.support_filament.value - 1);
+            const coordf_t interface_nozzle =
+                print_config.nozzle_diameter.get_at(object_config.support_interface_filament.value - 1);
+            const RaftPhasePlan raft_plan = build_cura_raft_phase_plan(
+                resolve_cura_raft_plan_config(
+                    print_config, object_config, support_nozzle, interface_nozzle, slicing_params.soluble_interface));
+            assert(raft_plan.validate());
+
+            const RaftPhaseLayer &base_layer = *raft_plan.find_layer(RaftPhase::Base, 0);
+            const RaftPhaseLayer *interface_layer = raft_plan.find_layer(RaftPhase::Interface, 0);
+            const RaftPhaseLayer &surface_layer = *raft_plan.find_layer(RaftPhase::Surface, 0);
+            if (interface_layer == nullptr)
+                interface_layer = &surface_layer;
+
+            const auto phase_flow_density_and_spacing = [](const RaftPhaseLayer &layer, coordf_t nozzle_diameter) {
+                Flow flow(float(layer.line_width), float(layer.height), float(nozzle_diameter));
+                // Fill generators require density <= 1. Select a pattern base
+                // spacing no larger than the configured center distance, while
+                // keeping Flow's nominal spacing for wall geometry and width.
+                const coordf_t pattern_spacing = std::min(coordf_t(flow.spacing()), coordf_t(layer.line_spacing));
+                const coordf_t density = pattern_spacing / layer.line_spacing;
+                return std::make_tuple(flow, density, pattern_spacing);
+            };
+
+            std::tie(this->raft_base_flow, this->raft_base_density, this->raft_base_pattern_spacing) =
+                phase_flow_density_and_spacing(base_layer, support_nozzle);
+            std::tie(this->raft_phase_interface_flow, this->raft_phase_interface_density,
+                     this->raft_phase_interface_pattern_spacing) =
+                phase_flow_density_and_spacing(*interface_layer, interface_nozzle);
+            std::tie(this->raft_surface_flow, this->raft_surface_density, this->raft_surface_pattern_spacing) =
+                phase_flow_density_and_spacing(surface_layer, interface_nozzle);
+            this->raft_base_flow_ratio = base_layer.flow_ratio;
+            this->raft_phase_interface_flow_ratio = interface_layer->flow_ratio;
+            this->raft_surface_flow_ratio = surface_layer.flow_ratio;
+            this->raft_base_wall_count = base_layer.wall_count;
+            this->raft_phase_interface_wall_count = interface_layer->wall_count;
+            this->raft_surface_wall_count = surface_layer.wall_count;
+
+            this->first_layer_flow = this->raft_base_flow;
+            this->raft_interface_flow = this->raft_surface_flow;
+        }
+
+        // Cura V1 RaftContact does not yet have a separate ironing path. Ignore
+        // stale legacy values when switching modes instead of silently turning
+        // the final Surface layer into legacy support ironing.
+        this->ironing = !this->cura_raft_mode && object_config.support_ironing;
         this->ironing_flow = support_material_interface_flow.with_height(support_material_interface_flow.height() * 0.01 * object_config.support_ironing_flow.value);
         this->ironing_spacing = object_config.support_ironing_spacing;
         this->ironing_pattern = object_config.support_ironing_pattern;
@@ -101,6 +153,8 @@ struct SupportParameters {
         // Orca: Force solid support interface when using support ironing
         double raft_interface_spacing = (this->ironing ? 0 : object_config.support_interface_spacing.value) + this->raft_interface_flow.spacing();
         this->raft_interface_density = std::min(1., this->raft_interface_flow.spacing() / raft_interface_spacing);
+        if (this->cura_raft_mode)
+            this->raft_interface_density = this->raft_surface_density;
         this->support_spacing = object_config.support_base_pattern_spacing.value + this->support_material_flow.spacing();
         this->support_density = std::min(1., this->support_material_flow.spacing() / this->support_spacing);
         if (object_config.support_interface_top_layers.value == 0) {
@@ -130,7 +184,13 @@ struct SupportParameters {
         this->raft_angle_1st_layer  = 0.f;
         this->raft_angle_base       = 0.f;
         this->raft_angle_interface  = 0.f;
-        if (slicing_params.base_raft_layers > 1) {
+        this->raft_angle_increment  = 0.f;
+        if (this->cura_raft_mode) {
+            this->raft_angle_1st_layer = Geometry::deg2rad(float(object_config.raft_angle.value));
+            this->raft_angle_base = this->raft_angle_1st_layer;
+            this->raft_angle_interface = this->raft_angle_1st_layer;
+            this->raft_angle_increment = Geometry::deg2rad(float(object_config.raft_angle_increment.value));
+        } else if (slicing_params.base_raft_layers > 1) {
             assert(slicing_params.raft_layers() >= 4);
             // There are all raft layer types (1st layer, base, interface & contact layers) available.
             this->raft_angle_1st_layer  = this->interface_angle;
@@ -221,6 +281,15 @@ struct SupportParameters {
 	Flow 					support_material_bottom_interface_flow;
 	// Flow at raft inteface & contact layers.
 	Flow    				raft_interface_flow;
+    // Resolved Cura V1 phase geometry. Flow percentages are kept separately
+    // and applied only to extrusion volume, so configured width and spacing do
+    // not change when material flow is adjusted.
+    Flow                    raft_base_flow;
+    Flow                    raft_phase_interface_flow;
+    Flow                    raft_surface_flow;
+    coordf_t                raft_base_flow_ratio { 1. };
+    coordf_t                raft_phase_interface_flow_ratio { 1. };
+    coordf_t                raft_surface_flow_ratio { 1. };
     coordf_t support_extrusion_width;
 	// Is merging of regions allowed? Could the interface & base support regions be printed with the same extruder?
 	bool 					can_merge_support_regions;
@@ -239,6 +308,15 @@ struct SupportParameters {
     coordf_t 				interface_density;
     // Density of the raft interface and contact layers.
     coordf_t 				raft_interface_density;
+    coordf_t               raft_base_density { 0. };
+    coordf_t               raft_phase_interface_density { 0. };
+    coordf_t               raft_surface_density { 0. };
+    coordf_t               raft_base_pattern_spacing { 0. };
+    coordf_t               raft_phase_interface_pattern_spacing { 0. };
+    coordf_t               raft_surface_pattern_spacing { 0. };
+    size_t                 raft_base_wall_count { 0 };
+    size_t                 raft_phase_interface_wall_count { 0 };
+    size_t                 raft_surface_wall_count { 0 };
     coordf_t 				support_spacing;
     // Density of the base support layers.
     coordf_t 				support_density;
@@ -260,6 +338,73 @@ struct SupportParameters {
     float 					raft_angle_1st_layer;
     float 					raft_angle_base;
     float 					raft_angle_interface;
+    float                       raft_angle_increment;
+    bool                        cura_raft_mode { false };
+
+    float raft_layer_angle(size_t layer_id) const
+    {
+        if (!cura_raft_mode)
+            return layer_id == 0 ? raft_angle_1st_layer : raft_angle_interface;
+        float angle = std::fmod(raft_angle_1st_layer + raft_angle_increment * float(layer_id), float(M_PI));
+        if (angle < 0.f)
+            angle += float(M_PI);
+        return angle;
+    }
+
+    const Flow &raft_flow(RaftPhase phase) const
+    {
+        switch (phase) {
+        case RaftPhase::Base:      return raft_base_flow;
+        case RaftPhase::Interface: return raft_phase_interface_flow;
+        case RaftPhase::Surface:   return raft_surface_flow;
+        }
+        return raft_surface_flow;
+    }
+
+    coordf_t raft_density(RaftPhase phase) const
+    {
+        switch (phase) {
+        case RaftPhase::Base:      return raft_base_density;
+        case RaftPhase::Interface: return raft_phase_interface_density;
+        case RaftPhase::Surface:   return raft_surface_density;
+        }
+        return raft_surface_density;
+    }
+
+    coordf_t raft_flow_ratio(RaftPhase phase) const
+    {
+        switch (phase) {
+        case RaftPhase::Base:      return raft_base_flow_ratio;
+        case RaftPhase::Interface: return raft_phase_interface_flow_ratio;
+        case RaftPhase::Surface:   return raft_surface_flow_ratio;
+        }
+        return raft_surface_flow_ratio;
+    }
+
+    coordf_t raft_pattern_spacing(RaftPhase phase) const
+    {
+        switch (phase) {
+        case RaftPhase::Base:      return raft_base_pattern_spacing;
+        case RaftPhase::Interface: return raft_phase_interface_pattern_spacing;
+        case RaftPhase::Surface:   return raft_surface_pattern_spacing;
+        }
+        return raft_surface_pattern_spacing;
+    }
+
+    size_t raft_wall_count(RaftPhase phase) const
+    {
+        switch (phase) {
+        case RaftPhase::Base:      return raft_base_wall_count;
+        case RaftPhase::Interface: return raft_phase_interface_wall_count;
+        case RaftPhase::Surface:   return raft_surface_wall_count;
+        }
+        return raft_surface_wall_count;
+    }
+
+    InfillPattern raft_fill_pattern(RaftPhase phase) const
+    {
+        return raft_density(phase) > 0.95 ? ipRectilinear : ipSupportBase;
+    }
 
     // Produce a raft interface angle for a given SupportLayer::interface_id()
     float 					raft_interface_angle(size_t interface_id) const 

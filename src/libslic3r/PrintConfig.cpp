@@ -230,6 +230,12 @@ static t_config_enum_values s_keys_map_SlicingMode {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SlicingMode)
 
+static t_config_enum_values s_keys_map_RaftMode {
+    { "legacy",  int(RaftMode::Legacy) },
+    { "cura_v1", int(RaftMode::CuraV1) }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(RaftMode)
+
 static t_config_enum_values s_keys_map_SupportMaterialPattern {
     { "rectilinear",        smpRectilinear },
     { "rectilinear-grid",   smpRectilinearGrid },
@@ -4187,6 +4193,151 @@ void PrintConfigDef::init_fff_params()
     def->max = 100;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(0));
+
+    // Cura-style raft is opt-in. Keep the legacy raft parameters above intact so
+    // profiles created before this mode was introduced retain their exact behavior.
+    def = this->add("raft_mode", coEnum);
+    def->label = L("Raft mode");
+    def->category = L("Support");
+    def->tooltip = L("Select the raft implementation. Legacy preserves the existing OrcaSlicer raft behavior and settings. "
+                     "Cura-style v1 is a new opt-in mode that uses the independent Base, Interface, and Surface settings below.");
+    def->enum_keys_map = &ConfigOptionEnum<RaftMode>::get_enum_values();
+    def->enum_values.push_back("legacy");
+    def->enum_values.push_back("cura_v1");
+    def->enum_labels.push_back(L("Legacy"));
+    def->enum_labels.push_back(L("Cura-style v1 (new)"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+
+    auto add_cura_raft_float = [this](const char *key, const char *label, const char *tooltip, const char *unit, double min,
+                                      double max, double default_value, ConfigOptionMode mode) {
+        ConfigOptionDef *raft_def = this->add(key, coFloat);
+        raft_def->label = label;
+        raft_def->category = L("Support");
+        raft_def->tooltip = tooltip;
+        if (unit != nullptr)
+            raft_def->sidetext = unit;
+        raft_def->min = min;
+        raft_def->max = max;
+        raft_def->mode = mode;
+        raft_def->set_default_value(new ConfigOptionFloat(default_value));
+    };
+
+    auto add_cura_raft_int = [this](const char *key, const char *label, const char *tooltip, const char *unit, int min, int max,
+                                    int default_value, ConfigOptionMode mode) {
+        ConfigOptionDef *raft_def = this->add(key, coInt);
+        raft_def->label = label;
+        raft_def->category = L("Support");
+        raft_def->tooltip = tooltip;
+        if (unit != nullptr)
+            raft_def->sidetext = unit;
+        raft_def->min = min;
+        raft_def->max = max;
+        raft_def->mode = mode;
+        raft_def->set_default_value(new ConfigOptionInt(default_value));
+    };
+
+    auto add_cura_raft_percent = [this](const char *key, const char *label, const char *tooltip, double min, double max,
+                                        double default_value, ConfigOptionMode mode) {
+        ConfigOptionDef *raft_def = this->add(key, coPercent);
+        raft_def->label = label;
+        raft_def->category = L("Support");
+        raft_def->tooltip = tooltip;
+        raft_def->sidetext = "%";
+        raft_def->min = min;
+        raft_def->max = max;
+        raft_def->mode = mode;
+        raft_def->set_default_value(new ConfigOptionPercent(default_value));
+    };
+
+    add_cura_raft_float("raft_airgap", L("Raft air gap"),
+                        L("Exact Z gap between the final raft surface and the first model layer in Cura-style mode. "
+                          "It is not rounded to the normal layer height."),
+                        "mm", 0.0, 10.0, 0.27, comAdvanced);
+    add_cura_raft_float("raft_layer_0_z_overlap", L("Initial model layer Z overlap"),
+                        L("Shift model layers above the first model layer down by this amount to compensate for material lost across the "
+                          "raft air gap."),
+                        "mm", 0.0, 10.0, 0.10, comAdvanced);
+
+    add_cura_raft_int("raft_base_layers", L("Raft base layers"),
+                      L("Number of build-plate-facing Base layers in Cura-style mode. At least one Base layer is required."),
+                      L("layers"), 1, 20, 1, comAdvanced);
+    add_cura_raft_int("raft_interface_layers", L("Raft interface layers"),
+                      L("Number of transitional Interface layers between the Base and Surface phases in Cura-style mode."),
+                      L("layers"), 0, 20, 2, comAdvanced);
+    add_cura_raft_int("raft_surface_layers", L("Raft surface layers"),
+                      L("Number of dense Surface layers directly below the model in Cura-style mode. At least one Surface layer is "
+                        "required."),
+                      L("layers"), 1, 20, 2, comAdvanced);
+
+    add_cura_raft_float("raft_angle", L("Raft pattern angle"),
+                        L("Pattern angle of the first Cura-style raft layer on the horizontal plane."), "°", 0.0, 359.0, 45.0, comDevelop);
+    add_cura_raft_float("raft_angle_increment", L("Raft angle increment"),
+                        L("Rotation added for each subsequent Cura-style raft layer. A value of 90 degrees alternates 45 and 135 degree "
+                          "lines."),
+                        "°", 0.0, 360.0, 90.0, comDevelop);
+
+    add_cura_raft_float("raft_base_layer_height", L("Raft base layer height"),
+                        L("Layer height of the Base phase. Zero automatically derives it from the nozzle and initial-layer settings."),
+                        "mm", 0.0, 2.0, 0.0, comDevelop);
+    add_cura_raft_float("raft_base_line_width", L("Raft base line width"),
+                        L("Absolute extrusion width of Base lines. Zero automatically derives it from the active nozzle diameter."),
+                        "mm", 0.0, 10.0, 0.0, comDevelop);
+    add_cura_raft_float("raft_base_line_spacing", L("Raft base line spacing"),
+                        L("Center-to-center spacing of Base lines. Zero automatically derives it from the resolved Base line width."),
+                        "mm", 0.0, 100.0, 0.0, comDevelop);
+    add_cura_raft_percent("raft_base_flow", L("Raft base flow"),
+                          L("Material flow of the Base phase relative to the resolved extrusion flow."), 10.0, 200.0, 105.0, comDevelop);
+    add_cura_raft_float("raft_base_speed", L("Raft base speed"), L("Print speed of the Base phase."), "mm/s", 0.1, 500.0, 10.0, comDevelop);
+    add_cura_raft_percent("raft_base_fan_speed", L("Raft base fan speed"),
+                          L("Part-cooling fan speed during the Base phase."), 0.0, 100.0, 0.0, comDevelop);
+    add_cura_raft_int("raft_base_wall_count", L("Raft base wall count"),
+                      L("Number of contours around the linear Base pattern."), L("walls"), 0, 100, 4, comDevelop);
+    add_cura_raft_float("raft_base_margin", L("Raft base margin"),
+                        L("Additional XY margin around the model footprint for the Base phase."), "mm", 0.0, 100.0, 3.0, comDevelop);
+
+    add_cura_raft_float("raft_interface_layer_height", L("Raft interface layer height"),
+                        L("Layer height of the Interface phase. Zero automatically derives it from the nozzle and normal-layer settings."),
+                        "mm", 0.0, 2.0, 0.0, comDevelop);
+    add_cura_raft_float("raft_interface_line_width", L("Raft interface line width"),
+                        L("Absolute extrusion width of Interface lines. Zero automatically derives it from the active nozzle diameter."),
+                        "mm", 0.0, 10.0, 0.0, comDevelop);
+    add_cura_raft_float("raft_interface_line_spacing", L("Raft interface line spacing"),
+                        L("Center-to-center spacing of Interface lines. Zero automatically derives it from the resolved Interface line "
+                          "width."),
+                        "mm", 0.0, 100.0, 0.0, comDevelop);
+    add_cura_raft_percent("raft_interface_flow", L("Raft interface flow"),
+                          L("Material flow of the Interface phase relative to the resolved extrusion flow."), 10.0, 200.0, 95.0,
+                          comDevelop);
+    add_cura_raft_float("raft_interface_speed", L("Raft interface speed"), L("Print speed of the Interface phase."), "mm/s", 0.1, 500.0,
+                        25.0, comDevelop);
+    add_cura_raft_percent("raft_interface_fan_speed", L("Raft interface fan speed"),
+                          L("Part-cooling fan speed during the Interface phase."), 0.0, 100.0, 0.0, comDevelop);
+    add_cura_raft_int("raft_interface_wall_count", L("Raft interface wall count"),
+                      L("Number of contours around the linear Interface pattern."), L("walls"), 0, 100, 0, comDevelop);
+    add_cura_raft_float("raft_interface_margin", L("Raft interface margin"),
+                        L("Additional XY margin around the model footprint for the Interface phase."), "mm", 0.0, 100.0, 1.0, comDevelop);
+
+    add_cura_raft_float("raft_surface_layer_height", L("Raft surface layer height"),
+                        L("Layer height of the dense Surface phase. Zero automatically derives it from the normal model layer height."),
+                        "mm", 0.0, 2.0, 0.0, comDevelop);
+    add_cura_raft_float("raft_surface_line_width", L("Raft surface line width"),
+                        L("Absolute extrusion width of Surface lines. Zero automatically derives it from the active nozzle diameter."),
+                        "mm", 0.0, 10.0, 0.0, comDevelop);
+    add_cura_raft_float("raft_surface_line_spacing", L("Raft surface line spacing"),
+                        L("Center-to-center spacing of Surface lines. Zero makes it equal to the resolved Surface line width for a solid "
+                          "top."),
+                        "mm", 0.0, 100.0, 0.0, comDevelop);
+    add_cura_raft_percent("raft_surface_flow", L("Raft surface flow"),
+                          L("Material flow of the Surface phase relative to the resolved extrusion flow."), 10.0, 200.0, 100.0, comDevelop);
+    add_cura_raft_float("raft_surface_speed", L("Raft surface speed"), L("Print speed of the Surface phase."), "mm/s", 0.1, 500.0, 60.0,
+                        comDevelop);
+    add_cura_raft_percent("raft_surface_fan_speed", L("Raft surface fan speed"),
+                          L("Part-cooling fan speed during the Surface phase."), 0.0, 100.0, 0.0, comDevelop);
+    add_cura_raft_int("raft_surface_wall_count", L("Raft surface wall count"),
+                      L("Number of contours around the dense Surface pattern."), L("walls"), 0, 100, 0, comDevelop);
+    add_cura_raft_float("raft_surface_margin", L("Raft surface margin"),
+                        L("Additional XY margin around the model footprint for the Surface phase."), "mm", 0.0, 100.0, 1.0, comDevelop);
 
     def = this->add("resolution", coFloat);
     def->label = L("Resolution");
