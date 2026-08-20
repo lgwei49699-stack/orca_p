@@ -2549,6 +2549,14 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         this->_print_first_layer_extruder_temperatures(file, print, machine_start_gcode, initial_extruder_id, false);
     }
 
+    // Keep model initial-layer semantics for placeholders while telling the
+    // preview processor where the first physical printed layer actually is.
+    // Cura-style rafts may use a Base height different from the model's
+    // initial_layer_print_height.
+    file.write_format(";%s%.3f\n",
+                      GCodeProcessor::reserved_tag(GCodeProcessor::ETags::First_Print_Layer_Height).c_str(),
+                      print.skirt_first_layer_height());
+
     // adds tag for processor
     file.write_format(";%s%s\n", GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role).c_str(), ExtrusionEntity::role_to_string(erCustom).c_str());
 

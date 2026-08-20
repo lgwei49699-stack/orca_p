@@ -472,6 +472,7 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     config.set_key_value("full_fan_speed_layer", new ConfigOptionInts({3}));
     config.set_key_value("filament_max_volumetric_speed", new ConfigOptionFloats({100.}));
     config.set("slow_down_layers", 8);
+    config.set("machine_start_gcode", std::string("G90\nM83\nG1 Z0.28 F1200\nG1 X5 Y5 F3000\nG1 X85 E8 F2400\nG92 E0"));
     config.set("before_layer_change_gcode", std::string("G92 E0"));
     config.option<ConfigOptionBools>("slow_down_for_layer_cooling")->values = {false};
     // full_print_config() contains a few generic enum-vector defaults without
@@ -579,6 +580,13 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
         REQUIRE(warning.message_id != PrintStateBase::SlicingEmptyGcodeLayers);
     std::ifstream gcode_stream(gcode_path.string());
     const std::string gcode((std::istreambuf_iterator<char>(gcode_stream)), std::istreambuf_iterator<char>());
+    REQUIRE(gcode.find("; FIRST_PRINT_LAYER_HEIGHT: 0.300") != std::string::npos);
+    const auto first_start_gcode_extrusion = std::find_if(
+        gcode_result.moves.begin(), gcode_result.moves.end(), [](const GCodeProcessorResult::MoveVertex &move) {
+            return move.type == EMoveType::Extrude && move.extrusion_role == erCustom;
+        });
+    REQUIRE(first_start_gcode_extrusion != gcode_result.moves.end());
+    REQUIRE(first_start_gcode_extrusion->position.z() == Approx(0.3));
     const auto layer_marker_position = [&gcode](double print_z, size_t offset = 0) {
         std::ostringstream compact_marker;
         compact_marker << ";Z:" << print_z;
