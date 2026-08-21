@@ -6,13 +6,17 @@
 #include "libslic3r/Format/STL.hpp"
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/Slicing.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/miniz_extension.hpp"
 
 #include <boost/filesystem/operations.hpp>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <fstream>
+#include <functional>
 #include <stdexcept>
 
 using namespace Slic3r;
@@ -202,6 +206,49 @@ void replace_first_or_throw(std::string &text, const std::string &old_value, con
     text.replace(position, old_value.size(), new_value);
 }
 
+void append_json_member(std::string &text, const std::string &key, const std::string &serialized_value)
+{
+    const size_t object_end = text.find_last_of('}');
+    if (object_end == std::string::npos)
+        throw std::runtime_error("Required test JSON object was not found");
+    text.insert(object_end, ",\n    \"" + key + "\": " + serialized_value + "\n");
+}
+
+bool erase_json_member(std::string &text, const std::string &key)
+{
+    nlohmann::json document = nlohmann::json::parse(text);
+    if (!document.is_object())
+        throw std::runtime_error("Required test JSON root is not an object");
+
+    const bool erased = document.erase(key) != 0;
+    text              = document.dump(4);
+    return erased;
+}
+
+void append_object_metadata(std::string &text, const std::string &key, const std::string &value)
+{
+    const size_t object_end = text.find("  </object>");
+    if (object_end == std::string::npos)
+        throw std::runtime_error("Required test model object was not found");
+    text.insert(object_end, "    <metadata key=\"" + key + "\" value=\"" + value + "\"/>\n");
+}
+
+void append_volume_metadata(std::string &text, const std::string &key, const std::string &value)
+{
+    const size_t volume_end = text.find("    </part>");
+    if (volume_end == std::string::npos)
+        throw std::runtime_error("Required test model volume was not found");
+    text.insert(volume_end, "      <metadata key=\"" + key + "\" value=\"" + value + "\"/>\n");
+}
+
+void append_layer_range_option(std::string &text, const std::string &key, const std::string &value)
+{
+    const size_t range_end = text.find("</range>");
+    if (range_end == std::string::npos)
+        throw std::runtime_error("Required test layer range was not found");
+    text.insert(range_end, "   <option opt_key=\"" + key + "\">" + value + "</option>\n  ");
+}
+
 void configure_raft(DynamicPrintConfig &config, RaftMode mode, int base_layers, int interface_layers, int surface_layers)
 {
     config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(mode));
@@ -230,7 +277,8 @@ void attach_enum_vector_serialization_maps(DynamicPrintConfig &config)
 bool store_bbs_project(const std::string          &path,
                        DynamicPrintConfig         &config,
                        const RaftMode             *object_raft_mode = nullptr,
-                       const std::vector<Preset *> &project_presets = {})
+                       const std::vector<Preset *> &project_presets = {},
+                       const std::function<void(ModelObject &)> &configure_object = {})
 {
     attach_enum_vector_serialization_maps(config);
 
@@ -243,6 +291,8 @@ bool store_bbs_project(const std::string          &path,
     object->ensure_on_bed();
     if (object_raft_mode != nullptr)
         object->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(*object_raft_mode));
+    if (configure_object)
+        configure_object(*object);
 
     StoreParams params;
     params.path            = path.c_str();
@@ -556,7 +606,120 @@ TEST_CASE("BBS 3MF reader accepts its known Cura V1 raft requirement", "[3mf][bb
     REQUIRE(loaded_config.opt_float("raft_surface_speed") == Approx(37.5));
 }
 
-TEST_CASE("BBS 3MF reader falls back only unknown Cura raft features to Legacy",
+TEST_CASE("BBS 3MF reader keeps Cura V1 while ignoring additive unknown raft options",
+          "[3mf][bbs][Raft][RequiredFeature]")
+{
+    Temporary3mfPath source_archive("orca-required-feature-additive-raft-source");
+    DynamicPrintConfig stored_config = DynamicPrintConfig::full_print_config();
+    configure_raft(stored_config, RaftMode::CuraV1, 2, 3, 4);
+    stored_config.set("layer_height", 0.23);
+    stored_config.set("raft_airgap", 0.31);
+
+    Preset embedded_print(Preset::TYPE_PRINT, "embedded additive Cura raft print", false);
+    embedded_print.is_project_embedded = true;
+    embedded_print.config.set_key_value("print_settings_id", new ConfigOptionString(embedded_print.name));
+    embedded_print.config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    embedded_print.config.set_key_value("raft_airgap", new ConfigOptionFloat(0.35));
+
+    const RaftMode object_raft_mode = RaftMode::CuraV1;
+    const auto configure_nested_raft_overrides = [](ModelObject &object) {
+        REQUIRE(object.volumes.size() == 1);
+        object.volumes.front()->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+        object.volumes.front()->config.set("raft_surface_speed", 43.);
+
+        DynamicPrintConfig layer_range_config;
+        layer_range_config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+        layer_range_config.set_key_value("raft_surface_speed", new ConfigOptionFloat(41.));
+        object.layer_config_ranges[{1., 2.}].assign_config(std::move(layer_range_config));
+    };
+    REQUIRE(store_bbs_project(source_archive.path(), stored_config, &object_raft_mode, {&embedded_print},
+                              configure_nested_raft_overrides));
+
+    const std::string project_unknown_key = "raft_future_project_bias";
+    std::string project_config = read_zip_entry_text(source_archive.path(), "Metadata/project_settings.config");
+    append_json_member(project_config, project_unknown_key, "\"17\"");
+    Temporary3mfPath project_archive("orca-required-feature-additive-raft-project");
+    copy_zip_replacing_entry(source_archive.path(), project_archive.path(), "Metadata/project_settings.config", project_config);
+
+    const std::string object_unknown_key = "raft_future_object_bias";
+    const std::string volume_unknown_key = "raft_future_volume_bias";
+    std::string object_config = read_zip_entry_text(project_archive.path(), "Metadata/model_settings.config");
+    append_object_metadata(object_config, object_unknown_key, "19");
+    append_volume_metadata(object_config, volume_unknown_key, "21");
+    Temporary3mfPath object_archive("orca-required-feature-additive-raft-object");
+    copy_zip_replacing_entry(project_archive.path(), object_archive.path(), "Metadata/model_settings.config", object_config);
+
+    const std::string layer_range_unknown_key = "raft_future_layer_range_bias";
+    std::string layer_range_config = read_zip_entry_text(object_archive.path(), "Metadata/layer_config_ranges.xml");
+    append_layer_range_option(layer_range_config, layer_range_unknown_key, "22");
+    Temporary3mfPath layer_range_archive("orca-required-feature-additive-raft-layer-range");
+    copy_zip_replacing_entry(object_archive.path(), layer_range_archive.path(), "Metadata/layer_config_ranges.xml",
+                             layer_range_config);
+
+    const std::string embedded_unknown_key = "raft_future_embedded_bias";
+    std::string embedded_config = read_zip_entry_text(layer_range_archive.path(), "Metadata/process_settings_1.config");
+    append_json_member(embedded_config, embedded_unknown_key, "[\"future\", \"values\"]");
+    Temporary3mfPath future_archive("orca-required-feature-additive-raft");
+    copy_zip_replacing_entry(layer_range_archive.path(), future_archive.path(), "Metadata/process_settings_1.config", embedded_config);
+
+    DynamicPrintConfig loaded_config = DynamicPrintConfig::full_print_config();
+    configure_raft(loaded_config, RaftMode::Legacy, 7, 0, 0);
+    loaded_config.set("layer_height", 0.37);
+    attach_enum_vector_serialization_maps(loaded_config);
+
+    Model                loaded_model;
+    ModelBackupPathGuard loaded_backup_path_guard(loaded_model);
+    BbsLoadArtifacts     loaded_artifacts;
+    ConfigSubstitutionContext substitutions {ForwardCompatibilitySubstitutionRule::Disable};
+    substitutions.ignore_unknown_option = [](const t_config_option_key &key) { return key == "caller_owned_optional"; };
+    bool                      is_bbl_3mf = false;
+    Semver                    file_version;
+    REQUIRE(load_bbs_3mf(future_archive.path().c_str(), &loaded_config, &substitutions, &loaded_model,
+                         &loaded_artifacts.plates, &loaded_artifacts.presets, &is_bbl_3mf, &file_version, nullptr,
+                         LoadStrategy::LoadModel | LoadStrategy::LoadConfig));
+
+    REQUIRE(loaded_config.opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
+    REQUIRE(loaded_config.opt_float("layer_height") == Approx(0.23));
+    REQUIRE(loaded_config.opt_float("raft_airgap") == Approx(0.31));
+    REQUIRE(loaded_config.opt_int("raft_base_layers") == 2);
+    REQUIRE(loaded_config.opt_int("raft_interface_layers") == 3);
+    REQUIRE(loaded_config.opt_int("raft_surface_layers") == 4);
+    REQUIRE(std::find(substitutions.unrecogized_keys.begin(), substitutions.unrecogized_keys.end(), project_unknown_key) !=
+            substitutions.unrecogized_keys.end());
+    REQUIRE(std::find(substitutions.unrecogized_keys.begin(), substitutions.unrecogized_keys.end(), object_unknown_key) !=
+            substitutions.unrecogized_keys.end());
+    REQUIRE(std::find(substitutions.unrecogized_keys.begin(), substitutions.unrecogized_keys.end(), volume_unknown_key) !=
+            substitutions.unrecogized_keys.end());
+    REQUIRE(std::find(substitutions.unrecogized_keys.begin(), substitutions.unrecogized_keys.end(), layer_range_unknown_key) !=
+            substitutions.unrecogized_keys.end());
+    REQUIRE(static_cast<bool>(substitutions.ignore_unknown_option));
+    REQUIRE(substitutions.ignore_unknown_option("caller_owned_optional"));
+    REQUIRE_FALSE(substitutions.ignore_unknown_option(project_unknown_key));
+
+    REQUIRE(loaded_model.objects.size() == 1);
+    const ModelObject &loaded_object = *loaded_model.objects.front();
+    REQUIRE(loaded_object.config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
+    REQUIRE(loaded_object.volumes.size() == 1);
+    REQUIRE(loaded_object.volumes.front()->config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
+    REQUIRE(loaded_object.volumes.front()->config.get().opt_float("raft_surface_speed") == Approx(43.));
+    REQUIRE_FALSE(loaded_object.volumes.front()->config.has(volume_unknown_key));
+
+    REQUIRE(loaded_object.layer_config_ranges.size() == 1);
+    const ModelConfig &loaded_layer_range = loaded_object.layer_config_ranges.begin()->second;
+    REQUIRE(loaded_layer_range.get().opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
+    REQUIRE(loaded_layer_range.get().opt_float("raft_surface_speed") == Approx(41.));
+    REQUIRE_FALSE(loaded_layer_range.has(layer_range_unknown_key));
+
+    const auto embedded_print_it = std::find_if(
+        loaded_artifacts.presets.begin(), loaded_artifacts.presets.end(), [](const Preset *preset) {
+            return preset != nullptr && preset->type == Preset::TYPE_PRINT;
+        });
+    REQUIRE(embedded_print_it != loaded_artifacts.presets.end());
+    REQUIRE((*embedded_print_it)->config.opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
+    REQUIRE((*embedded_print_it)->config.opt_float("raft_airgap") == Approx(0.35));
+}
+
+TEST_CASE("BBS 3MF reader falls back unknown Cura raft algorithm versions to Legacy",
           "[3mf][bbs][Raft][RequiredFeature]")
 {
     Temporary3mfPath source_archive("orca-required-feature-future-raft-source");
@@ -689,6 +852,86 @@ TEST_CASE("BBS 3MF preserves dormant Cura V1 raft tuning", "[3mf][bbs][Raft][Con
     REQUIRE(loaded_cura_config.opt_int("raft_layers") == 7);
 }
 
+TEST_CASE("BBS 3MF treats a project predating raft_mode as Legacy", "[3mf][bbs][Raft][LegacyCompatibility]")
+{
+    Temporary3mfPath source_archive("orca-raft-legacy-with-mode");
+    DynamicPrintConfig stored_config = DynamicPrintConfig::full_print_config();
+    configure_raft(stored_config, RaftMode::Legacy, 1, 0, 0);
+    stored_config.set("raft_layers", 6);
+    stored_config.set("raft_contact_distance", 0.24);
+    stored_config.set("raft_expansion", 1.75);
+    stored_config.set_key_value("raft_first_layer_density", new ConfigOptionPercent(86.));
+    REQUIRE(store_bbs_project(source_archive.path(), stored_config));
+
+    // The current Legacy writer already omits the Cura reader marker. Removing
+    // raft_mode from its project config then reproduces the relevant shape of
+    // an archive saved before raft implementations became selectable.
+    const std::string model_xml = read_zip_entry_text(source_archive.path(), BBS_3MF_MODEL_FILE);
+    REQUIRE(model_xml.find(required_feature_namespace_declaration()) == std::string::npos);
+    REQUIRE(model_xml.find(BBS_3MF_REQUIRED_FEATURES_TAG) == std::string::npos);
+    REQUIRE(model_xml.find(BBS_3MF_FEATURE_CURA_RAFT_V1) == std::string::npos);
+
+    std::string project_config = read_zip_entry_text(source_archive.path(), "Metadata/project_settings.config");
+    REQUIRE(erase_json_member(project_config, "raft_mode"));
+    REQUIRE_FALSE(nlohmann::json::parse(project_config).contains("raft_mode"));
+
+    Temporary3mfPath legacy_archive("orca-raft-legacy-without-mode");
+    copy_zip_replacing_entry(source_archive.path(), legacy_archive.path(), "Metadata/project_settings.config", project_config);
+
+    DynamicPrintConfig loaded_config = DynamicPrintConfig::full_print_config();
+    REQUIRE(loaded_config.opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(load_bbs_project(legacy_archive.path(), loaded_config));
+    REQUIRE(loaded_config.opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(loaded_config.opt_int("raft_layers") == 6);
+    REQUIRE(loaded_config.opt_float("raft_contact_distance") == Approx(0.24));
+    REQUIRE(loaded_config.opt_float("raft_expansion") == Approx(1.75));
+    REQUIRE(loaded_config.option<ConfigOptionPercent>("raft_first_layer_density")->value == Approx(86.));
+}
+
+TEST_CASE("BBS 3MF preserves Cura V1 Auto sentinels and percentage default line width",
+          "[3mf][bbs][Raft][ConfigRoundTrip]")
+{
+    Temporary3mfPath archive("orca-raft-auto-percent-roundtrip");
+    DynamicPrintConfig stored_config = DynamicPrintConfig::full_print_config();
+    configure_raft(stored_config, RaftMode::CuraV1, 1, 2, 2);
+    stored_config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4}));
+    stored_config.set_key_value("line_width", new ConfigOptionFloatOrPercent(120., true));
+
+    const std::array<const char *, 9> auto_keys = {
+        "raft_base_layer_height",       "raft_base_line_width",       "raft_base_line_spacing",
+        "raft_interface_layer_height",  "raft_interface_line_width",  "raft_interface_line_spacing",
+        "raft_surface_layer_height",    "raft_surface_line_width",    "raft_surface_line_spacing",
+    };
+    for (const char *key : auto_keys)
+        stored_config.set(key, 0.);
+
+    REQUIRE(store_bbs_project(archive.path(), stored_config));
+
+    DynamicPrintConfig loaded_config = DynamicPrintConfig::full_print_config();
+    REQUIRE(load_bbs_project(archive.path(), loaded_config));
+    REQUIRE(loaded_config.opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
+    REQUIRE(loaded_config.option<ConfigOptionFloats>("nozzle_diameter")->get_at(0) == Approx(0.4));
+
+    const ConfigOptionFloatOrPercent *loaded_line_width =
+        loaded_config.option<ConfigOptionFloatOrPercent>("line_width");
+    REQUIRE(loaded_line_width != nullptr);
+    REQUIRE(loaded_line_width->percent);
+    REQUIRE(loaded_line_width->value == Approx(120.));
+    for (const char *key : auto_keys) {
+        CAPTURE(key);
+        REQUIRE(loaded_config.opt_float(key) == Approx(0.));
+    }
+
+    PrintConfig print_config;
+    print_config.apply(loaded_config, true);
+    PrintObjectConfig object_config;
+    object_config.apply(loaded_config, true);
+    const coordf_t nozzle = loaded_config.option<ConfigOptionFloats>("nozzle_diameter")->get_at(0);
+    const RaftPlanConfig resolved = resolve_cura_raft_plan_config(print_config, object_config, nozzle, nozzle);
+    REQUIRE(resolved.surface_config.line_width == Approx(0.48));
+    REQUIRE(resolved.surface_config.line_spacing == Approx(0.48));
+}
+
 TEST_CASE("BBS 3MF readers gate unknown required features by artifact type",
           "[3mf][bbs][Raft][RequiredFeature]")
 {
@@ -715,6 +958,35 @@ TEST_CASE("BBS 3MF readers gate unknown required features by artifact type",
     REQUIRE_FALSE(read_zip_entry_text(known_archive.path(), "Metadata/plate_1.png").empty());
     REQUIRE_FALSE(read_zip_entry_text(known_archive.path(), "Metadata/model_settings.config").empty());
     REQUIRE_FALSE(read_zip_entry_text(known_archive.path(), "Metadata/slice_info.config").empty());
+
+    // Additive V1 raft options are editor metadata only. A G-code 3MF keeps
+    // the finalized artifact and imports every V1 option this reader knows.
+    std::string additive_project_config = read_zip_entry_text(known_archive.path(), "Metadata/project_settings.config");
+    append_json_member(additive_project_config, "raft_future_gcode_bias", "\"23\"");
+    Temporary3mfPath additive_archive("orca-required-feature-gcode-additive-raft");
+    copy_zip_replacing_entry(known_archive.path(), additive_archive.path(), "Metadata/project_settings.config",
+                             additive_project_config);
+
+    std::ifstream additive_stream(additive_archive.path(), std::ios::binary);
+    REQUIRE(additive_stream.good());
+    DynamicPrintConfig additive_config = DynamicPrintConfig::full_print_config();
+    configure_raft(additive_config, RaftMode::Legacy, 7, 0, 0);
+    additive_config.set("layer_height", 0.37);
+    attach_enum_vector_serialization_maps(additive_config);
+    Model                additive_model;
+    ModelBackupPathGuard additive_backup_path_guard(additive_model);
+    BbsLoadArtifacts     additive_artifacts;
+    Semver               additive_file_version;
+    REQUIRE(load_gcode_3mf_from_stream(additive_stream, &additive_config, &additive_model, &additive_artifacts.plates,
+                                       &additive_file_version));
+    REQUIRE(additive_config.opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
+    REQUIRE(additive_config.opt_float("layer_height") == Approx(0.23));
+    REQUIRE(additive_config.opt_int("raft_base_layers") == 1);
+    REQUIRE(additive_config.opt_int("raft_interface_layers") == 2);
+    REQUIRE(additive_config.opt_int("raft_surface_layers") == 2);
+    REQUIRE(additive_artifacts.plates.size() == 1);
+    REQUIRE(additive_artifacts.plates.front()->gcode_file == "Metadata/plate_1.gcode");
+    REQUIRE_FALSE(additive_artifacts.plates.front()->plate_thumbnail.pixels.empty());
 
     std::string model_xml = read_zip_entry_text(known_archive.path(), BBS_3MF_MODEL_FILE);
     const size_t feature_pos = model_xml.find(BBS_3MF_FEATURE_CURA_RAFT_V1);

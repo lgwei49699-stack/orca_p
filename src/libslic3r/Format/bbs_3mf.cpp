@@ -584,6 +584,19 @@ static bool is_cura_raft_required_feature(const std::string &feature)
            feature.size() > std::char_traits<char>::length(BBS_3MF_FEATURE_CURA_RAFT_PREFIX);
 }
 
+static bool is_optional_cura_raft_option(const t_config_option_key &option_key)
+{
+    return option_key != "raft_mode" && boost::algorithm::starts_with(option_key, "raft_");
+}
+
+static void allow_unknown_cura_raft_options(ConfigSubstitutionContext &context)
+{
+    const auto previous_predicate = context.ignore_unknown_option;
+    context.ignore_unknown_option = [previous_predicate](const t_config_option_key &option_key) {
+        return (previous_predicate && previous_predicate(option_key)) || is_optional_cura_raft_option(option_key);
+    };
+}
+
 static bool project_requires_cura_raft_v1(const Model &model,
                                           const DynamicPrintConfig *project_config,
                                           const std::vector<Preset *> *project_presets)
@@ -1087,6 +1100,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         std::string m_thumbnail_small;
         std::set<std::string> m_required_features;
         bool m_force_legacy_raft { false };
+        bool m_allow_unknown_cura_raft_options { false };
         std::vector<std::string> m_sub_model_paths;
         std::vector<ObjectImporter*> m_object_importers;
 
@@ -1307,6 +1321,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         m_curr_characters.clear();
         m_required_features.clear();
         m_force_legacy_raft = false;
+        m_allow_unknown_cura_raft_options = false;
 
         std::map<int, PlateData*>::iterator it = m_plater_data.begin();
         while (it != m_plater_data.end())
@@ -1352,6 +1367,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         m_curr_characters.clear();
         m_required_features.clear();
         m_force_legacy_raft = false;
+        m_allow_unknown_cura_raft_options = false;
         //BBS: plater data init
         m_plater_data.clear();
         m_curr_instance.object_id = -1;
@@ -1440,6 +1456,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
     {
         m_required_features.clear();
         m_force_legacy_raft = false;
+        m_allow_unknown_cura_raft_options = false;
 
         mz_zip_archive archive;
         mz_zip_zero_struct(&archive);
@@ -1531,6 +1548,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                         continue;
                     // extract slic3r print config file
                     ConfigSubstitutionContext config_substitutions(ForwardCompatibilitySubstitutionRule::Disable);
+                    if (m_allow_unknown_cura_raft_options)
+                        allow_unknown_cura_raft_options(config_substitutions);
                     _extract_project_config_from_archive(archive, stat, config, config_substitutions, model);
                 }
                 else if (boost::algorithm::iequals(name, BBS_MODEL_CONFIG_FILE)) {
@@ -1632,12 +1651,17 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
     void _BBS_3MF_Importer::_validate_required_features()
     {
         bool force_legacy_raft = false;
+        bool allow_unknown_cura_raft_options = false;
         for (const std::string &feature : m_required_features) {
-            if (BBS_3MF_SUPPORTED_REQUIRED_FEATURES.count(feature) != 0)
+            if (BBS_3MF_SUPPORTED_REQUIRED_FEATURES.count(feature) != 0) {
+                if (feature == BBS_3MF_FEATURE_CURA_RAFT_V1)
+                    allow_unknown_cura_raft_options = true;
                 continue;
+            }
 
             if (is_cura_raft_required_feature(feature)) {
                 force_legacy_raft = true;
+                allow_unknown_cura_raft_options = true;
                 BOOST_LOG_TRIVIAL(warning)
                     << "This 3MF project uses the unsupported Cura raft feature '" << feature
                     << "'. Loading the project with Legacy raft mode; review raft settings before slicing or saving.";
@@ -1650,6 +1674,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             throw UnsupportedRequired3mfFeatureError(message);
         }
         m_force_legacy_raft = force_legacy_raft;
+        m_allow_unknown_cura_raft_options = allow_unknown_cura_raft_options;
     }
 
     //BBS: add plate data related logic
@@ -1664,6 +1689,10 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         BBLProject *project,
         int plate_id)
     {
+        ScopeGuard restore_unknown_option_policy(
+            [&config_substitutions, previous_policy = config_substitutions.ignore_unknown_option]() mutable {
+                config_substitutions.ignore_unknown_option = std::move(previous_policy);
+            });
         bool cb_cancel = false;
         //BBS progress point
         // prepare restore
@@ -1812,6 +1841,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             return false;
         }
         _validate_required_features();
+        if (m_allow_unknown_cura_raft_options)
+            allow_unknown_cura_raft_options(config_substitutions);
 
         if (!m_designer.empty()) {
             m_model->design_info = std::make_shared<ModelDesignInfo>();
@@ -2680,7 +2711,16 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             //ConfigSubstitutions config_substitutions = config.load_from_ini(dest_file, Enable);
             std::map<std::string, std::string> key_values;
             std::string reason;
-            ConfigSubstitutions config_substitutions = use_json? config.load_from_json(dest_file, Enable, key_values, reason) : config.load_from_ini(dest_file, Enable);
+            ConfigSubstitutions config_substitutions;
+            if (use_json) {
+                ConfigSubstitutionContext embedded_substitutions(ForwardCompatibilitySubstitutionRule::Enable);
+                if (type == Preset::TYPE_PRINT && m_allow_unknown_cura_raft_options)
+                    allow_unknown_cura_raft_options(embedded_substitutions);
+                config.load_from_json(dest_file, embedded_substitutions, true, key_values, reason);
+                config_substitutions = std::move(embedded_substitutions.substitutions);
+            } else {
+                config_substitutions = config.load_from_ini(dest_file, Enable);
+            }
             if (!reason.empty()) {
                 BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << boost::format(", load project embedded config from  %1% failed\n") % dest_file;
                 //skip this file

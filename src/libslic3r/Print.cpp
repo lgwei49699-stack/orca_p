@@ -1479,8 +1479,11 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                 // if we don't have raft layers, any nozzle diameter is potentially used in first layer
                 first_layer_min_nozzle_diameter = min_nozzle_diameter;
             }
-            if (initial_layer_print_height > first_layer_min_nozzle_diameter)
-                return {L("Layer height cannot exceed nozzle diameter."), object, "initial_layer_print_height"};
+            if (initial_layer_print_height > first_layer_min_nozzle_diameter) {
+                const char *opt_key = object->config().raft_mode.value == RaftMode::CuraV1 && object->has_raft() ?
+                    "raft_base_layer_height" : "initial_layer_print_height";
+                return {L("Layer height cannot exceed nozzle diameter."), object, opt_key};
+            }
 
             // validate layer_height
             double layer_height = object->config().layer_height.value;
@@ -1497,6 +1500,31 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
             }
             if (object->config().raft_mode.value == RaftMode::CuraV1 && object->has_raft()) {
                 const SlicingParameters &slicing_params = object->slicing_parameters();
+                // Zero is the explicit Auto sentinel. Reject tiny positive values before the resolver can either mistake values up to
+                // EPSILON for Auto or pass a pathologically dense spacing to the fill generator.
+                const auto invalid_explicit_spacing = [](coordf_t spacing) {
+                    return spacing > 0. && spacing < RESOLUTION;
+                };
+                const char *spacing_key = nullptr;
+                if (invalid_explicit_spacing(object->config().raft_base_line_spacing.value))
+                    spacing_key = "raft_base_line_spacing";
+                else if (slicing_params.interface_phase_raft_layers() > 0 &&
+                         invalid_explicit_spacing(object->config().raft_interface_line_spacing.value))
+                    spacing_key = "raft_interface_line_spacing";
+                else if (invalid_explicit_spacing(object->config().raft_surface_line_spacing.value))
+                    spacing_key = "raft_surface_line_spacing";
+                if (spacing_key != nullptr)
+                    return {L("Raft line spacing must be zero for Auto or at least 0.0125 mm."), object, spacing_key};
+
+                // The normal support generator keeps a 0.5 mm safety outline around the Surface footprint and can only expand
+                // the Base from there. Reject smaller deltas instead of silently producing a Base wider than configured.
+                constexpr coordf_t normal_raft_base_margin_delta = 0.5;
+                if (!is_tree(object->config().support_type.value) &&
+                    object->config().raft_base_margin.value + EPSILON <
+                        object->config().raft_surface_margin.value + normal_raft_base_margin_delta) {
+                    return {L("For normal support, Raft Base margin must be at least 0.5 mm larger than Raft Surface margin."), object,
+                            "raft_base_margin"};
+                }
                 if (printer_has_mixed_nozzle_diameters) {
                     if (slicing_params.base_raft_layers > 0 && object->config().support_filament.value == 0) {
                         return {L("Cura-style raft cannot use the current tool when printer nozzles have different diameters."), object,

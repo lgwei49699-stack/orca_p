@@ -4295,7 +4295,8 @@ void PrintConfigDef::init_fff_params()
                              L("Absolute extrusion width of Base lines. Zero automatically derives it from the active nozzle diameter."),
                              "mm", 0.0, 10.0, 0.0, comDevelop);
     add_cura_raft_auto_float("raft_base_line_spacing", L("Raft base line spacing"),
-                             L("Center-to-center spacing of Base lines. Zero automatically derives it from the resolved Base line width."),
+                             L("Center-to-center spacing of Base lines. Zero automatically derives it from the resolved Base line width; "
+                               "an explicit value must be at least 0.0125 mm."),
                              "mm", 0.0, 100.0, 0.0, comDevelop);
     add_cura_raft_percent("raft_base_flow", L("Raft base flow"),
                           L("Material flow of the Base phase relative to the resolved extrusion flow."), 10.0, 200.0, 105.0, comDevelop);
@@ -4305,7 +4306,9 @@ void PrintConfigDef::init_fff_params()
     add_cura_raft_int("raft_base_wall_count", L("Raft base wall count"),
                       L("Number of contours around the linear Base pattern."), L("walls"), 0, 100, 4, comDevelop);
     add_cura_raft_float("raft_base_margin", L("Raft base margin"),
-                        L("Additional XY margin around the model footprint for the Base phase."), "mm", 0.0, 100.0, 3.0, comDevelop);
+                        L("Additional XY margin around the model footprint for the Base phase. With normal support, it must be at least "
+                          "0.5 mm larger than the Raft Surface margin."),
+                        "mm", 0.0, 100.0, 3.0, comDevelop);
 
     add_cura_raft_auto_float("raft_interface_layer_height", L("Raft interface layer height"),
                              L("Layer height of the Interface phase. Zero automatically derives it from the nozzle and normal-layer "
@@ -4317,7 +4320,7 @@ void PrintConfigDef::init_fff_params()
                              "mm", 0.0, 10.0, 0.0, comDevelop);
     add_cura_raft_auto_float("raft_interface_line_spacing", L("Raft interface line spacing"),
                              L("Center-to-center spacing of Interface lines. Zero automatically derives it from the resolved Interface "
-                               "line width."),
+                               "line width; an explicit value must be at least 0.0125 mm."),
                              "mm", 0.0, 100.0, 0.0, comDevelop);
     add_cura_raft_percent("raft_interface_flow", L("Raft interface flow"),
                           L("Material flow of the Interface phase relative to the resolved extrusion flow."), 10.0, 200.0, 95.0,
@@ -4341,7 +4344,7 @@ void PrintConfigDef::init_fff_params()
                              "mm", 0.0, 10.0, 0.0, comAdvanced);
     add_cura_raft_auto_float("raft_surface_line_spacing", L("Raft surface line spacing"),
                              L("Center-to-center spacing of Surface lines. Zero makes it equal to the resolved Surface line width for a "
-                               "solid top."),
+                               "solid top; an explicit value must be at least 0.0125 mm."),
                              "mm", 0.0, 100.0, 0.0, comAdvanced);
     add_cura_raft_percent("raft_surface_flow", L("Raft surface flow"),
                           L("Material flow of the Surface phase relative to the resolved extrusion flow."), 10.0, 200.0, 100.0, comDevelop);

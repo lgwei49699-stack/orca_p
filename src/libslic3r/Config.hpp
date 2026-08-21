@@ -252,6 +252,10 @@ struct ConfigSubstitutionContext
     ForwardCompatibilitySubstitutionRule 	rule;
     ConfigSubstitutions					    substitutions;
     std::vector<std::string>                unrecogized_keys;
+    // Importers may opt into ignoring a narrowly scoped family of unknown
+    // options. Known options with invalid values still follow `rule` and are
+    // never swallowed by this predicate.
+    std::function<bool(const t_config_option_key &)> ignore_unknown_option;
 };
 
 // A generic value of a configuration option.

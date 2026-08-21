@@ -235,6 +235,11 @@ TEST_CASE("Cura V1 raft validates phase geometry against its active nozzle", "[S
         config.set("raft_interface_layer_height", 0.5);
         expected_key = "raft_interface_layer_height";
     }
+    SECTION("base layer height error points to the raft Base setting")
+    {
+        config.set("raft_base_layer_height", 0.5);
+        expected_key = "raft_base_layer_height";
+    }
     SECTION("surface line width must be larger than its layer height")
     {
         config.set("raft_surface_line_width", 0.19);
@@ -256,6 +261,27 @@ TEST_CASE("Cura V1 raft validates phase geometry against its active nozzle", "[S
         config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.2, false));
         expected_key = "initial_layer_line_width";
     }
+    SECTION("normal raft rejects a Base margin that cannot be represented exactly")
+    {
+        config.set("raft_base_margin", 1.4);
+        config.set("raft_surface_margin", 1.0);
+        expected_key = "raft_base_margin";
+    }
+    SECTION("base line spacing below resolver epsilon is not silently treated as Auto")
+    {
+        config.set("raft_base_line_spacing", EPSILON * 0.5);
+        expected_key = "raft_base_line_spacing";
+    }
+    SECTION("interface line spacing below path resolution is rejected")
+    {
+        config.set("raft_interface_line_spacing", RESOLUTION * 0.5);
+        expected_key = "raft_interface_line_spacing";
+    }
+    SECTION("surface line spacing below path resolution is rejected")
+    {
+        config.set("raft_surface_line_spacing", RESOLUTION * 0.5);
+        expected_key = "raft_surface_line_spacing";
+    }
 
     Model model;
     ModelObject *model_object = model.add_object();
@@ -269,6 +295,64 @@ TEST_CASE("Cura V1 raft validates phase geometry against its active nozzle", "[S
     const StringObjectException error = print.validate();
     REQUIRE_FALSE(error.string.empty());
     REQUIRE(error.opt_key == expected_key);
+}
+
+TEST_CASE("Cura V1 raft accepts safe explicit spacing and representable margins", "[SupportMaterial][Raft][CuraV1][Validation]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    config.set("raft_base_layers", 1);
+    config.set("raft_interface_layers", 2);
+    config.set("raft_surface_layers", 2);
+    config.set("raft_base_layer_height", 0.3);
+    config.set("raft_interface_layer_height", 0.3);
+    config.set("raft_surface_layer_height", 0.2);
+    config.set("raft_base_line_width", 0.6);
+    config.set("raft_interface_line_width", 0.6);
+    config.set("raft_surface_line_width", 0.42);
+    config.set("before_layer_change_gcode", std::string("G92 E0"));
+
+    SECTION("zero remains Auto")
+    {
+        config.set("raft_base_line_spacing", 0.);
+        config.set("raft_interface_line_spacing", 0.);
+        config.set("raft_surface_line_spacing", 0.);
+    }
+    SECTION("path resolution is an accepted explicit boundary")
+    {
+        config.set("raft_base_line_spacing", RESOLUTION);
+        config.set("raft_interface_line_spacing", RESOLUTION);
+        config.set("raft_surface_line_spacing", RESOLUTION);
+    }
+    SECTION("business Surface spacing remains accepted")
+    {
+        config.set("raft_surface_line_spacing", 0.3);
+    }
+    SECTION("normal Base margin accepts the exact representable boundary")
+    {
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormal));
+        config.set("raft_base_margin", 1.5);
+        config.set("raft_surface_margin", 1.0);
+    }
+    SECTION("tree raft accepts a Base margin smaller than Surface")
+    {
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTree));
+        config.set("raft_base_margin", 0.5);
+        config.set("raft_surface_margin", 1.0);
+    }
+
+    Model model;
+    ModelObject *model_object = model.add_object();
+    model_object->add_volume(Slic3r::Test::mesh(TestMesh::cube_20x20x20));
+    model_object->add_instance();
+    model_object->ensure_on_bed();
+
+    Print print;
+    print.auto_assign_extruders(model_object);
+    print.apply(model, config);
+    const StringObjectException validation = print.validate();
+    INFO("validation error: " << validation.string << "; key: " << validation.opt_key);
+    REQUIRE(validation.string.empty());
 }
 
 TEST_CASE("Cura V1 current-tool raft phases require equal nozzle diameters", "[SupportMaterial][Raft][CuraV1][Validation]")
@@ -563,11 +647,11 @@ TEST_CASE("Cura V1 model features use model-local layer ids above the raft", "[S
 TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[SupportMaterial][Raft][CuraV1][GCode]")
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
-    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.6}));
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4}));
     config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
     config.set("layer_height", 0.2);
-    config.set("initial_layer_print_height", 0.42);
-    config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.8, false));
+    config.set("initial_layer_print_height", 0.28);
+    config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.58, false));
     config.set("inner_wall_line_width", 0.42);
     config.set("outer_wall_line_width", 0.42);
     config.set("initial_layer_speed", 7.);
@@ -636,11 +720,13 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
 
     const PrintObject *object = print.objects().front();
     REQUIRE(object->slicing_parameters().raft_layers() == 5);
-    REQUIRE(object->support_layers().size() >= 5);
+    REQUIRE(object->slicing_parameters().first_print_layer_height == Approx(0.3));
+    REQUIRE(object->slicing_parameters().first_object_layer_height == Approx(0.28));
+    REQUIRE(object->support_layers().size() == 5);
     const SupportParameters support_params(*object);
-    const Flow nominal_base_flow(0.6f, 0.3f, 0.6f);
-    const Flow nominal_interface_flow(0.6f, 0.3f, 0.6f);
-    const Flow nominal_surface_flow(0.42f, 0.2f, 0.6f);
+    const Flow nominal_base_flow(0.6f, 0.3f, 0.4f);
+    const Flow nominal_interface_flow(0.6f, 0.3f, 0.4f);
+    const Flow nominal_surface_flow(0.42f, 0.2f, 0.4f);
     REQUIRE(support_params.raft_flow(RaftPhase::Base).width() == Approx(0.6));
     REQUIRE(support_params.raft_flow(RaftPhase::Interface).width() == Approx(0.6));
     REQUIRE(support_params.raft_flow(RaftPhase::Surface).width() == Approx(0.42));
@@ -687,14 +773,14 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     }
     REQUIRE(object->layers().size() >= 2);
     REQUIRE(object->layers()[0]->id() == 5);
-    REQUIRE(object->layers()[0]->height == Approx(0.42));
-    REQUIRE(object->layers()[0]->print_z == Approx(1.99));
+    REQUIRE(object->layers()[0]->height == Approx(0.28));
+    REQUIRE(object->layers()[0]->print_z == Approx(1.85));
     REQUIRE(object->layers()[1]->height == Approx(0.2));
-    REQUIRE(object->layers()[1]->print_z == Approx(2.09));
+    REQUIRE(object->layers()[1]->print_z == Approx(1.95));
     // Overlap changes print Z only; the mesh must still be sliced through its
     // full 20 mm height instead of cropping the top by the overlap amount.
     REQUIRE(object->layers().back()->slice_z + 0.5 * object->layers().back()->height >= 20.0 - EPSILON);
-    REQUIRE(object->layers()[0]->get_region(0)->flow(frPerimeter).width() == Approx(0.8));
+    REQUIRE(object->layers()[0]->get_region(0)->flow(frPerimeter).width() == Approx(0.58));
     REQUIRE(object->layers()[1]->get_region(0)->flow(frPerimeter).width() == Approx(0.42));
     REQUIRE(print.skirt_first_layer_height() == Approx(0.3));
     REQUIRE(print.skirt_flow().height() == Approx(0.3));
@@ -737,7 +823,7 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     const std::string base_gcode = layer_section(0.3, 0.6);
     const std::string interface_gcode = layer_section(0.6, 0.9);
     const std::string surface_gcode = layer_section(1.1, 1.3);
-    const std::string first_model_layer_gcode = layer_section(1.99, 2.09);
+    const std::string first_model_layer_gcode = layer_section(1.85, 1.95);
     const auto fan_command_count = [](const std::string &section) {
         size_t count = 0;
         for (size_t position = 0; (position = section.find("M106 S", position)) != std::string::npos; ++count)
@@ -756,7 +842,7 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     // marker. The post-raft model layer must therefore reset the Surface fan
     // to the model-local layer-0 value between the last raft marker and the
     // first model marker, instead of treating physical layer 5 as fully cooled.
-    const size_t first_model_marker = layer_marker_position(1.99);
+    const size_t first_model_marker = layer_marker_position(1.85);
     const size_t last_raft_marker = layer_marker_position(1.3);
     const size_t model_fan_reset = gcode.rfind("M106 S0", first_model_marker);
     REQUIRE(model_fan_reset != std::string::npos);
@@ -770,6 +856,7 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
 TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial][Raft][CuraV1][TreeSupport]")
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4}));
     config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
     config.set("layer_height", 0.2);
     config.set("initial_layer_print_height", 0.3);
@@ -781,10 +868,14 @@ TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial]
     config.set_key_value("raft_base_flow", new ConfigOptionPercent(105.));
     config.set_key_value("raft_interface_flow", new ConfigOptionPercent(95.));
     config.set_key_value("raft_surface_flow", new ConfigOptionPercent(80.));
+    config.set("raft_surface_line_width", 0.72);
+    config.set("raft_surface_line_spacing", 0.72);
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTreeAuto));
     config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(smsTreeOrganic));
+    config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(0.44, false));
     config.set("support_threshold_angle", 30);
     config.set("support_top_z_distance", 0.2);
+    config.set("before_layer_change_gcode", std::string("G92 E0"));
 
     TriangleMesh tilted_cube = Slic3r::Test::mesh(TestMesh::cube_20x20x20);
     tilted_cube.rotate_x(float(Geometry::deg2rad(15.)));
@@ -799,14 +890,19 @@ TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial]
     Print print;
     print.auto_assign_extruders(model_object);
     print.apply(model, config);
-    print.validate();
+    const StringObjectException validation = print.validate();
+    INFO("validation error: " << validation.string << "; key: " << validation.opt_key);
+    REQUIRE(validation.string.empty());
     print.set_status_silent();
     print.process();
 
     const PrintObject *object = print.objects().front();
     const SupportParameters support_params(*object);
     REQUIRE(object->slicing_parameters().raft_layers() == 5);
-    REQUIRE(object->support_layers().size() >= 5);
+    REQUIRE(object->support_layers().size() > 5);
+    REQUIRE(support_params.raft_surface_flow.width() == Approx(0.72));
+    REQUIRE(support_params.support_material_flow.width() == Approx(0.44));
+    REQUIRE(support_params.support_material_interface_flow.width() == Approx(0.44));
     const std::array<double, 5> expected_print_z {0.3, 0.6, 0.9, 1.1, 1.3};
     for (size_t layer_id = 0; layer_id < expected_print_z.size(); ++layer_id) {
         INFO("tree raft layer " << layer_id);
@@ -834,6 +930,128 @@ TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial]
             }
         }
         REQUIRE(found_phase_path);
+    }
+
+    const double surface_mm3_per_mm =
+        support_params.raft_surface_flow.mm3_per_mm() * support_params.raft_flow_ratio(RaftPhase::Surface);
+    bool found_ordinary_tree_support_path = false;
+    for (size_t layer_id = object->slicing_parameters().raft_layers(); layer_id < object->support_layers().size(); ++layer_id) {
+        const ExtrusionEntityCollection flattened = object->support_layers()[layer_id]->support_fills.flatten();
+        const auto check_path = [&](const ExtrusionPath &path) {
+            if (path.role() != erSupportMaterial && path.role() != erSupportMaterialInterface)
+                return;
+            found_ordinary_tree_support_path = true;
+            CAPTURE(layer_id, path.width, path.height, path.mm3_per_mm);
+            REQUIRE_FALSE(path.width == Approx(support_params.raft_surface_flow.width()));
+            REQUIRE_FALSE(path.mm3_per_mm == Approx(surface_mm3_per_mm));
+        };
+        for (const ExtrusionEntity *entity : flattened.entities) {
+            if (const auto *path = dynamic_cast<const ExtrusionPath *>(entity)) {
+                check_path(*path);
+            } else if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath *>(entity)) {
+                for (const ExtrusionPath &path : multipath->paths)
+                    check_path(path);
+            } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(entity)) {
+                for (const ExtrusionPath &path : loop->paths)
+                    check_path(path);
+            }
+        }
+    }
+    REQUIRE(found_ordinary_tree_support_path);
+}
+
+TEST_CASE("Cura V1 raft keeps normal Grid and Snug support controls independent", "[SupportMaterial][Raft][CuraV1][NormalSupport]")
+{
+    for (const SupportMaterialStyle support_style : {smsGrid, smsSnug}) {
+        CAPTURE(support_style);
+
+        DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4}));
+        config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+        config.set("layer_height", 0.2);
+        config.set("initial_layer_print_height", 0.28);
+        config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.58, false));
+        config.set("raft_airgap", 0.27);
+        config.set("raft_base_layers", 1);
+        config.set("raft_interface_layers", 2);
+        config.set("raft_surface_layers", 2);
+        config.set("raft_base_layer_height", 0.3);
+        config.set("raft_interface_layer_height", 0.3);
+        config.set("raft_surface_layer_height", 0.2);
+        config.set("raft_base_line_width", 0.6);
+        config.set("raft_interface_line_width", 0.6);
+        config.set("raft_surface_line_width", 0.72);
+        config.set("raft_base_line_spacing", 1.5);
+        config.set("raft_interface_line_spacing", 1.5);
+        config.set("raft_surface_line_spacing", 0.72);
+        config.set("enable_support", true);
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalAuto));
+        config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(support_style));
+        config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(0.44, false));
+        config.set("support_threshold_angle", 30);
+        config.set("support_top_z_distance", 0.4);
+        config.set("independent_support_layer_height", true);
+        config.set("before_layer_change_gcode", "G92 E0");
+
+        TriangleMesh tilted_cube = Slic3r::Test::mesh(TestMesh::cube_20x20x20);
+        tilted_cube.rotate_x(float(Geometry::deg2rad(15.)));
+        Model model;
+        ModelObject *model_object = model.add_object();
+        model_object->name = support_style == smsGrid ? "Cura-style raft Grid support cube" : "Cura-style raft Snug support cube";
+        model_object->add_volume(std::move(tilted_cube));
+        ModelInstance *instance = model_object->add_instance();
+        instance->set_offset(Vec3d(100., 100., 0.));
+        model_object->ensure_on_bed();
+
+        Print print;
+        print.auto_assign_extruders(model_object);
+        print.apply(model, config);
+        const StringObjectException validation = print.validate();
+        INFO("validation error: " << validation.string << "; key: " << validation.opt_key);
+        REQUIRE(validation.string.empty());
+        print.set_status_silent();
+        print.process();
+
+        const PrintObject *object = print.objects().front();
+        const SlicingParameters &slicing_params = object->slicing_parameters();
+        const SupportParameters support_params(*object);
+        REQUIRE(slicing_params.raft_layers() == 5);
+        REQUIRE(slicing_params.first_print_layer_height == Approx(0.3));
+        REQUIRE(slicing_params.first_object_layer_height == Approx(0.28));
+        REQUIRE(slicing_params.gap_raft_object == Approx(0.27));
+        REQUIRE(support_params.support_style == support_style);
+        REQUIRE(support_params.raft_surface_flow.width() == Approx(0.72));
+        REQUIRE(support_params.support_material_flow.width() == Approx(0.44));
+        REQUIRE(support_params.support_material_interface_flow.width() == Approx(0.44));
+        REQUIRE(object->support_layers().size() > slicing_params.raft_layers());
+        REQUIRE_FALSE(object->layers().empty());
+        REQUIRE(object->layers().front()->id() == slicing_params.raft_layers());
+        REQUIRE(object->layers().front()->height == Approx(0.28));
+        REQUIRE(object->layers().front()->get_region(0)->flow(frPerimeter).width() == Approx(0.58));
+
+        bool found_normal_support_path = false;
+        for (size_t layer_id = slicing_params.raft_layers(); layer_id < object->support_layers().size(); ++layer_id) {
+            const ExtrusionEntityCollection flattened = object->support_layers()[layer_id]->support_fills.flatten();
+            const auto check_path = [&](const ExtrusionPath &path) {
+                if (path.role() != erSupportMaterial && path.role() != erSupportMaterialInterface)
+                    return;
+                found_normal_support_path = true;
+                CAPTURE(layer_id, path.width, path.height, path.mm3_per_mm);
+                REQUIRE_FALSE(path.width == Approx(support_params.raft_surface_flow.width()));
+            };
+            for (const ExtrusionEntity *entity : flattened.entities) {
+                if (const auto *path = dynamic_cast<const ExtrusionPath *>(entity)) {
+                    check_path(*path);
+                } else if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath *>(entity)) {
+                    for (const ExtrusionPath &path : multipath->paths)
+                        check_path(path);
+                } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(entity)) {
+                    for (const ExtrusionPath &path : loop->paths)
+                        check_path(path);
+                }
+            }
+        }
+        REQUIRE(found_normal_support_path);
     }
 }
 
@@ -1435,16 +1653,47 @@ TEST_CASE("Cura V1 resolves only phase geometry zero values as Auto", "[SupportM
     object_config.raft_surface_line_width.value = 0.;
     object_config.raft_surface_line_spacing.value = 0.;
 
-    const RaftPlanConfig automatic = resolve_cura_raft_plan_config(print_config, object_config, 0.4, 0.6);
+    const RaftPlanConfig automatic = resolve_cura_raft_plan_config(print_config, object_config, 0.4, 0.4);
     REQUIRE(automatic.base_config.layer_height == Approx(0.3));
     REQUIRE(automatic.base_config.line_width == Approx(0.6));
     REQUIRE(automatic.base_config.line_spacing == Approx(1.5));
-    REQUIRE(automatic.interface_config.layer_height == Approx(0.45));
-    REQUIRE(automatic.interface_config.line_width == Approx(0.9));
-    REQUIRE(automatic.interface_config.line_spacing == Approx(2.25));
+    REQUIRE(automatic.interface_config.layer_height == Approx(0.3));
+    REQUIRE(automatic.interface_config.line_width == Approx(0.6));
+    REQUIRE(automatic.interface_config.line_spacing == Approx(1.5));
     REQUIRE(automatic.surface_config.layer_height == Approx(0.2));
-    REQUIRE(automatic.surface_config.line_width == Approx(0.63));
-    REQUIRE(automatic.surface_config.line_spacing == Approx(0.63));
+    REQUIRE(automatic.surface_config.line_width == Approx(0.42));
+    REQUIRE(automatic.surface_config.line_spacing == Approx(0.42));
+
+    SECTION("Surface Auto uses an absolute default line width")
+    {
+        object_config.line_width.value = 0.5;
+        object_config.line_width.percent = false;
+        const RaftPlanConfig absolute_width = resolve_cura_raft_plan_config(print_config, object_config, 0.4, 0.4);
+        REQUIRE(absolute_width.surface_config.line_width == Approx(0.5));
+        REQUIRE(absolute_width.surface_config.line_spacing == Approx(0.5));
+    }
+
+    SECTION("Surface Auto resolves a percentage default line width for the supported 0.4 mm nozzle")
+    {
+        object_config.line_width.value = 120.;
+        object_config.line_width.percent = true;
+        const RaftPlanConfig percentage_width = resolve_cura_raft_plan_config(print_config, object_config, 0.4, 0.4);
+        REQUIRE(percentage_width.surface_config.line_width == Approx(0.48));
+        REQUIRE(percentage_width.surface_config.line_spacing == Approx(0.48));
+    }
+
+    SECTION("explicit Surface geometry overrides the percentage default line width")
+    {
+        object_config.line_width.value = 120.;
+        object_config.line_width.percent = true;
+        object_config.raft_surface_layer_height.value = 0.23;
+        object_config.raft_surface_line_width.value = 0.53;
+        object_config.raft_surface_line_spacing.value = 0.54;
+        const RaftPlanConfig explicit_surface = resolve_cura_raft_plan_config(print_config, object_config, 0.4, 0.4);
+        REQUIRE(explicit_surface.surface_config.layer_height == Approx(0.23));
+        REQUIRE(explicit_surface.surface_config.line_width == Approx(0.53));
+        REQUIRE(explicit_surface.surface_config.line_spacing == Approx(0.54));
+    }
 
     object_config.raft_base_layer_height.value = 0.21;
     object_config.raft_base_line_width.value = 0.51;
@@ -1456,7 +1705,7 @@ TEST_CASE("Cura V1 resolves only phase geometry zero values as Auto", "[SupportM
     object_config.raft_surface_line_width.value = 0.53;
     object_config.raft_surface_line_spacing.value = 0.54;
 
-    const RaftPlanConfig explicit_values = resolve_cura_raft_plan_config(print_config, object_config, 0.4, 0.6);
+    const RaftPlanConfig explicit_values = resolve_cura_raft_plan_config(print_config, object_config, 0.4, 0.4);
     REQUIRE(explicit_values.base_config.layer_height == Approx(0.21));
     REQUIRE(explicit_values.base_config.line_width == Approx(0.51));
     REQUIRE(explicit_values.base_config.line_spacing == Approx(1.21));

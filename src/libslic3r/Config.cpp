@@ -586,6 +586,16 @@ bool ConfigBase::set_deserialize_raw(const t_config_option_key &opt_key_src, con
             if (optdef != nullptr)
                 break;
         }
+        if (optdef == nullptr && substitutions_ctxt.ignore_unknown_option &&
+            substitutions_ctxt.ignore_unknown_option(opt_key_src)) {
+            auto iter = std::find(substitutions_ctxt.unrecogized_keys.begin(),
+                                  substitutions_ctxt.unrecogized_keys.end(), opt_key_src);
+            if (iter == substitutions_ctxt.unrecogized_keys.end()) {
+                substitutions_ctxt.unrecogized_keys.push_back(opt_key_src);
+                BOOST_LOG_TRIVIAL(warning) << "Ignoring unsupported optional configuration option '" << opt_key_src << "'.";
+            }
+            return true;
+        }
         if (optdef == nullptr)
             throw UnknownOptionException(opt_key);
     }
