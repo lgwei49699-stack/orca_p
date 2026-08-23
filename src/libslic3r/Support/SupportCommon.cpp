@@ -565,11 +565,13 @@ static inline void fill_expolygons_generate_paths(
     float                    density,
     ExtrusionRole            role,
     const Flow              &flow,
-    double                   flow_ratio = 1.)
+    double                   flow_ratio = 1.,
+    InfillPattern            pattern = ipRectilinear)
 {
     FillParams fill_params;
     fill_params.density     = density;
     fill_params.dont_adjust = true;
+    fill_params.pattern     = pattern;
     fill_expolygons_generate_paths(dst, std::move(expolygons), filler, fill_params, density, role, flow, flow_ratio);
 }
 
@@ -832,7 +834,8 @@ void fill_expolygons_with_sheath_generate_paths(
     const SupportParameters& support_params,
     size_t                   wall_count,
     bool                     no_sort,
-    double                   flow_ratio)
+    double                   flow_ratio,
+    InfillPattern            pattern)
 {
     if (polygons.empty())
         return;
@@ -844,13 +847,14 @@ void fill_expolygons_with_sheath_generate_paths(
         }
     }
     else {
-        fill_expolygons_generate_paths(dst, closing_ex(polygons, float(SCALED_EPSILON)), filler, density, role, flow, flow_ratio);
+        fill_expolygons_generate_paths(dst, closing_ex(polygons, float(SCALED_EPSILON)), filler, density, role, flow, flow_ratio, pattern);
         return;
     }
 
     FillParams fill_params;
     fill_params.density     = density;
     fill_params.dont_adjust = true;
+    fill_params.pattern     = pattern;
 
     const double spacing = flow.scaled_spacing();
     // Clip the sheath path to avoid the extruder to get exactly on the first point of the loop.
@@ -1558,6 +1562,15 @@ void generate_support_toolpaths(
         angles.push_back(support_params.interface_angle);
 
     BoundingBox bbox_object(Point(-scale_(1.), -scale_(1.0)), Point(scale_(1.), scale_(1.)));
+    BoundingBox bbox_raft = bbox_object;
+    if (support_params.cura_raft_mode) {
+        BoundingBox resolved_bbox;
+        for (const SupportGeneratorLayer *layer : raft_layers)
+            if (layer != nullptr && !layer->polygons.empty())
+                resolved_bbox.merge(get_extents(layer->polygons));
+        if (resolved_bbox.defined)
+            bbox_raft = resolved_bbox;
+    }
 
 //    const coordf_t link_max_length_factor = 3.;
     const coordf_t link_max_length_factor = 0.;
@@ -1567,7 +1580,7 @@ void generate_support_toolpaths(
 
     tbb::parallel_for(tbb::blocked_range<size_t>(0, n_raft_layers),
         [&support_layers, &raft_layers, &intermediate_layers, &config, &support_params, &slicing_params,
-            &bbox_object, link_max_length_factor]
+            &bbox_object, &bbox_raft, link_max_length_factor]
             (const tbb::blocked_range<size_t>& range) {
         for (size_t support_layer_id = range.begin(); support_layer_id < range.end(); ++ support_layer_id)
         {
@@ -1583,8 +1596,8 @@ void generate_support_toolpaths(
             std::unique_ptr<Fill> filler_support = std::unique_ptr<Fill>(Fill::new_from_type(
                 support_params.cura_raft_mode && raft_phase == RaftPhase::Base ? support_params.raft_fill_pattern(raft_phase) :
                                                                                 support_params.base_fill_pattern));
-            filler_interface->set_bounding_box(bbox_object);
-            filler_support->set_bounding_box(bbox_object);
+            filler_interface->set_bounding_box(support_params.cura_raft_mode ? bbox_raft : bbox_object);
+            filler_support->set_bounding_box(support_params.cura_raft_mode ? bbox_raft : bbox_object);
 
             // Print the tree supports cutting through the raft with the exception of the 1st layer, where a full support layer will be printed below
             // both the raft and the trees.
@@ -1624,7 +1637,8 @@ void generate_support_toolpaths(
                         ExtrusionRole::erSupportMaterial, flow,
                         support_params,
                         cura_base_phase ? support_params.raft_wall_count(raft_phase) : size_t(support_params.with_sheath), false,
-                        cura_base_phase ? support_params.raft_flow_ratio(raft_phase) : 1.);
+                        cura_base_phase ? support_params.raft_flow_ratio(raft_phase) : 1.,
+                        cura_base_phase ? support_params.raft_fill_pattern(raft_phase) : ipRectilinear);
                 }
                 if (! tree_polygons.empty())
                     tree_supports_generate_paths(support_layer.support_fills.entities, tree_polygons, flow, support_params,
@@ -1679,7 +1693,8 @@ void generate_support_toolpaths(
                 // sheath at first layer
                 support_params,
                 support_params.cura_raft_mode ? support_params.raft_wall_count(raft_phase) : size_t(support_layer_id == 0),
-                support_layer_id == 0, support_params.cura_raft_mode ? support_params.raft_flow_ratio(raft_phase) : 1.);
+                support_layer_id == 0, support_params.cura_raft_mode ? support_params.raft_flow_ratio(raft_phase) : 1.,
+                support_params.cura_raft_mode ? support_params.raft_fill_pattern(raft_phase) : ipRectilinear);
         }
     });
 
@@ -1711,7 +1726,7 @@ void generate_support_toolpaths(
 
     tbb::parallel_for(tbb::blocked_range<size_t>(n_raft_layers, support_layers.size()),
         [&config, &slicing_params, &support_params, &support_layers, &bottom_contacts, &top_contacts, &intermediate_layers, &interface_layers, &base_interface_layers, &layer_caches, &loop_interface_processor,
-            &bbox_object, &angles, n_raft_layers, link_max_length_factor]
+            &bbox_object, &bbox_raft, &angles, n_raft_layers, link_max_length_factor]
             (const tbb::blocked_range<size_t>& range) {
         // Indices of the 1st layer in their respective container at the support layer height.
         size_t idx_layer_bottom_contact   = size_t(-1);
@@ -1726,8 +1741,10 @@ void generate_support_toolpaths(
         // Pointer to the 1st layer interface filler.
         auto filler_first_layer     = filler_first_layer_ptr ? filler_first_layer_ptr.get() : filler_interface.get();
         // Filler for the 1st layer interface, if different from filler_interface.
-        auto filler_raft_contact_ptr = std::unique_ptr<Fill>(range.begin() == n_raft_layers && config.support_interface_top_layers.value == 0 ?
-            Fill::new_from_type(support_params.raft_interface_fill_pattern) : nullptr);
+        auto filler_raft_contact_ptr = std::unique_ptr<Fill>(support_params.cura_raft_mode ?
+            Fill::new_from_type(support_params.raft_fill_pattern(RaftPhase::Surface)) :
+            range.begin() == n_raft_layers && config.support_interface_top_layers.value == 0 ?
+                Fill::new_from_type(support_params.raft_interface_fill_pattern) : nullptr);
         // Pointer to the 1st layer interface filler.
         auto filler_raft_contact     = filler_raft_contact_ptr ? filler_raft_contact_ptr.get() : filler_interface.get();
         // Filler for the base interface (to be used for soluble interface / non soluble base, to produce non soluble interface layer below soluble interface layer).
@@ -1738,7 +1755,7 @@ void generate_support_toolpaths(
         if (filler_first_layer_ptr)
             filler_first_layer_ptr->set_bounding_box(bbox_object);
         if (filler_raft_contact_ptr)
-            filler_raft_contact_ptr->set_bounding_box(bbox_object);
+            filler_raft_contact_ptr->set_bounding_box(support_params.cura_raft_mode ? bbox_raft : bbox_object);
         if (filler_base_interface)
             filler_base_interface->set_bounding_box(bbox_object);
         filler_support->set_bounding_box(bbox_object);
@@ -1848,7 +1865,11 @@ void generate_support_toolpaths(
                             raft_contact ?
                                 support_params.raft_interface_angle(support_layer.interface_id()) :
                                 support_interface_angle;
-                    double density = raft_contact ? support_params.raft_interface_density : interface_as_base ? support_params.support_density : support_params.interface_density;
+                    double density = raft_contact && support_params.cura_raft_mode ?
+                                         support_params.raft_density(RaftPhase::Surface) :
+                                     raft_contact ?
+                                         support_params.raft_interface_density :
+                                     interface_as_base ? support_params.support_density : support_params.interface_density;
                     filler->spacing = raft_contact && support_params.cura_raft_mode ?
                         support_params.raft_pattern_spacing(RaftPhase::Surface) :
                         raft_contact ? support_params.raft_interface_flow.spacing() :
@@ -1861,7 +1882,8 @@ void generate_support_toolpaths(
                     if (raft_contact && support_params.cura_raft_mode && support_params.raft_surface_wall_count > 0) {
                         fill_expolygons_with_sheath_generate_paths(layer_ex.extrusions, layer_ex.polygons_to_extrude(), filler,
                                                                   float(density), extrusion_role, interface_flow, support_params,
-                                                                  support_params.raft_surface_wall_count, false, flow_ratio);
+                                                                  support_params.raft_surface_wall_count, false, flow_ratio,
+                                                                  support_params.raft_fill_pattern(RaftPhase::Surface));
                     } else {
                         fill_expolygons_generate_paths(
                             // Destination
@@ -1871,7 +1893,9 @@ void generate_support_toolpaths(
                             // Filler and its parameters
                             filler, float(density),
                             // Extrusion parameters
-                            extrusion_role, interface_flow, flow_ratio);
+                            extrusion_role, interface_flow, flow_ratio,
+                            raft_contact && support_params.cura_raft_mode ?
+                                support_params.raft_fill_pattern(RaftPhase::Surface) : ipRectilinear);
                     }
                 }
             };

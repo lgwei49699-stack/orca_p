@@ -403,7 +403,18 @@ struct SupportParameters {
 
     InfillPattern raft_fill_pattern(RaftPhase phase) const
     {
-        return raft_density(phase) > 0.95 ? ipRectilinear : ipSupportBase;
+        // Cura uses ordinary lines for the sparse Base, then a ZigZag path
+        // with end-piece turns for both Interface and Surface. Rectilinear is
+        // Orca's closest general-purpose Base filler; importantly, the sparse
+        // phases must not fall back to Orca's SupportBase arch connector:
+        // that is a support-specific topology, not a consequence of the
+        // configured raft density.
+        switch (phase) {
+        case RaftPhase::Base:      return ipRectilinear;
+        case RaftPhase::Interface: return ipZigZag;
+        case RaftPhase::Surface:   return ipZigZag;
+        }
+        return ipZigZag;
     }
 
     // Produce a raft interface angle for a given SupportLayer::interface_id()

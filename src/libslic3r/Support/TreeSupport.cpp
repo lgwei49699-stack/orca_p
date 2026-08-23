@@ -1270,7 +1270,7 @@ static void make_perimeter_and_inner_brim(ExtrusionEntitiesPtr &dst, const ExPol
 
 static void make_perimeter_and_infill(ExtrusionEntitiesPtr& dst, const ExPolygon& support_area, size_t wall_count, const Flow& flow,
                                       ExtrusionRole role, Fill* filler_support, double support_density, bool infill_first = true,
-                                      double flow_ratio = 1.)
+                                      double flow_ratio = 1., InfillPattern pattern = ipRectilinear)
 {
     Polygons   loops;
     ExPolygons support_area_new = offset_ex(support_area, -0.5f * float(flow.scaled_spacing()), jtSquare);
@@ -1279,6 +1279,7 @@ static void make_perimeter_and_infill(ExtrusionEntitiesPtr& dst, const ExPolygon
     FillParams fill_params;
     fill_params.density = support_density;
     fill_params.dont_adjust = true;
+    fill_params.pattern = pattern;
     ExPolygons to_infill = offset_ex(support_area, -float(wall_count) * float(flow.scaled_spacing()), jtSquare);
     std::vector<BoundingBox> fill_boxes =
         fill_expolygons_generate_paths(dst, to_infill, filler_support, fill_params, role, flow, flow_ratio);
@@ -1379,6 +1380,12 @@ void TreeSupport::generate_toolpaths()
 
     size_t layer_nr = 0;
     if (m_slicing_params.cura_raft_mode) {
+        const double raft_fill_margin = std::max({object_config.raft_base_margin.value,
+                                                  object_config.raft_interface_margin.value,
+                                                  object_config.raft_surface_margin.value});
+        const ExPolygons raft_fill_bbox_areas =
+            raft_fill_margin > 0 ? offset_ex(raft_areas, scale_(raft_fill_margin)) : raft_areas;
+        const BoundingBox raft_fill_bbox = get_extents(raft_fill_bbox_areas);
         for (; layer_nr < m_slicing_params.raft_layers(); ++layer_nr) {
             SupportLayer *ts_layer = m_object->get_support_layer(layer_nr);
             const RaftPhase phase = m_slicing_params.raft_phase(layer_nr);
@@ -1387,14 +1394,16 @@ void TreeSupport::generate_toolpaths()
                                                                   object_config.raft_surface_margin.value;
             ExPolygons phase_areas = margin > 0 ? offset_ex(raft_areas, scale_(margin)) : raft_areas;
             const Flow phase_flow = m_support_params.raft_flow(phase);
-            std::unique_ptr<Fill> filler_raft(Fill::new_from_type(m_support_params.raft_fill_pattern(phase)));
+            const InfillPattern phase_pattern = m_support_params.raft_fill_pattern(phase);
+            std::unique_ptr<Fill> filler_raft(Fill::new_from_type(phase_pattern));
             filler_raft->angle = m_support_params.raft_layer_angle(layer_nr);
             filler_raft->spacing = m_support_params.raft_pattern_spacing(phase);
+            filler_raft->set_bounding_box(raft_fill_bbox);
             for (const ExPolygon &poly : phase_areas)
                 make_perimeter_and_infill(ts_layer->support_fills.entities, poly, m_support_params.raft_wall_count(phase), phase_flow,
                                           phase == RaftPhase::Base ? erSupportMaterial : erSupportMaterialInterface,
                                           filler_raft.get(), m_support_params.raft_density(phase), false,
-                                          m_support_params.raft_flow_ratio(phase));
+                                          m_support_params.raft_flow_ratio(phase), phase_pattern);
         }
 
         ExPolygons first_non_raft_base;

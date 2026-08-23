@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <fstream>
+#include <limits>
+#include <optional>
 #include <sstream>
 
 #include "libslic3r/GCodeReader.hpp"
@@ -1056,6 +1059,11 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4}));
     config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    // The ordinary support interface is deliberately Grid.  CuraV1 Raft
+    // Surface must keep its own phase topology instead of inheriting this
+    // unrelated support setting.
+    config.set_key_value("support_interface_pattern",
+                         new ConfigOptionEnum<SupportMaterialInterfacePattern>(smipGrid));
     config.set("layer_height", 0.2);
     config.set("initial_layer_print_height", 0.28);
     config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.58, false));
@@ -1156,6 +1164,9 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     REQUIRE(support_params.raft_wall_count(RaftPhase::Base) == 4);
     REQUIRE(support_params.raft_wall_count(RaftPhase::Interface) == 0);
     REQUIRE(support_params.raft_wall_count(RaftPhase::Surface) == 0);
+    REQUIRE(support_params.raft_fill_pattern(RaftPhase::Base) == ipRectilinear);
+    REQUIRE(support_params.raft_fill_pattern(RaftPhase::Interface) == ipZigZag);
+    REQUIRE(support_params.raft_fill_pattern(RaftPhase::Surface) == ipZigZag);
     REQUIRE(support_params.raft_layer_angle(0) == Approx(Geometry::deg2rad(45.f)));
     REQUIRE(support_params.raft_layer_angle(1) == Approx(Geometry::deg2rad(135.f)));
     const std::array<double, 5> expected_print_z {0.3, 0.6, 0.9, 1.1, 1.3};
@@ -1185,6 +1196,65 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
             }
         }
     }
+
+    // The last Surface is a single-direction ZigZag with short end-piece
+    // turns.  If it accidentally inherits the Grid support pattern, long
+    // extrusions appear in two perpendicular directions.
+    const ExtrusionEntityCollection final_surface = object->support_layers().back()->support_fills.flatten();
+    CAPTURE(final_surface.entities.size());
+    REQUIRE(final_surface.entities.size() == 1);
+    std::optional<double> primary_long_angle;
+    size_t long_segment_count = 0;
+    size_t perpendicular_long_segment_count = 0;
+    std::vector<double> hatch_offsets;
+    const auto angle_distance = [](double lhs, double rhs) {
+        double distance = std::fmod(std::abs(lhs - rhs), M_PI);
+        return std::min(distance, M_PI - distance);
+    };
+    const auto inspect_polyline = [&](const Polyline &polyline) {
+        for (size_t point_id = 1; point_id < polyline.points.size(); ++point_id) {
+            const Point &from = polyline.points[point_id - 1];
+            const Point &to = polyline.points[point_id];
+            const double dx = unscale<double>(to.x() - from.x());
+            const double dy = unscale<double>(to.y() - from.y());
+            if (std::hypot(dx, dy) < 5.)
+                continue;
+            const double angle = std::atan2(dy, dx);
+            if (!primary_long_angle)
+                primary_long_angle = angle;
+            ++long_segment_count;
+            const double distance_from_primary = angle_distance(angle, *primary_long_angle);
+            if (std::abs(distance_from_primary - M_PI_2) < Geometry::deg2rad(10.)) {
+                ++perpendicular_long_segment_count;
+            } else if (distance_from_primary < Geometry::deg2rad(10.)) {
+                const double midpoint_x = 0.5 * unscale<double>(from.x() + to.x());
+                const double midpoint_y = 0.5 * unscale<double>(from.y() + to.y());
+                hatch_offsets.emplace_back(-midpoint_x * std::sin(*primary_long_angle) +
+                                           midpoint_y * std::cos(*primary_long_angle));
+            }
+        }
+    };
+    for (const ExtrusionEntity *entity : final_surface.entities) {
+        if (const auto *path = dynamic_cast<const ExtrusionPath *>(entity)) {
+            inspect_polyline(path->polyline);
+        } else if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath *>(entity)) {
+            for (const ExtrusionPath &path : multipath->paths)
+                inspect_polyline(path.polyline);
+        } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(entity)) {
+            for (const ExtrusionPath &path : loop->paths)
+                inspect_polyline(path.polyline);
+        }
+    }
+    REQUIRE(long_segment_count > 2);
+    REQUIRE(perpendicular_long_segment_count == 0);
+    std::sort(hatch_offsets.begin(), hatch_offsets.end());
+    double minimum_hatch_spacing = std::numeric_limits<double>::max();
+    for (size_t offset_id = 1; offset_id < hatch_offsets.size(); ++offset_id) {
+        const double spacing = hatch_offsets[offset_id] - hatch_offsets[offset_id - 1];
+        if (spacing > 0.05)
+            minimum_hatch_spacing = std::min(minimum_hatch_spacing, spacing);
+    }
+    REQUIRE(minimum_hatch_spacing == Approx(0.3).margin(0.03));
     REQUIRE(object->layers().size() >= 2);
     REQUIRE(object->layers()[0]->id() == 5);
     REQUIRE(object->layers()[0]->height == Approx(0.28));
@@ -1342,6 +1412,10 @@ TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial]
     config.set_key_value("raft_base_flow", new ConfigOptionPercent(105.));
     config.set_key_value("raft_interface_flow", new ConfigOptionPercent(95.));
     config.set_key_value("raft_surface_flow", new ConfigOptionPercent(80.));
+    config.set("raft_interface_margin", 1.3);
+    config.set("raft_surface_margin", 1.0);
+    config.set("raft_interface_line_width", 0.72);
+    config.set("raft_interface_line_spacing", 0.72);
     config.set("raft_surface_line_width", 0.72);
     config.set("raft_surface_line_spacing", 0.72);
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTreeAuto));
@@ -1374,6 +1448,9 @@ TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial]
     const SupportParameters support_params(*object);
     REQUIRE(object->slicing_parameters().raft_layers() == 5);
     REQUIRE(object->support_layers().size() > 5);
+    REQUIRE(support_params.raft_fill_pattern(RaftPhase::Base) == ipRectilinear);
+    REQUIRE(support_params.raft_fill_pattern(RaftPhase::Interface) == ipZigZag);
+    REQUIRE(support_params.raft_fill_pattern(RaftPhase::Surface) == ipZigZag);
     REQUIRE(support_params.raft_surface_flow.width() == Approx(0.72));
     REQUIRE(support_params.support_material_flow.width() == Approx(0.44));
     REQUIRE(support_params.support_material_interface_flow.width() == Approx(0.44));
@@ -1405,6 +1482,55 @@ TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial]
         }
         REQUIRE(found_phase_path);
     }
+
+    // Interface layer 1 and Surface layer 1 use the same direction and line
+    // spacing but deliberately have different margins. Their hatch lattice
+    // must still share one raft-wide origin instead of shifting at the phase
+    // boundary.
+    const auto hatch_offsets = [&](size_t layer_id, std::optional<double> reference_angle = std::nullopt) {
+        std::vector<double> offsets;
+        const ExtrusionEntityCollection flattened = object->support_layers()[layer_id]->support_fills.flatten();
+        const auto inspect_polyline = [&](const Polyline &polyline) {
+            for (size_t point_id = 1; point_id < polyline.points.size(); ++point_id) {
+                const Point &from = polyline.points[point_id - 1];
+                const Point &to = polyline.points[point_id];
+                const double dx = unscale<double>(to.x() - from.x());
+                const double dy = unscale<double>(to.y() - from.y());
+                if (std::hypot(dx, dy) < 5.)
+                    continue;
+                const double angle = std::atan2(dy, dx);
+                if (!reference_angle)
+                    reference_angle = angle;
+                double angle_delta = std::fmod(std::abs(angle - *reference_angle), M_PI);
+                angle_delta = std::min(angle_delta, M_PI - angle_delta);
+                if (angle_delta >= Geometry::deg2rad(10.))
+                    continue;
+                const double midpoint_x = 0.5 * unscale<double>(from.x() + to.x());
+                const double midpoint_y = 0.5 * unscale<double>(from.y() + to.y());
+                offsets.emplace_back(-midpoint_x * std::sin(*reference_angle) +
+                                     midpoint_y * std::cos(*reference_angle));
+            }
+        };
+        for (const ExtrusionEntity *entity : flattened.entities) {
+            if (const auto *path = dynamic_cast<const ExtrusionPath *>(entity)) {
+                inspect_polyline(path->polyline);
+            } else if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath *>(entity)) {
+                for (const ExtrusionPath &path : multipath->paths)
+                    inspect_polyline(path.polyline);
+            } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(entity)) {
+                for (const ExtrusionPath &path : loop->paths)
+                    inspect_polyline(path.polyline);
+            }
+        }
+        std::sort(offsets.begin(), offsets.end());
+        return std::make_pair(std::move(offsets), reference_angle);
+    };
+    const auto interface_hatch = hatch_offsets(1);
+    REQUIRE(interface_hatch.second.has_value());
+    const auto surface_hatch = hatch_offsets(3, interface_hatch.second);
+    REQUIRE_FALSE(interface_hatch.first.empty());
+    REQUIRE_FALSE(surface_hatch.first.empty());
+    REQUIRE(std::abs(std::remainder(surface_hatch.first.front() - interface_hatch.first.front(), 0.72)) < 0.03);
 
     const double surface_mm3_per_mm =
         support_params.raft_surface_flow.mm3_per_mm() * support_params.raft_flow_ratio(RaftPhase::Surface);

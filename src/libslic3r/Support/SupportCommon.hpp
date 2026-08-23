@@ -55,7 +55,8 @@ void tree_supports_generate_paths(ExtrusionEntitiesPtr &dst, const Polygons &pol
 
 void fill_expolygons_with_sheath_generate_paths(
     ExtrusionEntitiesPtr &dst, const Polygons &polygons, Fill *filler, float density, ExtrusionRole role, const Flow &flow,
-    const SupportParameters &support_params, size_t wall_count, bool no_sort, double flow_ratio = 1.);
+    const SupportParameters &support_params, size_t wall_count, bool no_sort, double flow_ratio = 1.,
+    InfillPattern pattern = ipRectilinear);
 
 // returns sorted layers
 SupportGeneratorLayersPtr generate_support_layers(
