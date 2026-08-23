@@ -1395,13 +1395,32 @@ void PrintObject::detect_surfaces_type()
                             opening_ex(diff(layerm_slices_surfaces, lower_slices, true), offset),
                             surface_type_bottom_other);
 #else
-                        // Any surface lying on the void is a true bottom bridge (an overhang)
-                        surfaces_append(
-                            bottom,
-                            opening_ex(
-                                diff_ex(layerm_slices_surfaces, lower_layer->lslices, ApplySafetyOffset::Yes),
-                                offset),
-                            surface_type_bottom_other);
+                        // Any surface lying on the void is normally a true bottom bridge (an overhang).
+                        ExPolygons unsupported_bottom = opening_ex(
+                            diff_ex(layerm_slices_surfaces, lower_layer->lslices, ApplySafetyOffset::Yes), offset);
+
+                        // Cura-style positive layer-0 overlap intentionally presses the second model layer into the first one.
+                        // A recessed logo or another closed detail in model layer 0 is therefore a transition bottom, not a
+                        // free-standing bridge. Split only the part enclosed by the exact outer contours of model layer 0;
+                        // genuine external overhangs and spans between separate islands remain bridges.
+                        const bool cura_raft_transition =
+                            m_slicing_params.cura_raft_mode && m_slicing_params.has_raft() &&
+                            m_slicing_params.raft_layer_0_z_overlap > EPSILON &&
+                            m_slicing_params.model_layer_id(layer->id()) == 1 && surface_type_bottom_other == stBottomBridge;
+                        if (cura_raft_transition && ! unsupported_bottom.empty()) {
+                            ExPolygons lower_outer_envelope;
+                            lower_outer_envelope.reserve(lower_layer->lslices.size());
+                            for (const ExPolygon &lower_slice : lower_layer->lslices)
+                                lower_outer_envelope.emplace_back(lower_slice.contour);
+                            lower_outer_envelope = union_ex(lower_outer_envelope);
+
+                            ExPolygons transition_bottom = intersection_ex(unsupported_bottom, lower_outer_envelope);
+                            ExPolygons external_bridge    = diff_ex(unsupported_bottom, transition_bottom);
+                            surfaces_append(bottom, std::move(transition_bottom), stBottom);
+                            surfaces_append(bottom, std::move(external_bridge), surface_type_bottom_other);
+                        } else {
+                            surfaces_append(bottom, std::move(unsupported_bottom), surface_type_bottom_other);
+                        }
                         // if user requested internal shells, we need to identify surfaces
                         // lying on other slices not belonging to this region
                         if (interface_shells) {

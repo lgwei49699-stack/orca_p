@@ -11,6 +11,11 @@ public:
     ~FillConcentric() override = default;
     bool is_self_crossing() override { return false; }
 
+    // Generate a single closed variable-width fill contour for a solid-fill
+    // surface and return the exact contour left for its inner fill pattern.
+    ExPolygons fill_surface_single_wall_extrusion(
+        const Surface *surface, const FillParams &params, ExtrusionEntitiesPtr &out);
+
 protected:
     Fill* clone() const override { return new FillConcentric(*this); };
 	void _fill_surface_single(
