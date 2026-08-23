@@ -2072,19 +2072,23 @@ TEST_CASE("Cura V1 raft air gap is independent from ordinary support Top Z dista
     REQUIRE(cura_again.gap_raft_object == Approx(0.27));
 }
 
-TEST_CASE("Cura V1 exposes surface tuning without promoting phase internals", "[SupportMaterial][Raft][CuraV1][ConfigMode]")
+TEST_CASE("Cura V1 exposes all dedicated Raft controls in Advanced mode", "[SupportMaterial][Raft][CuraV1][ConfigMode]")
 {
-    for (const char *key : {"raft_surface_line_width", "raft_surface_line_spacing", "raft_surface_speed"}) {
+    for (const char *key : {"raft_mode", "raft_airgap", "raft_layer_0_z_overlap", "raft_base_layers", "raft_interface_layers",
+                            "raft_surface_layers", "raft_angle", "raft_angle_increment", "raft_base_layer_height",
+                            "raft_base_line_width", "raft_base_line_spacing", "raft_base_flow", "raft_base_speed",
+                            "raft_base_acceleration", "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin",
+                            "raft_interface_layer_height", "raft_interface_line_width", "raft_interface_line_spacing",
+                            "raft_interface_flow", "raft_interface_speed", "raft_interface_acceleration",
+                            "raft_interface_fan_speed", "raft_interface_wall_count", "raft_interface_margin",
+                            "raft_surface_layer_height", "raft_surface_line_width", "raft_surface_line_spacing",
+                            "raft_surface_flow", "raft_surface_speed", "raft_surface_acceleration", "raft_surface_fan_speed",
+                            "raft_surface_wall_count", "raft_surface_margin"}) {
         const ConfigOptionDef *def = print_config_def.get(key);
         CAPTURE(key);
         REQUIRE(def != nullptr);
         REQUIRE(def->mode == comAdvanced);
     }
-
-    // Keep at least one representative phase-internal control behind Developer mode.
-    const ConfigOptionDef *base_line_width = print_config_def.get("raft_base_line_width");
-    REQUIRE(base_line_width != nullptr);
-    REQUIRE(base_line_width->mode == comDevelop);
 
     for (const char *key : {"raft_base_layer_height", "raft_base_line_width", "raft_base_line_spacing",
                             "raft_interface_layer_height", "raft_interface_line_width", "raft_interface_line_spacing",
