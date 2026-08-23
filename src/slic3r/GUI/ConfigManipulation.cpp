@@ -764,20 +764,21 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     }
 
     for (const char *key : {"raft_base_layer_height", "raft_base_line_width", "raft_base_line_spacing", "raft_base_flow", "raft_base_speed",
-                            "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin"}) {
+                            "raft_base_acceleration", "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin"}) {
         toggle_line(key, use_cura_raft);
         toggle_field(key, have_cura_raft && cura_raft_base_layers > 0);
     }
 
     for (const char *key : {"raft_interface_layer_height", "raft_interface_line_width", "raft_interface_line_spacing",
-                            "raft_interface_flow", "raft_interface_speed", "raft_interface_fan_speed", "raft_interface_wall_count",
-                            "raft_interface_margin"}) {
+                            "raft_interface_flow", "raft_interface_speed", "raft_interface_acceleration", "raft_interface_fan_speed",
+                            "raft_interface_wall_count", "raft_interface_margin"}) {
         toggle_line(key, use_cura_raft);
         toggle_field(key, have_cura_raft && cura_raft_interface_layers > 0);
     }
 
     for (const char *key : {"raft_surface_layer_height", "raft_surface_line_width", "raft_surface_line_spacing", "raft_surface_flow",
-                            "raft_surface_speed", "raft_surface_fan_speed", "raft_surface_wall_count", "raft_surface_margin"}) {
+                            "raft_surface_speed", "raft_surface_acceleration", "raft_surface_fan_speed", "raft_surface_wall_count",
+                            "raft_surface_margin"}) {
         toggle_line(key, use_cura_raft);
         toggle_field(key, have_cura_raft && cura_raft_surface_layers > 0);
     }

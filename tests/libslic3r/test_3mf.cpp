@@ -588,6 +588,9 @@ TEST_CASE("BBS 3MF reader accepts its known Cura V1 raft requirement", "[3mf][bb
     stored_config.set("raft_surface_line_width", 0.47);
     stored_config.set("raft_surface_line_spacing", 0.33);
     stored_config.set("raft_surface_speed", 37.5);
+    stored_config.set("raft_base_acceleration", 600.);
+    stored_config.set("raft_interface_acceleration", 2000.);
+    stored_config.set("raft_surface_acceleration", 800.);
     REQUIRE(store_bbs_project(archive.path(), stored_config));
 
     DynamicPrintConfig loaded_config = DynamicPrintConfig::full_print_config();
@@ -604,6 +607,9 @@ TEST_CASE("BBS 3MF reader accepts its known Cura V1 raft requirement", "[3mf][bb
     REQUIRE(loaded_config.opt_float("raft_surface_line_width") == Approx(0.47));
     REQUIRE(loaded_config.opt_float("raft_surface_line_spacing") == Approx(0.33));
     REQUIRE(loaded_config.opt_float("raft_surface_speed") == Approx(37.5));
+    REQUIRE(loaded_config.opt_float("raft_base_acceleration") == Approx(600.));
+    REQUIRE(loaded_config.opt_float("raft_interface_acceleration") == Approx(2000.));
+    REQUIRE(loaded_config.opt_float("raft_surface_acceleration") == Approx(800.));
 }
 
 TEST_CASE("BBS 3MF reader keeps Cura V1 while ignoring additive unknown raft options",
@@ -818,6 +824,9 @@ TEST_CASE("BBS 3MF preserves dormant Cura V1 raft tuning", "[3mf][bbs][Raft][Con
     stored_config.set("raft_surface_line_width", 0.46);
     stored_config.set("raft_surface_line_spacing", 0.32);
     stored_config.set("raft_surface_speed", 36.5);
+    stored_config.set("raft_base_acceleration", 610.);
+    stored_config.set("raft_interface_acceleration", 2010.);
+    stored_config.set("raft_surface_acceleration", 810.);
     stored_config.set("support_top_z_distance", 0.0);
     REQUIRE(store_bbs_project(legacy_archive.path(), stored_config));
 
@@ -831,6 +840,9 @@ TEST_CASE("BBS 3MF preserves dormant Cura V1 raft tuning", "[3mf][bbs][Raft][Con
     REQUIRE(loaded_config.opt_float("raft_surface_line_width") == Approx(0.46));
     REQUIRE(loaded_config.opt_float("raft_surface_line_spacing") == Approx(0.32));
     REQUIRE(loaded_config.opt_float("raft_surface_speed") == Approx(36.5));
+    REQUIRE(loaded_config.opt_float("raft_base_acceleration") == Approx(610.));
+    REQUIRE(loaded_config.opt_float("raft_interface_acceleration") == Approx(2010.));
+    REQUIRE(loaded_config.opt_float("raft_surface_acceleration") == Approx(810.));
     REQUIRE(loaded_config.opt_float("support_top_z_distance") == Approx(0.0));
 
     // Cura mode must preserve the dormant Legacy layer count as well. The GUI

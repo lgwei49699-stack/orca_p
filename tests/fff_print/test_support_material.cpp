@@ -1085,6 +1085,13 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     config.set("raft_base_speed", 10.);
     config.set("raft_interface_speed", 25.);
     config.set("raft_surface_speed", 60.);
+    config.set("default_acceleration", 500.);
+    config.set("initial_layer_acceleration", 300.);
+    config.set("raft_base_acceleration", 600.);
+    config.set("raft_interface_acceleration", 2000.);
+    config.set("raft_surface_acceleration", 800.);
+    config.set_key_value("gcode_flavor", new ConfigOptionEnum<GCodeFlavor>(gcfMarlinFirmware));
+    config.set_key_value("machine_max_acceleration_extruding", new ConfigOptionFloats({5000.}));
     config.set_key_value("raft_base_fan_speed", new ConfigOptionPercent(0.));
     config.set_key_value("raft_interface_fan_speed", new ConfigOptionPercent(20.));
     config.set_key_value("raft_surface_fan_speed", new ConfigOptionPercent(40.));
@@ -1240,6 +1247,9 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     REQUIRE(base_gcode.find("F600") != std::string::npos);
     REQUIRE(interface_gcode.find("F1500") != std::string::npos);
     REQUIRE(surface_gcode.find("F3600") != std::string::npos);
+    REQUIRE(base_gcode.find("M204 P600") != std::string::npos);
+    REQUIRE(interface_gcode.find("M204 P2000") != std::string::npos);
+    REQUIRE(surface_gcode.find("M204 P800") != std::string::npos);
     REQUIRE(interface_gcode.find("M106 S51") != std::string::npos);
     REQUIRE(surface_gcode.find("M106 S102") != std::string::npos);
     REQUIRE(fan_command_count(base_gcode) == 1);
@@ -1257,7 +1267,64 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     REQUIRE(first_model_layer_gcode.find("F420") != std::string::npos);
     REQUIRE(first_model_layer_gcode.find("F660") != std::string::npos);
     REQUIRE(first_model_layer_gcode.find("F180") != std::string::npos);
+    REQUIRE(first_model_layer_gcode.find("M204 P300") != std::string::npos);
     boost::filesystem::remove(gcode_path);
+
+    const auto export_reapplied_config = [&](const DynamicPrintConfig &updated_config) {
+        Print updated_print;
+        updated_print.auto_assign_extruders(model_object);
+        updated_print.apply(model, updated_config);
+        const StringObjectException updated_validation = updated_print.validate();
+        INFO("updated validation error: " << updated_validation.string << "; key: " << updated_validation.opt_key);
+        REQUIRE(updated_validation.string.empty());
+        updated_print.set_status_silent();
+        updated_print.process();
+
+        const boost::filesystem::path updated_gcode_path =
+            boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orca-raft-motion-%%%%-%%%%.gcode");
+        GCodeProcessorResult updated_result;
+        updated_print.export_gcode(updated_gcode_path.string(), &updated_result, nullptr);
+        std::ifstream updated_stream(updated_gcode_path.string());
+        const std::string updated_gcode((std::istreambuf_iterator<char>(updated_stream)), std::istreambuf_iterator<char>());
+        boost::filesystem::remove(updated_gcode_path);
+        return updated_gcode;
+    };
+
+    // Zero means inherit the existing initial/default acceleration schedule,
+    // not a literal M204 P0 and not the Cura reference values.
+    DynamicPrintConfig inherited_acceleration_config = config;
+    inherited_acceleration_config.set("raft_base_acceleration", 0.);
+    inherited_acceleration_config.set("raft_interface_acceleration", 0.);
+    inherited_acceleration_config.set("raft_surface_acceleration", 0.);
+    const std::string inherited_acceleration_gcode = export_reapplied_config(inherited_acceleration_config);
+    REQUIRE(inherited_acceleration_gcode.find("M204 P300") != std::string::npos);
+    REQUIRE(inherited_acceleration_gcode.find("M204 P500") != std::string::npos);
+    REQUIRE(inherited_acceleration_gcode.find("M204 P600") == std::string::npos);
+    REQUIRE(inherited_acceleration_gcode.find("M204 P2000") == std::string::npos);
+    REQUIRE(inherited_acceleration_gcode.find("M204 P800") == std::string::npos);
+    REQUIRE(inherited_acceleration_gcode.find("M204 P0") == std::string::npos);
+
+    // A zero normal acceleration delegates motion control to the firmware. In
+    // that mode a phase override is intentionally suppressed because standard
+    // G-code cannot restore the unknown firmware acceleration after the Raft.
+    DynamicPrintConfig firmware_acceleration_config = config;
+    firmware_acceleration_config.set("default_acceleration", 0.);
+    const std::string firmware_acceleration_gcode = export_reapplied_config(firmware_acceleration_config);
+    REQUIRE(firmware_acceleration_gcode.find("M204 P600") == std::string::npos);
+    REQUIRE(firmware_acceleration_gcode.find("M204 P2000") == std::string::npos);
+    REQUIRE(firmware_acceleration_gcode.find("M204 P800") == std::string::npos);
+
+    // Dormant CuraV1 values remain saveable while Legacy Raft keeps its
+    // existing initial/default acceleration behavior.
+    DynamicPrintConfig legacy_acceleration_config = config;
+    legacy_acceleration_config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    legacy_acceleration_config.set("raft_layers", 3);
+    const std::string legacy_acceleration_gcode = export_reapplied_config(legacy_acceleration_config);
+    REQUIRE(legacy_acceleration_gcode.find("M204 P300") != std::string::npos);
+    REQUIRE(legacy_acceleration_gcode.find("M204 P500") != std::string::npos);
+    REQUIRE(legacy_acceleration_gcode.find("M204 P600") == std::string::npos);
+    REQUIRE(legacy_acceleration_gcode.find("M204 P2000") == std::string::npos);
+    REQUIRE(legacy_acceleration_gcode.find("M204 P800") == std::string::npos);
 }
 
 TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial][Raft][CuraV1][TreeSupport]")
@@ -2029,6 +2096,18 @@ TEST_CASE("Cura V1 exposes surface tuning without promoting phase internals", "[
         REQUIRE(def->enum_values == std::vector<std::string>{"0"});
         REQUIRE(def->enum_labels.size() == 1);
         REQUIRE(def->enum_labels.front() == "Auto");
+    }
+
+    for (const char *key : {"raft_base_acceleration", "raft_interface_acceleration", "raft_surface_acceleration"}) {
+        const ConfigOptionDef *def = print_config_def.get(key);
+        CAPTURE(key);
+        REQUIRE(def != nullptr);
+        REQUIRE(def->mode == comAdvanced);
+        REQUIRE(def->gui_type == ConfigOptionDef::GUIType::f_enum_open);
+        REQUIRE(def->enum_values == std::vector<std::string>{"0"});
+        REQUIRE(def->enum_labels.size() == 1);
+        REQUIRE(def->enum_labels.front() == "Inherit");
+        REQUIRE(def->default_value->getFloat() == Approx(0.));
     }
 
     for (const char *key : {"raft_airgap", "raft_layer_0_z_overlap", "raft_base_flow", "raft_base_speed",

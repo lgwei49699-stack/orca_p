@@ -5481,13 +5481,28 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
     const bool use_initial_model_layer_motion = this->use_initial_layer_motion();
 
+    double cura_raft_acceleration = 0.;
+    if (on_cura_raft_layer) {
+        switch (current_raft_phase) {
+        case RaftPhase::Base:      cura_raft_acceleration = m_config.raft_base_acceleration.value; break;
+        case RaftPhase::Interface: cura_raft_acceleration = m_config.raft_interface_acceleration.value; break;
+        case RaftPhase::Surface:   cura_raft_acceleration = m_config.raft_surface_acceleration.value; break;
+        }
+    }
+
     // Orca: optimize for Klipper, set acceleration and jerk in one command
     unsigned int acceleration_i = 0;
     double jerk = 0;
     // adjust acceleration
+    // A phase override needs a known non-zero fallback. When the normal
+    // acceleration is zero Orca intentionally leaves acceleration under
+    // firmware control, and there is no portable G-code command that restores
+    // that unknown firmware value after a Raft phase override.
     if (m_config.default_acceleration.value > 0) {
         double acceleration;
-        if (use_initial_model_layer_motion && m_config.initial_layer_acceleration.value > 0) {
+        if (cura_raft_acceleration > 0) {
+            acceleration = cura_raft_acceleration;
+        } else if (use_initial_model_layer_motion && m_config.initial_layer_acceleration.value > 0) {
             acceleration = m_config.initial_layer_acceleration.value;
 #if 0
         } else if (this->object_layer_over_raft() && m_config.first_layer_acceleration_over_raft.value > 0) {

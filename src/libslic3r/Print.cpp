@@ -1522,7 +1522,7 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                 if (!is_tree(object->config().support_type.value) &&
                     object->config().raft_base_margin.value + EPSILON <
                         object->config().raft_surface_margin.value + normal_raft_base_margin_delta) {
-                    return {L("For normal support, Raft Base margin must be at least 0.5 mm larger than Raft Surface margin."), object,
+                    return {L("For normal support, Raft Base margin must be at least 0.5 mm larger than Raft Top margin."), object,
                             "raft_base_margin"};
                 }
                 if (printer_has_mixed_nozzle_diameters) {
@@ -1693,7 +1693,7 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
             
             // check acceleration
             const auto max_accel = m_config.machine_max_acceleration_extruding.values[0];
-            if (warning_key.empty() && m_default_object_config.default_acceleration > 0 && max_accel > 0) {
+            if (warning_key.empty() && max_accel > 0 && m_default_object_config.default_acceleration > 0) {
                const bool support_travel_acc = (m_config.gcode_flavor == gcfRepetier || m_config.gcode_flavor == gcfMarlinFirmware ||
                                                 m_config.gcode_flavor == gcfRepRapFirmware);
 
@@ -1721,6 +1721,11 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                         "internal_solid_infill_acceleration",
                         "top_surface_acceleration",
                     };
+               if (m_default_object_config.raft_mode.value == RaftMode::CuraV1) {
+                    accel_to_check.emplace_back("raft_base_acceleration");
+                    accel_to_check.emplace_back("raft_interface_acceleration");
+                    accel_to_check.emplace_back("raft_surface_acceleration");
+               }
                warning_key = check_motion_ability_object_setting(accel_to_check, max_accel);
                if (!warning_key.empty()) {
                     warning->string  = L("The acceleration setting exceeds the printer's maximum acceleration "
