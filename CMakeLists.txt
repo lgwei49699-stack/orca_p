@@ -727,10 +727,6 @@ function(orcaslicer_copy_dlls target config postfix output_dlls)
             ${TOP_LEVEL_PROJECT_DIR}/deps/WebView2/lib/win-${_arch}/WebView2Loader.dll
         DESTINATION ${_out_dir})
 
-    file(COPY ${_out_dir}/libcrypto-3-x64.dll
-            ${_out_dir}/libssl-3-x64.dll
-        DESTINATION ${_out_dir})
-
     file(COPY ${CMAKE_PREFIX_PATH}/bin/occt/TKBO.dll
             ${CMAKE_PREFIX_PATH}/bin/occt/TKBRep.dll
             ${CMAKE_PREFIX_PATH}/bin/occt/TKCAF.dll
@@ -764,9 +760,6 @@ function(orcaslicer_copy_dlls target config postfix output_dlls)
         ${_out_dir}/libgmp-10.dll
         ${_out_dir}/libmpfr-4.dll
         ${_out_dir}/WebView2Loader.dll
-        ${_out_dir}/libcrypto-3-x64.dll
-        ${_out_dir}/libssl-3-x64.dll
-
         ${_out_dir}/TKBO.dll
         ${_out_dir}/TKBRep.dll
         ${_out_dir}/TKCAF.dll
