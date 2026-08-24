@@ -236,7 +236,7 @@ Polygon apply_fuzzy_skin(const Polygon& polygon, const PerimeterGenerator& perim
     const auto& regions = perimeter_generator.regions_by_fuzzify;
     if (regions.size() == 1) { // optimization
         const auto& config  = regions.begin()->first;
-        const bool  fuzzify = should_fuzzify(config, perimeter_generator.layer_id, loop_idx, is_contour);
+        const bool  fuzzify = should_fuzzify(config, perimeter_generator.model_layer_id(), loop_idx, is_contour);
         if (!fuzzify) {
             return polygon;
         }
@@ -250,7 +250,7 @@ Polygon apply_fuzzy_skin(const Polygon& polygon, const PerimeterGenerator& perim
     std::vector<std::pair<const FuzzySkinConfig&, const ExPolygons&>> fuzzified_regions;
     fuzzified_regions.reserve(regions.size());
     for (const auto& region : regions) {
-        if (should_fuzzify(region.first, perimeter_generator.layer_id, loop_idx, is_contour)) {
+        if (should_fuzzify(region.first, perimeter_generator.model_layer_id(), loop_idx, is_contour)) {
             fuzzified_regions.emplace_back(region.first, region.second);
         }
     }
@@ -334,7 +334,7 @@ void apply_fuzzy_skin(Arachne::ExtrusionLine* extrusion, const PerimeterGenerato
     const auto& regions = perimeter_generator.regions_by_fuzzify;
     if (regions.size() == 1) { // optimization
         const auto& config  = regions.begin()->first;
-        const bool  fuzzify = should_fuzzify(config, perimeter_generator.layer_id, extrusion->inset_idx, is_contour);
+        const bool  fuzzify = should_fuzzify(config, perimeter_generator.model_layer_id(), extrusion->inset_idx, is_contour);
         if (fuzzify)
             fuzzy_extrusion_line(extrusion->junctions, slice_z, config);
     } else {
@@ -342,7 +342,7 @@ void apply_fuzzy_skin(Arachne::ExtrusionLine* extrusion, const PerimeterGenerato
         std::vector<std::pair<const FuzzySkinConfig&, const ExPolygons&>> fuzzified_regions;
         fuzzified_regions.reserve(regions.size());
         for (const auto& region : regions) {
-            if (should_fuzzify(region.first, perimeter_generator.layer_id, extrusion->inset_idx, is_contour)) {
+            if (should_fuzzify(region.first, perimeter_generator.model_layer_id(), extrusion->inset_idx, is_contour)) {
                 fuzzified_regions.emplace_back(region.first, region.second);
             }
         }

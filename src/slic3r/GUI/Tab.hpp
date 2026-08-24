@@ -24,6 +24,7 @@
 #include <wx/bmpbuttn.h>
 #include <wx/treectrl.h>
 #include <wx/imaglist.h>
+#include <wx/weakref.h>
 
 #include <map>
 #include <vector>
@@ -465,11 +466,18 @@ public:
 	void		toggle_options() override;
 	void		update() override;
 	void		clear_pages() override;
+	void        refresh_raft_auto_resolved_labels();
 	bool 		supports_printer_technology(const PrinterTechnology tech) const override { return tech == ptFFF; }
+
+protected:
+	virtual bool has_mixed_raft_auto_inputs() const { return false; }
 
 private:
 	ogStaticText*	m_recommended_thin_wall_thickness_description_line = nullptr;
 	ogStaticText*	m_top_bottom_shell_thickness_explanation = nullptr;
+	std::map<std::string, wxWeakRef<wxStaticText>> m_raft_auto_resolved_labels;
+
+	void update_raft_auto_resolved_labels();
 };
 
 class TabPrintModel : public TabPrint
@@ -501,6 +509,7 @@ protected:
 	virtual void	reload_config();
 
 	virtual void	update_custom_dirty() override;
+	bool            has_mixed_raft_auto_inputs() const override;
 
 protected:
 	std::vector<std::string> m_keys;

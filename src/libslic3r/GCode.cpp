@@ -1354,14 +1354,16 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
             }
             double extra_gap = (layer_to_print.support_layer ? bottom_cd : top_cd);
 
-            // raft contact distance should not trigger any warning
-            if (last_extrusion_layer && last_extrusion_layer->support_layer) {
-                double raft_gap = object.config().raft_contact_distance.value;
-                //if (!object.print()->config().independent_support_layer_height)
-                {
-                    raft_gap = std::ceil(raft_gap / object.config().layer_height) * object.config().layer_height;
-                }
-                extra_gap = std::max(extra_gap, object.config().raft_contact_distance.value);
+            // Only the final raft contact directly below the first object layer
+            // may use the resolved raft gap. Ordinary support layers continue
+            // to use the top support distance.
+            const SlicingParameters &slicing_params = object.slicing_parameters();
+            const bool crosses_raft_gap = last_extrusion_layer != nullptr && last_extrusion_layer->support_layer != nullptr &&
+                layer_to_print.object_layer != nullptr && slicing_params.has_raft() &&
+                slicing_params.is_first_object_layer_id(layer_to_print.object_layer->id()) &&
+                last_extrusion_layer->support_layer->id() + 1 == slicing_params.raft_layers();
+            if (crosses_raft_gap) {
+                extra_gap = std::max(extra_gap, double(slicing_params.gap_raft_object));
             }
             double maximal_print_z = (last_extrusion_layer ? last_extrusion_layer->print_z() : 0.)
                 + layer_to_print.layer()->height
@@ -2547,6 +2549,14 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         this->_print_first_layer_extruder_temperatures(file, print, machine_start_gcode, initial_extruder_id, false);
     }
 
+    // Keep model initial-layer semantics for placeholders while telling the
+    // preview processor where the first physical printed layer actually is.
+    // Cura-style rafts may use a Base height different from the model's
+    // initial_layer_print_height.
+    file.write_format(";%s%.3f\n",
+                      GCodeProcessor::reserved_tag(GCodeProcessor::ETags::First_Print_Layer_Height).c_str(),
+                      print.skirt_first_layer_height());
+
     // adds tag for processor
     file.write_format(";%s%s\n", GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Role).c_str(), ExtrusionEntity::role_to_string(erCustom).c_str());
 
@@ -2970,7 +2980,8 @@ void GCode::process_layers(
                 
             spiral_mode.enable(in.spiral_vase_enable);
             bool last_layer = in.layer_id == layers_to_print.size() - 1;
-            return { spiral_mode.process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush};
+            in.gcode = spiral_mode.process_layer(std::move(in.gcode), last_layer);
+            return in;
         });
     const auto pressure_equalizer = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
         [pressure_equalizer = this->m_pressure_equalizer.get()](LayerResult in) -> LayerResult {
@@ -2980,7 +2991,8 @@ void GCode::process_layers(
         [&cooling_buffer = *this->m_cooling_buffer.get()](LayerResult in) -> std::string {
         	if (in.nop_layer_result)
                 return in.gcode;
-            return cooling_buffer.process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush);
+            return cooling_buffer.process_layer(std::move(in.gcode), in.cooling_layer_id, in.cooling_buffer_flush,
+                                                in.preserve_cooling_fan_commands);
         });
     const auto pa_processor_filter = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
             [&pa_processor = *this->m_pa_processor](std::string in) -> std::string {
@@ -3069,7 +3081,8 @@ void GCode::process_layers(
                 return in;
             spiral_mode.enable(in.spiral_vase_enable);
             bool last_layer = in.layer_id == layers_to_print.size() - 1;
-            return { spiral_mode.process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush };
+            in.gcode = spiral_mode.process_layer(std::move(in.gcode), last_layer);
+            return in;
         });
     const auto pressure_equalizer = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
         [pressure_equalizer = this->m_pressure_equalizer.get()](LayerResult in) -> LayerResult {
@@ -3079,7 +3092,8 @@ void GCode::process_layers(
         [&cooling_buffer = *this->m_cooling_buffer.get()](LayerResult in)->std::string {
             if (in.nop_layer_result)
                 return in.gcode;
-            return cooling_buffer.process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush);
+            return cooling_buffer.process_layer(std::move(in.gcode), in.cooling_layer_id, in.cooling_buffer_flush,
+                                                in.preserve_cooling_fan_commands);
         });
     const auto pa_processor_filter = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
         [&pa_processor = *this->m_pa_processor](std::string in) -> std::string {
@@ -3783,14 +3797,31 @@ LayerResult GCode::process_layer(
     const Layer         *object_layer  = nullptr;
     const SupportLayer  *support_layer = nullptr;
     const SupportLayer  *raft_layer    = nullptr;
+    size_t               cooling_layer_id = std::numeric_limits<size_t>::max();
+    bool                 has_cura_raft_layer = false;
+    bool                 only_cura_raft_layers = true;
     for (const LayerToPrint &l : layers) {
-        if (l.object_layer && ! object_layer)
-            object_layer = l.object_layer;
+        if (l.object_layer) {
+            if (! object_layer)
+                object_layer = l.object_layer;
+            const SlicingParameters &slicing_params = l.object_layer->object()->slicing_parameters();
+            const size_t local_layer_id = slicing_params.model_layer_id(l.object_layer->id());
+            // Multiple objects may contribute to the same physical print Z.
+            // The minimum local id conservatively keeps every material's early
+            // model-layer fan restriction active and is independent of order.
+            cooling_layer_id = std::min(cooling_layer_id, local_layer_id);
+            only_cura_raft_layers = false;
+        }
         if (l.support_layer) {
             if (! support_layer)
                 support_layer = l.support_layer;
-            if (! raft_layer && support_layer->id() < support_layer->object()->slicing_parameters().raft_layers())
-                raft_layer = support_layer;
+            const SlicingParameters &slicing_params = l.support_layer->object()->slicing_parameters();
+            const bool is_cura_raft_layer = slicing_params.cura_raft_mode &&
+                                            l.support_layer->id() < slicing_params.raft_layers();
+            has_cura_raft_layer |= is_cura_raft_layer;
+            only_cura_raft_layers &= is_cura_raft_layer;
+            if (! raft_layer && l.support_layer->id() < slicing_params.raft_layers())
+                raft_layer = l.support_layer;
         }
     }
 
@@ -3801,6 +3832,8 @@ LayerResult GCode::process_layer(
         layer_ptr = support_layer;
     const Layer& layer = *layer_ptr;
     LayerResult   result { {}, layer.id(), false, last_layer };
+    result.cooling_layer_id = cooling_layer_id == std::numeric_limits<size_t>::max() ? layer.id() : cooling_layer_id;
+    result.preserve_cooling_fan_commands = has_cura_raft_layer && only_cura_raft_layers;
     if (layer_tools.extruders.empty())
         // Nothing to extrude.
         return result;
@@ -3811,7 +3844,11 @@ LayerResult GCode::process_layer(
     //support is attached above the object, and support layers has independent layer height, then the lowest support
     //interface layer id is 0.
     bool                 first_layer   = (layer.id() == 0 && abs(layer.bottom_z()) < EPSILON);
-    m_writer.set_is_first_layer(first_layer);
+    const bool cura_model_first_layer = object_layer != nullptr && object_layer->object()->slicing_parameters().cura_raft_mode &&
+                                        object_layer->object()->slicing_parameters().is_first_object_layer_id(object_layer->id());
+    // Keep temperatures tied to the physical first layer, but restore the
+    // model's initial travel speed when Cura V1 reaches model layer 0.
+    m_writer.set_is_first_layer(first_layer || cura_model_first_layer);
     unsigned int         first_extruder_id = layer_tools.extruders.front();
 
     // Initialize config with the 1st object to be printed at this layer.
@@ -4857,7 +4894,7 @@ std::string GCode::extrude_loop(ExtrusionLoop loop, std::string description, dou
     bool enable_seam_slope = ((seam_scarf_type == SeamScarfType::External && !is_hole) || seam_scarf_type == SeamScarfType::All) &&
         !m_config.spiral_mode &&
         (loop.role() == erExternalPerimeter || (loop.role() == erPerimeter && m_config.seam_slope_inner_walls)) &&
-        layer_id() > 0;
+        m_layer != nullptr && m_layer->object()->slicing_parameters().model_layer_id(m_layer->id()) > 0;
     const auto nozzle_diameter = EXTRUDER_CONFIG(nozzle_diameter);
     if (enable_seam_slope && m_config.seam_slope_conditional.value) {
         enable_seam_slope = loop.is_smooth(m_config.scarf_angle_threshold.value * M_PI / 180., nozzle_diameter);
@@ -5411,13 +5448,61 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     gcode += this->unretract();
     m_config.apply(m_calib_config);
 
+    // Physical first-layer temperatures still belong to the Raft Base. Cura V1
+    // only restores model-first-layer motion settings for the first object layer.
+    const SupportLayer *current_support_layer = dynamic_cast<const SupportLayer *>(m_layer);
+    const SlicingParameters *current_slicing_params = current_support_layer == nullptr ? nullptr :
+        &current_support_layer->object()->slicing_parameters();
+    const bool on_cura_raft_layer = current_slicing_params != nullptr && current_slicing_params->cura_raft_mode &&
+        current_support_layer->id() < current_slicing_params->raft_layers() &&
+        is_approx(current_support_layer->print_z, current_slicing_params->raft_layer_print_z(current_support_layer->id()));
+    const RaftPhase current_raft_phase = on_cura_raft_layer ? current_slicing_params->raft_phase(current_support_layer->id()) :
+                                                              RaftPhase::Base;
+
+    if (on_cura_raft_layer) {
+        int fan_speed = 0;
+        switch (current_raft_phase) {
+        case RaftPhase::Base:      fan_speed = m_config.raft_base_fan_speed.value; break;
+        case RaftPhase::Interface: fan_speed = m_config.raft_interface_fan_speed.value; break;
+        case RaftPhase::Surface:   fan_speed = m_config.raft_surface_fan_speed.value; break;
+        }
+        if (m_last_cura_raft_fan_object != current_support_layer->object() ||
+            m_last_cura_raft_fan_layer_id != current_support_layer->id() || m_last_cura_raft_fan_speed != fan_speed) {
+            gcode += m_writer.set_fan(unsigned(std::clamp(fan_speed, 0, 100)));
+            m_last_cura_raft_fan_object = current_support_layer->object();
+            m_last_cura_raft_fan_layer_id = current_support_layer->id();
+            m_last_cura_raft_fan_speed = fan_speed;
+        }
+    } else {
+        m_last_cura_raft_fan_object = nullptr;
+        m_last_cura_raft_fan_layer_id = size_t(-1);
+        m_last_cura_raft_fan_speed = -1;
+    }
+
+    const bool use_initial_model_layer_motion = this->use_initial_layer_motion();
+
+    double cura_raft_acceleration = 0.;
+    if (on_cura_raft_layer) {
+        switch (current_raft_phase) {
+        case RaftPhase::Base:      cura_raft_acceleration = m_config.raft_base_acceleration.value; break;
+        case RaftPhase::Interface: cura_raft_acceleration = m_config.raft_interface_acceleration.value; break;
+        case RaftPhase::Surface:   cura_raft_acceleration = m_config.raft_surface_acceleration.value; break;
+        }
+    }
+
     // Orca: optimize for Klipper, set acceleration and jerk in one command
     unsigned int acceleration_i = 0;
     double jerk = 0;
     // adjust acceleration
+    // A phase override needs a known non-zero fallback. When the normal
+    // acceleration is zero Orca intentionally leaves acceleration under
+    // firmware control, and there is no portable G-code command that restores
+    // that unknown firmware value after a Raft phase override.
     if (m_config.default_acceleration.value > 0) {
         double acceleration;
-        if (this->on_first_layer() && m_config.initial_layer_acceleration.value > 0) {
+        if (cura_raft_acceleration > 0) {
+            acceleration = cura_raft_acceleration;
+        } else if (use_initial_model_layer_motion && m_config.initial_layer_acceleration.value > 0) {
             acceleration = m_config.initial_layer_acceleration.value;
 #if 0
         } else if (this->object_layer_over_raft() && m_config.first_layer_acceleration_over_raft.value > 0) {
@@ -5443,7 +5528,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
     // adjust X Y jerk
     if (m_config.default_jerk.value > 0) {
-        if (this->on_first_layer() && m_config.initial_layer_jerk.value > 0) {
+        if (use_initial_model_layer_motion && m_config.initial_layer_jerk.value > 0) {
             jerk = m_config.initial_layer_jerk.value;
         } else if (m_config.outer_wall_jerk.value > 0 && is_external_perimeter(path.role())) {
              jerk = m_config.outer_wall_jerk.value;
@@ -5519,9 +5604,17 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         }
         else if (path.role() == erSupportMaterial ||
                  path.role() == erSupportMaterialInterface) {
-            const double  support_speed = m_config.support_speed.value;
-            const double  support_interface_speed = m_config.get_abs_value("support_interface_speed");
-            speed = (path.role() == erSupportMaterial) ? support_speed : support_interface_speed;
+            if (on_cura_raft_layer) {
+                switch (current_raft_phase) {
+                case RaftPhase::Base:      speed = m_config.raft_base_speed.value; break;
+                case RaftPhase::Interface: speed = m_config.raft_interface_speed.value; break;
+                case RaftPhase::Surface:   speed = m_config.raft_surface_speed.value; break;
+                }
+            } else {
+                const double support_speed = m_config.support_speed.value;
+                const double support_interface_speed = m_config.get_abs_value("support_interface_speed");
+                speed = (path.role() == erSupportMaterial) ? support_speed : support_interface_speed;
+            }
         } else {
             throw Slic3r::InvalidArgument("Invalid speed");
         }
@@ -5529,15 +5622,17 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     //BBS: if not set the speed, then use the filament_max_volumetric_speed directly
     if (speed == 0)
         speed = EXTRUDER_CONFIG(filament_max_volumetric_speed) / _mm3_per_mm;
-    if (this->on_first_layer()) {
+    if (use_initial_model_layer_motion && !on_cura_raft_layer) {
         //BBS: for solid infill of initial layer, speed can be higher as long as
         //wall lines have be attached
         if (path.role() != erBottomSurface)
             speed = m_config.get_abs_value("initial_layer_speed");
     }
-    else if(m_config.slow_down_layers > 1){
-        const auto _layer = layer_id();
-        if (_layer > 0 && _layer < m_config.slow_down_layers) {
+    else if (!on_cura_raft_layer && m_config.slow_down_layers > 1) {
+        int motion_layer_id = layer_id();
+        if (current_support_layer == nullptr && m_layer != nullptr)
+            motion_layer_id = int(m_layer->object()->slicing_parameters().model_layer_id(m_layer->id()));
+        if (motion_layer_id > 0 && motion_layer_id < m_config.slow_down_layers) {
             const auto first_layer_speed =
                 is_perimeter(path.role())
                     ? m_config.get_abs_value("initial_layer_speed")
@@ -5546,7 +5641,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                 speed = std::min(
                     speed,
                     Slic3r::lerp(first_layer_speed, speed,
-                                 (double)_layer / m_config.slow_down_layers));
+                                 (double) motion_layer_id / m_config.slow_down_layers));
             }
         }
     }
@@ -5603,7 +5698,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     bool variable_speed = false;
     std::vector<ProcessedPoint> new_points {};
 
-    if (m_config.enable_overhang_speed && !this->on_first_layer() &&
+    if (m_config.enable_overhang_speed && !this->use_initial_layer_motion() &&
         (is_bridge(path.role()) || is_perimeter(path.role()))) {
             bool is_external = is_external_perimeter(path.role());
             double ref_speed   = is_external ? m_config.get_abs_value("outer_wall_speed") : m_config.get_abs_value("inner_wall_speed");
@@ -5850,12 +5945,13 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         }
     };
     auto apply_role_based_fan_speed = [
-        &path, &append_role_based_fan_marker,
+        &path, &append_role_based_fan_marker, on_cura_raft_layer,
         supp_interface_fan_speed = EXTRUDER_CONFIG(support_material_interface_fan_speed),
         ironing_fan_speed        = EXTRUDER_CONFIG(ironing_fan_speed)
     ] {
         append_role_based_fan_marker(erSupportMaterialInterface, "_SUPP_INTERFACE"sv,
-                                     supp_interface_fan_speed >= 0 && path.role() == erSupportMaterialInterface);
+                                     !on_cura_raft_layer && supp_interface_fan_speed >= 0 &&
+                                         path.role() == erSupportMaterialInterface);
         append_role_based_fan_marker(erIroning, "_IRONING"sv,
                                      ironing_fan_speed >= 0 && path.role() == erIroning);
     };
@@ -6241,7 +6337,7 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
     // Orca: we don't need to optimize the Klipper as only set once
     double jerk_to_set = 0.0;
     unsigned int acceleration_to_set = 0;
-    if (this->on_first_layer()) {
+    if (this->use_initial_layer_motion()) {
         if (m_config.default_acceleration.value > 0 && m_config.initial_layer_acceleration.value > 0) {
             acceleration_to_set = (unsigned int) floor(m_config.initial_layer_acceleration.value + 0.5);
         }

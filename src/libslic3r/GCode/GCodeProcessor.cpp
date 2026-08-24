@@ -70,7 +70,8 @@ const std::vector<std::string> GCodeProcessor::Reserved_Tags = {
     "_DURING_PRINT_EXHAUST_FAN",
     " WIPE_TOWER_START",
     " WIPE_TOWER_END",
-    " PA_CHANGE:"
+    " PA_CHANGE:",
+    " FIRST_PRINT_LAYER_HEIGHT: "
 };
 
 const std::vector<std::string> GCodeProcessor::Reserved_Tags_compatible = {
@@ -91,7 +92,8 @@ const std::vector<std::string> GCodeProcessor::Reserved_Tags_compatible = {
     "_DURING_PRINT_EXHAUST_FAN",
     " WIPE_TOWER_START",
     " WIPE_TOWER_END",
-    " PA_CHANGE:"
+    " PA_CHANGE:",
+    " FIRST_PRINT_LAYER_HEIGHT: "
 };
 
 
@@ -1916,6 +1918,16 @@ bool GCodeProcessor::get_last_z_from_gcode(const std::string& gcode_str, double&
 
 void GCodeProcessor::process_tags(const std::string_view comment, bool producers_enabled)
 {
+    // The model's initial layer height is not necessarily the first physical
+    // print layer height when a raft is present. Keep the explicit generated
+    // value separate from the legacy initial_layer_print_height fallback so
+    // start-G-code extrusion is displayed at the actual raft Base Z.
+    if (boost::starts_with(comment, reserved_tag(ETags::First_Print_Layer_Height))) {
+        if (!parse_number(comment.substr(reserved_tag(ETags::First_Print_Layer_Height).size()), m_first_layer_height))
+            BOOST_LOG_TRIVIAL(error) << "GCodeProcessor encountered an invalid value for First_Print_Layer_Height (" << comment << ").";
+        return;
+    }
+
     // producers tags
     if (producers_enabled && process_producers_tags(comment))
         return;

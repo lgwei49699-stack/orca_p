@@ -545,6 +545,12 @@ void OG_CustomCtrl::correct_widgets_position(wxSizer* widget, const Line& line, 
     auto children = widget->GetChildren();
     wxPoint line_pos = get_pos(line, field);
     int line_height = get_height(line);
+    if (line.extra_widget_sizer && widget == line.extra_widget_sizer && field != nullptr) {
+        if (field->getWindow() != nullptr)
+            line_pos.x += field->getWindow()->GetSize().x;
+        else if (field->getSizer() != nullptr)
+            line_pos.x += field->getSizer()->CalcMin().x;
+    }
     for (auto child : children)
         if (child->IsWindow()) {
             wxPoint pos = line_pos;
@@ -671,14 +677,16 @@ void OG_CustomCtrl::CtrlLine::correct_items_positions()
     if (draw_just_act_buttons || !is_visible)
         return;
 
+    const std::vector<Option>& option_set = og_line.get_options();
     if (og_line.near_label_widget_win)
         ctrl->correct_window_position(og_line.near_label_widget_win, og_line);
     if (og_line.widget_sizer)
         ctrl->correct_widgets_position(og_line.widget_sizer, og_line);
-    if (og_line.extra_widget_sizer)
-        ctrl->correct_widgets_position(og_line.extra_widget_sizer, og_line);
+    if (og_line.extra_widget_sizer) {
+        Field *single_field = option_set.size() == 1 ? ctrl->opt_group->get_field(option_set.front().opt_id) : nullptr;
+        ctrl->correct_widgets_position(og_line.extra_widget_sizer, og_line, single_field);
+    }
 
-    const std::vector<Option>& option_set = og_line.get_options();
     for (auto opt : option_set) {
         Field* field = ctrl->opt_group->get_field(opt.opt_id);
         if (!field)

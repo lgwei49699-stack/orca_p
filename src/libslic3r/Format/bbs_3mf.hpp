@@ -5,6 +5,7 @@
 #include "libslic3r/ProjectTask.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include <functional>
+#include <stdexcept>
 
 namespace Slic3r {
 class Model;
@@ -14,6 +15,19 @@ class DynamicPrintConfig;
 class Preset;
 struct FilamentInfo;
 struct ThumbnailData;
+
+inline constexpr char BBS_3MF_REQUIRED_FEATURES_TAG[] = "OrcaSlicer:RequiredFeatures";
+inline constexpr char BBS_3MF_FEATURE_CURA_RAFT_PREFIX[] = "orca_cura_raft_";
+inline constexpr char BBS_3MF_FEATURE_CURA_RAFT_V1[]  = "orca_cura_raft_v1";
+inline constexpr char BBS_3MF_MODEL_FILE[]             = "3D/3dmodel.model";
+inline constexpr char BBS_3MF_REQUIRED_FEATURES_NAMESPACE[] =
+    "https://github.com/SoftFever/OrcaSlicer/3mf/2026/required-features";
+
+class UnsupportedRequired3mfFeatureError : public std::runtime_error
+{
+public:
+    using std::runtime_error::runtime_error;
+};
 
 
 #define PLATE_THUMBNAIL_SMALL_WIDTH     128

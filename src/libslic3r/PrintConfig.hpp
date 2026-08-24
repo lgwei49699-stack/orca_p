@@ -137,6 +137,14 @@ enum class SlicingMode
     CloseHoles,
 };
 
+// Selects the raft implementation without changing the behavior of existing profiles.
+// The serialized values are defined in PrintConfig.cpp and must remain stable.
+enum class RaftMode
+{
+    Legacy,
+    CuraV1,
+};
+
 enum SupportMaterialPattern {
     smpDefault,
     smpRectilinear, smpRectilinearGrid, smpHoneycomb,
@@ -453,6 +461,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(NoiseType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(InfillPattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(IroningType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SlicingMode)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(RaftMode)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportMaterialPattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportMaterialStyle)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SupportMaterialInterfacePattern)
@@ -825,11 +834,44 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,               layer_height))
     ((ConfigOptionFloat,               mmu_segmented_region_max_width))
     ((ConfigOptionFloat,               mmu_segmented_region_interlocking_depth))
+    ((ConfigOptionFloat,               raft_airgap))
+    ((ConfigOptionPercent,             raft_base_fan_speed))
+    ((ConfigOptionPercent,             raft_base_flow))
+    ((ConfigOptionFloat,               raft_base_layer_height))
+    ((ConfigOptionInt,                 raft_base_layers))
+    ((ConfigOptionFloat,               raft_base_line_spacing))
+    ((ConfigOptionFloat,               raft_base_line_width))
+    ((ConfigOptionFloat,               raft_base_margin))
+    ((ConfigOptionFloat,               raft_base_acceleration))
+    ((ConfigOptionFloat,               raft_base_speed))
+    ((ConfigOptionInt,                 raft_base_wall_count))
     ((ConfigOptionFloat,               raft_contact_distance))
     ((ConfigOptionFloat,               raft_expansion))
     ((ConfigOptionPercent,             raft_first_layer_density))
     ((ConfigOptionFloat,               raft_first_layer_expansion))
+    ((ConfigOptionPercent,             raft_interface_fan_speed))
+    ((ConfigOptionPercent,             raft_interface_flow))
+    ((ConfigOptionFloat,               raft_interface_layer_height))
+    ((ConfigOptionInt,                 raft_interface_layers))
+    ((ConfigOptionFloat,               raft_interface_line_spacing))
+    ((ConfigOptionFloat,               raft_interface_line_width))
+    ((ConfigOptionFloat,               raft_interface_margin))
+    ((ConfigOptionFloat,               raft_interface_acceleration))
+    ((ConfigOptionFloat,               raft_interface_speed))
+    ((ConfigOptionInt,                 raft_interface_wall_count))
+    ((ConfigOptionFloat,               raft_layer_0_z_overlap))
     ((ConfigOptionInt,                 raft_layers))
+    ((ConfigOptionEnum<RaftMode>,       raft_mode))
+    ((ConfigOptionPercent,             raft_surface_fan_speed))
+    ((ConfigOptionPercent,             raft_surface_flow))
+    ((ConfigOptionFloat,               raft_surface_layer_height))
+    ((ConfigOptionInt,                 raft_surface_layers))
+    ((ConfigOptionFloat,               raft_surface_line_spacing))
+    ((ConfigOptionFloat,               raft_surface_line_width))
+    ((ConfigOptionFloat,               raft_surface_margin))
+    ((ConfigOptionFloat,               raft_surface_acceleration))
+    ((ConfigOptionFloat,               raft_surface_speed))
+    ((ConfigOptionInt,                 raft_surface_wall_count))
     ((ConfigOptionEnum<SeamPosition>,  seam_position))
     ((ConfigOptionBool,                staggered_inner_seams))
     ((ConfigOptionFloat,               slice_closing_radius))

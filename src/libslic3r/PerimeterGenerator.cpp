@@ -106,7 +106,7 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
     
     // Detect steep overhangs
     bool overhangs_reverse = perimeter_generator.config->overhang_reverse &&
-                             perimeter_generator.layer_id % 2 == 1; // Only calculate overhang degree on even (from GUI POV) layers
+                             perimeter_generator.model_layer_id() % 2 == 1; // Only calculate overhang degree on even (from GUI POV) layers
 
     for (const PerimeterGeneratorLoop &loop : loops) {
         bool is_external = loop.is_external();
@@ -151,7 +151,8 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
         const Polygon polygon = apply_fuzzy_skin(loop.polygon, perimeter_generator, loop.depth, loop.is_contour);
 
         ExtrusionPaths paths;
-        if (perimeter_generator.config->detect_overhang_wall && perimeter_generator.layer_id > perimeter_generator.object_config->raft_layers) {
+        if (perimeter_generator.config->detect_overhang_wall &&
+            perimeter_generator.layer_id > perimeter_generator.raft_layer_count()) {
             // detect overhanging/bridging perimeters
 
             // get non 100% overhang paths by intersecting this loop with the grown lower slices
@@ -208,7 +209,7 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
             if(paths.empty()) continue;
             chain_and_reorder_extrusion_paths(paths, &paths.front().first_point());
         } else {
-            if (overhangs_reverse && perimeter_generator.layer_id > perimeter_generator.object_config->raft_layers) {
+            if (overhangs_reverse && perimeter_generator.layer_id > perimeter_generator.raft_layer_count()) {
                 // Always reverse if detect overhang wall is not enabled
                 steep_overhang_contour = true;
                 steep_overhang_hole    = true;
@@ -359,7 +360,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
 {
     // Detect steep overhangs
     bool overhangs_reverse = perimeter_generator.config->overhang_reverse &&
-                             perimeter_generator.layer_id % 2 == 1;  // Only calculate overhang degree on even (from GUI POV) layers
+                             perimeter_generator.model_layer_id() % 2 == 1;  // Only calculate overhang degree on even (from GUI POV) layers
 
     ExtrusionEntityCollection extrusion_coll;
     for (PerimeterGeneratorArachneExtrusion& pg_extrusion : pg_extrusions) {
@@ -375,7 +376,8 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
 
         ExtrusionPaths paths;
         // detect overhanging/bridging perimeters
-        if (perimeter_generator.config->detect_overhang_wall && perimeter_generator.layer_id > perimeter_generator.object_config->raft_layers) {
+        if (perimeter_generator.config->detect_overhang_wall &&
+            perimeter_generator.layer_id > perimeter_generator.raft_layer_count()) {
             ClipperLib_Z::Path extrusion_path;
             extrusion_path.reserve(extrusion->size());
             BoundingBox extrusion_path_bbox;
@@ -498,7 +500,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
             }
         }
         else {
-            if (overhangs_reverse && perimeter_generator.layer_id > perimeter_generator.object_config->raft_layers) {
+            if (overhangs_reverse && perimeter_generator.layer_id > perimeter_generator.raft_layer_count()) {
                 // Always reverse if detect overhang wall is not enabled
                 steep_overhang_contour = true;
                 steep_overhang_hole    = true;
@@ -1059,7 +1061,7 @@ std::tuple<std::vector<ExtrusionPaths>, Polygons> generate_extra_perimeters_over
 void PerimeterGenerator::apply_extra_perimeters(ExPolygons &infill_area)
 {
     if (!m_spiral_vase && this->lower_slices != nullptr && this->config->detect_overhang_wall && this->config->extra_perimeters_on_overhangs &&
-        this->config->wall_loops > 0 && this->layer_id > this->object_config->raft_layers) {
+        this->config->wall_loops > 0 && this->layer_id > this->raft_layer_count()) {
         // Generate extra perimeters on overhang areas, and cut them to these parts only, to save print time and material
         auto [extra_perimeters, filled_area] = generate_extra_perimeters_over_overhangs(infill_area, this->lower_slices_polygons(),
                                                                                         this->config->wall_loops, this->overhang_flow,
@@ -1196,9 +1198,10 @@ void PerimeterGenerator::process_classic()
         // detect how many perimeters must be generated for this island
         int loop_number = this->config->wall_loops + surface.extra_perimeters - 1;  // 0-indexed loops
         int sparse_infill_density = this->config->sparse_infill_density.value;
-        if (this->config->alternate_extra_wall && this->layer_id % 2 == 1 && !m_spiral_vase && sparse_infill_density > 0) // add alternating extra wall
+        // Add an alternating extra wall on odd model layers.
+        if (this->config->alternate_extra_wall && this->model_layer_id() % 2 == 1 && !m_spiral_vase && sparse_infill_density > 0)
             loop_number++;
-        if (this->layer_id == object_config->raft_layers && this->config->only_one_wall_first_layer)
+        if (this->layer_id == this->raft_layer_count() && this->config->only_one_wall_first_layer)
             loop_number = 0;
         // Set the topmost layer to be one wall
         if (loop_number > 0 && config->only_one_wall_top && this->upper_slices == nullptr)
@@ -1434,12 +1437,12 @@ void PerimeterGenerator::process_classic()
             bool is_outer_wall_first = this->config->wall_sequence == WallSequence::OuterInner;
             if (is_outer_wall_first ||
                 //BBS: always print outer wall first when there indeed has brim.
-                (this->layer_id == 0 &&
+                (this->is_first_model_layer() &&
                     this->object_config->brim_type == BrimType::btOuterOnly &&
                     this->object_config->brim_width.value > 0))
                 entities.reverse();
             // Orca: sandwich mode. Apply after 1st layer.
-            else if ((this->config->wall_sequence == WallSequence::InnerOuterInner) && layer_id > 0){
+            else if ((this->config->wall_sequence == WallSequence::InnerOuterInner) && this->model_layer_id() > 0){
                 entities.reverse(); // reverse all entities - order them from external to internal
                 if(entities.entities.size()>2){ // 3 walls minimum needed to do inner outer inner ordering
                     int position = 0; // index to run the re-ordering for multiple external perimeters in a single island.
@@ -1614,7 +1617,7 @@ void PerimeterGenerator::process_classic()
         coord_t infill_peri_overlap = 0;
         coord_t top_infill_peri_overlap = 0;
         if (inset > 0) {
-            if(this->layer_id == 0 || this->upper_slices == nullptr){
+            if(this->is_first_model_layer() || this->upper_slices == nullptr){
                 infill_peri_overlap = coord_t(scale_(this->config->top_bottom_infill_wall_overlap.get_abs_value(unscale<double>(inset + solid_infill_spacing / 2))));
             }else{
                 infill_peri_overlap = coord_t(scale_(this->config->infill_wall_overlap.get_abs_value(unscale<double>(inset + solid_infill_spacing / 2))));
@@ -2111,11 +2114,12 @@ void PerimeterGenerator::process_arachne()
         // detect how many perimeters must be generated for this island
         int loop_number = this->config->wall_loops + surface.extra_perimeters - 1; // 0-indexed loops
         int sparse_infill_density = this->config->sparse_infill_density.value;
-        if (this->config->alternate_extra_wall && this->layer_id % 2 == 1 && !m_spiral_vase && sparse_infill_density > 0) // add alternating extra wall
+        // Add an alternating extra wall on odd model layers.
+        if (this->config->alternate_extra_wall && this->model_layer_id() % 2 == 1 && !m_spiral_vase && sparse_infill_density > 0)
             loop_number++;
 
         // Set the bottommost layer to be one wall
-        const bool is_bottom_layer = (this->layer_id == object_config->raft_layers) ? true : false;
+        const bool is_bottom_layer = this->layer_id == this->raft_layer_count();
         if (is_bottom_layer && this->config->only_one_wall_first_layer)
             loop_number = 0;
 
@@ -2130,7 +2134,7 @@ void PerimeterGenerator::process_arachne()
                        apply_precise_outer_wall? -float(ext_perimeter_width - ext_perimeter_spacing )
                                                  : -float(ext_perimeter_width / 2. - ext_perimeter_spacing / 2.));
         
-        Arachne::WallToolPathsParams input_params = Arachne::make_paths_params(this->layer_id, *object_config, *print_config);
+        Arachne::WallToolPathsParams input_params = Arachne::make_paths_params(this->model_layer_id(), *object_config, *print_config);
         // Set params is_top_or_bottom_layer for adjusting short-wall removal sensitivity.
         input_params.is_top_or_bottom_layer = (is_bottom_layer || is_topmost_layer) ? true : false;
 
@@ -2255,7 +2259,7 @@ void PerimeterGenerator::process_arachne()
             	this->config->wall_sequence == WallSequence::OuterInner ||
             	this->config->wall_sequence == WallSequence::InnerOuterInner;
         
-        if (layer_id == 0){ // disable inner outer inner algorithm after the first layer
+        if (this->is_first_model_layer()){ // disable inner outer inner algorithm after the first layer
         	is_outer_wall_first =
             	this->config->wall_sequence == WallSequence::OuterInner;
         }
@@ -2345,7 +2349,8 @@ void PerimeterGenerator::process_arachne()
         }
 
        // printf("New Layer: Layer ID %d\n",layer_id); //debug - new layer
-        if (this->config->wall_sequence == WallSequence::InnerOuterInner && layer_id > 0) { // only enable inner outer inner algorithm after first layer
+        // Only enable inner-outer-inner ordering after the first model layer.
+        if (this->config->wall_sequence == WallSequence::InnerOuterInner && this->model_layer_id() > 0) {
             if (ordered_extrusions.size() > 2) { // 3 walls minimum needed to do inner outer inner ordering
                 int position = 0; // index to run the re-ordering for multiple external perimeters in a single island.
                 int arr_i, arr_j = 0;    // indexes to run through the walls in the for loops

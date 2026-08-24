@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <limits>
 
 #include "libslic3r.h"
@@ -59,6 +60,71 @@ coordf_t Slicing::max_layer_height_from_nozzle(const DynamicPrintConfig &print_c
     return std::max(min_layer_height, (max_layer_height == 0.) ? (0.75 * nozzle_dmr) : max_layer_height);
 }
 
+RaftPlanConfig resolve_cura_raft_plan_config(const PrintConfig &print_config, const PrintObjectConfig &object_config,
+                                              coordf_t support_nozzle_diameter, coordf_t interface_nozzle_diameter)
+{
+    const auto positive_or = [](double value, double fallback) { return value > EPSILON ? value : fallback; };
+    const auto absolute_width_or = [](const ConfigOptionFloatOrPercent &option, double nozzle_diameter, double fallback) {
+        const double value = option.get_abs_value(nozzle_diameter);
+        return value > EPSILON ? value : fallback;
+    };
+
+    const double layer_height = object_config.layer_height.value;
+    const double base_height = positive_or(object_config.raft_base_layer_height.value,
+                                           std::max(layer_height, 0.75 * support_nozzle_diameter));
+    const double interface_height = positive_or(object_config.raft_interface_layer_height.value,
+                                                std::max(layer_height, 0.75 * interface_nozzle_diameter));
+    const double surface_height = positive_or(object_config.raft_surface_layer_height.value, layer_height);
+
+    const double base_width = positive_or(object_config.raft_base_line_width.value, 1.5 * support_nozzle_diameter);
+    const double interface_width = positive_or(object_config.raft_interface_line_width.value, 1.5 * interface_nozzle_diameter);
+    const double surface_width = positive_or(
+        object_config.raft_surface_line_width.value,
+        absolute_width_or(object_config.line_width, interface_nozzle_diameter, 1.05 * interface_nozzle_diameter));
+
+    RaftPlanConfig config;
+    config.first_base_layer_height = base_height;
+    config.airgap = std::max(0., object_config.raft_airgap.value);
+    // The overlap reduces the second model-layer Z step. Keep that step positive even for hand-edited configs.
+    config.overlap = std::clamp(object_config.raft_layer_0_z_overlap.value, 0., std::max(0., layer_height - EPSILON));
+
+    auto resolve_phase = [](size_t layer_count, double layer_height, double line_width, double configured_spacing,
+                            double automatic_spacing, double flow_percent, double speed, double fan_percent,
+                            size_t wall_count, double margin) {
+        RaftPhaseConfig phase;
+        phase.layer_count = layer_count;
+        phase.layer_height = layer_height;
+        phase.line_width = line_width;
+        phase.line_spacing = configured_spacing > EPSILON ? configured_spacing : automatic_spacing;
+        phase.flow_ratio = std::max(0.01, flow_percent * 0.01);
+        phase.speed = std::max(0.1, speed);
+        phase.fan_speed = std::clamp(fan_percent, 0., 100.);
+        phase.wall_count = wall_count;
+        phase.margin = std::max(0., margin);
+        return phase;
+    };
+
+    config.base_config = resolve_phase(size_t(std::max(1, object_config.raft_base_layers.value)), base_height, base_width,
+                                       object_config.raft_base_line_spacing.value, 2.5 * base_width,
+                                       object_config.raft_base_flow.value, object_config.raft_base_speed.value,
+                                       object_config.raft_base_fan_speed.value,
+                                       size_t(std::max(0, object_config.raft_base_wall_count.value)),
+                                       object_config.raft_base_margin.value);
+    config.interface_config = resolve_phase(size_t(std::max(0, object_config.raft_interface_layers.value)), interface_height,
+                                            interface_width, object_config.raft_interface_line_spacing.value, 2.5 * interface_width,
+                                            object_config.raft_interface_flow.value, object_config.raft_interface_speed.value,
+                                            object_config.raft_interface_fan_speed.value,
+                                            size_t(std::max(0, object_config.raft_interface_wall_count.value)),
+                                            object_config.raft_interface_margin.value);
+    config.surface_config = resolve_phase(size_t(std::max(1, object_config.raft_surface_layers.value)), surface_height, surface_width,
+                                          object_config.raft_surface_line_spacing.value, surface_width,
+                                          object_config.raft_surface_flow.value, object_config.raft_surface_speed.value,
+                                          object_config.raft_surface_fan_speed.value,
+                                          size_t(std::max(0, object_config.raft_surface_wall_count.value)),
+                                          object_config.raft_surface_margin.value);
+    return config;
+}
+
 SlicingParameters SlicingParameters::create_from_config(
      const PrintConfig                 &print_config,
      const PrintObjectConfig         &object_config,
@@ -77,7 +143,14 @@ SlicingParameters SlicingParameters::create_from_config(
     coordf_t support_material_interface_extruder_dmr = print_config.nozzle_diameter.get_at(object_config.support_interface_filament.value - 1);
     bool     soluble_interface                       = object_config.support_top_z_distance.value == 0.;
 
+    const bool use_cura_raft = object_config.raft_mode.value == RaftMode::CuraV1;
+    const RaftPhasePlan cura_raft_plan = use_cura_raft ?
+        build_cura_raft_phase_plan(resolve_cura_raft_plan_config(print_config, object_config, support_material_extruder_dmr,
+                                                                  support_material_interface_extruder_dmr)) :
+        RaftPhasePlan();
+
     SlicingParameters params;
+    params.cura_raft_mode = use_cura_raft;
     params.layer_height = object_config.layer_height.value;
     params.first_print_layer_height = initial_layer_print_height;
     params.first_object_layer_height = initial_layer_print_height;
@@ -86,13 +159,14 @@ SlicingParameters SlicingParameters::create_from_config(
     params.object_print_z_max = object_height * object_shrinkage_compensation.z();
     params.object_print_z_uncompensated_max = object_height;
     params.object_shrinkage_compensation_z = object_shrinkage_compensation.z();
-    params.base_raft_layers = object_config.raft_layers.value;
+    params.base_raft_layers = use_cura_raft ? 0 : object_config.raft_layers.value;
     params.soluble_interface = soluble_interface;
 
     // Miniumum/maximum of the minimum layer height over all extruders.
     params.min_layer_height = MIN_LAYER_HEIGHT;
     params.max_layer_height = std::numeric_limits<double>::max();
-    if (object_config.enable_support.value || params.base_raft_layers > 0 || object_config.enforce_support_layers > 0) {
+    if (object_config.enable_support.value || params.base_raft_layers > 0 || !cura_raft_plan.empty() ||
+        object_config.enforce_support_layers > 0) {
         // Has some form of support. Add the support layers to the minimum / maximum layer height limits.
         params.min_layer_height = std::max(
             min_layer_height_from_nozzle(print_config, object_config.support_filament), 
@@ -114,20 +188,40 @@ SlicingParameters SlicingParameters::create_from_config(
     params.min_layer_height = std::min(params.min_layer_height, params.layer_height);
     params.max_layer_height = std::max(params.max_layer_height, params.layer_height);
 
+    if (use_cura_raft)
+        params.gap_raft_object = cura_raft_plan.airgap;
+
     if (! soluble_interface) {
-        params.gap_raft_object    = object_config.raft_contact_distance.value;
+        if (!use_cura_raft)
+            params.gap_raft_object = object_config.raft_contact_distance.value;
         //BBS
         params.gap_object_support = object_config.support_bottom_z_distance.value; 
         params.gap_support_object = object_config.support_top_z_distance.value;
 
         if (!print_config.independent_support_layer_height) {
-            params.gap_raft_object = std::round(params.gap_raft_object / object_config.layer_height + EPSILON) * object_config.layer_height;
+            if (!use_cura_raft)
+                params.gap_raft_object =
+                    std::round(params.gap_raft_object / object_config.layer_height + EPSILON) * object_config.layer_height;
             params.gap_object_support = std::round(params.gap_object_support / object_config.layer_height + EPSILON) * object_config.layer_height;
             params.gap_support_object = std::round(params.gap_support_object / object_config.layer_height + EPSILON) * object_config.layer_height;
         }
     }
 
-    if (params.base_raft_layers > 0) {
+    if (use_cura_raft) {
+        assert(cura_raft_plan.validate());
+        params.base_raft_layers = cura_raft_plan.phase_layer_count(RaftPhase::Base);
+        params.surface_raft_layers = cura_raft_plan.phase_layer_count(RaftPhase::Surface);
+        params.interface_raft_layers = cura_raft_plan.phase_layer_count(RaftPhase::Interface) + params.surface_raft_layers;
+        params.first_print_layer_height = cura_raft_plan.layers.front().height;
+        params.base_raft_layer_height = cura_raft_plan.find_layer(RaftPhase::Base, 0)->height;
+        const RaftPhaseLayer *first_interface = cura_raft_plan.find_layer(RaftPhase::Interface, 0);
+        params.interface_raft_layer_height = first_interface == nullptr ? params.base_raft_layer_height : first_interface->height;
+        params.surface_raft_layer_height = cura_raft_plan.find_layer(RaftPhase::Surface, 0)->height;
+        params.contact_raft_layer_height = cura_raft_plan.layers.back().height;
+        params.first_object_layer_height = initial_layer_print_height;
+        params.first_object_layer_bridging = false;
+        params.raft_layer_0_z_overlap = cura_raft_plan.overlap;
+    } else if (params.base_raft_layers > 0) {
 		params.interface_raft_layers = (params.base_raft_layers + 1) / 2;
         params.base_raft_layers -= params.interface_raft_layers;
         // Use as large as possible layer height for the intermediate raft layers.
@@ -141,7 +235,16 @@ SlicingParameters SlicingParameters::create_from_config(
     if (params.has_raft()) {
         // Raise first object layer Z by the thickness of the raft itself plus the extra distance required by the support material logic.
         //FIXME The last raft layer is the contact layer, which shall be printed with a bridging flow for ease of separation. Currently it is not the case.
-		if (params.raft_layers() == 1) {
+        if (use_cura_raft) {
+            const RaftPhaseLayer *last_base = cura_raft_plan.find_layer(RaftPhase::Base, params.base_raft_layers - 1);
+            params.raft_base_top_z = last_base->print_z;
+            const size_t interface_phase_layers = params.interface_phase_raft_layers();
+            const RaftPhaseLayer *last_interface = interface_phase_layers == 0 ? nullptr :
+                cura_raft_plan.find_layer(RaftPhase::Interface, interface_phase_layers - 1);
+            params.raft_phase_interface_top_z = last_interface == nullptr ? params.raft_base_top_z : last_interface->print_z;
+            params.raft_interface_top_z = cura_raft_plan.layers[cura_raft_plan.layers.size() - 2].print_z;
+            params.raft_contact_top_z = cura_raft_plan.top_z();
+        } else if (params.raft_layers() == 1) {
             // There is only the contact layer.
             params.contact_raft_layer_height = initial_layer_print_height;
             params.raft_contact_top_z        = initial_layer_print_height;
@@ -153,9 +256,13 @@ SlicingParameters SlicingParameters::create_from_config(
             // Number of the interface raft layers is decreased by the contact layer.
             params.raft_interface_top_z  = params.raft_base_top_z + coordf_t(params.interface_raft_layers - 1) * params.interface_raft_layer_height;
 			params.raft_contact_top_z    = params.raft_interface_top_z + params.contact_raft_layer_height;
-		}
+        }
+        if (!use_cura_raft)
+            params.raft_phase_interface_top_z = params.raft_interface_top_z;
         coordf_t print_z = params.raft_contact_top_z + params.gap_raft_object;
         params.object_print_z_min  = print_z;
+        // Keep the complete model slicing range. Cura overlap only lowers the
+        // print Z of model layers after layer 0; it must not crop the mesh range.
         params.object_print_z_max += print_z;
         params.object_print_z_uncompensated_max += print_z;
     }

@@ -18,6 +18,7 @@
 #include <limits>
 #include <stdexcept>
 #include <iomanip>
+#include <set>
 
 #include <boost/assign.hpp>
 #include <boost/bimap.hpp>
@@ -147,7 +148,7 @@ const std::string BBL_PROFILE_USER_NAME_TAG         = "ProfileUserName";
 
 const std::string MODEL_FOLDER = "3D/";
 const std::string MODEL_EXTENSION = ".model";
-const std::string MODEL_FILE = "3D/3dmodel.model"; // << this is the only format of the string which works with CURA
+const std::string MODEL_FILE = Slic3r::BBS_3MF_MODEL_FILE; // << this is the only format of the string which works with CURA
 const std::string MODEL_RELS_FILE = "3D/_rels/3dmodel.model.rels";
 //BBS: add metadata_folder
 const std::string METADATA_DIR = "Metadata/";
@@ -574,6 +575,79 @@ bool bbs_is_valid_object_type(const std::string& type)
 }
 
 namespace Slic3r {
+
+static const std::set<std::string> BBS_3MF_SUPPORTED_REQUIRED_FEATURES {BBS_3MF_FEATURE_CURA_RAFT_V1};
+
+static bool is_cura_raft_required_feature(const std::string &feature)
+{
+    return boost::algorithm::starts_with(feature, BBS_3MF_FEATURE_CURA_RAFT_PREFIX) &&
+           feature.size() > std::char_traits<char>::length(BBS_3MF_FEATURE_CURA_RAFT_PREFIX);
+}
+
+static bool is_optional_cura_raft_option(const t_config_option_key &option_key)
+{
+    return option_key != "raft_mode" && boost::algorithm::starts_with(option_key, "raft_");
+}
+
+static void allow_unknown_cura_raft_options(ConfigSubstitutionContext &context)
+{
+    const auto previous_predicate = context.ignore_unknown_option;
+    context.ignore_unknown_option = [previous_predicate](const t_config_option_key &option_key) {
+        return (previous_predicate && previous_predicate(option_key)) || is_optional_cura_raft_option(option_key);
+    };
+}
+
+static bool project_requires_cura_raft_v1(const Model &model,
+                                          const DynamicPrintConfig *project_config,
+                                          const std::vector<Preset *> *project_presets)
+{
+    if (project_config != nullptr) {
+        const ConfigOption *raft_mode = project_config->option("raft_mode");
+        if (raft_mode != nullptr && RaftMode(raft_mode->getInt()) == RaftMode::CuraV1)
+            return true;
+    }
+
+    for (const ModelObject *object : model.objects) {
+        if (object == nullptr)
+            continue;
+
+        const ConfigOption *raft_mode = object->config.option("raft_mode");
+        if (raft_mode != nullptr && RaftMode(raft_mode->getInt()) == RaftMode::CuraV1)
+            return true;
+    }
+
+    if (project_presets != nullptr) {
+        for (const Preset *preset : *project_presets) {
+            if (preset == nullptr || preset->type != Preset::TYPE_PRINT)
+                continue;
+
+            const ConfigOption *raft_mode = preset->config.option("raft_mode");
+            if (raft_mode != nullptr && RaftMode(raft_mode->getInt()) == RaftMode::CuraV1)
+                return true;
+        }
+    }
+
+    return false;
+}
+
+static void force_legacy_raft_mode(Model &model, DynamicPrintConfig &project_config,
+                                   const std::vector<Preset *> *project_presets = nullptr)
+{
+    project_config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+
+    for (ModelObject *object : model.objects) {
+        if (object != nullptr && object->config.option("raft_mode") != nullptr)
+            object->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    }
+
+    if (project_presets == nullptr)
+        return;
+
+    for (Preset *preset : *project_presets) {
+        if (preset != nullptr && preset->type == Preset::TYPE_PRINT && preset->config.option("raft_mode") != nullptr)
+            preset->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    }
+}
 
 void PlateData::parse_filament_info(GCodeProcessorResult *result)
 {
@@ -1024,6 +1098,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         std::string m_thumbnail_path;
         std::string m_thumbnail_middle;
         std::string m_thumbnail_small;
+        std::set<std::string> m_required_features;
+        bool m_force_legacy_raft { false };
+        bool m_allow_unknown_cura_raft_options { false };
         std::vector<std::string> m_sub_model_paths;
         std::vector<ObjectImporter*> m_object_importers;
 
@@ -1054,6 +1131,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
     private:
         void _destroy_xml_parser();
         void _stop_xml_parser(const std::string& msg = std::string());
+        void _validate_required_features();
 
         bool        parse_error()         const { return m_parse_error; }
         const char* parse_error_message() const {
@@ -1241,6 +1319,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         m_objects_metadata.clear();
         m_curr_metadata_name.clear();
         m_curr_characters.clear();
+        m_required_features.clear();
+        m_force_legacy_raft = false;
+        m_allow_unknown_cura_raft_options = false;
 
         std::map<int, PlateData*>::iterator it = m_plater_data.begin();
         while (it != m_plater_data.end())
@@ -1284,6 +1365,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         //m_sla_support_points.clear();
         m_curr_metadata_name.clear();
         m_curr_characters.clear();
+        m_required_features.clear();
+        m_force_legacy_raft = false;
+        m_allow_unknown_cura_raft_options = false;
         //BBS: plater data init
         m_plater_data.clear();
         m_curr_instance.object_id = -1;
@@ -1370,6 +1454,10 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
     bool _BBS_3MF_Importer::load_gcode_3mf_from_stream(std::istream &data, Model &model, PlateDataPtrs &plate_data_list, DynamicPrintConfig &config, Semver &file_version)
     {
+        m_required_features.clear();
+        m_force_legacy_raft = false;
+        m_allow_unknown_cura_raft_options = false;
+
         mz_zip_archive archive;
         mz_zip_zero_struct(&archive);
         archive.m_pRead = mz_zip_read_istream;
@@ -1408,6 +1496,17 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             add_error("Archive does not contain a valid model");
             return false;
         }
+        bool skip_incompatible_project_config = false;
+        try {
+            _validate_required_features();
+        } catch (const UnsupportedRequired3mfFeatureError &error) {
+            // A G-code 3MF already contains the finalized toolpath. Keep its
+            // printable/viewable data available, but do not import project
+            // settings whose semantics this build cannot preserve.
+            skip_incompatible_project_config = true;
+            BOOST_LOG_TRIVIAL(warning) << error.what()
+                                       << " Loading finalized G-code metadata while skipping incompatible project configuration.";
+        }
 
         if (!m_designer.empty()) {
             m_model->design_info                 = std::make_shared<ModelDesignInfo>();
@@ -1445,8 +1544,12 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__ << boost::format("extract %1%th file %2%, total=%3%\n")%(i+1)%name%num_entries;
 
                 if (boost::algorithm::iequals(name, BBS_PROJECT_CONFIG_FILE)) {
+                    if (skip_incompatible_project_config)
+                        continue;
                     // extract slic3r print config file
                     ConfigSubstitutionContext config_substitutions(ForwardCompatibilitySubstitutionRule::Disable);
+                    if (m_allow_unknown_cura_raft_options)
+                        allow_unknown_cura_raft_options(config_substitutions);
                     _extract_project_config_from_archive(archive, stat, config, config_substitutions, model);
                 }
                 else if (boost::algorithm::iequals(name, BBS_MODEL_CONFIG_FILE)) {
@@ -1464,6 +1567,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 }
             }
         }
+
+        if (m_force_legacy_raft)
+            force_legacy_raft_mode(model, config);
 
         //BBS: load the plate info into plate_data_list
         std::map<int, PlateData*>::iterator it = m_plater_data.begin();
@@ -1542,6 +1648,35 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         XML_StopParser(m_xml_parser, false);
     }
 
+    void _BBS_3MF_Importer::_validate_required_features()
+    {
+        bool force_legacy_raft = false;
+        bool allow_unknown_cura_raft_options = false;
+        for (const std::string &feature : m_required_features) {
+            if (BBS_3MF_SUPPORTED_REQUIRED_FEATURES.count(feature) != 0) {
+                if (feature == BBS_3MF_FEATURE_CURA_RAFT_V1)
+                    allow_unknown_cura_raft_options = true;
+                continue;
+            }
+
+            if (is_cura_raft_required_feature(feature)) {
+                force_legacy_raft = true;
+                allow_unknown_cura_raft_options = true;
+                BOOST_LOG_TRIVIAL(warning)
+                    << "This 3MF project uses the unsupported Cura raft feature '" << feature
+                    << "'. Loading the project with Legacy raft mode; review raft settings before slicing or saving.";
+                continue;
+            }
+
+            const std::string message = "This 3MF project requires the unsupported OrcaSlicer feature '" + feature +
+                                        "'. Please update OrcaSlicer before opening it.";
+            BOOST_LOG_TRIVIAL(error) << message;
+            throw UnsupportedRequired3mfFeatureError(message);
+        }
+        m_force_legacy_raft = force_legacy_raft;
+        m_allow_unknown_cura_raft_options = allow_unknown_cura_raft_options;
+    }
+
     //BBS: add plate data related logic
     bool _BBS_3MF_Importer::_load_model_from_file(
         std::string filename,
@@ -1554,6 +1689,10 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         BBLProject *project,
         int plate_id)
     {
+        ScopeGuard restore_unknown_option_policy(
+            [&config_substitutions, previous_policy = config_substitutions.ignore_unknown_option]() mutable {
+                config_substitutions.ignore_unknown_option = std::move(previous_policy);
+            });
         bool cb_cancel = false;
         //BBS progress point
         // prepare restore
@@ -1701,6 +1840,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             add_error("Archive does not contain a valid model");
             return false;
         }
+        _validate_required_features();
+        if (m_allow_unknown_cura_raft_options)
+            allow_unknown_cura_raft_options(config_substitutions);
 
         if (!m_designer.empty()) {
             m_model->design_info = std::make_shared<ModelDesignInfo>();
@@ -1990,6 +2132,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     //BBS: add module name
                     else if (metadata.key == "module")
                         model_object->module_name = metadata.value;
+                    else if (m_force_legacy_raft && metadata.key == "raft_mode")
+                        model_object->config.set_key_value(
+                            "raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
                     else
                         model_object->config.set_deserialize(metadata.key, metadata.value, config_substitutions);
                 }
@@ -2219,6 +2364,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             for (int index = delete_ids.size() - 1; index >= 0; index--)
                 m_model->delete_object(delete_ids[index]);
         }
+
+        if (m_force_legacy_raft)
+            force_legacy_raft_mode(model, config, &project_presets);
 
         //BBS progress point
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__ << boost::format("import 3mf IMPORT_STAGE_FINISH\n");
@@ -2495,6 +2643,40 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 add_error("Error while extract project config file to file");
                 return;
             }
+
+            // A future Cura-raft-only feature has an explicit safe fallback: do
+            // not let an unknown raft_mode enum abort or partially apply this
+            // otherwise compatible project. Normalize only this one option and
+            // leave all unrelated forward-compatibility handling unchanged.
+            if (m_force_legacy_raft) {
+                try {
+                    nlohmann::json project_json;
+                    {
+                        boost::nowide::ifstream input(dest_file);
+                        if (!input)
+                            throw std::runtime_error("unable to open extracted project config");
+                        input >> project_json;
+                    }
+
+                    if (!project_json.is_object())
+                        throw std::runtime_error("project config root is not an object");
+
+                    auto raft_mode = project_json.find("raft_mode");
+                    if (raft_mode != project_json.end()) {
+                        *raft_mode = "legacy";
+                        boost::nowide::ofstream output(dest_file, std::ios::trunc);
+                        if (!output)
+                            throw std::runtime_error("unable to rewrite extracted project config");
+                        output << project_json.dump(4);
+                        if (!output.good())
+                            throw std::runtime_error("unable to persist Legacy raft fallback");
+                    }
+                } catch (const std::exception &error) {
+                    add_error(std::string("Error applying Legacy raft fallback to project config: ") + error.what());
+                    return;
+                }
+            }
+
             std::map<std::string, std::string> key_values;
             std::string reason;
             int ret = config.load_from_json(dest_file, config_substitutions, true, key_values, reason);
@@ -2529,7 +2711,16 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             //ConfigSubstitutions config_substitutions = config.load_from_ini(dest_file, Enable);
             std::map<std::string, std::string> key_values;
             std::string reason;
-            ConfigSubstitutions config_substitutions = use_json? config.load_from_json(dest_file, Enable, key_values, reason) : config.load_from_ini(dest_file, Enable);
+            ConfigSubstitutions config_substitutions;
+            if (use_json) {
+                ConfigSubstitutionContext embedded_substitutions(ForwardCompatibilitySubstitutionRule::Enable);
+                if (type == Preset::TYPE_PRINT && m_allow_unknown_cura_raft_options)
+                    allow_unknown_cura_raft_options(embedded_substitutions);
+                config.load_from_json(dest_file, embedded_substitutions, true, key_values, reason);
+                config_substitutions = std::move(embedded_substitutions.substitutions);
+            } else {
+                config_substitutions = config.load_from_ini(dest_file, Enable);
+            }
             if (!reason.empty()) {
                 BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << boost::format(", load project embedded config from  %1% failed\n") % dest_file;
                 //skip this file
@@ -3701,11 +3892,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
     bool _BBS_3MF_Importer::_handle_start_metadata(const char** attributes, unsigned int num_attributes)
     {
         m_curr_characters.clear();
-
-        std::string name = bbs_get_attribute_value_string(attributes, num_attributes, NAME_ATTR);
-        if (!name.empty()) {
-            m_curr_metadata_name = name;
-        }
+        m_curr_metadata_name = bbs_get_attribute_value_string(attributes, num_attributes, NAME_ATTR);
 
         return true;
     }
@@ -3718,7 +3905,14 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
     bool _BBS_3MF_Importer::_handle_end_metadata()
     {
-        if ((m_curr_metadata_name == BBS_3MF_VERSION)||(m_curr_metadata_name == BBS_3MF_VERSION1)) {
+        if (m_curr_metadata_name == BBS_3MF_REQUIRED_FEATURES_TAG) {
+            std::vector<std::string> required_features;
+            boost::split(
+                required_features, xml_unescape(m_curr_characters), boost::is_any_of(",; \t\r\n"), boost::token_compress_on);
+            for (std::string &feature : required_features)
+                if (!feature.empty())
+                    m_required_features.emplace(std::move(feature));
+        } else if ((m_curr_metadata_name == BBS_3MF_VERSION)||(m_curr_metadata_name == BBS_3MF_VERSION1)) {
             //m_is_bbl_3mf = true;
             m_version = (unsigned int)atoi(m_curr_characters.c_str());
             /*if (m_check_version && (m_version > VERSION_BBS_3MF_COMPATIBLE)) {
@@ -5596,7 +5790,14 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                                                 std::vector<std::string> const &types   = {},
                                                 PackingTemporaryData            data    = PackingTemporaryData(),
                                                 int export_plate_idx = -1) const;
-        bool _add_model_file_to_archive(const std::string& filename, mz_zip_archive& archive, const Model& model, ObjectToObjectDataMap& objects_data, Export3mfProgressFn proFn = nullptr, BBLProject* project = nullptr) const;
+        bool _add_model_file_to_archive(const std::string &         filename,
+                                        mz_zip_archive &            archive,
+                                        const Model &               model,
+                                        ObjectToObjectDataMap &     objects_data,
+                                        Export3mfProgressFn         proFn           = nullptr,
+                                        BBLProject *                project         = nullptr,
+                                        const DynamicPrintConfig *  config          = nullptr,
+                                        const std::vector<Preset *> *project_presets = nullptr) const;
         bool _add_object_to_model_stream(mz_zip_writer_staged_context &context, ObjectData const &object_data) const;
         void _add_object_components_to_stream(std::stringstream &stream, ObjectData const &object_data) const;
         //BBS: change volume to seperate objects
@@ -5987,7 +6188,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         ObjectToObjectDataMap objects_data;
         //if (!m_skip_model)
         {
-            if (!_add_model_file_to_archive(filename, archive, model, objects_data, proFn, project)) { return false; }
+            if (!_add_model_file_to_archive(filename, archive, model, objects_data, proFn, project, config, &project_presets))
+                return false;
 
             // Adds layer height profile file ("Metadata/Slic3r_PE_layer_heights_profile.txt").
             // All layer height profiles of all ModelObjects are stored here, indexed by 1 based index of the ModelObject in Model.
@@ -6411,10 +6613,18 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
     *   save sub model if objects_data is not empty
     *   not collect build items in sub model
     */
-    bool _BBS_3MF_Exporter::_add_model_file_to_archive(const std::string& filename, mz_zip_archive& archive, const Model& model, ObjectToObjectDataMap& objects_data, Export3mfProgressFn proFn, BBLProject* project) const
+    bool _BBS_3MF_Exporter::_add_model_file_to_archive(const std::string &         filename,
+                                                       mz_zip_archive &            archive,
+                                                       const Model &               model,
+                                                       ObjectToObjectDataMap &     objects_data,
+                                                       Export3mfProgressFn         proFn,
+                                                       BBLProject *                project,
+                                                       const DynamicPrintConfig *  config,
+                                                       const std::vector<Preset *> *project_presets) const
     {
-        bool sub_model = !objects_data.empty();
-        bool write_object = sub_model || !m_split_model;
+        const bool sub_model             = !objects_data.empty();
+        const bool write_object          = sub_model || !m_split_model;
+        const bool requires_cura_raft_v1 = !sub_model && project_requires_cura_raft_v1(model, config, project_presets);
 
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__ << boost::format(", filename %1%, m_split_model %2%,  sub_model %3%")%filename % m_split_model % sub_model;
 
@@ -6448,7 +6658,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             std::stringstream stream;
             reset_stream(stream);
             stream << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
-            stream << "<" << MODEL_TAG << " unit=\"millimeter\" xml:lang=\"en-US\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\" xmlns:BambuStudio=\"http://schemas.bambulab.com/package/2021\"";
+            stream << "<" << MODEL_TAG
+                   << " unit=\"millimeter\" xml:lang=\"en-US\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\""
+                   << " xmlns:BambuStudio=\"http://schemas.bambulab.com/package/2021\"";
+            if (requires_cura_raft_v1)
+                stream << " xmlns:OrcaSlicer=\"" << BBS_3MF_REQUIRED_FEATURES_NAMESPACE << "\"";
             if (m_production_ext)
                 stream << " xmlns:p=\"http://schemas.microsoft.com/3dmanufacturing/production/2015/06\" requiredextensions=\"p\"";
             stream << ">\n";
@@ -6531,6 +6745,12 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     metadata_item_map[model.md_name[i]] = xml_escape(model.md_value[i]);
                 }
             }
+
+            // Required features describe the effective project configuration. Never preserve a stale marker
+            // copied from imported or custom metadata when the feature has since been disabled.
+            metadata_item_map.erase(BBS_3MF_REQUIRED_FEATURES_TAG);
+            if (requires_cura_raft_v1)
+                metadata_item_map[BBS_3MF_REQUIRED_FEATURES_TAG] = BBS_3MF_FEATURE_CURA_RAFT_V1;
 
             // store metadata info
             for (auto item : metadata_item_map) {

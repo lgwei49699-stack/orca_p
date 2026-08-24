@@ -685,7 +685,7 @@ void PrintObject::estimate_curled_extrusions()
             float support_flow_width = support_material_flow(this, this->config().layer_height).width();
             SupportSpotsGenerator::Params params{this->print()->m_config.filament_type.values,
                                                  float(this->print()->default_object_config().inner_wall_acceleration.getFloat()),
-                                                 this->config().raft_layers.getInt(), this->config().brim_type.value,
+                                                 int(this->slicing_parameters().raft_layers()), this->config().brim_type.value,
                                                  float(this->config().brim_width.getFloat())};
             SupportSpotsGenerator::estimate_malformations(this->layers(), params);
             m_print->throw_if_canceled();
@@ -879,6 +879,15 @@ bool PrintObject::invalidate_state_by_config_options(
 
     std::vector<PrintObjectStep> steps;
     bool invalidated = false;
+    const auto uses_cura_raft = [](const ConfigOptionResolver &config) {
+        const auto *mode = config.option<ConfigOptionEnum<RaftMode>>("raft_mode");
+        return mode != nullptr && mode->value == RaftMode::CuraV1;
+    };
+    // Region-only updates pass PrintRegionConfig resolvers, which do not own
+    // raft_mode. Include the PrintObject's active mode so changing a model L1
+    // bottom direction invalidates already-generated CuraV1 raft toolpaths.
+    const bool cura_raft_uses_model_l1_angle = uses_cura_raft(old_config) || uses_cura_raft(new_config) ||
+                                               this->config().raft_mode.value == RaftMode::CuraV1;
     for (const t_config_option_key &opt_key : opt_keys) {
         if (   opt_key == "brim_width"
             || opt_key == "brim_object_gap"
@@ -950,6 +959,36 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "mmu_segmented_region_interlocking_depth"
             || opt_key == "raft_layers"
             || opt_key == "raft_contact_distance"
+            || opt_key == "raft_mode"
+            || opt_key == "raft_airgap"
+            || opt_key == "raft_layer_0_z_overlap"
+            || opt_key == "raft_base_layers"
+            || opt_key == "raft_interface_layers"
+            || opt_key == "raft_surface_layers"
+            || opt_key == "raft_base_layer_height"
+            || opt_key == "raft_base_line_width"
+            || opt_key == "raft_base_line_spacing"
+            || opt_key == "raft_base_flow"
+            || opt_key == "raft_base_speed"
+            || opt_key == "raft_base_fan_speed"
+            || opt_key == "raft_base_wall_count"
+            || opt_key == "raft_base_margin"
+            || opt_key == "raft_interface_layer_height"
+            || opt_key == "raft_interface_line_width"
+            || opt_key == "raft_interface_line_spacing"
+            || opt_key == "raft_interface_flow"
+            || opt_key == "raft_interface_speed"
+            || opt_key == "raft_interface_fan_speed"
+            || opt_key == "raft_interface_wall_count"
+            || opt_key == "raft_interface_margin"
+            || opt_key == "raft_surface_layer_height"
+            || opt_key == "raft_surface_line_width"
+            || opt_key == "raft_surface_line_spacing"
+            || opt_key == "raft_surface_flow"
+            || opt_key == "raft_surface_speed"
+            || opt_key == "raft_surface_fan_speed"
+            || opt_key == "raft_surface_wall_count"
+            || opt_key == "raft_surface_margin"
             || opt_key == "slice_closing_radius"
             || opt_key == "slicing_mode"
             || opt_key == "slowdown_for_curled_perimeters"
@@ -1046,6 +1085,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "top_shell_layers") {
 
             steps.emplace_back(posSlice);
+            if (cura_raft_uses_model_l1_angle && opt_key == "bottom_shell_layers")
+                steps.emplace_back(posSupportMaterial);
 #if (0)
             const auto *old_shell_layers = old_config.option<ConfigOptionInt>(opt_key);
             const auto *new_shell_layers = new_config.option<ConfigOptionInt>(opt_key);
@@ -1087,6 +1128,9 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "bridge_density"
             || opt_key == "internal_bridge_density") {
             steps.emplace_back(posPrepareInfill);
+            if (cura_raft_uses_model_l1_angle &&
+                (opt_key == "solid_infill_direction" || opt_key == "align_infill_direction_to_model"))
+                steps.emplace_back(posSupportMaterial);
         } else if (
                opt_key == "top_surface_pattern"
             || opt_key == "bottom_surface_pattern"
@@ -1103,6 +1147,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "lateral_lattice_angle_2"
             || opt_key == "infill_overhang_angle") {
             steps.emplace_back(posInfill);
+            if (cura_raft_uses_model_l1_angle && opt_key == "bottom_surface_pattern")
+                steps.emplace_back(posSupportMaterial);
         } else if (opt_key == "sparse_infill_pattern"
                    || opt_key == "symmetric_infill_y_axis"
                    || opt_key == "infill_shift_step"
@@ -1113,6 +1159,8 @@ bool PrintObject::invalidate_state_by_config_options(
                    || opt_key == "infill_lock_depth"
                    || opt_key == "skin_infill_depth") {
             steps.emplace_back(posPrepareInfill);
+            if (cura_raft_uses_model_l1_angle && opt_key == "solid_infill_rotate_template")
+                steps.emplace_back(posSupportMaterial);
         } else if (opt_key == "sparse_infill_density") {
             // One likely wants to reslice only when switching between zero infill to simulate boolean difference (subtracting volumes),
             // normal infill and 100% (solid) infill.
@@ -1196,6 +1244,9 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "inner_wall_speed"
             || opt_key == "internal_solid_infill_speed"
             || opt_key == "top_surface_speed"
+            || opt_key == "raft_base_acceleration"
+            || opt_key == "raft_interface_acceleration"
+            || opt_key == "raft_surface_acceleration"
             || opt_key == "bed_mesh_min"
             || opt_key == "bed_mesh_max"
             || opt_key == "adaptive_bed_mesh_margin"
@@ -3724,7 +3775,7 @@ void PrintObject::combine_infill()
             for (size_t layer_idx = 0; layer_idx < m_layers.size(); ++ layer_idx) {
                 m_print->throw_if_canceled();
                 const Layer *layer = m_layers[layer_idx];
-                if (layer->id() == 0)
+                if (m_slicing_params.model_layer_id(layer->id()) == 0)
                     // Skip first print layer (which may not be first layer in array because of raft).
                     continue;
                 // Check whether the combination of this layer with the lower layers' buffer

@@ -667,7 +667,15 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     // Hide Elephant foot compensation layers if elefant_foot_compensation is not enabled
     toggle_line("elefant_foot_compensation_layers", config->opt_float("elefant_foot_compensation") > 0);
 
-    bool have_raft = config->opt_int("raft_layers") > 0;
+    const RaftMode raft_mode = config->opt_enum<RaftMode>("raft_mode");
+    const bool use_cura_raft = raft_mode == RaftMode::CuraV1;
+    const bool have_legacy_raft = config->opt_int("raft_layers") > 0;
+    const int cura_raft_base_layers = config->opt_int("raft_base_layers");
+    const int cura_raft_interface_layers = config->opt_int("raft_interface_layers");
+    const int cura_raft_surface_layers = config->opt_int("raft_surface_layers");
+    const bool have_cura_raft = use_cura_raft &&
+                                cura_raft_base_layers + cura_raft_interface_layers + cura_raft_surface_layers > 0;
+    const bool have_raft = use_cura_raft ? have_cura_raft : have_legacy_raft;
     bool have_support_material = config->opt_bool("enable_support") || have_raft;
 
     SupportType support_type = config->opt_enum<SupportType>("support_type");
@@ -706,11 +714,12 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     toggle_line("bridge_no_support", !support_is_normal_tree);
     toggle_line("support_critical_regions_only", is_auto(support_type) && support_is_tree);
 
-    for (auto el : { "support_interface_filament",
-        "support_interface_loop_pattern", "support_bottom_interface_spacing" })
+    toggle_field("support_interface_filament", have_support_material && (have_support_interface || have_cura_raft));
+    for (auto el : { "support_interface_loop_pattern", "support_bottom_interface_spacing" })
         toggle_field(el, have_support_material && have_support_interface);
 
-    bool can_ironing_support = have_raft || (have_support_material && config->opt_int("support_interface_top_layers") > 0);
+    bool can_ironing_support = !use_cura_raft &&
+        (have_legacy_raft || (config->opt_bool("enable_support") && config->opt_int("support_interface_top_layers") > 0));
     toggle_field("support_ironing", can_ironing_support);
     bool has_support_ironing = can_ironing_support && config->opt_bool("support_ironing");
     for (auto el : {"support_ironing_pattern", "support_ironing_flow", "support_ironing_spacing" })
@@ -729,11 +738,53 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     toggle_field("inner_wall_line_width", have_perimeters || have_skirt || have_brim);
     toggle_field("support_filament", have_support_material || have_skirt);
 
-    toggle_line("raft_contact_distance", have_raft && !have_support_soluble);
+    // Legacy and Cura-style raft settings intentionally have disjoint consumers.
+    // Only show the settings for the selected mode, while preserving the hidden values
+    // so switching modes restores the user's previous tuning.
+    toggle_field("raft_layers", !use_cura_raft);
+    toggle_line("raft_layers", !use_cura_raft);
+    toggle_line("raft_contact_distance", !use_cura_raft && have_legacy_raft && !have_support_soluble);
+
+    for (const char *key : {"raft_base_layers", "raft_interface_layers", "raft_surface_layers"}) {
+        toggle_line(key, use_cura_raft);
+        toggle_field(key, use_cura_raft);
+    }
+
+    // Cura-style raft contact is independent of the ordinary support Top Z distance.
+    toggle_line("raft_airgap", use_cura_raft);
+    toggle_field("raft_airgap", have_cura_raft);
+
+    // Top Z remains meaningful for ordinary support and for the legacy raft's
+    // soluble-interface convention, but not for a Cura-style raft by itself.
+    toggle_field("support_top_z_distance", config->opt_bool("enable_support") || (!use_cura_raft && have_legacy_raft));
+
+    toggle_line("raft_layer_0_z_overlap", use_cura_raft);
+    toggle_field("raft_layer_0_z_overlap", have_cura_raft);
+
+    for (const char *key : {"raft_base_layer_height", "raft_base_line_width", "raft_base_line_spacing", "raft_base_flow", "raft_base_speed",
+                            "raft_base_acceleration", "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin"}) {
+        toggle_line(key, use_cura_raft);
+        toggle_field(key, have_cura_raft && cura_raft_base_layers > 0);
+    }
+
+    for (const char *key : {"raft_interface_layer_height", "raft_interface_line_width", "raft_interface_line_spacing",
+                            "raft_interface_flow", "raft_interface_speed", "raft_interface_acceleration", "raft_interface_fan_speed",
+                            "raft_interface_wall_count", "raft_interface_margin"}) {
+        toggle_line(key, use_cura_raft);
+        toggle_field(key, have_cura_raft && cura_raft_interface_layers > 0);
+    }
+
+    for (const char *key : {"raft_surface_layer_height", "raft_surface_line_width", "raft_surface_line_spacing", "raft_surface_flow",
+                            "raft_surface_speed", "raft_surface_acceleration", "raft_surface_fan_speed", "raft_surface_wall_count",
+                            "raft_surface_margin"}) {
+        toggle_line(key, use_cura_raft);
+        toggle_field(key, have_cura_raft && cura_raft_surface_layers > 0);
+    }
 
     // Orca: Raft, grid, snug and organic supports use these two parameters to control the size & density of the "brim"/flange
+    const bool have_legacy_raft_or_support = config->opt_bool("enable_support") || (!use_cura_raft && have_legacy_raft);
     for (auto el : { "raft_first_layer_expansion", "raft_first_layer_density"})
-        toggle_field(el, have_support_material && !(support_is_normal_tree && !have_raft));
+        toggle_field(el, have_legacy_raft_or_support && !(support_is_normal_tree && !have_legacy_raft));
 
     bool has_ironing = (config->opt_enum<IroningType>("ironing_type") != IroningType::NoIroning);
     for (auto el : { "ironing_pattern", "ironing_flow", "ironing_spacing", "ironing_angle", "ironing_inset"})

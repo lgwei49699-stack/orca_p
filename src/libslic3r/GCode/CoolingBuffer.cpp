@@ -311,7 +311,7 @@ finished:
 	return new_feedrate;
 }
 
-std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush)
+std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush, bool preserve_fan_commands)
 {
     // Cache the input G-code.
     if (m_gcode.empty())
@@ -325,8 +325,15 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
         // and one object layer.
         std::vector<PerExtruderAdjustments> per_extruder_adjustments = this->parse_layer_gcode(m_gcode, m_current_pos);
         float layer_time_stretched = this->calculate_layer_slowdown(per_extruder_adjustments);
-        out = this->apply_layer_cooldown(m_gcode, layer_id, layer_time_stretched, per_extruder_adjustments);
+        out = this->apply_layer_cooldown(m_gcode, layer_id, layer_time_stretched, per_extruder_adjustments, preserve_fan_commands);
         m_gcode.clear();
+        if (preserve_fan_commands) {
+            // Cura V1 raft phase commands changed the physical fan without
+            // going through CoolingBuffer. Invalidate the cached automatic
+            // fan state so model layer 0 always emits its own ramp value.
+            m_fan_speed         = -1;
+            m_current_fan_speed = -1;
+        }
     }
     return out;
 }
@@ -700,7 +707,8 @@ std::string CoolingBuffer::apply_layer_cooldown(
     // Total time of this layer after slow down, used to control the fan.
     float                                   layer_time,
     // Per extruder list of G-code lines and their cool down attributes.
-    std::vector<PerExtruderAdjustments>    &per_extruder_adjustments)
+    std::vector<PerExtruderAdjustments>    &per_extruder_adjustments,
+    bool                                    preserve_fan_commands)
 {
     // First sort the adjustment lines by of multiple extruders by their position in the source G-code.
     std::vector<const CoolingLine*> lines;
@@ -725,12 +733,14 @@ std::string CoolingBuffer::apply_layer_cooldown(
     int  supp_interface_fan_speed = 0;
     bool ironing_fan_control= false; // ORCA: Add support for ironing fan speed control
     int  ironing_fan_speed   = 0; // ORCA: Add support for ironing fan speed control
-    auto change_extruder_set_fan = [ this, layer_id, layer_time, &new_gcode,
+    auto change_extruder_set_fan = [ this, layer_id, layer_time, preserve_fan_commands, &new_gcode,
         &overhang_fan_control, &overhang_fan_speed,
         &internal_bridge_fan_control, &internal_bridge_fan_speed,
         &supp_interface_fan_control, &supp_interface_fan_speed,
         &ironing_fan_control, &ironing_fan_speed
     ](bool immediately_apply) {
+        if (preserve_fan_commands)
+            return;
 #define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_current_extruder)
         float fan_min_speed = EXTRUDER_CONFIG(fan_min_speed);
         float fan_speed_new = EXTRUDER_CONFIG(reduce_fan_stop_start_freq) ? fan_min_speed : 0;
@@ -884,11 +894,13 @@ std::string CoolingBuffer::apply_layer_cooldown(
             need_set_fan = true;
         } else if (line->type & CoolingLine::TYPE_FORCE_RESUME_FAN) {
             // check if any fan speed change request is active
-            if (m_fan_speed != -1 && !std::any_of(fan_speed_change_requests.begin(), fan_speed_change_requests.end(), [](const std::pair<int, bool>& p) { return p.second; })){
+            if (!preserve_fan_commands && m_fan_speed != -1 &&
+                !std::any_of(fan_speed_change_requests.begin(), fan_speed_change_requests.end(),
+                             [](const std::pair<int, bool>& p) { return p.second; })) {
                 fan_speed_change_requests[CoolingLine::TYPE_FORCE_RESUME_FAN] = true;
                 need_set_fan = true;
             }
-            if (m_additional_fan_speed != -1 && m_config.auxiliary_fan.value)
+            if (!preserve_fan_commands && m_additional_fan_speed != -1 && m_config.auxiliary_fan.value)
                 new_gcode += GCodeWriter::set_additional_fan(m_additional_fan_speed);
         }
         else if (line->type & CoolingLine::TYPE_EXTRUDE_END) {
@@ -976,7 +988,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
             new_gcode.append(line_start, line_end - line_start);
         }
 
-        if (need_set_fan) {
+        if (need_set_fan && !preserve_fan_commands) {
             if (fan_speed_change_requests[CoolingLine::TYPE_OVERHANG_FAN_START]){
                 new_gcode += GCodeWriter::set_fan(m_config.gcode_flavor, overhang_fan_speed);
                 m_current_fan_speed = overhang_fan_speed;

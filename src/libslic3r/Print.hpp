@@ -426,7 +426,12 @@ public:
     const PrintObjectRegions*   shared_regions() const throw() { return m_shared_regions; }
 
     bool                        has_support()           const { return m_config.enable_support || m_config.enforce_support_layers > 0; }
-    bool                        has_raft()              const { return m_config.raft_layers > 0; }
+    bool                        has_raft()              const
+    {
+        return m_config.raft_mode.value == RaftMode::CuraV1 ?
+                   m_config.raft_base_layers.value + m_config.raft_interface_layers.value + m_config.raft_surface_layers.value > 0 :
+                   m_config.raft_layers.value > 0;
+    }
     bool                        has_support_material()  const { return this->has_support() || this->has_raft(); }
     // Checks if the model object is painted using the multi-material painting gizmo.
     bool                        is_mm_painted()         const { return this->model_object()->is_mm_painted(); }

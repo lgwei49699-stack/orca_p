@@ -809,6 +809,7 @@ void split_solid_surface(size_t layer_id, const SurfaceFill &fill, ExPolygons &n
 std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_param)
 {
 	std::vector<SurfaceFill> surface_fills;
+	const size_t model_layer_id = layer.object()->slicing_parameters().model_layer_id(layer.id());
 	// Fill in a map of a region & surface to SurfaceFillParams.
 	std::set<SurfaceFillParams> 						set_surface_params;
 	std::vector<std::vector<const SurfaceFillParams*>> 	region_to_surface_params(layer.regions().size(), std::vector<const SurfaceFillParams*>());
@@ -899,11 +900,13 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
                 params.multiline = params.extrusion_role == erInternalInfill ? int(region_config.fill_multiline) : 1;
 
                 if (params.extrusion_role == erInternalInfill) {
-                    params.angle = calculate_infill_rotation_angle(layer.object(), layer.id(), region_config.infill_direction.value,
+                    params.angle = calculate_infill_rotation_angle(layer.object(), model_layer_id,
+                                                                   region_config.infill_direction.value,
                                                                    region_config.sparse_infill_rotate_template.value);
                     params.is_using_template_angle = !region_config.sparse_infill_rotate_template.value.empty();
                 } else {
-                    params.angle = calculate_infill_rotation_angle(layer.object(), layer.id(), region_config.solid_infill_direction.value,
+                    params.angle = calculate_infill_rotation_angle(layer.object(), model_layer_id,
+                                                                   region_config.solid_infill_direction.value,
                                                                    region_config.solid_infill_rotate_template.value);
                     params.is_using_template_angle = !region_config.solid_infill_rotate_template.value.empty();
                 }
@@ -1091,7 +1094,8 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 	            params.density 		 = 100.f;
 		        params.extrusion_role = erSolidInfill;
 		        const PrintRegionConfig &region_config = layerm.region().config();
-                params.angle = calculate_infill_rotation_angle(layer.object(), layer.id(), region_config.solid_infill_direction.value,
+                params.angle = calculate_infill_rotation_angle(layer.object(), model_layer_id,
+                                                               region_config.solid_infill_direction.value,
                                                                region_config.solid_infill_rotate_template.value);
                 params.is_using_template_angle = !region_config.solid_infill_rotate_template.value.empty();
 
@@ -1118,7 +1122,7 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 
 			ExPolygons normal_infill;
             ExPolygons narrow_infill;
-            split_solid_surface(layer.id(), surface_fills[i], normal_infill, narrow_infill);
+            split_solid_surface(model_layer_id, surface_fills[i], normal_infill, narrow_infill);
 
 			if (narrow_infill.empty()) {
 				// BBS: has no narrow expolygon
@@ -1183,6 +1187,7 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
     std::vector<SurfaceFill>     surface_fills = group_fills(*this, lock_param);
 	const Slic3r::BoundingBox bbox 			= this->object()->bounding_box();
 	const auto                resolution 	= this->object()->print()->config().resolution.value;
+	const size_t              model_layer_id = this->object()->slicing_parameters().model_layer_id(this->id());
 
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING
 	{
@@ -1195,7 +1200,7 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
         // Create the filler object.
         std::unique_ptr<Fill> f = std::unique_ptr<Fill>(Fill::new_from_type(surface_fill.params.pattern));
         f->set_bounding_box(bbox);
-        f->layer_id = this->id();
+        f->layer_id = model_layer_id;
         f->z 		= this->print_z;
         f->angle 	= surface_fill.params.angle;
         f->is_using_template_angle = surface_fill.params.is_using_template_angle;
@@ -1558,7 +1563,7 @@ void Layer::make_ironing()
     InfillPattern         f_pattern = ipRectilinear;
     std::unique_ptr<Fill> f         = std::unique_ptr<Fill>(Fill::new_from_type(f_pattern));
     f->set_bounding_box(this->object()->bounding_box());
-    f->layer_id = this->id();
+    f->layer_id = this->object()->slicing_parameters().model_layer_id(this->id());
     f->z        = this->print_z;
     f->overlap  = 0;
 	for (size_t i = 0; i < by_extruder.size();) {
@@ -1570,7 +1575,7 @@ void Layer::make_ironing()
             f_pattern               = ironing_params.pattern;
             f = std::unique_ptr<Fill>(Fill::new_from_type(f_pattern));
             f->set_bounding_box(this->object()->bounding_box());
-            f->layer_id = this->id();
+            f->layer_id = this->object()->slicing_parameters().model_layer_id(this->id());
             f->z        = this->print_z;
             f->overlap  = 0;
 		}

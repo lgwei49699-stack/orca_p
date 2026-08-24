@@ -1054,12 +1054,62 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
 {
     std::vector<unsigned int> extruders = this->extruders();
     unsigned int nozzles = m_config.nozzle_diameter.size();
-
     if (m_objects.empty())
         return {std::string()};
 
     if (extruders.empty())
         return { L("No extrusions under current settings.") };
+
+    // Cura-style raft layers share plate-level first-layer consumers such as the skirt,
+    // brim and wipe tower. Those consumers cannot safely select a physical first-layer
+    // height or phase from m_objects.front() if objects use different raft schedules.
+    const auto cura_raft_object = std::find_if(m_objects.begin(), m_objects.end(), [](const PrintObject *object) {
+        const SlicingParameters &slicing_params = object->slicing_parameters();
+        return slicing_params.cura_raft_mode && slicing_params.has_raft();
+    });
+    if (cura_raft_object != m_objects.end()) {
+        const SlicingParameters &reference = (*cura_raft_object)->slicing_parameters();
+        for (const PrintObject *object : m_objects) {
+            const SlicingParameters &candidate = object->slicing_parameters();
+            if (!candidate.cura_raft_mode || !candidate.has_raft()) {
+                return {L("Cura-style raft cannot be mixed with unrafted or legacy-raft objects on the same plate."), object,
+                        "raft_mode"};
+            }
+
+            const char *mismatch_key = nullptr;
+            if (candidate.base_raft_layers != reference.base_raft_layers)
+                mismatch_key = "raft_base_layers";
+            else if (candidate.interface_phase_raft_layers() != reference.interface_phase_raft_layers())
+                mismatch_key = "raft_interface_layers";
+            else if (candidate.surface_raft_layers != reference.surface_raft_layers)
+                mismatch_key = "raft_surface_layers";
+            else {
+                for (size_t layer_id = 0; layer_id < reference.raft_layers(); ++layer_id) {
+                    if (candidate.raft_phase(layer_id) != reference.raft_phase(layer_id) ||
+                        std::abs(candidate.raft_layer_height(layer_id) - reference.raft_layer_height(layer_id)) > EPSILON) {
+                        switch (reference.raft_phase(layer_id)) {
+                        case RaftPhase::Base:      mismatch_key = "raft_base_layer_height"; break;
+                        case RaftPhase::Interface: mismatch_key = "raft_interface_layer_height"; break;
+                        case RaftPhase::Surface:   mismatch_key = "raft_surface_layer_height"; break;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (mismatch_key == nullptr && std::abs(candidate.gap_raft_object - reference.gap_raft_object) > EPSILON)
+                mismatch_key = "raft_airgap";
+            if (mismatch_key == nullptr &&
+                std::abs(candidate.raft_layer_0_z_overlap - reference.raft_layer_0_z_overlap) > EPSILON)
+                mismatch_key = "raft_layer_0_z_overlap";
+            if (mismatch_key == nullptr &&
+                std::abs(candidate.first_object_layer_height - reference.first_object_layer_height) > EPSILON)
+                mismatch_key = "initial_layer_print_height";
+            if (mismatch_key != nullptr) {
+                return {L("Cura-style raft requires all objects on the same plate to use the same raft phase Z schedule."), object,
+                        mismatch_key};
+            }
+        }
+    }
 
     if (nozzles < 2 && extruders.size() > 1 && m_config.print_sequence != PrintSequence::ByObject) {
         auto ret = check_multi_filament_valid(*this);
@@ -1288,6 +1338,11 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
 			min_nozzle_diameter = std::min(min_nozzle_diameter, dmr);
 			max_nozzle_diameter = std::max(max_nozzle_diameter, dmr);
 		}
+        const bool printer_has_mixed_nozzle_diameters =
+            !m_config.nozzle_diameter.values.empty() &&
+            std::any_of(m_config.nozzle_diameter.values.begin() + 1, m_config.nozzle_diameter.values.end(), [this](double nozzle) {
+                return std::abs(nozzle - m_config.nozzle_diameter.values.front()) > EPSILON;
+            });
 
         // BBS: remove L()
 #if 0
@@ -1299,20 +1354,62 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                 return {L("One or more object were assigned an extruder that the printer does not have.")};
 #endif
 
-        auto validate_extrusion_width = [min_nozzle_diameter, max_nozzle_diameter](const ConfigBase &config, const char *opt_key, double layer_height, std::string &err_msg) -> bool {
-            double extrusion_width_min = config.get_abs_value(opt_key, min_nozzle_diameter);
-            double extrusion_width_max = config.get_abs_value(opt_key, max_nozzle_diameter);
-        	if (extrusion_width_min == 0) {
-        		// Default "auto-generated" extrusion width is always valid.
-        	} else if (extrusion_width_min <= layer_height) {
+        auto validate_extrusion_width_for_nozzles = [](const ConfigBase &config, const char *opt_key, double layer_height,
+                                                        double min_nozzle, double max_nozzle, std::string &err_msg) -> bool {
+            double extrusion_width_min = config.get_abs_value(opt_key, min_nozzle);
+            double extrusion_width_max = config.get_abs_value(opt_key, max_nozzle);
+            if (extrusion_width_min == 0) {
+                // Default "auto-generated" extrusion width is always valid.
+            } else if (extrusion_width_min <= layer_height) {
                 err_msg = L("Too small line width");
-				return false;
-			} else if (extrusion_width_max > max_nozzle_diameter * MAX_LINE_WIDTH_MULTIPLIER) {
+                return false;
+            } else if (extrusion_width_max > max_nozzle * MAX_LINE_WIDTH_MULTIPLIER) {
                 err_msg = L("Too large line width");
-				return false;
-			}
-			return true;
-		};
+                return false;
+            }
+            return true;
+        };
+        auto validate_extrusion_width = [min_nozzle_diameter, max_nozzle_diameter, &validate_extrusion_width_for_nozzles](
+                                            const ConfigBase &config, const char *opt_key, double layer_height,
+                                            std::string &err_msg) -> bool {
+            return validate_extrusion_width_for_nozzles(
+                config, opt_key, layer_height, min_nozzle_diameter, max_nozzle_diameter, err_msg);
+        };
+        auto model_extruders_for_object = [this](const PrintObject &object) {
+            std::vector<unsigned int> model_extruders;
+            for (const PrintRegion &region : object.all_regions())
+                region.collect_object_printing_extruders(*this, model_extruders);
+            for (const ModelVolume *volume : object.model_object()->volumes) {
+                for (int extruder : volume->get_extruders()) {
+                    assert(extruder > 0);
+                    model_extruders.push_back(extruder - 1);
+                }
+            }
+            for (const auto &layer_range : object.model_object()->layer_config_ranges) {
+                if (layer_range.second.has("extruder")) {
+                    const int extruder = layer_range.second.option("extruder")->getInt();
+                    if (extruder > 0)
+                        model_extruders.push_back(extruder - 1);
+                }
+            }
+            sort_remove_duplicates(model_extruders);
+            return model_extruders;
+        };
+        auto model_nozzle_range = [this, min_nozzle_diameter, max_nozzle_diameter,
+                                   &model_extruders_for_object](const PrintObject &object) {
+            const std::vector<unsigned int> model_extruders = model_extruders_for_object(object);
+            if (model_extruders.empty())
+                return std::make_pair(min_nozzle_diameter, max_nozzle_diameter);
+
+            double min_model_nozzle = std::numeric_limits<double>::max();
+            double max_model_nozzle = 0.;
+            for (unsigned int extruder : model_extruders) {
+                const double nozzle = m_config.nozzle_diameter.get_at(extruder);
+                min_model_nozzle = std::min(min_model_nozzle, nozzle);
+                max_model_nozzle = std::max(max_model_nozzle, nozzle);
+            }
+            return std::make_pair(min_model_nozzle, max_model_nozzle);
+        };
         for (PrintObject *object : m_objects) {
             if (object->has_support_material()) {
                 // BBS: remove useless logics and L()
@@ -1365,11 +1462,14 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                 }
             }
 
-            double initial_layer_print_height = m_config.initial_layer_print_height.value;
+            const double initial_layer_print_height = object->config().raft_mode.value == RaftMode::CuraV1 ?
+                object->slicing_parameters().first_print_layer_height : m_config.initial_layer_print_height.value;
             double first_layer_min_nozzle_diameter;
             if (object->has_raft()) {
                 // if we have raft layers, only support material extruder is used on first layer
-                size_t first_layer_extruder = object->config().raft_layers == 1
+                const bool legacy_single_layer_raft = object->config().raft_mode.value == RaftMode::Legacy &&
+                                                      object->config().raft_layers.value == 1;
+                size_t first_layer_extruder = legacy_single_layer_raft
                     ? object->config().support_interface_filament-1
                     : object->config().support_filament-1;
                 first_layer_min_nozzle_diameter = (first_layer_extruder == size_t(-1)) ?
@@ -1379,8 +1479,11 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                 // if we don't have raft layers, any nozzle diameter is potentially used in first layer
                 first_layer_min_nozzle_diameter = min_nozzle_diameter;
             }
-            if (initial_layer_print_height > first_layer_min_nozzle_diameter)
-                return {L("Layer height cannot exceed nozzle diameter."), object, "initial_layer_print_height"};
+            if (initial_layer_print_height > first_layer_min_nozzle_diameter) {
+                const char *opt_key = object->config().raft_mode.value == RaftMode::CuraV1 && object->has_raft() ?
+                    "raft_base_layer_height" : "initial_layer_print_height";
+                return {L("Layer height cannot exceed nozzle diameter."), object, opt_key};
+            }
 
             // validate layer_height
             double layer_height = object->config().layer_height.value;
@@ -1394,6 +1497,72 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
             if (object->has_support() || object->has_raft()) {
                 if (!validate_extrusion_width(object->config(), "support_line_width", layer_height, err_msg))
                     return {err_msg, object, "support_line_width"};
+            }
+            if (object->config().raft_mode.value == RaftMode::CuraV1 && object->has_raft()) {
+                const SlicingParameters &slicing_params = object->slicing_parameters();
+                // Zero is the explicit Auto sentinel. Reject tiny positive values before the resolver can either mistake values up to
+                // EPSILON for Auto or pass a pathologically dense spacing to the fill generator.
+                const auto invalid_explicit_spacing = [](coordf_t spacing) {
+                    return spacing > 0. && spacing < RESOLUTION;
+                };
+                const char *spacing_key = nullptr;
+                if (invalid_explicit_spacing(object->config().raft_base_line_spacing.value))
+                    spacing_key = "raft_base_line_spacing";
+                else if (slicing_params.interface_phase_raft_layers() > 0 &&
+                         invalid_explicit_spacing(object->config().raft_interface_line_spacing.value))
+                    spacing_key = "raft_interface_line_spacing";
+                else if (invalid_explicit_spacing(object->config().raft_surface_line_spacing.value))
+                    spacing_key = "raft_surface_line_spacing";
+                if (spacing_key != nullptr)
+                    return {L("Raft line spacing must be zero for Auto or at least 0.0125 mm."), object, spacing_key};
+
+                // The normal support generator keeps a 0.5 mm safety outline around the Surface footprint and can only expand
+                // the Base from there. Reject smaller deltas instead of silently producing a Base wider than configured.
+                constexpr coordf_t normal_raft_base_margin_delta = 0.5;
+                if (!is_tree(object->config().support_type.value) &&
+                    object->config().raft_base_margin.value + EPSILON <
+                        object->config().raft_surface_margin.value + normal_raft_base_margin_delta) {
+                    return {L("For normal support, Raft Base margin must be at least 0.5 mm larger than Raft Top margin."), object,
+                            "raft_base_margin"};
+                }
+                if (printer_has_mixed_nozzle_diameters) {
+                    if (slicing_params.base_raft_layers > 0 && object->config().support_filament.value == 0) {
+                        return {L("Cura-style raft cannot use the current tool when printer nozzles have different diameters."), object,
+                                "support_filament"};
+                    }
+                    if (slicing_params.interface_raft_layers > 0 && object->config().support_interface_filament.value == 0) {
+                        return {L("Cura-style raft cannot use the current tool when printer nozzles have different diameters."), object,
+                                "support_interface_filament"};
+                    }
+                }
+
+                const auto [min_model_nozzle, max_model_nozzle] = model_nozzle_range(*object);
+                const coordf_t model_first_layer_height = slicing_params.first_object_layer_height;
+                if (model_first_layer_height > min_model_nozzle)
+                    return {L("Layer height cannot exceed nozzle diameter."), object, "initial_layer_print_height"};
+                if (!validate_extrusion_width_for_nozzles(m_config, "initial_layer_line_width", model_first_layer_height,
+                                                          min_model_nozzle, max_model_nozzle, err_msg))
+                    return {err_msg, object, "initial_layer_line_width"};
+
+                const coordf_t support_nozzle = m_config.nozzle_diameter.get_at(object->config().support_filament.value - 1);
+                const coordf_t interface_nozzle =
+                    m_config.nozzle_diameter.get_at(object->config().support_interface_filament.value - 1);
+                const RaftPhasePlan raft_plan = build_cura_raft_phase_plan(resolve_cura_raft_plan_config(
+                    m_config, object->config(), support_nozzle, interface_nozzle));
+                for (const RaftPhaseLayer &raft_layer : raft_plan.layers) {
+                    const bool base_phase = raft_layer.phase == RaftPhase::Base;
+                    const coordf_t nozzle = base_phase ? support_nozzle : interface_nozzle;
+                    const char *height_key = base_phase ? "raft_base_layer_height" :
+                        raft_layer.phase == RaftPhase::Interface ? "raft_interface_layer_height" : "raft_surface_layer_height";
+                    const char *width_key = base_phase ? "raft_base_line_width" :
+                        raft_layer.phase == RaftPhase::Interface ? "raft_interface_line_width" : "raft_surface_line_width";
+                    if (raft_layer.height > nozzle)
+                        return {L("Layer height cannot exceed nozzle diameter."), object, height_key};
+                    if (raft_layer.line_width <= raft_layer.height)
+                        return {L("Too small line width"), object, width_key};
+                    if (raft_layer.line_width > nozzle * MAX_LINE_WIDTH_MULTIPLIER)
+                        return {L("Too large line width"), object, width_key};
+                }
             }
             for (const char *opt_key : { "inner_wall_line_width", "outer_wall_line_width", "sparse_infill_line_width", "internal_solid_infill_line_width", "top_surface_line_width","skin_infill_line_width" ,"skeleton_infill_line_width"})
 				for (const PrintRegion &region : object->all_regions())
@@ -1524,7 +1693,7 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
             
             // check acceleration
             const auto max_accel = m_config.machine_max_acceleration_extruding.values[0];
-            if (warning_key.empty() && m_default_object_config.default_acceleration > 0 && max_accel > 0) {
+            if (warning_key.empty() && max_accel > 0 && m_default_object_config.default_acceleration > 0) {
                const bool support_travel_acc = (m_config.gcode_flavor == gcfRepetier || m_config.gcode_flavor == gcfMarlinFirmware ||
                                                 m_config.gcode_flavor == gcfRepRapFirmware);
 
@@ -1552,6 +1721,11 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                         "internal_solid_infill_acceleration",
                         "top_surface_acceleration",
                     };
+               if (m_default_object_config.raft_mode.value == RaftMode::CuraV1) {
+                    accel_to_check.emplace_back("raft_base_acceleration");
+                    accel_to_check.emplace_back("raft_interface_acceleration");
+                    accel_to_check.emplace_back("raft_surface_acceleration");
+               }
                warning_key = check_motion_ability_object_setting(accel_to_check, max_accel);
                if (!warning_key.empty()) {
                     warning->string  = L("The acceleration setting exceeds the printer's maximum acceleration "
@@ -1676,6 +1850,11 @@ BoundingBox Print::total_bounding_box() const
 
 double Print::skirt_first_layer_height() const
 {
+    if (!m_objects.empty()) {
+        const SlicingParameters &slicing_params = m_objects.front()->slicing_parameters();
+        if (slicing_params.cura_raft_mode && slicing_params.has_raft())
+            return slicing_params.first_print_layer_height;
+    }
     return m_config.initial_layer_print_height.value;
 }
 
