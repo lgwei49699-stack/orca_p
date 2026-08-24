@@ -10,8 +10,8 @@ endif ()
 
 set(_opencv_jpeg_dependency "")
 set(_opencv_jpeg_args -DBUILD_JPEG=ON)
-if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    # Reuse OrcaSlicer's JPEG library on Linux. Linking OpenCV's bundled
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR MSVC)
+    # Reuse OrcaSlicer's JPEG library on Linux and MSVC. Linking OpenCV's bundled
     # libjpeg-turbo together with JPEG::JPEG causes duplicate JPEG symbols.
     set(_opencv_jpeg_args -DBUILD_JPEG=OFF -DWITH_JPEG=ON)
     if (JPEG_PKG)
@@ -86,4 +86,3 @@ orcaslicer_add_cmake_project(OpenCV
        -DWITH_WIN32UI=OFF
        -DHAVE_WIN32UI=FALSE
 )
-
