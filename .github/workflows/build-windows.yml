@@ -14,7 +14,9 @@ jobs:
     name: Build Windows x64
     uses: ./.github/workflows/build_check_cache.yml
     with:
-      os: windows-latest
+      # Keep the VS2022 build on the Windows Server 2022 image. windows-latest
+      # now provides Visual Studio 2026, which cannot satisfy the VS2022 generator.
+      os: windows-2022
       build-deps-only: false
       force-build: false
     secrets: inherit
