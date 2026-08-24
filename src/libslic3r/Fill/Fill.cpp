@@ -1185,12 +1185,9 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
 #endif /* SLIC3R_DEBUG_SLICE_PROCESSING */
     LockRegionParam lock_param;
     std::vector<SurfaceFill>     surface_fills = group_fills(*this, lock_param);
-	const Slic3r::BoundingBox bbox             = this->object()->bounding_box();
-	const auto                resolution       = this->object()->print()->config().resolution.value;
-	const SlicingParameters  &slicing_params   = this->object()->slicing_parameters();
-	const size_t              model_layer_id   = slicing_params.model_layer_id(this->id());
-	const bool                cura_raft_contact_skin =
-		slicing_params.cura_raft_mode && slicing_params.has_raft() && model_layer_id == 0;
+	const Slic3r::BoundingBox bbox 			= this->object()->bounding_box();
+	const auto                resolution 	= this->object()->print()->config().resolution.value;
+	const size_t              model_layer_id = this->object()->slicing_parameters().model_layer_id(this->id());
 
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING
 	{
@@ -1283,86 +1280,30 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
         }
 		if (surface_fill.params.pattern == ipGrid)
 			params.can_reverse = false;
-		const bool add_cura_raft_skin_outline =
-			cura_raft_contact_skin && !surface_fill.params.bridge &&
-			surface_fill.params.extrusion_role == erBottomSurface &&
-			surface_fill.params.pattern != ipConcentric &&
-			surface_fill.params.pattern != ipConcentricInternal;
-		if (params.symmetric_infill_y_axis)
-			params.symmetric_y_axis = f->extended_object_bounding_box().center().x();
-		for (ExPolygon &expoly : surface_fill.expolygons) {
-			ExtrusionEntitiesPtr &layer_output = m_regions[surface_fill.region_id]->fills.entities;
-			std::unique_ptr<ExtrusionEntityCollection> contact_skin;
-			ExPolygons fill_regions;
-			if (add_cura_raft_skin_outline) {
-				// Cura keeps one contour-following skin line around the model's
-				// first layer above a raft. Arachne preserves that line through
-				// acute tips and returns the exact inner boundary for the user's
-				// selected bottom pattern.
-				FillConcentric outline_filler;
-				outline_filler.set_bounding_box(bbox);
-				outline_filler.layer_id            = model_layer_id;
-				outline_filler.z                   = this->print_z;
-				outline_filler.spacing             = surface_fill.params.spacing;
-				outline_filler.angle               = 0.f;
-				outline_filler.print_config        = &this->object()->print()->config();
-				outline_filler.print_object_config = &this->object()->config();
+		for (ExPolygon& expoly : surface_fill.expolygons) {
 
-				FillParams outline_params               = params;
-				outline_params.pattern                  = ipConcentric;
-				outline_params.density                  = 1.f;
-				outline_params.dont_adjust               = true;
-				outline_params.use_arachne               = true;
-				outline_params.can_reverse               = false;
+      f->no_overlap_expolygons = intersection_ex(surface_fill.no_overlap_expolygons, ExPolygons() = {expoly}, ApplySafetyOffset::Yes);
+            if (params.symmetric_infill_y_axis) {
+                params.symmetric_y_axis = f->extended_object_bounding_box().center().x();
+                expoly.symmetric_y(params.symmetric_y_axis);
+            }
 
-				Surface outline_surface = surface_fill.surface;
-				outline_surface.expolygon = expoly;
-				contact_skin = std::make_unique<ExtrusionEntityCollection>();
-				contact_skin->no_sort = true;
-				fill_regions = outline_filler.fill_surface_single_wall_extrusion(
-					&outline_surface, outline_params, contact_skin->entities);
+			// Spacing is modified by the filler to indicate adjustments. Reset it for each expolygon.
+			f->spacing = surface_fill.params.spacing;
+			surface_fill.surface.expolygon = std::move(expoly);
 
-				if (contact_skin->entities.empty()) {
-					// Preserve the historical fill for islands too small to carry
-					// a valid variable-width contact outline.
-					contact_skin.reset();
-					fill_regions.clear();
-					fill_regions.emplace_back(expoly);
-				}
-			} else {
-				fill_regions.emplace_back(std::move(expoly));
+			if(surface_fill.params.bridge && surface_fill.surface.is_external() && surface_fill.params.density > 99.0){
+				params.density = layerm->region().config().bridge_density.get_abs_value(1.0);
+				params.dont_adjust = true;
 			}
-
-			for (ExPolygon &fill_region : fill_regions) {
-				f->no_overlap_expolygons = intersection_ex(
-					surface_fill.no_overlap_expolygons, ExPolygons{fill_region}, ApplySafetyOffset::Yes);
-				if (params.symmetric_infill_y_axis)
-					fill_region.symmetric_y(params.symmetric_y_axis);
-				// Spacing is modified by the filler to indicate adjustments. Reset it for each expolygon.
-				f->spacing = surface_fill.params.spacing;
-				surface_fill.surface.expolygon = std::move(fill_region);
-
-				if (surface_fill.params.bridge && surface_fill.surface.is_external() && surface_fill.params.density > 99.0) {
-					params.density = layerm->region().config().bridge_density.get_abs_value(1.0);
-					params.dont_adjust = true;
-				}
-				if (surface_fill.surface.is_internal_bridge()) {
-					params.density = f->print_object_config->internal_bridge_density.get_abs_value(1.0);
-					params.dont_adjust = true;
-				}
-				// BBS: make fill
-				f->fill_surface_extrusion(
-					&surface_fill.surface, params, contact_skin ? contact_skin->entities : layer_output);
-			}
-			if (contact_skin && !contact_skin->entities.empty()) {
-				// G-code accepts one collection level for infill. Flatten the
-				// outline/core children into this ordered parent so the outline
-				// remains first without introducing nested collections.
-				ExtrusionEntityCollection ordered_paths = contact_skin->flatten();
-				contact_skin->clear();
-				contact_skin->append(std::move(ordered_paths.entities));
-				layer_output.emplace_back(contact_skin.release());
-			}
+            if(surface_fill.surface.is_internal_bridge()){
+                params.density = f->print_object_config->internal_bridge_density.get_abs_value(1.0);
+                params.dont_adjust = true;
+            }
+			// BBS: make fill
+			f->fill_surface_extrusion(&surface_fill.surface,
+				params,
+				m_regions[surface_fill.region_id]->fills.entities);
 		}
     }
 
