@@ -758,10 +758,8 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     // soluble-interface convention, but not for a Cura-style raft by itself.
     toggle_field("support_top_z_distance", config->opt_bool("enable_support") || (!use_cura_raft && have_legacy_raft));
 
-    for (const char *key : {"raft_layer_0_z_overlap", "raft_angle", "raft_angle_increment"}) {
-        toggle_line(key, use_cura_raft);
-        toggle_field(key, have_cura_raft);
-    }
+    toggle_line("raft_layer_0_z_overlap", use_cura_raft);
+    toggle_field("raft_layer_0_z_overlap", have_cura_raft);
 
     for (const char *key : {"raft_base_layer_height", "raft_base_line_width", "raft_base_line_spacing", "raft_base_flow", "raft_base_speed",
                             "raft_base_acceleration", "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin"}) {

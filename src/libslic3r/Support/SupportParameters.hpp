@@ -8,6 +8,7 @@
 #include "../libslic3r.h"
 #include "../Flow.hpp"
 #include "../Slicing.hpp"
+#include "RaftAngleResolver.hpp"
 
 namespace Slic3r {
 struct SupportParameters {
@@ -54,14 +55,17 @@ struct SupportParameters {
         this->support_material_interface_flow = Slic3r::support_material_interface_flow(&object, float(slicing_params.layer_height));
     	this->raft_interface_flow                = support_material_interface_flow;
 
+        double cura_raft_first_angle_degrees = 0.;
         if (this->cura_raft_mode) {
             const coordf_t support_nozzle = print_config.nozzle_diameter.get_at(object_config.support_filament.value - 1);
             const coordf_t interface_nozzle =
                 print_config.nozzle_diameter.get_at(object_config.support_interface_filament.value - 1);
-            const RaftPhasePlan raft_plan = build_cura_raft_phase_plan(
-                resolve_cura_raft_plan_config(
-                    print_config, object_config, support_nozzle, interface_nozzle));
+            RaftPlanConfig raft_plan_config =
+                resolve_cura_raft_plan_config(print_config, object_config, support_nozzle, interface_nozzle);
+            raft_plan_config.surface_angle = resolve_cura_raft_surface_angle(object);
+            const RaftPhasePlan raft_plan = build_cura_raft_phase_plan(raft_plan_config);
             assert(raft_plan.validate());
+            cura_raft_first_angle_degrees = raft_plan.layers.front().angle;
 
             const RaftPhaseLayer &base_layer = *raft_plan.find_layer(RaftPhase::Base, 0);
             const RaftPhaseLayer *interface_layer = raft_plan.find_layer(RaftPhase::Interface, 0);
@@ -184,12 +188,10 @@ struct SupportParameters {
         this->raft_angle_1st_layer  = 0.f;
         this->raft_angle_base       = 0.f;
         this->raft_angle_interface  = 0.f;
-        this->raft_angle_increment  = 0.f;
         if (this->cura_raft_mode) {
-            this->raft_angle_1st_layer = Geometry::deg2rad(float(object_config.raft_angle.value));
+            this->raft_angle_1st_layer = Geometry::deg2rad(float(cura_raft_first_angle_degrees));
             this->raft_angle_base = this->raft_angle_1st_layer;
             this->raft_angle_interface = this->raft_angle_1st_layer;
-            this->raft_angle_increment = Geometry::deg2rad(float(object_config.raft_angle_increment.value));
         } else if (slicing_params.base_raft_layers > 1) {
             assert(slicing_params.raft_layers() >= 4);
             // There are all raft layer types (1st layer, base, interface & contact layers) available.
@@ -338,14 +340,13 @@ struct SupportParameters {
     float 					raft_angle_1st_layer;
     float 					raft_angle_base;
     float 					raft_angle_interface;
-    float                       raft_angle_increment;
     bool                        cura_raft_mode { false };
 
     float raft_layer_angle(size_t layer_id) const
     {
         if (!cura_raft_mode)
             return layer_id == 0 ? raft_angle_1st_layer : raft_angle_interface;
-        float angle = std::fmod(raft_angle_1st_layer + raft_angle_increment * float(layer_id), float(M_PI));
+        float angle = std::fmod(raft_angle_1st_layer + float(0.5 * M_PI) * float(layer_id), float(M_PI));
         if (angle < 0.f)
             angle += float(M_PI);
         return angle;

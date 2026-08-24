@@ -3189,12 +3189,6 @@ void TabPrint::build()
         optgroup->append_single_option_line("raft_interface_flow", "support_settings_raft");
         optgroup->append_single_option_line("raft_surface_flow", "support_settings_raft");
 
-        // Orca's explicit angle schedule has no equivalent parent setting in
-        // the Cura panel, so keep it as a separate advanced group at the end.
-        optgroup = page->new_optgroup(L("Raft Advanced"), L"param_raft");
-        optgroup->append_single_option_line("raft_angle", "support_settings_raft");
-        optgroup->append_single_option_line("raft_angle_increment", "support_settings_raft");
-
     page = add_options_page(L("Multimaterial"), "custom-gcode_multi_material"); // ORCA: icon only visible on placeholders
         optgroup = page->new_optgroup(L("Prime tower"), L"param_tower");
         optgroup->append_single_option_line("enable_prime_tower", "multimaterial_settings_prime_tower");

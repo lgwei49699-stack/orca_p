@@ -14,6 +14,13 @@ namespace Slic3r {
 
 class ExtrusionEntityCollection;
 class LayerRegion;
+class PrintObject;
+
+// Resolve the configured fixed/template infill direction for one model layer.
+// The returned angle is expressed in radians; fill generators may apply their
+// own pattern rotation afterwards.
+double calculate_infill_rotation_angle(const PrintObject *object, size_t layer_id, const double &fixed_infill_angle,
+                                       const std::string &template_string);
 
 // An interface class to Perl, aggregating an instance of a Fill and a FillData.
 class Filler

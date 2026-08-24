@@ -51,11 +51,12 @@ bool fail_validation(std::string *error, const char *message)
 }
 
 void append_phase_layers(RaftPhasePlan &plan, const RaftPlanConfig &config, RaftPhase phase, const RaftPhaseConfig &phase_config,
-                         double &print_z)
+                         size_t total_layer_count, double &print_z)
 {
     for (size_t index = 0; index < phase_config.layer_count; ++index) {
         const double height = phase == RaftPhase::Base && index == 0 ? config.first_base_layer_height : phase_config.layer_height;
         const size_t global_index = plan.layers.size();
+        const size_t layers_before_surface = total_layer_count - global_index - 1;
         print_z += height;
 
         plan.layers.push_back({ phase,
@@ -64,7 +65,7 @@ void append_phase_layers(RaftPhasePlan &plan, const RaftPlanConfig &config, Raft
                                 height,
                                 phase_config.line_width,
                                 phase_config.line_spacing,
-                                normalize_line_angle(config.angle + config.angle_increment * static_cast<double>(global_index)),
+                                normalize_line_angle(config.surface_angle + 90.0 * static_cast<double>(layers_before_surface)),
                                 phase_config.flow_ratio,
                                 phase_config.speed,
                                 phase_config.fan_speed,
@@ -165,10 +166,12 @@ RaftPhasePlan build_cura_raft_phase_plan(const RaftPlanConfig &config)
     plan.airgap = config.airgap;
     plan.overlap = config.overlap;
 
+    const size_t total_layer_count = config.base_config.layer_count + config.interface_config.layer_count +
+                                     config.surface_config.layer_count;
     double print_z = 0.0;
-    append_phase_layers(plan, config, RaftPhase::Base, config.base_config, print_z);
-    append_phase_layers(plan, config, RaftPhase::Interface, config.interface_config, print_z);
-    append_phase_layers(plan, config, RaftPhase::Surface, config.surface_config, print_z);
+    append_phase_layers(plan, config, RaftPhase::Base, config.base_config, total_layer_count, print_z);
+    append_phase_layers(plan, config, RaftPhase::Interface, config.interface_config, total_layer_count, print_z);
+    append_phase_layers(plan, config, RaftPhase::Surface, config.surface_config, total_layer_count, print_z);
     return plan;
 }
 

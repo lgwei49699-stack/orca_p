@@ -406,6 +406,8 @@ set(lisbslic3r_sources
     SlicingAdaptive.hpp
     Slicing.cpp
     Slicing.hpp
+    Support/RaftAngleResolver.cpp
+    Support/RaftAngleResolver.hpp
     Support/RaftPlan.cpp
     Support/RaftPlan.hpp
     Support/SupportCommon.cpp

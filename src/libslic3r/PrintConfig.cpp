@@ -4288,13 +4288,6 @@ void PrintConfigDef::init_fff_params()
                         "required."),
                       L("layers"), 1, 20, 2, comAdvanced);
 
-    add_cura_raft_float("raft_angle", L("Raft pattern angle"),
-                        L("Pattern angle of the first Cura-style raft layer on the horizontal plane."), "°", 0.0, 359.0, 45.0, comAdvanced);
-    add_cura_raft_float("raft_angle_increment", L("Raft angle increment"),
-                        L("Rotation added for each subsequent Cura-style raft layer. A value of 90 degrees alternates 45 and 135 degree "
-                          "lines."),
-                        "°", 0.0, 360.0, 90.0, comAdvanced);
-
     add_cura_raft_auto_float("raft_base_layer_height", L("Raft base thickness"),
                              L("Thickness of each Base layer. Auto uses the larger of the normal model layer height and 75% of the "
                                "support/raft base nozzle diameter."),

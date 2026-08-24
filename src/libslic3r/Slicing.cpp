@@ -87,8 +87,6 @@ RaftPlanConfig resolve_cura_raft_plan_config(const PrintConfig &print_config, co
     config.airgap = std::max(0., object_config.raft_airgap.value);
     // The overlap reduces the second model-layer Z step. Keep that step positive even for hand-edited configs.
     config.overlap = std::clamp(object_config.raft_layer_0_z_overlap.value, 0., std::max(0., layer_height - EPSILON));
-    config.angle = object_config.raft_angle.value;
-    config.angle_increment = object_config.raft_angle_increment.value;
 
     auto resolve_phase = [](size_t layer_count, double layer_height, double line_width, double configured_spacing,
                             double automatic_spacing, double flow_percent, double speed, double fan_percent,

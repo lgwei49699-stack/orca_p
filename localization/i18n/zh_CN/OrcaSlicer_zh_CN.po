@@ -12824,10 +12824,6 @@ msgid "Raft Flow"
 msgstr "筏层流量"
 
 #: src/slic3r/GUI/Tab.cpp
-msgid "Raft Advanced"
-msgstr "筏层高级设置"
-
-#: src/slic3r/GUI/Tab.cpp
 msgid "Resolved:"
 msgstr "解析值："
 
@@ -12905,24 +12901,6 @@ msgid ""
 "Number of dense Top layers directly below the model in Cura-style mode. At "
 "least one Top layer is required."
 msgstr "Cura 风格模式中模型正下方的致密顶部阶段层数。顶部阶段至少需要一层。"
-
-#: src/libslic3r/PrintConfig.cpp:4283
-msgid "Raft pattern angle"
-msgstr "筏层图案角度"
-
-#: src/libslic3r/PrintConfig.cpp:4284
-msgid "Pattern angle of the first Cura-style raft layer on the horizontal plane."
-msgstr "第一层 Cura 风格筏层图案在水平面内的角度。"
-
-#: src/libslic3r/PrintConfig.cpp:4285
-msgid "Raft angle increment"
-msgstr "筏层角度增量"
-
-#: src/libslic3r/PrintConfig.cpp:4286
-msgid ""
-"Rotation added for each subsequent Cura-style raft layer. A value of 90 "
-"degrees alternates 45 and 135 degree lines."
-msgstr "每增加一层 Cura 风格筏层时叠加的旋转角度。设为 90 度时，线条会在 45 度与 135 度之间交替。"
 
 #: src/libslic3r/PrintConfig.cpp:4290
 msgid "Raft base thickness"

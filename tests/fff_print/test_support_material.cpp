@@ -125,8 +125,7 @@ TEST_CASE("Cura V1 raft plan preserves the three physical phases", "[SupportMate
     config.first_base_layer_height = 0.3;
     config.airgap                  = 0.27;
     config.overlap                 = 0.1;
-    config.angle                   = 45.;
-    config.angle_increment         = 90.;
+    config.surface_angle           = 110.;
     config.base_config             = {1, 0.3, 0.6, 1.5, 1.05, 10., 0., 4, 3.};
     config.interface_config        = {2, 0.3, 0.6, 1.5, 0.95, 25., 0., 0, 1.};
     config.surface_config          = {2, 0.2, 0.42, 0.42, 1., 60., 0., 0, 1.};
@@ -144,11 +143,11 @@ TEST_CASE("Cura V1 raft plan preserves the three physical phases", "[SupportMate
     REQUIRE(plan.layers[2].print_z == Approx(0.9));
     REQUIRE(plan.layers[3].print_z == Approx(1.1));
     REQUIRE(plan.layers[4].print_z == Approx(1.3));
-    REQUIRE(plan.layers[0].angle == Approx(45.));
-    REQUIRE(plan.layers[1].angle == Approx(135.));
-    REQUIRE(plan.layers[2].angle == Approx(45.));
-    REQUIRE(plan.layers[3].angle == Approx(135.));
-    REQUIRE(plan.layers[4].angle == Approx(45.));
+    REQUIRE(plan.layers[0].angle == Approx(110.));
+    REQUIRE(plan.layers[1].angle == Approx(20.));
+    REQUIRE(plan.layers[2].angle == Approx(110.));
+    REQUIRE(plan.layers[3].angle == Approx(20.));
+    REQUIRE(plan.layers[4].angle == Approx(110.));
     REQUIRE(plan.layers[0].line_width == Approx(0.6));
     REQUIRE(plan.layers[0].line_spacing == Approx(1.5));
     REQUIRE(plan.layers[0].flow_ratio == Approx(1.05));
@@ -166,6 +165,19 @@ TEST_CASE("Cura V1 raft plan preserves the three physical phases", "[SupportMate
     REQUIRE(plan.layers[3].speed == Approx(60.));
     REQUIRE(plan.layers[3].wall_count == 0);
     REQUIRE(plan.layers[3].margin == Approx(1.));
+
+    // The model-contacting Surface stays anchored when the total physical
+    // layer count changes from odd to even; only the preceding schedule moves.
+    RaftPlanConfig even_config = config;
+    even_config.interface_config.layer_count = 1;
+    const RaftPhasePlan even_plan = build_cura_raft_phase_plan(even_config);
+    REQUIRE(even_plan.validate());
+    REQUIRE(even_plan.layers.size() == 4);
+    REQUIRE(even_plan.layers[0].angle == Approx(20.));
+    REQUIRE(even_plan.layers[1].angle == Approx(110.));
+    REQUIRE(even_plan.layers[2].angle == Approx(20.));
+    REQUIRE(even_plan.layers[3].angle == Approx(110.));
+    REQUIRE(even_plan.layers.back().phase == RaftPhase::Surface);
 }
 
 TEST_CASE("SlicingParameters resolves Cura V1 airgap and model first layer independently", "[SupportMaterial][Raft][CuraV1]")
@@ -1069,6 +1081,8 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.58, false));
     config.set("inner_wall_line_width", 0.42);
     config.set("outer_wall_line_width", 0.42);
+    config.set_key_value("bottom_surface_pattern", new ConfigOptionEnum<InfillPattern>(ipMonotonic));
+    config.set("solid_infill_direction", 20.);
     config.set("initial_layer_speed", 7.);
     config.set("initial_layer_infill_speed", 11.);
     config.set_key_value("initial_layer_travel_speed", new ConfigOptionFloatOrPercent(3., false));
@@ -1167,8 +1181,46 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     REQUIRE(support_params.raft_fill_pattern(RaftPhase::Base) == ipRectilinear);
     REQUIRE(support_params.raft_fill_pattern(RaftPhase::Interface) == ipZigZag);
     REQUIRE(support_params.raft_fill_pattern(RaftPhase::Surface) == ipZigZag);
-    REQUIRE(support_params.raft_layer_angle(0) == Approx(Geometry::deg2rad(45.f)));
-    REQUIRE(support_params.raft_layer_angle(1) == Approx(Geometry::deg2rad(135.f)));
+    REQUIRE(support_params.raft_layer_angle(0) == Approx(Geometry::deg2rad(110.f)));
+    REQUIRE(support_params.raft_layer_angle(1) == Approx(Geometry::deg2rad(20.f)));
+    REQUIRE(support_params.raft_layer_angle(4) == Approx(Geometry::deg2rad(110.f)));
+
+    // A non-directional model bottom has no meaningful perpendicular line.
+    // Keep Cura's stable 135 degree Surface fallback instead of deriving a
+    // pseudo-angle from the sparse infill direction or polygon geometry.
+    DynamicPrintConfig non_directional_config = config;
+    non_directional_config.set_key_value("bottom_surface_pattern", new ConfigOptionEnum<InfillPattern>(ipConcentric));
+    Print non_directional_print;
+    non_directional_print.auto_assign_extruders(model_object);
+    non_directional_print.apply(model, non_directional_config);
+    const StringObjectException non_directional_validation = non_directional_print.validate();
+    INFO("non-directional validation error: " << non_directional_validation.string << "; key: " << non_directional_validation.opt_key);
+    REQUIRE(non_directional_validation.string.empty());
+    non_directional_print.set_status_silent();
+    non_directional_print.process();
+    const SupportParameters non_directional_support_params(*non_directional_print.objects().front());
+    REQUIRE(non_directional_support_params.raft_layer_angle(0) == Approx(Geometry::deg2rad(135.f)));
+    REQUIRE(non_directional_support_params.raft_layer_angle(1) == Approx(Geometry::deg2rad(45.f)));
+    REQUIRE(non_directional_support_params.raft_layer_angle(4) == Approx(Geometry::deg2rad(135.f)));
+
+    // Random template operators cannot be evaluated twice while preserving
+    // the actual model Bottom direction because they consume global rand().
+    // Treat them as non-unique and use the deterministic Surface fallback.
+    DynamicPrintConfig randomized_direction_config = config;
+    randomized_direction_config.set("solid_infill_rotate_template", std::string("90~1"));
+    Print randomized_direction_print;
+    randomized_direction_print.auto_assign_extruders(model_object);
+    randomized_direction_print.apply(model, randomized_direction_config);
+    const StringObjectException randomized_direction_validation = randomized_direction_print.validate();
+    INFO("randomized direction validation error: " << randomized_direction_validation.string
+                                                     << "; key: " << randomized_direction_validation.opt_key);
+    REQUIRE(randomized_direction_validation.string.empty());
+    randomized_direction_print.set_status_silent();
+    randomized_direction_print.process();
+    const SupportParameters randomized_direction_support_params(*randomized_direction_print.objects().front());
+    REQUIRE(randomized_direction_support_params.raft_layer_angle(0) == Approx(Geometry::deg2rad(135.f)));
+    REQUIRE(randomized_direction_support_params.raft_layer_angle(4) == Approx(Geometry::deg2rad(135.f)));
+
     const std::array<double, 5> expected_print_z {0.3, 0.6, 0.9, 1.1, 1.3};
     for (size_t layer_id = 0; layer_id < expected_print_z.size(); ++layer_id) {
         INFO("raft layer " << layer_id);
@@ -1246,6 +1298,45 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
         }
     }
     REQUIRE(long_segment_count > 2);
+    REQUIRE(primary_long_angle.has_value());
+    // Verify emitted geometry, not just the resolved plan values. The model
+    // Bottom hatch follows its configured 20 degree direction, while the
+    // model-contacting Raft Surface must emit at 110 degrees.
+    size_t model_bottom_parallel_segments = 0;
+    size_t model_bottom_perpendicular_segments = 0;
+    const auto inspect_model_bottom_path = [&](const ExtrusionPath &path) {
+        if (path.role() != erBottomSurface)
+            return;
+        for (size_t point_id = 1; point_id < path.polyline.points.size(); ++point_id) {
+            const Point &from = path.polyline.points[point_id - 1];
+            const Point &to = path.polyline.points[point_id];
+            const double dx = unscale<double>(to.x() - from.x());
+            const double dy = unscale<double>(to.y() - from.y());
+            if (std::hypot(dx, dy) < 5.)
+                continue;
+            const double angle = std::atan2(dy, dx);
+            if (angle_distance(angle, Geometry::deg2rad(20.)) < Geometry::deg2rad(5.))
+                ++model_bottom_parallel_segments;
+            if (angle_distance(angle, Geometry::deg2rad(110.)) < Geometry::deg2rad(5.))
+                ++model_bottom_perpendicular_segments;
+        }
+    };
+    const ExtrusionEntityCollection model_bottom = object->layers().front()->get_region(0)->fills.flatten();
+    for (const ExtrusionEntity *entity : model_bottom.entities) {
+        if (const auto *path = dynamic_cast<const ExtrusionPath *>(entity)) {
+            inspect_model_bottom_path(*path);
+        } else if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath *>(entity)) {
+            for (const ExtrusionPath &path : multipath->paths)
+                inspect_model_bottom_path(path);
+        } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(entity)) {
+            for (const ExtrusionPath &path : loop->paths)
+                inspect_model_bottom_path(path);
+        }
+    }
+    REQUIRE(model_bottom_parallel_segments > 2);
+    REQUIRE(model_bottom_parallel_segments > model_bottom_perpendicular_segments);
+    REQUIRE(angle_distance(*primary_long_angle, Geometry::deg2rad(110.)) < Geometry::deg2rad(5.));
+    REQUIRE(std::abs(angle_distance(*primary_long_angle, Geometry::deg2rad(20.)) - M_PI_2) < Geometry::deg2rad(5.));
     REQUIRE(perpendicular_long_segment_count == 0);
     std::sort(hatch_offsets.begin(), hatch_offsets.end());
     double minimum_hatch_spacing = std::numeric_limits<double>::max();
@@ -1395,6 +1486,36 @@ TEST_CASE("Cura V1 raft reaches support toolpaths and G-code phase controls", "[
     REQUIRE(legacy_acceleration_gcode.find("M204 P600") == std::string::npos);
     REQUIRE(legacy_acceleration_gcode.find("M204 P2000") == std::string::npos);
     REQUIRE(legacy_acceleration_gcode.find("M204 P800") == std::string::npos);
+
+    // Region-only changes do not carry raft_mode in their old/new resolvers.
+    // Updating the model L1 direction on an existing Print must nevertheless
+    // invalidate and regenerate its CuraV1 raft instead of retaining stale
+    // Surface toolpaths until the project is reopened.
+    REQUIRE(print.is_step_done(posSupportMaterial));
+    DynamicPrintConfig updated_direction_config = config;
+    updated_direction_config.set("solid_infill_direction", 35.);
+    print.apply(model, updated_direction_config);
+    REQUIRE_FALSE(print.is_step_done(posSupportMaterial));
+    print.set_status_silent();
+    print.process();
+    const SupportParameters updated_direction_support_params(*print.objects().front());
+    REQUIRE(updated_direction_support_params.raft_layer_angle(0) == Approx(Geometry::deg2rad(125.f)));
+    REQUIRE(updated_direction_support_params.raft_layer_angle(4) == Approx(Geometry::deg2rad(125.f)));
+
+    // A region can still touch L1 when bottom shells are disabled, but it no
+    // longer emits a model Bottom hatch. The Raft direction must then use the
+    // stable fallback, and the same-Print update must invalidate the existing
+    // support toolpaths.
+    REQUIRE(print.is_step_done(posSupportMaterial));
+    DynamicPrintConfig no_bottom_config = updated_direction_config;
+    no_bottom_config.set("bottom_shell_layers", 0);
+    print.apply(model, no_bottom_config);
+    REQUIRE_FALSE(print.is_step_done(posSupportMaterial));
+    print.set_status_silent();
+    print.process();
+    const SupportParameters no_bottom_support_params(*print.objects().front());
+    REQUIRE(no_bottom_support_params.raft_layer_angle(0) == Approx(Geometry::deg2rad(135.f)));
+    REQUIRE(no_bottom_support_params.raft_layer_angle(4) == Approx(Geometry::deg2rad(135.f)));
 }
 
 TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial][Raft][CuraV1][TreeSupport]")
@@ -1421,6 +1542,9 @@ TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial]
     config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTreeAuto));
     config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(smsTreeOrganic));
     config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(0.44, false));
+    config.set_key_value("bottom_surface_pattern", new ConfigOptionEnum<InfillPattern>(ipMonotonic));
+    config.set("solid_infill_rotate_template", std::string("30,120"));
+    config.set("align_infill_direction_to_model", true);
     config.set("support_threshold_angle", 30);
     config.set("support_top_z_distance", 0.2);
     config.set("before_layer_change_gcode", std::string("G92 E0"));
@@ -1433,6 +1557,7 @@ TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial]
     model_object->add_volume(std::move(tilted_cube));
     ModelInstance *instance = model_object->add_instance();
     instance->set_offset(Vec3d(100., 100., 0.));
+    instance->set_rotation(Z, Geometry::deg2rad(20.));
     model_object->ensure_on_bed();
 
     Print print;
@@ -1454,6 +1579,9 @@ TEST_CASE("Cura V1 raft reaches organic tree support layers", "[SupportMaterial]
     REQUIRE(support_params.raft_surface_flow.width() == Approx(0.72));
     REQUIRE(support_params.support_material_flow.width() == Approx(0.44));
     REQUIRE(support_params.support_material_interface_flow.width() == Approx(0.44));
+    REQUIRE(support_params.raft_layer_angle(0) == Approx(Geometry::deg2rad(140.f)));
+    REQUIRE(support_params.raft_layer_angle(1) == Approx(Geometry::deg2rad(50.f)));
+    REQUIRE(support_params.raft_layer_angle(4) == Approx(Geometry::deg2rad(140.f)));
     const std::array<double, 5> expected_print_z {0.3, 0.6, 0.9, 1.1, 1.3};
     for (size_t layer_id = 0; layer_id < expected_print_z.size(); ++layer_id) {
         INFO("tree raft layer " << layer_id);
@@ -2201,7 +2329,7 @@ TEST_CASE("Cura V1 raft air gap is independent from ordinary support Top Z dista
 TEST_CASE("Cura V1 exposes all dedicated Raft controls in Advanced mode", "[SupportMaterial][Raft][CuraV1][ConfigMode]")
 {
     for (const char *key : {"raft_mode", "raft_airgap", "raft_layer_0_z_overlap", "raft_base_layers", "raft_interface_layers",
-                            "raft_surface_layers", "raft_angle", "raft_angle_increment", "raft_base_layer_height",
+                            "raft_surface_layers", "raft_base_layer_height",
                             "raft_base_line_width", "raft_base_line_spacing", "raft_base_flow", "raft_base_speed",
                             "raft_base_acceleration", "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin",
                             "raft_interface_layer_height", "raft_interface_line_width", "raft_interface_line_spacing",
@@ -2215,6 +2343,9 @@ TEST_CASE("Cura V1 exposes all dedicated Raft controls in Advanced mode", "[Supp
         REQUIRE(def != nullptr);
         REQUIRE(def->mode == comAdvanced);
     }
+
+    REQUIRE(print_config_def.get("raft_angle") == nullptr);
+    REQUIRE(print_config_def.get("raft_angle_increment") == nullptr);
 
     for (const char *key : {"raft_base_layer_height", "raft_base_line_width", "raft_base_line_spacing",
                             "raft_interface_layer_height", "raft_interface_line_width", "raft_interface_line_spacing",

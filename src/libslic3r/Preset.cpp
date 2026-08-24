@@ -808,7 +808,6 @@ static std::vector<std::string> s_Preset_print_options {
     "brim_width", "brim_object_gap", "brim_type", "brim_ears_max_angle", "brim_ears_detection_length", "enable_support", "support_type", "support_threshold_angle", "support_threshold_overlap","enforce_support_layers",
     "raft_layers", "raft_first_layer_density", "raft_first_layer_expansion", "raft_contact_distance", "raft_expansion",
     "raft_mode", "raft_airgap", "raft_layer_0_z_overlap", "raft_base_layers", "raft_interface_layers", "raft_surface_layers",
-    "raft_angle", "raft_angle_increment",
     "raft_base_layer_height", "raft_base_line_width", "raft_base_line_spacing", "raft_base_flow", "raft_base_speed", "raft_base_acceleration",
     "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin",
     "raft_interface_layer_height", "raft_interface_line_width", "raft_interface_line_spacing", "raft_interface_flow",

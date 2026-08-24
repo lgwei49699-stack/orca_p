@@ -879,6 +879,15 @@ bool PrintObject::invalidate_state_by_config_options(
 
     std::vector<PrintObjectStep> steps;
     bool invalidated = false;
+    const auto uses_cura_raft = [](const ConfigOptionResolver &config) {
+        const auto *mode = config.option<ConfigOptionEnum<RaftMode>>("raft_mode");
+        return mode != nullptr && mode->value == RaftMode::CuraV1;
+    };
+    // Region-only updates pass PrintRegionConfig resolvers, which do not own
+    // raft_mode. Include the PrintObject's active mode so changing a model L1
+    // bottom direction invalidates already-generated CuraV1 raft toolpaths.
+    const bool cura_raft_uses_model_l1_angle = uses_cura_raft(old_config) || uses_cura_raft(new_config) ||
+                                               this->config().raft_mode.value == RaftMode::CuraV1;
     for (const t_config_option_key &opt_key : opt_keys) {
         if (   opt_key == "brim_width"
             || opt_key == "brim_object_gap"
@@ -956,8 +965,6 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "raft_base_layers"
             || opt_key == "raft_interface_layers"
             || opt_key == "raft_surface_layers"
-            || opt_key == "raft_angle"
-            || opt_key == "raft_angle_increment"
             || opt_key == "raft_base_layer_height"
             || opt_key == "raft_base_line_width"
             || opt_key == "raft_base_line_spacing"
@@ -1078,6 +1085,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "top_shell_layers") {
 
             steps.emplace_back(posSlice);
+            if (cura_raft_uses_model_l1_angle && opt_key == "bottom_shell_layers")
+                steps.emplace_back(posSupportMaterial);
 #if (0)
             const auto *old_shell_layers = old_config.option<ConfigOptionInt>(opt_key);
             const auto *new_shell_layers = new_config.option<ConfigOptionInt>(opt_key);
@@ -1119,6 +1128,9 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "bridge_density"
             || opt_key == "internal_bridge_density") {
             steps.emplace_back(posPrepareInfill);
+            if (cura_raft_uses_model_l1_angle &&
+                (opt_key == "solid_infill_direction" || opt_key == "align_infill_direction_to_model"))
+                steps.emplace_back(posSupportMaterial);
         } else if (
                opt_key == "top_surface_pattern"
             || opt_key == "bottom_surface_pattern"
@@ -1135,6 +1147,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "lateral_lattice_angle_2"
             || opt_key == "infill_overhang_angle") {
             steps.emplace_back(posInfill);
+            if (cura_raft_uses_model_l1_angle && opt_key == "bottom_surface_pattern")
+                steps.emplace_back(posSupportMaterial);
         } else if (opt_key == "sparse_infill_pattern"
                    || opt_key == "symmetric_infill_y_axis"
                    || opt_key == "infill_shift_step"
@@ -1145,6 +1159,8 @@ bool PrintObject::invalidate_state_by_config_options(
                    || opt_key == "infill_lock_depth"
                    || opt_key == "skin_infill_depth") {
             steps.emplace_back(posPrepareInfill);
+            if (cura_raft_uses_model_l1_angle && opt_key == "solid_infill_rotate_template")
+                steps.emplace_back(posSupportMaterial);
         } else if (opt_key == "sparse_infill_density") {
             // One likely wants to reslice only when switching between zero infill to simulate boolean difference (subtracting volumes),
             // normal infill and 100% (solid) infill.

@@ -835,8 +835,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,               mmu_segmented_region_max_width))
     ((ConfigOptionFloat,               mmu_segmented_region_interlocking_depth))
     ((ConfigOptionFloat,               raft_airgap))
-    ((ConfigOptionFloat,               raft_angle))
-    ((ConfigOptionFloat,               raft_angle_increment))
     ((ConfigOptionPercent,             raft_base_fan_speed))
     ((ConfigOptionPercent,             raft_base_flow))
     ((ConfigOptionFloat,               raft_base_layer_height))

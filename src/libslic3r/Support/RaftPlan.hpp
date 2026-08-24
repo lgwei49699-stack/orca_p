@@ -41,9 +41,10 @@ struct RaftPlanConfig {
     double first_base_layer_height { 0.0 };
     double airgap { 0.0 };
     double overlap { 0.0 };
-    // Global line angle schedule, in degrees, shared by every phase.
-    double angle { 45.0 };
-    double angle_increment { 90.0 };
+    // Input angle of the final Surface layer, in degrees. Earlier physical
+    // raft layers are derived backwards in 90 degree steps so changing the
+    // total layer count never flips the model-contacting Surface direction.
+    double surface_angle { 135.0 };
 
     RaftPhaseConfig base_config;
     RaftPhaseConfig interface_config;
@@ -82,8 +83,9 @@ struct RaftPhasePlan {
 
 // Build a deterministic, configuration-independent Cura V1 raft schedule.
 // The first Base layer height replaces the configured Base height only for
-// the first generated layer. Angles advance continuously by physical layer
-// index across phase boundaries and are normalized into [0, 180) degrees.
+// the first generated layer. The final Surface angle is anchored explicitly;
+// preceding angles alternate backwards across phase boundaries and are
+// normalized into [0, 180) degrees.
 RaftPhasePlan build_cura_raft_phase_plan(const RaftPlanConfig &config);
 
 } // namespace Slic3r
