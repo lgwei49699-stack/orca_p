@@ -501,23 +501,26 @@ TEST_CASE("Cura V1 current-tool raft phases require equal nozzle diameters", "[S
     }
 }
 
-TEST_CASE("Cura V1 raft validates a shared multi-object Z schedule", "[SupportMaterial][Raft][CuraV1][Validation]")
+TEST_CASE("Mixed object-level raft settings prefer the first valid CuraV1 configuration",
+          "[SupportMaterial][Raft][CuraV1][Compatibility]")
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
     config.set("raft_base_layers", 1);
     config.set("raft_interface_layers", 2);
     config.set("raft_surface_layers", 2);
+    config.set("raft_airgap", 0.27);
     config.set("raft_base_layer_height", 0.3);
     config.set("raft_interface_layer_height", 0.3);
     config.set("raft_surface_layer_height", 0.2);
     config.set("raft_base_line_width", 0.6);
     config.set("raft_interface_line_width", 0.6);
     config.set("raft_surface_line_width", 0.42);
+    config.set("raft_surface_speed", 60.);
     config.set("before_layer_change_gcode", std::string("G92 E0"));
 
     Model model;
-    const auto add_cube = [&model](const char *name, double x) {
+    const auto add_cube = [&model](const char *name, double x) -> ModelObject * {
         ModelObject *object = model.add_object();
         object->name = name;
         object->add_volume(Slic3r::Test::mesh(TestMesh::cube_20x20x20));
@@ -526,36 +529,164 @@ TEST_CASE("Cura V1 raft validates a shared multi-object Z schedule", "[SupportMa
         object->ensure_on_bed();
         return object;
     };
-    ModelObject *first_object = add_cube("first Cura raft object", 80.);
-    ModelObject *second_object = add_cube("second Cura raft object", 120.);
+    ModelObject *active_legacy = add_cube("active Legacy raft object", 40.);
+    ModelObject *disabled_legacy = add_cube("disabled Legacy raft object", 80.);
+    ModelObject *first_cura = add_cube("first valid CuraV1 raft object", 120.);
+    ModelObject *second_cura = add_cube("second valid CuraV1 raft object", 160.);
 
-    const char *expected_key = nullptr;
-    SECTION("matching schedules remain valid") {}
-    SECTION("a Cura raft cannot share the plate with an unrafted legacy object")
-    {
-        // Put the unrafted object first to characterize the m_objects.front()
-        // hazard in plate-level skirt/brim/wipe-tower height selection.
-        first_object->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
-        expected_key = "raft_mode";
-    }
-    SECTION("resolved Base heights must match")
-    {
-        second_object->config.set("raft_base_layer_height", 0.25);
-        expected_key = "raft_base_layer_height";
-    }
+    active_legacy->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    active_legacy->config.set("raft_layers", 3);
+    active_legacy->config.set("raft_contact_distance", 0.11);
+    disabled_legacy->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    disabled_legacy->config.set("raft_layers", 0);
+    first_cura->config.set("raft_surface_speed", 41.);
+    second_cura->config.set("raft_surface_speed", 52.);
 
     Print print;
-    print.auto_assign_extruders(first_object);
-    print.auto_assign_extruders(second_object);
+    for (ModelObject *object : model.objects)
+        print.auto_assign_extruders(object);
     print.apply(model, config);
     const StringObjectException error = print.validate();
     INFO("validation error: " << error.string << "; key: " << error.opt_key);
-    if (expected_key == nullptr) {
-        REQUIRE(error.string.empty());
-    } else {
-        REQUIRE_FALSE(error.string.empty());
-        REQUIRE(error.opt_key == expected_key);
+    REQUIRE(error.string.empty());
+    REQUIRE(print.objects().size() == 4);
+
+    const PrintObjectConfig &converted_config = print.objects()[0]->config();
+    const PrintObjectConfig &disabled_config = print.objects()[1]->config();
+    const PrintObjectConfig &donor_config = print.objects()[2]->config();
+    const PrintObjectConfig &other_cura_config = print.objects()[3]->config();
+
+    REQUIRE(converted_config.raft_mode.value == RaftMode::CuraV1);
+    REQUIRE(disabled_config.raft_mode.value == RaftMode::Legacy);
+    REQUIRE(disabled_config.raft_layers.value == 0);
+    REQUIRE(other_cura_config.raft_mode.value == RaftMode::CuraV1);
+    REQUIRE(donor_config.raft_surface_speed.value == Approx(41.));
+    REQUIRE(other_cura_config.raft_surface_speed.value == Approx(52.));
+
+    // The active Legacy object receives the donor's complete runtime raft
+    // configuration. A later CuraV1 object keeps its own settings.
+    for (const t_config_option_key &key : donor_config.keys()) {
+        if (key.compare(0, 5, "raft_") != 0)
+            continue;
+        INFO("runtime CuraV1 donor key: " << key);
+        REQUIRE(*converted_config.option(key) == *donor_config.option(key));
     }
+
+    // Runtime compatibility must not rewrite the source Model/3MF/JSON data.
+    REQUIRE(active_legacy->config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(active_legacy->config.get().opt_int("raft_layers") == 3);
+    REQUIRE(active_legacy->config.get().opt_float("raft_contact_distance") == Approx(0.11));
+    REQUIRE(disabled_legacy->config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(disabled_legacy->config.get().opt_int("raft_layers") == 0);
+
+    REQUIRE(print.objects()[0]->slicing_parameters().raft_layers() == 5);
+    REQUIRE(print.objects()[1]->slicing_parameters().raft_layers() == 0);
+    REQUIRE(print.objects()[2]->slicing_parameters().raft_layers() == 5);
+    REQUIRE(print.objects()[3]->slicing_parameters().raft_layers() == 5);
+    REQUIRE(print.apply(model, config) == Print::APPLY_STATUS_UNCHANGED);
+
+    print.set_status_silent();
+    print.process();
+    REQUIRE(print.objects()[0]->support_layers().size() == 5);
+    REQUIRE(print.objects()[1]->support_layers().empty());
+
+    // If all valid CuraV1 donors disappear, a subsequent apply reconstructs
+    // the original Legacy settings instead of retaining stale runtime values.
+    first_cura->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    first_cura->config.set("raft_layers", 0);
+    second_cura->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    second_cura->config.set("raft_layers", 0);
+    print.apply(model, config);
+    REQUIRE(print.validate().string.empty());
+    REQUIRE(print.objects()[0]->config().raft_mode.value == RaftMode::Legacy);
+    REQUIRE(print.objects()[0]->config().raft_layers.value == 3);
+    REQUIRE(print.objects()[0]->config().raft_contact_distance.value == Approx(0.11));
+    REQUIRE(print.objects()[1]->config().raft_mode.value == RaftMode::Legacy);
+    REQUIRE(print.objects()[1]->config().raft_layers.value == 0);
+    print.process();
+    REQUIRE(print.objects()[0]->support_layers().size() == 3);
+    REQUIRE(print.objects()[1]->support_layers().empty());
+    REQUIRE(print.objects()[2]->support_layers().empty());
+    REQUIRE(print.objects()[3]->support_layers().empty());
+}
+
+TEST_CASE("Pure Legacy object-level raft settings retain their existing per-object behavior",
+          "[SupportMaterial][Raft][Legacy][Compatibility]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    config.set("raft_layers", 3);
+    config.set("raft_contact_distance", 0.1);
+    config.set("before_layer_change_gcode", std::string("G92 E0"));
+
+    Model model;
+    for (size_t object_idx = 0; object_idx < 2; ++object_idx) {
+        ModelObject *object = model.add_object();
+        object->name = "Legacy raft object";
+        object->add_volume(Slic3r::Test::mesh(TestMesh::cube_20x20x20));
+        ModelInstance *instance = object->add_instance();
+        instance->set_offset(Vec3d(80. + 40. * object_idx, 100., 0.));
+        object->ensure_on_bed();
+        if (object_idx == 1) {
+            object->config.set("raft_layers", 7);
+            object->config.set("raft_contact_distance", 0.35);
+        }
+    }
+
+    Print print;
+    for (ModelObject *object : model.objects)
+        print.auto_assign_extruders(object);
+    print.apply(model, config);
+    REQUIRE(print.validate().string.empty());
+    REQUIRE(print.objects().size() == 2);
+    REQUIRE(print.objects()[0]->config().raft_mode.value == RaftMode::Legacy);
+    REQUIRE(print.objects()[0]->config().raft_layers.value == 3);
+    REQUIRE(print.objects()[0]->config().raft_contact_distance.value == Approx(0.1));
+    REQUIRE(print.objects()[1]->config().raft_mode.value == RaftMode::Legacy);
+    REQUIRE(print.objects()[1]->config().raft_layers.value == 7);
+    REQUIRE(print.objects()[1]->config().raft_contact_distance.value == Approx(0.35));
+}
+
+TEST_CASE("Mixed raft compatibility skips CuraV1 donors with invalid mandatory phase counts",
+          "[SupportMaterial][Raft][CuraV1][Compatibility][Validation]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    config.set("raft_base_layers", 1);
+    config.set("raft_interface_layers", 2);
+    config.set("raft_surface_layers", 2);
+    config.set("before_layer_change_gcode", std::string("G92 E0"));
+
+    Model model;
+    const auto add_cube = [&model](double x) -> ModelObject * {
+        ModelObject *object = model.add_object();
+        object->add_volume(Slic3r::Test::mesh(TestMesh::cube_20x20x20));
+        ModelInstance *instance = object->add_instance();
+        instance->set_offset(Vec3d(x, 100., 0.));
+        object->ensure_on_bed();
+        return object;
+    };
+    ModelObject *active_legacy = add_cube(70.);
+    ModelObject *invalid_cura = add_cube(110.);
+    ModelObject *valid_cura = add_cube(150.);
+    active_legacy->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    active_legacy->config.set("raft_layers", 3);
+    invalid_cura->config.set("raft_base_layers", 0);
+    valid_cura->config.set("raft_surface_speed", 43.);
+
+    Print print;
+    for (ModelObject *object : model.objects)
+        print.auto_assign_extruders(object);
+    print.apply(model, config);
+
+    REQUIRE(print.objects().size() == 3);
+    REQUIRE(print.objects()[0]->config().raft_mode.value == RaftMode::CuraV1);
+    REQUIRE(print.objects()[0]->config().raft_surface_speed.value == Approx(43.));
+    REQUIRE(print.objects()[1]->config().raft_base_layers.value == 0);
+    const StringObjectException error = print.validate();
+    REQUIRE_FALSE(error.string.empty());
+    REQUIRE(error.object == print.objects()[1]);
+    REQUIRE(error.opt_key == "raft_base_layers");
 }
 
 TEST_CASE("Cura V1 overlap stays below a thin second model layer", "[SupportMaterial][Raft][CuraV1][VariableLayer]")

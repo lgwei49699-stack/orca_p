@@ -1075,57 +1075,6 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
             return {L("Cura-style raft requires at least one Top layer."), object, "raft_surface_layers"};
     }
 
-    // Cura-style raft layers share plate-level first-layer consumers such as the skirt,
-    // brim and wipe tower. Those consumers cannot safely select a physical first-layer
-    // height or phase from m_objects.front() if objects use different raft schedules.
-    const auto cura_raft_object = std::find_if(m_objects.begin(), m_objects.end(), [](const PrintObject *object) {
-        const SlicingParameters &slicing_params = object->slicing_parameters();
-        return slicing_params.cura_raft_mode && slicing_params.has_raft();
-    });
-    if (cura_raft_object != m_objects.end()) {
-        const SlicingParameters &reference = (*cura_raft_object)->slicing_parameters();
-        for (const PrintObject *object : m_objects) {
-            const SlicingParameters &candidate = object->slicing_parameters();
-            if (!candidate.cura_raft_mode || !candidate.has_raft()) {
-                return {L("Cura-style raft cannot be mixed with unrafted or legacy-raft objects on the same plate."), object,
-                        "raft_mode"};
-            }
-
-            const char *mismatch_key = nullptr;
-            if (candidate.base_raft_layers != reference.base_raft_layers)
-                mismatch_key = "raft_base_layers";
-            else if (candidate.interface_phase_raft_layers() != reference.interface_phase_raft_layers())
-                mismatch_key = "raft_interface_layers";
-            else if (candidate.surface_raft_layers != reference.surface_raft_layers)
-                mismatch_key = "raft_surface_layers";
-            else {
-                for (size_t layer_id = 0; layer_id < reference.raft_layers(); ++layer_id) {
-                    if (candidate.raft_phase(layer_id) != reference.raft_phase(layer_id) ||
-                        std::abs(candidate.raft_layer_height(layer_id) - reference.raft_layer_height(layer_id)) > EPSILON) {
-                        switch (reference.raft_phase(layer_id)) {
-                        case RaftPhase::Base:      mismatch_key = "raft_base_layer_height"; break;
-                        case RaftPhase::Interface: mismatch_key = "raft_interface_layer_height"; break;
-                        case RaftPhase::Surface:   mismatch_key = "raft_surface_layer_height"; break;
-                        }
-                        break;
-                    }
-                }
-            }
-            if (mismatch_key == nullptr && std::abs(candidate.gap_raft_object - reference.gap_raft_object) > EPSILON)
-                mismatch_key = "raft_airgap";
-            if (mismatch_key == nullptr &&
-                std::abs(candidate.raft_layer_0_z_overlap - reference.raft_layer_0_z_overlap) > EPSILON)
-                mismatch_key = "raft_layer_0_z_overlap";
-            if (mismatch_key == nullptr &&
-                std::abs(candidate.first_object_layer_height - reference.first_object_layer_height) > EPSILON)
-                mismatch_key = "initial_layer_print_height";
-            if (mismatch_key != nullptr) {
-                return {L("Cura-style raft requires all objects on the same plate to use the same raft phase Z schedule."), object,
-                        mismatch_key};
-            }
-        }
-    }
-
     if (nozzles < 2 && extruders.size() > 1 && m_config.print_sequence != PrintSequence::ByObject) {
         auto ret = check_multi_filament_valid(*this);
         if (!ret.string.empty())

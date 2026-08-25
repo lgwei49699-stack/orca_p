@@ -9624,16 +9624,6 @@ msgid "Cura-style raft requires at least one Top layer."
 msgstr "Cura 风格筏层至少需要一层顶部层。"
 
 msgid ""
-"Cura-style raft cannot be mixed with unrafted or legacy-raft objects on the "
-"same plate."
-msgstr ""
-
-msgid ""
-"Cura-style raft requires all objects on the same plate to use the same raft "
-"phase Z schedule."
-msgstr ""
-
-msgid ""
 "Smooth mode of timelapse is not supported when \"by object\" sequence is "
 "enabled."
 msgstr "平滑模式的延时摄影不支持在逐件打印模式下使用。"

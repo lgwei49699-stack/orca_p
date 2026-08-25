@@ -1657,14 +1657,60 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
             }
     }
 
-    // Update SlicingParameters for each object where the SlicingParameters is not valid.
-    // If it is not valid, then it is ensured that PrintObject.m_slicing_params is not in use
-    // (posSlicing and posSupportMaterial was invalidated).
-    for (PrintObject *object : m_objects)
-    {
+    // Rebuild each object's source configuration before applying mixed-mode
+    // compatibility. The effective CuraV1 fallback below is intentionally
+    // runtime-only: removing or changing the CuraV1 donor on a later apply
+    // must restore the object's original Legacy configuration from the model.
+    std::vector<PrintObjectConfig> source_object_configs;
+    source_object_configs.reserve(m_objects.size());
+    for (const PrintObject *object : m_objects) {
+        source_object_configs.emplace_back(
+            PrintObject::object_config_from_model_object(m_default_object_config, *object->model_object(), num_extruders));
+    }
+
+    // CuraV1 takes priority on a mixed plate. The first CuraV1 object with
+    // valid mandatory phase counts is the donor for every active Legacy raft.
+    // Legacy with zero layers remains disabled. Existing CuraV1 objects retain
+    // their own parameters. Other CuraV1 validation remains in Print::validate()
+    // and is never silently repaired here.
+    const auto valid_cura_raft = [](const PrintObjectConfig &config) {
+        return config.raft_mode.value == RaftMode::CuraV1 && config.raft_base_layers.value >= 1 &&
+               config.raft_interface_layers.value >= 0 && config.raft_surface_layers.value >= 1;
+    };
+    const auto cura_donor = std::find_if(source_object_configs.begin(), source_object_configs.end(), valid_cura_raft);
+
+    t_config_option_keys raft_keys;
+    if (cura_donor != source_object_configs.end()) {
+        const t_config_option_keys object_keys = cura_donor->keys();
+        std::copy_if(object_keys.begin(), object_keys.end(), std::back_inserter(raft_keys), [](const t_config_option_key &key) {
+            return key.compare(0, 5, "raft_") == 0;
+        });
+    }
+
+    bool converted_legacy_raft = false;
+    for (size_t object_idx = 0; object_idx < m_objects.size(); ++object_idx) {
+        PrintObject       *object           = m_objects[object_idx];
+        PrintObjectConfig  effective_config = source_object_configs[object_idx];
+        const bool active_legacy_raft = effective_config.raft_mode.value == RaftMode::Legacy && effective_config.raft_layers.value > 0;
+        if (cura_donor != source_object_configs.end() && active_legacy_raft) {
+            effective_config.apply_only(*cura_donor, raft_keys, true);
+            converted_legacy_raft = true;
+        }
+
+        const t_config_option_keys diff = object->config().diff(effective_config);
+        if (!diff.empty()) {
+            update_apply_status(object->invalidate_state_by_config_options(object->config(), effective_config, diff));
+            object->config_apply_only(effective_config, diff, true);
+        }
+
+        // Update SlicingParameters for each object where the SlicingParameters is not valid.
+        // If it is not valid, then it is ensured that PrintObject.m_slicing_params is not in use
+        // (posSlicing and posSupportMaterial was invalidated).
         object->update_slicing_parameters();
         m_support_used |= object->config().enable_support;
     }
+    if (converted_legacy_raft)
+        BOOST_LOG_TRIVIAL(info) << "Mixed raft modes: active Legacy objects use the first valid CuraV1 raft configuration for this slice.";
 
 #ifdef _DEBUG
     check_model_ids_equal(m_model, model);
