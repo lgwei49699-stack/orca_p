@@ -548,6 +548,13 @@ private:
     const PrintObject*                  m_last_cura_raft_fan_object { nullptr };
     size_t                              m_last_cura_raft_fan_layer_id { size_t(-1) };
     int                                 m_last_cura_raft_fan_speed { -1 };
+    // True only while emitting the Raft support collection itself. A skirt or
+    // brim may share the same physical SupportLayer, but it must keep its own
+    // normal motion and cooling semantics.
+    bool                                m_emitting_cura_raft_paths { false };
+    // A mixed physical Z group temporarily applies the CuraV1 phase fan to
+    // Raft paths, then asks CoolingBuffer to restore the group's regular fan.
+    bool                                m_restore_fan_after_cura_raft_paths { false };
     //double                              m_volumetric_speed;
     // Support for the extrusion role markers. Which marker is active?
     ExtrusionRole                       m_last_extrusion_role;

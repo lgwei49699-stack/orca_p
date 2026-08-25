@@ -892,6 +892,7 @@ public:
     StringObjectException validate(StringObjectException *warning = nullptr, Polygons* collison_polygons = nullptr, std::vector<std::pair<Polygon, float>>* height_polygons = nullptr) const override;
     double              skirt_first_layer_height() const;
     Flow                brim_flow() const;
+    Flow                brim_flow(coordf_t layer_height) const;
     Flow                skirt_flow() const;
 
     std::vector<unsigned int> object_extruders() const;

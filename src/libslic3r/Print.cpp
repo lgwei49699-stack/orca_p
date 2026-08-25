@@ -1814,15 +1814,28 @@ BoundingBox Print::total_bounding_box() const
 
 double Print::skirt_first_layer_height() const
 {
-    if (!m_objects.empty()) {
-        const SlicingParameters &slicing_params = m_objects.front()->slicing_parameters();
-        if (slicing_params.cura_raft_mode && slicing_params.has_raft())
-            return slicing_params.first_print_layer_height;
+    // A combined skirt and wipe-tower prime belong to the whole plate. If
+    // objects start with different physical layer heights, G-code visits the
+    // lowest print Z first, so their shared first-layer flow must not depend on
+    // model order.
+    double first_layer_height = std::numeric_limits<double>::max();
+    for (const PrintObject *object : m_objects) {
+        const SlicingParameters &slicing_params = object->slicing_parameters();
+        if (slicing_params.valid && slicing_params.first_print_layer_height > 0.)
+            first_layer_height = std::min(first_layer_height, double(slicing_params.first_print_layer_height));
     }
+
+    if (first_layer_height != std::numeric_limits<double>::max())
+        return first_layer_height;
     return m_config.initial_layer_print_height.value;
 }
 
 Flow Print::brim_flow() const
+{
+    return this->brim_flow(this->skirt_first_layer_height());
+}
+
+Flow Print::brim_flow(coordf_t layer_height) const
 {
     ConfigOptionFloatOrPercent width = m_config.initial_layer_line_width;
     if (width.value <= 0)
@@ -1838,9 +1851,9 @@ Flow Print::brim_flow() const
     return Flow::new_from_config_width(
         frPerimeter,
         // Flow::new_from_config_width takes care of the percent to value substitution
-		width,
+        width,
         (float)m_config.nozzle_diameter.get_at(m_print_regions.front()->config().wall_filament-1),
-		(float)this->skirt_first_layer_height());
+        (float)layer_height);
 }
 
 Flow Print::skirt_flow() const

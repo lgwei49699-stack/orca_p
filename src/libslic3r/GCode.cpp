@@ -3798,8 +3798,35 @@ LayerResult GCode::process_layer(
     const SupportLayer  *support_layer = nullptr;
     const SupportLayer  *raft_layer    = nullptr;
     size_t               cooling_layer_id = std::numeric_limits<size_t>::max();
+    size_t               ordinary_support_cooling_layer_id = std::numeric_limits<size_t>::max();
     bool                 has_cura_raft_layer = false;
     bool                 only_cura_raft_layers = true;
+    const auto is_physical_first_layer = [](const Layer *candidate) {
+        return candidate != nullptr && candidate->id() == 0 && std::abs(candidate->bottom_z()) < EPSILON;
+    };
+    const auto is_cura_raft_support_layer = [](const SupportLayer *candidate) {
+        if (candidate == nullptr)
+            return false;
+        const SlicingParameters &slicing_params = candidate->object()->slicing_parameters();
+        return slicing_params.cura_raft_mode && candidate->id() < slicing_params.raft_layers() &&
+               is_approx(candidate->print_z, slicing_params.raft_layer_print_z(candidate->id()));
+    };
+    const auto is_any_raft_support_layer = [](const SupportLayer *candidate) {
+        if (candidate == nullptr)
+            return false;
+        const SlicingParameters &slicing_params = candidate->object()->slicing_parameters();
+        return candidate->id() < slicing_params.raft_layers() &&
+               is_approx(candidate->print_z, slicing_params.raft_layer_print_z(candidate->id()));
+    };
+    const auto support_cooling_layer_id = [](const SupportLayer &candidate) {
+        const PrintObject &print_object = *candidate.object();
+        const SlicingParameters &slicing_params = print_object.slicing_parameters();
+        const auto &object_layers = print_object.layers();
+        const auto upper = std::upper_bound(
+            object_layers.begin(), object_layers.end(), candidate.print_z + EPSILON,
+            [](coordf_t print_z, const Layer *object_layer) { return print_z < object_layer->print_z; });
+        return upper == object_layers.begin() ? size_t(0) : slicing_params.model_layer_id((*std::prev(upper))->id());
+    };
     for (const LayerToPrint &l : layers) {
         if (l.object_layer) {
             if (! object_layer)
@@ -3816,14 +3843,22 @@ LayerResult GCode::process_layer(
             if (! support_layer)
                 support_layer = l.support_layer;
             const SlicingParameters &slicing_params = l.support_layer->object()->slicing_parameters();
-            const bool is_cura_raft_layer = slicing_params.cura_raft_mode &&
-                                            l.support_layer->id() < slicing_params.raft_layers();
+            const bool is_cura_raft_layer = is_cura_raft_support_layer(l.support_layer);
             has_cura_raft_layer |= is_cura_raft_layer;
             only_cura_raft_layers &= is_cura_raft_layer;
+            if (!is_any_raft_support_layer(l.support_layer))
+                ordinary_support_cooling_layer_id =
+                    std::min(ordinary_support_cooling_layer_id, support_cooling_layer_id(*l.support_layer));
             if (! raft_layer && l.support_layer->id() < slicing_params.raft_layers())
                 raft_layer = l.support_layer;
         }
     }
+
+    // Only a mixed CuraV1 physical group needs ordinary support translated to
+    // its object's model-local cooling age. Pure Legacy and pure ordinary
+    // support retain their established raw layer-id cooling schedule.
+    if (has_cura_raft_layer && ordinary_support_cooling_layer_id != std::numeric_limits<size_t>::max())
+        cooling_layer_id = std::min(cooling_layer_id, ordinary_support_cooling_layer_id);
 
     const Layer* layer_ptr = nullptr;
     if (object_layer != nullptr)
@@ -3831,24 +3866,40 @@ LayerResult GCode::process_layer(
     else if (support_layer != nullptr)
         layer_ptr = support_layer;
     const Layer& layer = *layer_ptr;
+    // By-layer printing owns one plate-level physical first group. Sequential
+    // printing starts each object from the bed again, so each object's local
+    // physical layer 0 must repeat the first-layer transition and emit a
+    // positive HEIGHT value.
+    const bool first_layer = print.config().print_sequence == PrintSequence::ByObject ? is_physical_first_layer(&layer) :
+                                                                                         m_layer_index < 0;
     LayerResult   result { {}, layer.id(), false, last_layer };
     result.cooling_layer_id = cooling_layer_id == std::numeric_limits<size_t>::max() ? layer.id() : cooling_layer_id;
     result.preserve_cooling_fan_commands = has_cura_raft_layer && only_cura_raft_layers;
+    m_restore_fan_after_cura_raft_paths = has_cura_raft_layer && !only_cura_raft_layers;
     if (layer_tools.extruders.empty())
         // Nothing to extrude.
         return result;
 
     // Extract 1st object_layer and support_layer of this set of layers with an equal print_z.
     coordf_t             print_z       = layer.print_z;
+    // By-layer printing may combine objects whose physical first layers use
+    // different heights (for example an unrafted 0.24 mm model and a 0.30 mm
+    // CuraV1 Base). Keep the plate in its initial temperature/acceleration
+    // window until every object's physical first layer has been emitted.
+    const bool within_physical_first_layer_window =
+        print.config().print_sequence == PrintSequence::ByObject ? first_layer :
+        std::any_of(print.objects().begin(), print.objects().end(), [print_z](const PrintObject *print_object) {
+            const SlicingParameters &slicing_params = print_object->slicing_parameters();
+            return slicing_params.valid && print_z <= slicing_params.first_print_layer_height + EPSILON;
+        });
     //BBS: using layer id to judge whether the layer is first layer is wrong. Because if the normal
     //support is attached above the object, and support layers has independent layer height, then the lowest support
     //interface layer id is 0.
-    bool                 first_layer   = (layer.id() == 0 && abs(layer.bottom_z()) < EPSILON);
-    const bool cura_model_first_layer = object_layer != nullptr && object_layer->object()->slicing_parameters().cura_raft_mode &&
-                                        object_layer->object()->slicing_parameters().is_first_object_layer_id(object_layer->id());
-    // Keep temperatures tied to the physical first layer, but restore the
-    // model's initial travel speed when Cura V1 reaches model layer 0.
-    m_writer.set_is_first_layer(first_layer || cura_model_first_layer);
+    // Layer change and temperature transitions follow the active physical
+    // sequence (once per plate in ByLayer, once per object in ByObject).
+    // Object-local model-first motion is selected immediately before emitting
+    // that object's paths below.
+    m_writer.set_is_first_layer(first_layer);
     unsigned int         first_extruder_id = layer_tools.extruders.front();
 
     // Initialize config with the 1st object to be printed at this layer.
@@ -4041,7 +4092,7 @@ LayerResult GCode::process_layer(
         }
     }
 
-    if (! first_layer && ! m_second_layer_things_done) {
+    if (!within_physical_first_layer_window && !m_second_layer_things_done) {
       if (print.is_BBL_printer()) {
         // BBS: open powerlost recovery
         {
@@ -4331,10 +4382,40 @@ LayerResult GCode::process_layer(
 
     if (m_wipe_tower)
         m_wipe_tower->set_is_first_print(true);
+    m_emitting_cura_raft_paths = false;
+
+    const auto is_cura_model_first_layer = [](const LayerToPrint &layer_to_print) {
+        if (layer_to_print.object_layer == nullptr)
+            return false;
+        const SlicingParameters &slicing_params = layer_to_print.object_layer->object()->slicing_parameters();
+        return slicing_params.cura_raft_mode && slicing_params.has_raft() &&
+               slicing_params.is_first_object_layer_id(layer_to_print.object_layer->id());
+    };
+    const auto is_initial_model_layer = [&is_physical_first_layer, &is_cura_model_first_layer](const LayerToPrint &layer_to_print) {
+        return layer_to_print.object_layer != nullptr &&
+               (is_physical_first_layer(layer_to_print.object_layer) || is_cura_model_first_layer(layer_to_print));
+    };
+    const auto activate_layer_context = [this, &is_physical_first_layer, &is_cura_model_first_layer](
+                                            const PrintObject &print_object,
+                                            const LayerToPrint &layer_to_print,
+                                            const Layer *active_layer) {
+        m_config.apply(print_object.config(), true);
+        m_layer = active_layer;
+        m_object_layer_over_raft = active_layer != nullptr && active_layer == layer_to_print.object_layer &&
+                                   is_cura_model_first_layer(layer_to_print);
+        m_writer.set_is_first_layer(is_physical_first_layer(active_layer) || m_object_layer_over_raft);
+    };
 
     // Extrude the skirt, brim, support, perimeters, infill ordered by the extruders.
     for (unsigned int extruder_id : layer_tools.extruders)
     {
+        // A previous extruder may have ended inside an object-local context.
+        // Wipe tower, tool change and combined skirt remain plate-level.
+        m_config.apply(layer.object()->config(), true);
+        m_layer = &layer;
+        m_object_layer_over_raft = false;
+        m_writer.set_is_first_layer(first_layer);
+
         if (print.config().skirt_type == stCombined && !print.skirt().empty())
             gcode += generate_skirt(print, print.skirt(), Point(0, 0), layer.object()->config().skirt_start_angle, layer_tools, layer,
                                     extruder_id);
@@ -4408,15 +4489,15 @@ LayerResult GCode::process_layer(
         }
 
         // BBS
-        if (print.config().skirt_type == stPerObject &&
-            print.config().print_sequence == PrintSequence::ByObject &&
-            !layer.object()->object_skirt().empty() &&
-            ((layer.id() < print.config().skirt_height || print.config().draft_shield == DraftShield::dsEnabled))
-           )
-        {
+        if (print.config().skirt_type == stPerObject && print.config().print_sequence == PrintSequence::ByObject) {
             for (InstanceToPrint& instance_to_print : instances_to_print) {
-                
+                const LayerToPrint &layer_to_print = layers[instance_to_print.layer_id];
+                const Layer *local_layer = layer_to_print.layer();
                 if (instance_to_print.print_object.object_skirt().empty())
+                    continue;
+                if (local_layer == nullptr ||
+                    (local_layer->id() >= size_t(print.config().skirt_height.value) &&
+                     print.config().draft_shield != DraftShield::dsEnabled))
                     continue;
                 
                 if (this->m_objSupportsWithBrim.find(instance_to_print.print_object.id()) != this->m_objSupportsWithBrim.end() &&
@@ -4426,14 +4507,17 @@ LayerResult GCode::process_layer(
                 if (this->m_objsWithBrim.find(instance_to_print.print_object.id()) != this->m_objsWithBrim.end() &&
                     print.m_brimMap.at(instance_to_print.print_object.id()).entities.size() > 0)
                     continue;
-                if (first_layer)
+                activate_layer_context(instance_to_print.print_object, layer_to_print, local_layer);
+                if (is_physical_first_layer(local_layer))
                     m_skirt_done.clear();
 
-                if (layer.id() == 1 && m_skirt_done.size() > 1)
+                if (local_layer->id() == 1 && m_skirt_done.size() > 1)
                     m_skirt_done.erase(m_skirt_done.begin()+1,m_skirt_done.end());
 
                 const Point& offset = instance_to_print.print_object.instances()[instance_to_print.instance_id].shift;
-                gcode += generate_skirt(print, instance_to_print.print_object.object_skirt(), offset, instance_to_print.print_object.config().skirt_start_angle, layer_tools, layer, extruder_id);
+                gcode += generate_skirt(print, instance_to_print.print_object.object_skirt(), offset,
+                                        instance_to_print.print_object.config().skirt_start_angle, layer_tools, *local_layer,
+                                        extruder_id);
             }
         }
 
@@ -4444,28 +4528,29 @@ LayerResult GCode::process_layer(
                 gcode+="; PURGING FINISHED\n";
 
             for (InstanceToPrint &instance_to_print : instances_to_print) {
+                const auto& inst = instance_to_print.print_object.instances()[instance_to_print.instance_id];
+                const LayerToPrint &layer_to_print = layers[instance_to_print.layer_id];
+                const bool model_initial_layer = is_initial_model_layer(layer_to_print);
+                const bool model_physical_first_layer =
+                    layer_to_print.object_layer != nullptr && is_physical_first_layer(layer_to_print.object_layer);
+                activate_layer_context(instance_to_print.print_object, layer_to_print, layer_to_print.layer());
+
                 if (print.config().skirt_type == stPerObject && 
                     !instance_to_print.print_object.object_skirt().empty() &&
                     print.config().print_sequence == PrintSequence::ByLayer
                     &&
-                    (layer.id() < print.config().skirt_height || print.config().draft_shield == DraftShield::dsEnabled))
+                    (layer_to_print.layer()->id() < size_t(print.config().skirt_height.value) ||
+                     print.config().draft_shield == DraftShield::dsEnabled))
                 {
-                    if (first_layer)
+                    if (is_physical_first_layer(layer_to_print.layer()))
                         m_skirt_done.clear();
                     const Point& offset = instance_to_print.print_object.instances()[instance_to_print.instance_id].shift;
-                    gcode += generate_skirt(print, instance_to_print.print_object.object_skirt(), offset, instance_to_print.print_object.config().skirt_start_angle, layer_tools, layer, extruder_id);
+                    gcode += generate_skirt(print, instance_to_print.print_object.object_skirt(), offset,
+                                            instance_to_print.print_object.config().skirt_start_angle, layer_tools,
+                                            *layer_to_print.layer(), extruder_id);
                     if (instances_to_print.size() > 1 && &instance_to_print != &*(instances_to_print.end() - 1))
                         m_skirt_done.pop_back();
                 }
-                
-                const auto& inst = instance_to_print.print_object.instances()[instance_to_print.instance_id];
-                const LayerToPrint &layer_to_print = layers[instance_to_print.layer_id];
-                // To control print speed of the 1st object layer printed over raft interface.
-                bool object_layer_over_raft = layer_to_print.object_layer && layer_to_print.object_layer->id() > 0 &&
-                    instance_to_print.print_object.slicing_parameters().raft_layers() == layer_to_print.object_layer->id();
-                m_config.apply(instance_to_print.print_object.config(), true);
-                m_layer = layer_to_print.layer();
-                m_object_layer_over_raft = object_layer_over_raft;
                 if (m_config.reduce_crossing_wall)
                     m_avoid_crossing_perimeters.init_layer(*m_layer);
 
@@ -4508,8 +4593,8 @@ LayerResult GCode::process_layer(
                 m_last_obj_copy = this_object_copy;
                 this->set_origin(unscale(offset));
                 if (instance_to_print.object_by_extruder.support != nullptr) {
-                    m_layer = layers[instance_to_print.layer_id].support_layer;
-                    m_object_layer_over_raft = false;
+                    activate_layer_context(instance_to_print.print_object, layer_to_print, layer_to_print.support_layer);
+                    const bool emitting_cura_raft_paths = is_cura_raft_support_layer(layer_to_print.support_layer);
 
                     //BBS: print supports' brims first
                     if (this->m_objSupportsWithBrim.find(instance_to_print.print_object.id()) != this->m_objSupportsWithBrim.end() && !print_wipe_extrusions) {
@@ -4539,26 +4624,40 @@ LayerResult GCode::process_layer(
 
                     ExtrusionRole support_extrusion_role = instance_to_print.object_by_extruder.support_extrusion_role;
                     bool is_overridden = support_extrusion_role == erSupportMaterialInterface ? support_intf_overridden : support_overridden;
+                    bool emitted_support_paths = false;
+                    m_emitting_cura_raft_paths = emitting_cura_raft_paths;
                     if (is_overridden == (print_wipe_extrusions != 0)) {
-                        gcode += this->extrude_support(
+                        std::string support_gcode = this->extrude_support(
                             // support_extrusion_role is erSupportMaterial, erSupportTransition, erSupportMaterialInterface or erMixed for all extrusion paths.
                             *instance_to_print.object_by_extruder.support, support_extrusion_role);
+                        emitted_support_paths |= !support_gcode.empty();
+                        gcode += std::move(support_gcode);
 
                         // Make sure ironing is the last
                         if (support_extrusion_role == erMixed || support_extrusion_role == erSupportMaterialInterface) {
-                            gcode += this->extrude_support(*instance_to_print.object_by_extruder.support, erIroning);
+                            std::string ironing_gcode =
+                                this->extrude_support(*instance_to_print.object_by_extruder.support, erIroning);
+                            emitted_support_paths |= !ironing_gcode.empty();
+                            gcode += std::move(ironing_gcode);
                         }
                     }
+                    m_emitting_cura_raft_paths = false;
 
-                    m_layer = layer_to_print.layer();
-                    m_object_layer_over_raft = object_layer_over_raft;
+                    if (emitted_support_paths && m_restore_fan_after_cura_raft_paths && emitting_cura_raft_paths) {
+                        gcode += ";_RESTORE_REGULAR_FAN_SPEED\n";
+                        m_last_cura_raft_fan_object = nullptr;
+                        m_last_cura_raft_fan_layer_id = size_t(-1);
+                        m_last_cura_raft_fan_speed = -1;
+                    }
+
+                    activate_layer_context(instance_to_print.print_object, layer_to_print, layer_to_print.layer());
                 }
                 //FIXME order islands?
                 // Sequential tool path ordering of multiple parts within the same object, aka. perimeter tracking (#5511)
                 for (ObjectByExtruder::Island &island : instance_to_print.object_by_extruder.islands) {
                     const auto& by_region_specific = is_anything_overridden ? island.by_region_per_copy(by_region_per_copy_cache, static_cast<unsigned int>(instance_to_print.instance_id), extruder_id, print_wipe_extrusions != 0) : island.by_region;
                     //BBS: add brim by obj by extruder
-                    if (first_layer) {
+                    if (model_physical_first_layer) {
                         if (this->m_objsWithBrim.find(instance_to_print.print_object.id()) != this->m_objsWithBrim.end() && !print_wipe_extrusions) {
                             this->set_origin(0., 0.);
                             m_avoid_crossing_perimeters.use_external_mp();
@@ -4589,7 +4688,7 @@ LayerResult GCode::process_layer(
                     };
                     {
                         // Print perimeters of regions that has is_infill_first == false
-                        gcode += this->extrude_perimeters(print, by_region_specific, first_layer, false);
+                        gcode += this->extrude_perimeters(print, by_region_specific, model_initial_layer, false);
                         if (!has_wipe_tower && need_insert_timelapse_gcode_for_traditional && !has_insert_timelapse_gcode && has_infill(by_region_specific)) {
                             gcode += this->retract(false, false, LiftType::NormalLift);
 
@@ -4610,7 +4709,7 @@ LayerResult GCode::process_layer(
                         // Then print infill
                         gcode += this->extrude_infill(print, by_region_specific, false);
                         // Then print perimeters of regions that has is_infill_first == true
-                        gcode += this->extrude_perimeters(print, by_region_specific, first_layer, true);
+                        gcode += this->extrude_perimeters(print, by_region_specific, model_initial_layer, true);
                     }
                     // ironing
                     gcode += this->extrude_infill(print,by_region_specific, true);
@@ -5453,31 +5552,37 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     const SupportLayer *current_support_layer = dynamic_cast<const SupportLayer *>(m_layer);
     const SlicingParameters *current_slicing_params = current_support_layer == nullptr ? nullptr :
         &current_support_layer->object()->slicing_parameters();
-    const bool on_cura_raft_layer = current_slicing_params != nullptr && current_slicing_params->cura_raft_mode &&
+    const bool on_cura_raft_layer = m_emitting_cura_raft_paths && current_slicing_params != nullptr &&
+        current_slicing_params->cura_raft_mode &&
         current_support_layer->id() < current_slicing_params->raft_layers() &&
         is_approx(current_support_layer->print_z, current_slicing_params->raft_layer_print_z(current_support_layer->id()));
     const RaftPhase current_raft_phase = on_cura_raft_layer ? current_slicing_params->raft_phase(current_support_layer->id()) :
                                                               RaftPhase::Base;
 
+    int cura_raft_fan_speed = -1;
     if (on_cura_raft_layer) {
-        int fan_speed = 0;
         switch (current_raft_phase) {
-        case RaftPhase::Base:      fan_speed = m_config.raft_base_fan_speed.value; break;
-        case RaftPhase::Interface: fan_speed = m_config.raft_interface_fan_speed.value; break;
-        case RaftPhase::Surface:   fan_speed = m_config.raft_surface_fan_speed.value; break;
-        }
-        if (m_last_cura_raft_fan_object != current_support_layer->object() ||
-            m_last_cura_raft_fan_layer_id != current_support_layer->id() || m_last_cura_raft_fan_speed != fan_speed) {
-            gcode += m_writer.set_fan(unsigned(std::clamp(fan_speed, 0, 100)));
-            m_last_cura_raft_fan_object = current_support_layer->object();
-            m_last_cura_raft_fan_layer_id = current_support_layer->id();
-            m_last_cura_raft_fan_speed = fan_speed;
+        case RaftPhase::Base:      cura_raft_fan_speed = m_config.raft_base_fan_speed.value; break;
+        case RaftPhase::Interface: cura_raft_fan_speed = m_config.raft_interface_fan_speed.value; break;
+        case RaftPhase::Surface:   cura_raft_fan_speed = m_config.raft_surface_fan_speed.value; break;
         }
     } else {
         m_last_cura_raft_fan_object = nullptr;
         m_last_cura_raft_fan_layer_id = size_t(-1);
         m_last_cura_raft_fan_speed = -1;
     }
+    const auto apply_cura_raft_phase_fan = [this, current_support_layer, cura_raft_fan_speed, &gcode] {
+        if (cura_raft_fan_speed < 0)
+            return;
+        if (m_last_cura_raft_fan_object != current_support_layer->object() ||
+            m_last_cura_raft_fan_layer_id != current_support_layer->id() ||
+            m_last_cura_raft_fan_speed != cura_raft_fan_speed) {
+            gcode += m_writer.set_fan(unsigned(std::clamp(cura_raft_fan_speed, 0, 100)));
+            m_last_cura_raft_fan_object = current_support_layer->object();
+            m_last_cura_raft_fan_layer_id = current_support_layer->id();
+            m_last_cura_raft_fan_speed = cura_raft_fan_speed;
+        }
+    };
 
     const bool use_initial_model_layer_motion = this->use_initial_layer_motion();
 
@@ -5953,7 +6058,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                                      !on_cura_raft_layer && supp_interface_fan_speed >= 0 &&
                                          path.role() == erSupportMaterialInterface);
         append_role_based_fan_marker(erIroning, "_IRONING"sv,
-                                     ironing_fan_speed >= 0 && path.role() == erIroning);
+                                     !on_cura_raft_layer && ironing_fan_speed >= 0 && path.role() == erIroning);
     };
 
     if (!variable_speed) {
@@ -6022,6 +6127,10 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
                 apply_role_based_fan_speed();
             }
+            // Close any role-specific fan state before applying the Raft
+            // phase fan, otherwise CoolingBuffer may immediately overwrite
+            // the phase command with the previous role's regular fan.
+            apply_cura_raft_phase_fan();
             // BBS: use G1 if not enable arc fitting or has no arc fitting result or in spiral_mode mode or we are doing sloped extrusion
             // Attention: G2 and G3 is not supported in spiral_mode mode
             if (!m_config.enable_arc_fitting || path.polyline.fitting_result.empty() || m_config.spiral_mode || sloped != nullptr) {
@@ -6162,6 +6271,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
                 apply_role_based_fan_speed();
             }
+            apply_cura_raft_phase_fan();
 
             const double line_length = (p - prev).norm();
             if(line_length < EPSILON)

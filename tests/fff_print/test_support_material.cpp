@@ -610,6 +610,373 @@ TEST_CASE("Mixed object-level raft settings prefer the first valid CuraV1 config
     REQUIRE(print.objects()[3]->support_layers().empty());
 }
 
+TEST_CASE("Mixed unrafted brim and CuraV1 raft keep their physical first-layer flows",
+          "[SupportMaterial][Raft][CuraV1][Compatibility][Brim]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    config.set("raft_layers", 0);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4}));
+    config.set("initial_layer_print_height", 0.24);
+    config.set("initial_layer_line_width", 0.42);
+    config.set_key_value("nozzle_temperature_initial_layer", new ConfigOptionInts({215}));
+    config.set_key_value("nozzle_temperature", new ConfigOptionInts({190}));
+    config.set_key_value("curr_bed_type", new ConfigOptionEnum<BedType>(btPEI));
+    config.set_key_value("hot_plate_temp_initial_layer", new ConfigOptionInts({60}));
+    config.set_key_value("hot_plate_temp", new ConfigOptionInts({45}));
+    config.set_key_value("gcode_flavor", new ConfigOptionEnum<GCodeFlavor>(gcfMarlinFirmware));
+    config.set("machine_start_gcode", std::string("G90\nM83\nG92 E0"));
+    config.set("before_layer_change_gcode", std::string("G92 E0"));
+
+    for (const std::string &key : config.keys()) {
+        const auto *enum_option = dynamic_cast<const ConfigOptionEnumsGeneric *>(config.option(key));
+        const ConfigOptionDef *option_def = print_config_def.get(key);
+        if (enum_option != nullptr && enum_option->keys_map == nullptr && option_def != nullptr && option_def->enum_keys_map != nullptr) {
+            auto *mapped_option = new ConfigOptionEnumsGeneric(option_def->enum_keys_map);
+            mapped_option->values = enum_option->values;
+            config.set_key_value(key, mapped_option);
+        }
+    }
+
+    const auto run_order = [&config](bool cura_first) {
+        Model model;
+        const auto add_cube = [&model](const char *name, double x) -> ModelObject * {
+            ModelObject *object = model.add_object();
+            object->name = name;
+            object->add_volume(Slic3r::Test::mesh(TestMesh::cube_20x20x20));
+            ModelInstance *instance = object->add_instance();
+            instance->set_offset(Vec3d(x, 100., 0.));
+            object->ensure_on_bed();
+            return object;
+        };
+        const auto configure_cura_raft = [](ModelObject *object) {
+            object->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+            object->config.set("raft_base_layers", 1);
+            object->config.set("raft_interface_layers", 2);
+            object->config.set("raft_surface_layers", 2);
+            object->config.set("raft_base_layer_height", 0.3);
+            object->config.set("raft_interface_layer_height", 0.3);
+            object->config.set("raft_surface_layer_height", 0.2);
+        };
+        const auto configure_unrafted_brim = [](ModelObject *object) {
+            object->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+            object->config.set("raft_layers", 0);
+            object->config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(BrimType::btOuterOnly));
+            object->config.set("brim_width", 3.);
+        };
+
+        ModelObject *first  = add_cube(cura_first ? "CuraV1 raft object" : "unrafted brim object", 80.);
+        ModelObject *second = add_cube(cura_first ? "unrafted brim object" : "CuraV1 raft object", 120.);
+        configure_cura_raft(cura_first ? first : second);
+        configure_unrafted_brim(cura_first ? second : first);
+
+        Print print;
+        for (ModelObject *object : model.objects)
+            print.auto_assign_extruders(object);
+        print.apply(model, config);
+        REQUIRE(print.validate().string.empty());
+        REQUIRE(print.objects().size() == 2);
+
+        const PrintObject *cura_print_object      = print.objects()[cura_first ? 0 : 1];
+        const PrintObject *unrafted_print_object = print.objects()[cura_first ? 1 : 0];
+        REQUIRE(cura_print_object->slicing_parameters().first_print_layer_height == Approx(0.3));
+        REQUIRE(unrafted_print_object->slicing_parameters().first_print_layer_height == Approx(0.24));
+        REQUIRE(print.skirt_first_layer_height() == Approx(0.24));
+        REQUIRE(print.brim_flow().height() == Approx(0.24));
+
+        print.set_status_silent();
+        print.process();
+
+        REQUIRE(unrafted_print_object->layers().front()->height == Approx(0.24));
+        const auto brim_it = print.get_brimMap().find(unrafted_print_object->id());
+        REQUIRE(brim_it != print.get_brimMap().end());
+        REQUIRE_FALSE(brim_it->second.empty());
+
+        const Flow expected_flow = print.brim_flow(unrafted_print_object->layers().front()->height);
+        size_t     brim_path_count = 0;
+        const auto inspect_path = [&expected_flow, &brim_path_count](const ExtrusionPath &path) {
+            ++brim_path_count;
+            REQUIRE(path.height == Approx(0.24));
+            REQUIRE(path.width == Approx(expected_flow.width()));
+            REQUIRE(path.mm3_per_mm == Approx(expected_flow.mm3_per_mm()));
+        };
+        for (const ExtrusionEntity *entity : brim_it->second.entities) {
+            if (const auto *path = dynamic_cast<const ExtrusionPath *>(entity)) {
+                inspect_path(*path);
+            } else if (const auto *multipath = dynamic_cast<const ExtrusionMultiPath *>(entity)) {
+                for (const ExtrusionPath &path : multipath->paths)
+                    inspect_path(path);
+            } else if (const auto *loop = dynamic_cast<const ExtrusionLoop *>(entity)) {
+                for (const ExtrusionPath &path : loop->paths)
+                    inspect_path(path);
+            }
+        }
+        REQUIRE(brim_path_count > 0);
+
+        const boost::filesystem::path gcode_path =
+            boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orca-mixed-first-layer-temp-%%%%-%%%%.gcode");
+        set_resources_dir((boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() / "resources").string());
+        GCodeProcessorResult gcode_result;
+        print.export_gcode(gcode_path.string(), &gcode_result, nullptr);
+        std::ifstream gcode_stream(gcode_path.string());
+        const std::string gcode((std::istreambuf_iterator<char>(gcode_stream)), std::istreambuf_iterator<char>());
+
+        size_t cura_base_marker = gcode.find(";Z:0.3");
+        if (cura_base_marker == std::string::npos)
+            cura_base_marker = gcode.find("; Z_HEIGHT: 0.3");
+        REQUIRE(cura_base_marker != std::string::npos);
+
+        const size_t normal_nozzle_temperature = gcode.find("M104 S190");
+        const size_t normal_bed_temperature = gcode.find("M140 S45");
+        REQUIRE(normal_nozzle_temperature != std::string::npos);
+        REQUIRE(normal_bed_temperature != std::string::npos);
+        REQUIRE(normal_nozzle_temperature > cura_base_marker);
+        REQUIRE(normal_bed_temperature > cura_base_marker);
+        boost::filesystem::remove(gcode_path);
+    };
+
+    run_order(true);
+    run_order(false);
+}
+
+TEST_CASE("Mixed same-Z CuraV1 and unrafted paths keep object-local layer context",
+          "[SupportMaterial][Raft][CuraV1][Compatibility][GCode]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4}));
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    config.set("layer_height", 0.2);
+    config.set("initial_layer_print_height", 0.3);
+    config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.42, false));
+    config.set("initial_layer_speed", 7.);
+    config.set("initial_layer_infill_speed", 11.);
+    config.set_key_value("initial_layer_travel_speed", new ConfigOptionFloatOrPercent(3., false));
+    config.set("travel_speed", 100.);
+    // 1.3 mm Raft top + 0.3 mm air gap + 0.3 mm model L1 = 1.9 mm,
+    // exactly matching an ordinary 0.2 mm layer of the unrafted object.
+    config.set("raft_airgap", 0.3);
+    config.set("raft_layer_0_z_overlap", 0.1);
+    config.set("raft_base_layers", 1);
+    config.set("raft_interface_layers", 2);
+    config.set("raft_surface_layers", 2);
+    config.set("raft_base_layer_height", 0.3);
+    config.set("raft_interface_layer_height", 0.3);
+    config.set("raft_surface_layer_height", 0.2);
+    config.set("raft_base_line_width", 0.6);
+    config.set("raft_interface_line_width", 0.6);
+    config.set("raft_surface_line_width", 0.42);
+    config.set("raft_base_line_spacing", 1.5);
+    config.set("raft_interface_line_spacing", 1.5);
+    config.set("raft_surface_line_spacing", 0.42);
+    config.set_key_value("raft_base_fan_speed", new ConfigOptionPercent(73.));
+    config.set_key_value("close_fan_the_first_x_layers", new ConfigOptionInts({1}));
+    config.set_key_value("full_fan_speed_layer", new ConfigOptionInts({3}));
+    config.set_key_value("gcode_flavor", new ConfigOptionEnum<GCodeFlavor>(gcfMarlinFirmware));
+    config.set("gcode_label_objects", true);
+    config.set("machine_start_gcode", std::string("G90\nM83\nG92 E0"));
+    config.set("before_layer_change_gcode", std::string("G92 E0"));
+    config.option<ConfigOptionBools>("slow_down_for_layer_cooling")->values = {false};
+
+    // Synthetic full configs contain generic enum-vector defaults without
+    // their serialization maps. Normal presets already provide these maps.
+    for (const std::string &key : config.keys()) {
+        const auto *enum_option = dynamic_cast<const ConfigOptionEnumsGeneric *>(config.option(key));
+        const ConfigOptionDef *option_def = print_config_def.get(key);
+        if (enum_option != nullptr && enum_option->keys_map == nullptr && option_def != nullptr && option_def->enum_keys_map != nullptr) {
+            auto *mapped_option = new ConfigOptionEnumsGeneric(option_def->enum_keys_map);
+            mapped_option->values = enum_option->values;
+            config.set_key_value(key, mapped_option);
+        }
+    }
+
+    Model model;
+    const auto add_cube = [&model](const char *name, double x) {
+        ModelObject *object = model.add_object();
+        object->name = name;
+        object->add_volume(Slic3r::Test::mesh(TestMesh::cube_20x20x20));
+        ModelInstance *instance = object->add_instance();
+        instance->set_offset(Vec3d(x, 100., 0.));
+        object->ensure_on_bed();
+        return object;
+    };
+    ModelObject *unrafted = add_cube("mixed unrafted object", 80.);
+    ModelObject *cura_raft = add_cube("mixed CuraV1 raft object", 120.);
+    unrafted->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    unrafted->config.set("raft_layers", 0);
+
+    Print print;
+    print.auto_assign_extruders(unrafted);
+    print.auto_assign_extruders(cura_raft);
+    print.apply(model, config);
+    const StringObjectException validation = print.validate();
+    INFO("validation error: " << validation.string << "; key: " << validation.opt_key);
+    REQUIRE(validation.string.empty());
+    REQUIRE(print.objects()[0]->config().raft_mode.value == RaftMode::Legacy);
+    REQUIRE(print.objects()[0]->slicing_parameters().raft_layers() == 0);
+    REQUIRE(print.objects()[1]->config().raft_mode.value == RaftMode::CuraV1);
+    REQUIRE(print.objects()[1]->slicing_parameters().raft_layers() == 5);
+    print.set_status_silent();
+    print.process();
+
+    const PrintObject *unrafted_object = print.objects()[0];
+    const PrintObject *cura_object = print.objects()[1];
+    const double cura_model_first_z = cura_object->layers().front()->print_z;
+    const auto closest_unrafted_layer = std::min_element(
+        unrafted_object->layers().begin(), unrafted_object->layers().end(), [cura_model_first_z](const Layer *lhs, const Layer *rhs) {
+            return std::abs(lhs->print_z - cura_model_first_z) < std::abs(rhs->print_z - cura_model_first_z);
+        });
+    REQUIRE(closest_unrafted_layer != unrafted_object->layers().end());
+    CAPTURE(cura_model_first_z, (*closest_unrafted_layer)->print_z,
+            std::abs((*closest_unrafted_layer)->print_z - cura_model_first_z));
+    REQUIRE(std::any_of(unrafted_object->layers().begin(), unrafted_object->layers().end(), [cura_model_first_z](const Layer *layer) {
+        return is_approx(layer->print_z, cura_model_first_z);
+    }));
+
+    const boost::filesystem::path gcode_path =
+        boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orca-mixed-layer-context-%%%%-%%%%.gcode");
+    set_resources_dir((boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() / "resources").string());
+    GCodeProcessorResult gcode_result;
+    print.export_gcode(gcode_path.string(), &gcode_result, nullptr);
+    std::ifstream gcode_stream(gcode_path.string());
+    const std::string gcode((std::istreambuf_iterator<char>(gcode_stream)), std::istreambuf_iterator<char>());
+
+    const auto layer_marker_position = [&gcode](double print_z) {
+        std::ostringstream compact_marker;
+        compact_marker << ";Z:" << print_z;
+        size_t position = gcode.find(compact_marker.str());
+        if (position == std::string::npos) {
+            std::ostringstream verbose_marker;
+            verbose_marker << "; Z_HEIGHT: " << print_z;
+            position = gcode.find(verbose_marker.str());
+        }
+        return position;
+    };
+    const auto layer_section = [&gcode, &layer_marker_position](double print_z) {
+        const size_t begin = layer_marker_position(print_z);
+        REQUIRE(begin != std::string::npos);
+        const size_t end = gcode.find(";LAYER_CHANGE", begin + 1);
+        return gcode.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+    };
+
+    // At Z0.3 the unrafted model L1 and CuraV1 Base share one physical
+    // group. Raft paths use their 73% phase fan and then restore the regular
+    // first-model-layer fan instead of leaking either value across paths.
+    const std::string mixed_base_section = layer_section(0.3);
+    const size_t raft_object_begin = mixed_base_section.find("; printing object mixed CuraV1 raft object id:");
+    REQUIRE(raft_object_begin != std::string::npos);
+    const size_t raft_fan_position = mixed_base_section.find("M106 S186");
+    REQUIRE(raft_fan_position != std::string::npos);
+    REQUIRE(raft_fan_position > raft_object_begin);
+    // A plate-level skirt/support brim sharing this SupportLayer must not
+    // activate the Raft phase fan before the Raft object itself starts.
+    const size_t first_raft_extrusion = mixed_base_section.find(" E", raft_fan_position);
+    REQUIRE(first_raft_extrusion != std::string::npos);
+    const size_t regular_fan_restore = mixed_base_section.find("M106 S0", first_raft_extrusion);
+    REQUIRE(regular_fan_restore != std::string::npos);
+
+    // Later, CuraV1 model L1 shares a Z with an ordinary higher layer of the
+    // unrafted object. Its first travel must still use 3 mm/s (F180), even
+    // though the first object in the group is not on its initial layer.
+    const std::string mixed_model_section = layer_section(cura_model_first_z);
+    const std::string object_start = "; printing object mixed CuraV1 raft object id:";
+    const size_t object_begin = mixed_model_section.find(object_start);
+    REQUIRE(object_begin != std::string::npos);
+    const size_t object_end = mixed_model_section.find("; stop printing object mixed CuraV1 raft object id:", object_begin);
+    REQUIRE(object_end != std::string::npos);
+    const std::string cura_object_section = mixed_model_section.substr(object_begin, object_end - object_begin);
+    REQUIRE(cura_object_section.find("F180") != std::string::npos);
+    boost::filesystem::remove(gcode_path);
+}
+
+TEST_CASE("ByObject restarts the physical first-layer transition for each object",
+          "[SupportMaterial][Raft][CuraV1][Compatibility][GCode][ByObject]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4}));
+    config.set_key_value("print_sequence", new ConfigOptionEnum<PrintSequence>(PrintSequence::ByObject));
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    config.set("initial_layer_print_height", 0.3);
+    config.set("raft_airgap", 0.3);
+    config.set("raft_layer_0_z_overlap", 0.1);
+    config.set("raft_base_layers", 1);
+    config.set("raft_interface_layers", 2);
+    config.set("raft_surface_layers", 2);
+    config.set("raft_base_layer_height", 0.3);
+    config.set("raft_interface_layer_height", 0.3);
+    config.set("raft_surface_layer_height", 0.2);
+    config.set("raft_base_line_width", 0.6);
+    config.set("raft_interface_line_width", 0.6);
+    config.set("raft_surface_line_width", 0.42);
+    config.set("raft_base_line_spacing", 1.5);
+    config.set("raft_interface_line_spacing", 1.5);
+    config.set("raft_surface_line_spacing", 0.42);
+    config.set("gcode_label_objects", true);
+    config.set("machine_start_gcode", std::string("G90\nM83\nG92 E0"));
+    config.set("before_layer_change_gcode", std::string("G92 E0"));
+
+    for (const std::string &key : config.keys()) {
+        const auto *enum_option = dynamic_cast<const ConfigOptionEnumsGeneric *>(config.option(key));
+        const ConfigOptionDef *option_def = print_config_def.get(key);
+        if (enum_option != nullptr && enum_option->keys_map == nullptr && option_def != nullptr && option_def->enum_keys_map != nullptr) {
+            auto *mapped_option = new ConfigOptionEnumsGeneric(option_def->enum_keys_map);
+            mapped_option->values = enum_option->values;
+            config.set_key_value(key, mapped_option);
+        }
+    }
+
+    Model model;
+    const auto add_cube = [&model](const char *name, double x) {
+        ModelObject *object = model.add_object();
+        object->name = name;
+        object->add_volume(Slic3r::Test::mesh(TestMesh::cube_20x20x20));
+        ModelInstance *instance = object->add_instance();
+        instance->set_offset(Vec3d(x, 100., 0.));
+        object->ensure_on_bed();
+        return object;
+    };
+    add_cube("sequential CuraV1 object", 60.);
+    ModelObject *unrafted = add_cube("sequential unrafted object", 180.);
+    unrafted->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    unrafted->config.set("raft_layers", 0);
+
+    Print print;
+    for (ModelObject *object : model.objects)
+        print.auto_assign_extruders(object);
+    print.apply(model, config);
+    const StringObjectException validation = print.validate();
+    INFO("validation error: " << validation.string << "; key: " << validation.opt_key);
+    REQUIRE(validation.string.empty());
+    print.set_status_silent();
+    print.process();
+
+    const boost::filesystem::path gcode_path =
+        boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orca-by-object-first-layer-%%%%-%%%%.gcode");
+    set_resources_dir((boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() / "resources").string());
+    GCodeProcessorResult gcode_result;
+    print.export_gcode(gcode_path.string(), &gcode_result, nullptr);
+    std::ifstream gcode_stream(gcode_path.string());
+    const std::string gcode((std::istreambuf_iterator<char>(gcode_stream)), std::istreambuf_iterator<char>());
+
+    size_t first_height_count = 0;
+    const auto count_first_height = [&gcode, &first_height_count](const std::string &marker) {
+        size_t height_position = 0;
+        while ((height_position = gcode.find(marker, height_position)) != std::string::npos) {
+            height_position += marker.size();
+            const double height = std::stod(gcode.substr(height_position));
+            CAPTURE(marker, height);
+            REQUIRE(height > 0.);
+            if (height == Approx(0.3))
+                ++first_height_count;
+        }
+    };
+    // Different G-code flavors expose the same layer transition with either
+    // the legacy HEIGHT marker or Orca's Z_HEIGHT marker.
+    count_first_height(";HEIGHT:");
+    count_first_height("; Z_HEIGHT:");
+    REQUIRE(first_height_count >= 2);
+    boost::filesystem::remove(gcode_path);
+}
+
 TEST_CASE("Pure Legacy object-level raft settings retain their existing per-object behavior",
           "[SupportMaterial][Raft][Legacy][Compatibility]")
 {

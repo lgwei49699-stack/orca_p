@@ -852,7 +852,8 @@ static ExPolygons make_brim_ears_auto(const ExPolygons& obj_expoly, coord_t size
     return mouse_ears_ex;
 }
 
-static ExPolygons make_brim_ears(const PrintObject* object, const double& flowWidth, float brim_offset, Flow &flow, bool is_outer_brim)
+static ExPolygons make_brim_ears(
+    const PrintObject *object, const double &flowWidth, float brim_offset, const Flow &flow, bool is_outer_brim)
 {
     ExPolygons mouse_ears_ex;
     BrimPoints brim_ear_points = object->model_object()->brim_points;
@@ -895,7 +896,6 @@ static ExPolygons outer_inner_brim_area(const Print& print,
     std::vector<unsigned int>& printExtruders)
 {
     unsigned int support_material_extruder = printExtruders.front() + 1;
-    Flow flow = print.brim_flow();
 
     ExPolygons brim_area;
     ExPolygons no_brim_area;
@@ -918,10 +918,11 @@ static ExPolygons outer_inner_brim_area(const Print& print,
         for (const auto& objectWithExtruder : objPrintVec) {
             const PrintObject* object = print.get_object(objectWithExtruder.first);
             const BrimType     brim_type = object->config().brim_type.value;
+            const Flow         object_brim_flow = print.brim_flow(object->layers().front()->height);
             float              brim_offset = scale_(object->config().brim_object_gap.value);
-            double             flowWidth = print.brim_flow().scaled_spacing() * SCALING_FACTOR;
+            double             flowWidth = object_brim_flow.scaled_spacing() * SCALING_FACTOR;
             float              brim_width = scale_(floor(object->config().brim_width.value / flowWidth / 2) * flowWidth * 2);
-            const float        scaled_flow_width = print.brim_flow().scaled_spacing();
+            const float        scaled_flow_width = object_brim_flow.scaled_spacing();
             const float        scaled_additional_brim_width = scale_(floor(5 / flowWidth / 2) * flowWidth * 2);
             const float        scaled_half_min_adh_length = scale_(1.1);
             bool               has_brim_auto = object->config().brim_type == btAutoBrim;
@@ -991,10 +992,10 @@ static ExPolygons outer_inner_brim_area(const Print& print,
                             auto innerExpoly = offset_ex(ex_poly.contour, brim_offset, jtRound, SCALED_RESOLUTION);
                             ExPolygons outerExpoly;
                             if (use_brim_ears) {
-                                outerExpoly = make_brim_ears(object, flowWidth, brim_offset, flow, true);
+                                outerExpoly = make_brim_ears(object, flowWidth, brim_offset, object_brim_flow, true);
                                 //outerExpoly = offset_ex(outerExpoly, brim_width_mod, jtRound, SCALED_RESOLUTION);
                             } else if (use_auto_brim_ears) {
-                                coord_t size_ear = (brim_width_mod - brim_offset - flow.scaled_spacing());
+                                coord_t size_ear = (brim_width_mod - brim_offset - object_brim_flow.scaled_spacing());
                                 outerExpoly = make_brim_ears_auto(innerExpoly, size_ear, ear_detection_length, brim_ears_max_angle, true);
                             }else {
                                 outerExpoly = offset_ex(innerExpoly, brim_width_mod, jtRound, SCALED_RESOLUTION);
@@ -1005,9 +1006,9 @@ static ExPolygons outer_inner_brim_area(const Print& print,
                             ExPolygons outerExpoly;
                             auto innerExpoly = offset_ex(ex_poly_holes_reversed, -brim_width - brim_offset);
                             if (use_brim_ears) {
-                                outerExpoly = make_brim_ears(object, flowWidth, brim_offset, flow, false);
+                                outerExpoly = make_brim_ears(object, flowWidth, brim_offset, object_brim_flow, false);
                             } else if (use_auto_brim_ears) {
-                                coord_t size_ear = (brim_width - brim_offset - flow.scaled_spacing());
+                                coord_t size_ear = (brim_width - brim_offset - object_brim_flow.scaled_spacing());
                                 outerExpoly = make_brim_ears_auto(offset_ex(ex_poly_holes_reversed, -brim_offset), size_ear, ear_detection_length, brim_ears_max_angle, false);
                             }else {
                                 outerExpoly = offset_ex(ex_poly_holes_reversed, -brim_offset);
@@ -1130,7 +1131,8 @@ static ExPolygons outer_inner_brim_area(const Print& print,
                 for (int iao = 0; iao != tempArea.size(); ++iao)
                     if (iao != ia) otherExPoly.push_back(tempArea[iao]);
 
-                auto offsetedTa = offset_ex(tempArea[ia], print.brim_flow().scaled_spacing() * 2, jtRound, SCALED_RESOLUTION);
+                const Flow object_brim_flow = print.brim_flow(object->layers().front()->height);
+                auto offsetedTa = offset_ex(tempArea[ia], object_brim_flow.scaled_spacing() * 2, jtRound, SCALED_RESOLUTION);
                 if (!intersection_ex(offsetedTa, objectIslands).empty() ||
                     !intersection_ex(offsetedTa, otherExPoly).empty() ||
                     !intersection_ex(offsetedTa, otherExPolys).empty())
@@ -1621,12 +1623,11 @@ static void make_inner_brim(const Print& print, const ConstPrintObjectPtrs& top_
 
 
 //BBS: generate out brim by offseting ExPolygons 'islands_area_ex'
-Polygons tryExPolygonOffset(const ExPolygons islandAreaEx, const Print& print)
+Polygons tryExPolygonOffset(const ExPolygons islandAreaEx, const Print &print, const Flow &flow)
 {
     const auto scaled_resolution = scaled<double>(print.config().resolution.value);
     Polygons   loops;
     ExPolygons islands_ex;
-    Flow       flow = print.brim_flow();
 
     double resolution = 0.0125 / SCALING_FACTOR;
     islands_ex = islandAreaEx;
@@ -1645,9 +1646,10 @@ Polygons tryExPolygonOffset(const ExPolygons islandAreaEx, const Print& print)
     return loops;
 }
 //BBS: a function creates the ExtrusionEntityCollection from the brim area defined by ExPolygons
-ExtrusionEntityCollection makeBrimInfill(const ExPolygons& singleBrimArea, const Print& print, const Polygons& islands_area) {
-    Polygons        loops = tryExPolygonOffset(singleBrimArea, print);
-    Flow  flow = print.brim_flow();
+ExtrusionEntityCollection makeBrimInfill(
+    const ExPolygons &singleBrimArea, const Print &print, const Polygons &islands_area, const Flow &flow)
+{
+    Polygons loops = tryExPolygonOffset(singleBrimArea, print, flow);
     loops = union_pt_chained_outside_in(loops);
 
     std::vector<Polylines> loops_pl_by_levels;
@@ -1681,7 +1683,8 @@ ExtrusionEntityCollection makeBrimInfill(const ExPolygons& singleBrimArea, const
     for (Polyline& one_loop : all_loops)
         one_loop.translate(scaled_plate_offset);
 
-    extrusion_entities_append_loops_and_paths(brim.entities, std::move(all_loops), erBrim, float(flow.mm3_per_mm()), float(flow.width()), float(print.skirt_first_layer_height()));
+    extrusion_entities_append_loops_and_paths(
+        brim.entities, std::move(all_loops), erBrim, float(flow.mm3_per_mm()), float(flow.width()), float(flow.height()));
     return brim;
 }
 
@@ -1740,12 +1743,18 @@ void make_brim(const Print& print, PrintTryCancel try_cancel, Polygons& islands_
 
     for (auto iter = brimAreaMap.begin(); iter != brimAreaMap.end(); ++iter) {
         if (!iter->second.empty()) {
-            brimMap.insert(std::make_pair(iter->first, makeBrimInfill(iter->second, print, islands_area)));
+            const PrintObject *object = print.get_object(iter->first);
+            assert(object != nullptr && !object->layers().empty());
+            const Flow object_brim_flow = print.brim_flow(object->layers().front()->height);
+            brimMap.insert(std::make_pair(iter->first, makeBrimInfill(iter->second, print, islands_area, object_brim_flow)));
         };
     }
     for (auto iter = supportBrimAreaMap.begin(); iter != supportBrimAreaMap.end(); ++iter) {
         if (!iter->second.empty()) {
-            supportBrimMap.insert(std::make_pair(iter->first, makeBrimInfill(iter->second, print, islands_area)));
+            const PrintObject *object = print.get_object(iter->first);
+            assert(object != nullptr && !object->support_layers().empty());
+            const Flow support_brim_flow = print.brim_flow(object->support_layers().front()->height);
+            supportBrimMap.insert(std::make_pair(iter->first, makeBrimInfill(iter->second, print, islands_area, support_brim_flow)));
         };
     }
 

@@ -71,6 +71,10 @@ struct CoolingLine
         // ORCA: Add support for ironing fan speed control
         TYPE_IRONING_FAN_START         = 1 << 19,
         TYPE_IRONING_FAN_END           = 1 << 20,
+        // Restore the regular layer fan after a temporary direct Raft phase
+        // command. This is intentionally separate from toolchange resume,
+        // which restores the currently active role-specific fan.
+        TYPE_RESTORE_REGULAR_FAN       = 1 << 21,
     };
 
     CoolingLine(unsigned int type, size_t  line_start, size_t  line_end) :
@@ -547,6 +551,8 @@ std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::
                 (pos_P > 0) ? atof(sline.c_str() + pos_P + 1) * 0.001 : 0.);
         } else if (boost::starts_with(sline, ";_FORCE_RESUME_FAN_SPEED")) {
             line.type = CoolingLine::TYPE_FORCE_RESUME_FAN;
+        } else if (boost::starts_with(sline, ";_RESTORE_REGULAR_FAN_SPEED")) {
+            line.type = CoolingLine::TYPE_RESTORE_REGULAR_FAN;
         }
 
         // Orca: For any movements before this layer's first ever extrusion, we exclude them from the layer time calculation.
@@ -902,6 +908,11 @@ std::string CoolingBuffer::apply_layer_cooldown(
             }
             if (!preserve_fan_commands && m_additional_fan_speed != -1 && m_config.auxiliary_fan.value)
                 new_gcode += GCodeWriter::set_additional_fan(m_additional_fan_speed);
+        } else if (line->type & CoolingLine::TYPE_RESTORE_REGULAR_FAN) {
+            if (!preserve_fan_commands && m_fan_speed != -1) {
+                new_gcode += GCodeWriter::set_fan(m_config.gcode_flavor, m_fan_speed);
+                m_current_fan_speed = m_fan_speed;
+            }
         }
         else if (line->type & CoolingLine::TYPE_EXTRUDE_END) {
             // Just remove this comment.

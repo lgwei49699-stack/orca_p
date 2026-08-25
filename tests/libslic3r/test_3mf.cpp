@@ -64,6 +64,46 @@ private:
     std::string m_path;
 };
 
+TEST_CASE("CuraV1 optional raft settings are forward compatible in JSON", "[3mf][CuraV1][Config]")
+{
+    const auto load_json = [](const nlohmann::json &document, DynamicPrintConfig &config,
+                              ConfigSubstitutionContext &substitutions) {
+        TemporaryFilePath path("orca-cura-raft-forward-config", ".json");
+        std::ofstream output(path.path());
+        output << document.dump(2);
+        output.close();
+
+        std::map<std::string, std::string> key_values;
+        std::string reason;
+        const int result = config.load_from_json(path.path(), substitutions, true, key_values, reason);
+        return std::make_pair(result, reason);
+    };
+
+    SECTION("future optional raft fields are ignored") {
+        DynamicPrintConfig config;
+        ConfigSubstitutionContext substitutions(ForwardCompatibilitySubstitutionRule::Disable);
+        const auto [result, reason] = load_json(
+            {{"raft_mode", "cura_v1"}, {"raft_airgap", "0.31"}, {"raft_future_surface_bias", "17"}},
+            config, substitutions);
+
+        REQUIRE(result == 0);
+        REQUIRE(reason.empty());
+        REQUIRE(config.opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
+        REQUIRE(config.opt_float("raft_airgap") == Approx(0.31));
+        REQUIRE(std::find(substitutions.unrecogized_keys.begin(), substitutions.unrecogized_keys.end(),
+                          "raft_future_surface_bias") != substitutions.unrecogized_keys.end());
+    }
+
+    SECTION("invalid known mode values still fail") {
+        DynamicPrintConfig invalid_mode_config;
+        ConfigSubstitutionContext invalid_mode_substitutions(ForwardCompatibilitySubstitutionRule::Disable);
+        const auto [invalid_mode_result, invalid_mode_reason] =
+            load_json({{"raft_mode", "cura_v2"}}, invalid_mode_config, invalid_mode_substitutions);
+        REQUIRE(invalid_mode_result != 0);
+        REQUIRE_FALSE(invalid_mode_reason.empty());
+    }
+}
+
 class ModelBackupPathGuard
 {
 public:
