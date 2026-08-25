@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Slic3rPE\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-09-28 18:44+0800\n"
+"POT-Creation-Date: 2026-08-24 19:45+0800\n"
 "PO-Revision-Date: 2024-07-28 07:12+0000\n"
 "Last-Translator: Handle <mail@bysb.net>\n"
 "Language-Team: \n"
@@ -1907,10 +1907,6 @@ msgstr "设置所选项的耗材丝"
 msgid "Default"
 msgstr "缺省"
 
-#: src/libslic3r/PrintConfig.cpp
-msgid "Inherit"
-msgstr "继承"
-
 #, c-format, boost-format
 msgid "Filament %d"
 msgstr "耗材丝%d"
@@ -2604,6 +2600,11 @@ msgstr "已完成自动摆放。"
 msgid ""
 "Arrange failed. Found some exceptions when processing object geometries."
 msgstr "自动摆放失败，处理对象几何数据时遇到异常。"
+
+msgid ""
+"The objects cannot fit on the current plate with the required spacing. Their "
+"original positions were kept."
+msgstr ""
 
 #, c-format, boost-format
 msgid ""
@@ -4522,6 +4523,135 @@ msgstr "新窗口"
 msgid "Open a new window"
 msgstr "打开新窗口"
 
+msgid "上传配置"
+msgstr ""
+
+msgid "配置名称"
+msgstr ""
+
+msgid "请输入配置名称"
+msgstr ""
+
+msgid "备注"
+msgstr ""
+
+msgid "请输入备注"
+msgstr ""
+
+msgid "取消"
+msgstr ""
+
+msgid "确定"
+msgstr ""
+
+msgid "云端导入"
+msgstr ""
+
+msgid "设备机型"
+msgstr ""
+
+msgid "刷新"
+msgstr ""
+
+msgid "点击刷新获取当前机型的云端配置"
+msgstr ""
+
+msgid "未找到可用机型"
+msgstr ""
+
+msgid "正在获取云端配置..."
+msgstr ""
+
+msgid "正在获取云端配置，请稍候..."
+msgstr ""
+
+msgid "当前机型暂无云端配置"
+msgstr ""
+
+msgid "机型"
+msgstr ""
+
+msgid "方案文件"
+msgstr ""
+
+msgid "操作"
+msgstr ""
+
+msgid "设置此参数"
+msgstr ""
+
+msgid "请选择要导入的云端配置"
+msgstr ""
+
+msgid "正在应用云端配置..."
+msgstr ""
+
+msgid "云端配置已应用"
+msgstr ""
+
+msgid "云端配置应用失败"
+msgstr ""
+
+msgid "材料设置"
+msgstr ""
+
+msgid "耗材"
+msgstr ""
+
+msgid "耗材SN:"
+msgstr ""
+
+msgid "-"
+msgstr ""
+
+msgid "保存"
+msgstr ""
+
+msgid "Plater 未初始化"
+msgstr ""
+
+msgid "正在获取耗材列表..."
+msgstr ""
+
+msgid "暂无耗材"
+msgstr ""
+
+msgid "当前耗材缺少 SN，无法获取详情"
+msgstr ""
+
+msgid "正在获取动态参数..."
+msgstr ""
+
+msgid "未查询到当前耗材动态参数，已使用当前耗材参数"
+msgstr ""
+
+msgid "请选择耗材"
+msgstr ""
+
+msgid "正在保存..."
+msgstr ""
+
+msgid "保存成功"
+msgstr ""
+
+msgid "提示"
+msgstr ""
+
+msgid "动态参数"
+msgstr ""
+
+msgid "参数名"
+msgstr ""
+
+msgid "参数"
+msgstr ""
+
+msgid "参数值"
+msgstr ""
+
+msgid "未找到当前耗材的机型参数"
+msgstr ""
+
 msgid "Application is closing"
 msgstr "正在关闭应用程序"
 
@@ -4554,6 +4684,9 @@ msgstr "切片单盘"
 
 msgid "Print plate"
 msgstr "打印单盘"
+
+msgid "请先完成切片后再打印。"
+msgstr ""
 
 msgid "Export G-code file"
 msgstr "导出G-code文件"
@@ -4995,6 +5128,9 @@ msgstr ""
 
 msgid "Import result"
 msgstr "导入结果"
+
+msgid "请输入配置名称。"
+msgstr ""
 
 msgid "File is missing"
 msgstr "文件丢失"
@@ -6103,6 +6239,12 @@ msgstr ""
 msgid "Multi-part object detected"
 msgstr "检测到多部分对象"
 
+msgid "Texture conversion failed. The model will be imported as geometry only."
+msgstr ""
+
+msgid "Texture Import Warning"
+msgstr ""
+
 msgid "Load these files as a single object with multiple parts?\n"
 msgstr "将这些文件加载为一个多零件对象？\n"
 
@@ -6205,12 +6347,78 @@ msgstr "无效数据"
 msgid "Slicing Canceled"
 msgstr "切片已取消"
 
+msgid "G-code 文件导出失败，无法上传打印。"
+msgstr ""
+
+msgid "G-code 已导出到临时路径，正在上传 OBS："
+msgstr ""
+
 #, c-format, boost-format
 msgid "Slicing Plate %d"
 msgstr "正在切片盘%d"
 
 msgid "Please resolve the slicing errors and publish again."
 msgstr "请解决切片错误后再重新发布。"
+
+msgid "登录状态无效，请重新登录。"
+msgstr ""
+
+msgid "生成配置 3MF 路径失败。"
+msgstr ""
+
+msgid "导出配置 3MF 失败。"
+msgstr ""
+
+msgid "上传配置成功。"
+msgstr ""
+
+msgid "当前没有可保存的云端导入配置。"
+msgstr ""
+
+msgid "云端配置"
+msgstr ""
+
+#, c-format, boost-format
+msgid "确认将修改保存到云端配置“%s”？"
+msgstr ""
+
+msgid "确认保存"
+msgstr ""
+
+msgid "保存配置成功。"
+msgstr ""
+
+msgid "云端配置已导入并应用。"
+msgstr ""
+
+msgid "当前 G-code 文件无效，无法打印。"
+msgstr ""
+
+msgid "当前导入文件不是 3MF，无法按 3MF 下发。"
+msgstr ""
+
+msgid "3MF 文件导出失败，无法上传打印。"
+msgstr ""
+
+msgid "请选择打印机"
+msgstr ""
+
+msgid "请输入打印文件 URL"
+msgstr ""
+
+#, boost-format
+msgid "测试 3MF 下发成功，共 %1% 台"
+msgstr ""
+
+msgid "下发成功"
+msgstr ""
+
+#, boost-format
+msgid "上传打印设备成功，共 %1% 台"
+msgstr ""
+
+msgid "上传成功"
+msgstr ""
 
 msgid ""
 "Network Plug-in is not detected. Network related features are unavailable."
@@ -6421,14 +6629,6 @@ msgstr "自定义的支撑和涂色在模型修复之前将被清除。"
 msgid "Optimize Rotation"
 msgstr "优化旋转"
 
-msgid ""
-"An object is laid over the boundary of plate or exceeds the height limit.\n"
-"Please solve the problem by moving it totally on or off the plate, and "
-"confirming that the height is within the build volume."
-msgstr ""
-"有对象被放置在构建板的边界上或超过高度限制。\n"
-"请通过将其完全移动到构建板内或构建板外，并确认高度在构建空间以内来解决问题。"
-
 msgid "Plate Settings"
 msgstr "盘参数设置"
 
@@ -6506,6 +6706,60 @@ msgstr "修改区域会自动登出您的账号。\n"
 
 msgid "Region selection"
 msgstr "区域选择"
+
+msgid "正式环境"
+msgstr ""
+
+msgid "测试环境"
+msgstr ""
+
+msgid "GFD 云环境"
+msgstr ""
+
+msgid "切换 GFD 中台的正式环境或测试环境"
+msgstr ""
+
+msgid ""
+"切换 GFD 环境会退出当前账号，并立即要求重新登录。\n"
+"\n"
+"是否继续？"
+msgstr ""
+
+msgid "切换 GFD 云环境"
+msgstr ""
+
+msgid "GFD 账号"
+msgstr ""
+
+msgid "查看当前 GFD 登录状态，或退出后重新登录"
+msgstr ""
+
+msgid "登录"
+msgstr ""
+
+msgid "将退出当前 GFD 账号并重新打开登录窗口。是否继续？"
+msgstr ""
+
+msgid "重新登录"
+msgstr ""
+
+msgid "退出登录"
+msgstr ""
+
+msgid "确定退出当前 GFD 账号？已记住的账号密码会继续保留。"
+msgstr ""
+
+msgid "已登录"
+msgstr ""
+
+msgid "已登录："
+msgstr ""
+
+msgid "未登录"
+msgstr ""
+
+msgid "当前没有有效的 GFD 登录会话"
+msgstr ""
 
 msgid "Second"
 msgstr "秒"
@@ -7451,6 +7705,54 @@ msgstr "登出成功。"
 msgid "Failed to log out."
 msgstr "登出失败。"
 
+msgid "本地耗材同步到云端"
+msgstr ""
+
+msgid "云端耗材同步到本地"
+msgstr ""
+
+msgid "本地耗材"
+msgstr ""
+
+msgid "云端机型"
+msgstr ""
+
+msgid "云端耗材"
+msgstr ""
+
+msgid "正在获取云端耗材列表..."
+msgstr ""
+
+msgid "同步到云端"
+msgstr ""
+
+msgid "同步到本地"
+msgstr ""
+
+msgid "请选择云端耗材"
+msgstr ""
+
+msgid "暂无可同步的云端耗材"
+msgstr ""
+
+msgid "请选择云端耗材，系统不会按名称自动匹配"
+msgstr ""
+
+msgid "耗材同步失败"
+msgstr ""
+
+msgid "云端→本地"
+msgstr ""
+
+msgid "从 GFD 云端同步到当前本地耗材编辑状态"
+msgstr ""
+
+msgid "本地→云端"
+msgstr ""
+
+msgid "把当前本地耗材编辑值同步到 GFD 云端"
+msgstr ""
+
 #. TRN "Save current Settings"
 #, c-format, boost-format
 msgid "Save current %s"
@@ -7461,6 +7763,83 @@ msgstr "删除此预设"
 
 msgid "Search in preset"
 msgstr "在预设中搜索"
+
+#, c-format, boost-format
+msgid ""
+"将把本地耗材“%s”的当前页面参数同步到云端耗材：\n"
+"\n"
+"耗材 SN：%s\n"
+"机型：%s\n"
+"\n"
+msgstr ""
+
+msgid "云端当前没有该机型参数，本次将创建参数。"
+msgstr ""
+
+msgid "云端已存在该机型参数，本次将覆盖已知字段。"
+msgstr ""
+
+msgid ""
+"\n"
+"\n"
+"当前本地耗材存在未保存修改；本次会上传页面中的当前值，但不会自动保存到本地。"
+msgstr ""
+
+msgid "确认同步到云端"
+msgstr ""
+
+#, c-format, boost-format
+msgid ""
+"本地耗材参数已同步到云端。\n"
+"\n"
+"耗材 SN：%s\n"
+"机型：%s"
+msgstr ""
+
+msgid "同步成功"
+msgstr ""
+
+#, c-format, boost-format
+msgid ""
+"将把云端耗材参数加载到当前本地耗材编辑状态：\n"
+"\n"
+"本地耗材：%s\n"
+"耗材 SN：%s\n"
+"机型：%s\n"
+"可应用字段：%llu"
+msgstr ""
+
+#, c-format, boost-format
+msgid ""
+"\n"
+"本地身份/继承保护字段：%llu（名称、ID、继承和兼容关系保留本地值）"
+msgstr ""
+
+#, c-format, boost-format
+msgid ""
+"\n"
+"当前版本未知字段：%llu（已跳过）"
+msgstr ""
+
+#, c-format, boost-format
+msgid ""
+"\n"
+"格式不兼容字段：%llu（已跳过）"
+msgstr ""
+
+msgid ""
+"\n"
+"\n"
+"同步后只会标记本地耗材为已修改，不会自动写入本地文件；请检查后使用原“保存”按"
+"钮落盘。"
+msgstr ""
+
+msgid "确认同步到本地"
+msgstr ""
+
+#, c-format, boost-format
+msgid "云端参数已加载到本地耗材编辑状态，共应用 %llu 个字段。"
+msgstr ""
 
 msgid "Click to reset all settings to the last saved preset."
 msgstr "点击以将所有设置还原到最后一次保存的版本。"
@@ -7705,9 +8084,6 @@ msgstr "加速度"
 msgid "Jerk(XY)"
 msgstr "抖动（XY轴）"
 
-msgid "Raft"
-msgstr "筏层"
-
 msgid "Support filament"
 msgstr "支撑耗材"
 
@@ -7716,6 +8092,36 @@ msgstr "支撑熨烫"
 
 msgid "Tree supports"
 msgstr "树状支撑"
+
+msgid "Raft"
+msgstr "筏层"
+
+msgid "Raft General"
+msgstr "筏层通用设置"
+
+msgid "Raft Base"
+msgstr "筏层基底"
+
+msgid "Raft Middle"
+msgstr "筏层中间"
+
+msgid "Raft Top"
+msgstr "筏层顶部"
+
+msgid "Raft Wall Count"
+msgstr "筏层壁圈数"
+
+msgid "Raft Print Speed"
+msgstr "筏层打印速度"
+
+msgid "Raft Acceleration"
+msgstr "筏层加速度"
+
+msgid "Raft Fan Speed"
+msgstr "筏层风扇速度"
+
+msgid "Raft Flow"
+msgstr "筏层流量"
 
 msgid "Multimaterial"
 msgstr "材料"
@@ -7743,6 +8149,24 @@ msgstr "后处理脚本"
 
 msgid "Notes"
 msgstr "注释"
+
+msgid "Resolved:"
+msgstr "解析值："
+
+msgid "Inactive:"
+msgstr "未生效："
+
+msgid "Normal printing acceleration is 0"
+msgstr "常规打印加速度为 0"
+
+msgid "Inherited:"
+msgstr "继承值："
+
+msgid "Firmware controlled"
+msgstr "固件控制"
+
+msgid "(first / later)"
+msgstr "（首层 / 后续）"
 
 msgid "Frequent"
 msgstr "常用"
@@ -8970,6 +9394,11 @@ msgid "Open G-code file:"
 msgstr "打开G-code文件："
 
 msgid ""
+"One object has an empty initial layer even though supports are enabled. "
+"Please re-orient it, cut a flat bottom, or use a raft."
+msgstr ""
+
+msgid ""
 "One object has empty initial layer and can't be printed. Please Cut the "
 "bottom or enable supports."
 msgstr "模型出现空层无法打印。请切掉底部或打开支撑。"
@@ -9185,6 +9614,25 @@ msgstr ""
 msgid "No extrusions under current settings."
 msgstr "根据当前设置，不会生成任何打印。"
 
+msgid "Cura-style raft requires at least one Base layer."
+msgstr "Cura 风格筏层至少需要一层基底层。"
+
+msgid "Cura-style raft Middle layer count cannot be negative."
+msgstr "Cura 风格筏层的中间层数不能为负数。"
+
+msgid "Cura-style raft requires at least one Top layer."
+msgstr "Cura 风格筏层至少需要一层顶部层。"
+
+msgid ""
+"Cura-style raft cannot be mixed with unrafted or legacy-raft objects on the "
+"same plate."
+msgstr ""
+
+msgid ""
+"Cura-style raft requires all objects on the same plate to use the same raft "
+"phase Z schedule."
+msgstr ""
+
 msgid ""
 "Smooth mode of timelapse is not supported when \"by object\" sequence is "
 "enabled."
@@ -9326,6 +9774,19 @@ msgstr "使用了支撑添加器但没有打开支撑。请打开支撑。"
 
 msgid "Layer height cannot exceed nozzle diameter."
 msgstr "层高不能超过喷嘴直径"
+
+msgid "Raft line spacing must be zero for Auto or at least 0.0125 mm."
+msgstr "筏层线距设为零时表示自动计算；显式线距必须至少为 0.0125 mm。"
+
+msgid ""
+"For normal support, Raft Base margin must be at least 0.5 mm larger than "
+"Raft Top margin."
+msgstr "使用普通支撑时，筏层基底外扩量必须至少比筏层顶部外扩量大 0.5 mm。"
+
+msgid ""
+"Cura-style raft cannot use the current tool when printer nozzles have "
+"different diameters."
+msgstr ""
 
 msgid ""
 "Relative extruder addressing requires resetting the extruder position at "
@@ -12718,6 +13179,12 @@ msgstr ""
 "径，使用分号来分割多个脚本。脚本执行的第一个参数将会被设置为 G-code 文件的绝"
 "对路径，并支持脚本通过全局变量来读取 Orca Slicer 的设置。"
 
+msgid "GFD device type"
+msgstr ""
+
+msgid "Internal device type for GFD printers."
+msgstr ""
+
 msgid "Printer type"
 msgstr "打印机类型"
 
@@ -12766,403 +13233,286 @@ msgid ""
 msgstr ""
 "模型会在相应层数的支撑上抬高进行打印。使用该功能通常用于打印ABS时翘曲。"
 
-#: src/libslic3r/PrintConfig.cpp:4200
 msgid "Raft mode"
 msgstr "筏层模式"
 
-#: src/libslic3r/PrintConfig.cpp:4202
 msgid ""
 "Select the raft implementation. Legacy preserves the existing OrcaSlicer "
 "raft behavior and settings. Cura-style v1 is a new opt-in mode that uses the "
 "independent Base, Middle, and Top settings below."
 msgstr ""
-"选择筏层实现方式。传统模式保留 OrcaSlicer 现有的筏层行为和设置。Cura 风格 v1 是"
-"一种新的可选模式，使用下方相互独立的基底、中间和顶部阶段设置。"
+"选择筏层实现方式。传统模式保留 OrcaSlicer 现有的筏层行为和设置。Cura 风格 v1 "
+"是一种新的可选模式，使用下方相互独立的基底、中间和顶部阶段设置。"
 
-#: src/libslic3r/PrintConfig.cpp:4207
 msgid "Legacy"
 msgstr "传统模式"
 
-#: src/libslic3r/PrintConfig.cpp:4208
 msgid "Cura-style v1 (new)"
 msgstr "Cura 风格 v1（新增）"
 
-#: src/slic3r/GUI/Tab.cpp
-msgid "Raft General"
-msgstr "筏层通用设置"
+msgid "Inherit"
+msgstr "继承"
 
-#: src/slic3r/GUI/Tab.cpp
-msgid "Raft Base"
-msgstr "筏层基底"
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Raft Middle"
-msgstr "筏层中间"
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Raft Top"
-msgstr "筏层顶部"
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Raft Wall Count"
-msgstr "筏层壁圈数"
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Raft Print Speed"
-msgstr "筏层打印速度"
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Raft Acceleration"
-msgstr "筏层加速度"
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Raft Fan Speed"
-msgstr "筏层风扇速度"
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Raft Flow"
-msgstr "筏层流量"
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Resolved:"
-msgstr "解析值："
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Inherited:"
-msgstr "继承值："
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Firmware controlled"
-msgstr "固件控制"
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Inactive:"
-msgstr "未生效："
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "Normal printing acceleration is 0"
-msgstr "常规打印加速度为 0"
-
-#: src/slic3r/GUI/Tab.cpp
-msgid "(first / later)"
-msgstr "（首层 / 后续）"
-
-#: src/libslic3r/PrintConfig.cpp:4262
 msgid "Raft air gap"
 msgstr "筏层气隙"
 
-#: src/libslic3r/PrintConfig.cpp:4263
 msgid ""
-"Exact Z gap between the final raft top layer and the first model layer in Cura-"
-"style mode. It is not rounded to the normal layer height and is independent "
-"of the ordinary support Top Z distance. Use zero only with a compatible "
-"soluble or breakaway material for the Raft Top."
+"Exact Z gap between the final raft top layer and the first model layer in "
+"Cura-style mode. It is not rounded to the normal layer height and is "
+"independent of the ordinary support Top Z distance. Use zero only with a "
+"compatible soluble or breakaway material for the Raft Top."
 msgstr ""
 "Cura 风格模式下，最终筏层顶层与模型首层之间的精确 Z 间隙。该值不会按常规层高"
 "取整，并且与普通支撑的顶部 Z 间距相互独立。仅在使用兼容的可溶性或易剥离筏层顶"
 "部材料时才将其设为零。"
 
-#: src/libslic3r/PrintConfig.cpp:4267
 msgid "Initial Layer Z Overlap"
 msgstr "起始层 Z 重叠"
 
-#: src/libslic3r/PrintConfig.cpp:4268
 msgid ""
 "Shift model layers above the first model layer down by this amount to "
 "compensate for material lost across the raft air gap."
 msgstr "将模型首层之上的各层向下移动此距离，以补偿材料跨越筏层气隙时的损失。"
 
-#: src/libslic3r/PrintConfig.cpp:4272
 msgid "Raft base layers"
 msgstr "筏层基底层数"
 
-#: src/libslic3r/PrintConfig.cpp:4273
 msgid ""
 "Number of build-plate-facing Base layers in Cura-style mode. At least one "
 "Base layer is required."
 msgstr "Cura 风格模式中靠近构建板的基底阶段层数。基底阶段至少需要一层。"
 
-#: src/libslic3r/PrintConfig.cpp:4275
 msgid "Raft middle layers"
 msgstr "筏层中间层数"
 
-#: src/libslic3r/PrintConfig.cpp:4276
 msgid ""
-"Number of transitional Middle layers between the Base and Top phases "
-"in Cura-style mode."
+"Number of transitional Middle layers between the Base and Top phases in Cura-"
+"style mode."
 msgstr "Cura 风格模式中位于基底阶段与顶部阶段之间的中间阶段层数。"
 
-#: src/libslic3r/PrintConfig.cpp:4278
 msgid "Raft top layers"
 msgstr "筏层顶部层数"
 
-#: src/libslic3r/PrintConfig.cpp:4279
 msgid ""
 "Number of dense Top layers directly below the model in Cura-style mode. At "
 "least one Top layer is required."
 msgstr "Cura 风格模式中模型正下方的致密顶部阶段层数。顶部阶段至少需要一层。"
 
-#: src/libslic3r/PrintConfig.cpp:4290
 msgid "Raft base thickness"
 msgstr "筏层基底厚度"
 
-#: src/libslic3r/PrintConfig.cpp:4291
 msgid ""
-"Thickness of each Base layer. Auto uses the larger of the normal model "
-"layer height and 75% of the support/raft base nozzle diameter."
-msgstr "每个基底层的厚度。自动模式取常规模型层高与支撑/筏层基底喷嘴直径的 75% 中的较大值。"
+"Thickness of each Base layer. Auto uses the larger of the normal model layer "
+"height and 75% of the support/raft base nozzle diameter."
+msgstr ""
+"每个基底层的厚度。自动模式取常规模型层高与支撑/筏层基底喷嘴直径的 75% 中的较"
+"大值。"
 
-#: src/libslic3r/PrintConfig.cpp:4294
 msgid "Raft base line width"
 msgstr "筏层基底线宽"
 
-#: src/libslic3r/PrintConfig.cpp:4295
 msgid ""
 "Absolute extrusion width of Base lines. Zero automatically derives it from "
 "the active nozzle diameter."
 msgstr "基底线条的绝对挤出线宽。设为零时，根据当前喷嘴直径自动计算。"
 
-#: src/libslic3r/PrintConfig.cpp:4297
 msgid "Raft base line spacing"
 msgstr "筏层基底线间距"
 
-#: src/libslic3r/PrintConfig.cpp:4298
 msgid ""
 "Center-to-center spacing of Base lines. Zero automatically derives it from "
 "the resolved Base line width; an explicit value must be at least 0.0125 mm."
-msgstr "基底线条之间的中心距。设为零时，根据解析后的基底线宽自动计算；显式值必须至少为 0.0125 mm。"
+msgstr ""
+"基底线条之间的中心距。设为零时，根据解析后的基底线宽自动计算；显式值必须至少"
+"为 0.0125 mm。"
 
-#: src/libslic3r/PrintConfig.cpp:4300
 msgid "Raft base flow"
 msgstr "筏层基底流量"
 
-#: src/libslic3r/PrintConfig.cpp:4301
-msgid "Material flow of the Base phase relative to the resolved extrusion flow."
+msgid ""
+"Material flow of the Base phase relative to the resolved extrusion flow."
 msgstr "基底阶段的材料流量相对于解析后挤出流量的比例。"
 
-#: src/libslic3r/PrintConfig.cpp:4302
 msgid "Raft base speed"
 msgstr "筏层基底速度"
 
-#: src/libslic3r/PrintConfig.cpp:4302
 msgid "Print speed of the Base phase."
 msgstr "基底阶段的打印速度。"
 
-#: src/libslic3r/PrintConfig.cpp
 msgid "Raft base acceleration"
 msgstr "筏层基底加速度"
 
-#: src/libslic3r/PrintConfig.cpp
 msgid ""
-"Acceleration of the Base phase. Default preserves the existing behavior: "
-"the physical first Base layer uses the initial-layer acceleration, while "
-"any additional Base layers use the normal printing acceleration. A phase "
+"Acceleration of the Base phase. Default preserves the existing behavior: the "
+"physical first Base layer uses the initial-layer acceleration, while any "
+"additional Base layers use the normal printing acceleration. A phase "
 "override is applied only when the normal printing acceleration is non-zero, "
 "so Orca can restore it after the Raft."
 msgstr ""
 "基底阶段的加速度。选择默认值时保留现有行为：物理首个基底层使用首层加速度，其"
-"余基底层使用常规打印加速度。仅当常规打印加速度非零时才应用阶段覆盖，以便 Orca "
-"在筏层结束后恢复该值。"
+"余基底层使用常规打印加速度。仅当常规打印加速度非零时才应用阶段覆盖，以便 "
+"Orca 在筏层结束后恢复该值。"
 
-#: src/libslic3r/PrintConfig.cpp:4303
 msgid "Raft base fan speed"
 msgstr "筏层基底风扇速度"
 
-#: src/libslic3r/PrintConfig.cpp:4304
 msgid "Part-cooling fan speed during the Base phase."
 msgstr "基底阶段的部件冷却风扇速度。"
 
-#: src/libslic3r/PrintConfig.cpp:4305
 msgid "Raft base wall count"
 msgstr "筏层基底墙层数"
 
-#: src/libslic3r/PrintConfig.cpp:4306
 msgid "Number of contours around the linear Base pattern."
 msgstr "线性基底图案外围的轮廓层数。"
 
-#: src/libslic3r/PrintConfig.cpp:4306 src/libslic3r/PrintConfig.cpp:4330
-#: src/libslic3r/PrintConfig.cpp:4353
 msgid "walls"
 msgstr "墙层"
 
-#: src/libslic3r/PrintConfig.cpp:4307
 msgid "Raft base margin"
 msgstr "筏层基底外扩量"
 
-#: src/libslic3r/PrintConfig.cpp:4308
-msgid "Additional XY margin around the model footprint for the Base phase. With normal support, it must be at least 0.5 mm larger than the Raft Top margin."
-msgstr "基底阶段在模型投影轮廓周围增加的 XY 外扩距离。使用普通支撑时，该值必须至少比筏层顶部外扩量大 0.5 mm。"
+msgid ""
+"Additional XY margin around the model footprint for the Base phase. With "
+"normal support, it must be at least 0.5 mm larger than the Raft Top margin."
+msgstr ""
+"基底阶段在模型投影轮廓周围增加的 XY 外扩距离。使用普通支撑时，该值必须至少比"
+"筏层顶部外扩量大 0.5 mm。"
 
-#: src/libslic3r/Print.cpp:1508
-msgid "For normal support, Raft Base margin must be at least 0.5 mm larger than Raft Top margin."
-msgstr "使用普通支撑时，筏层基底外扩量必须至少比筏层顶部外扩量大 0.5 mm。"
-
-#: src/libslic3r/Print.cpp:1517
-msgid "Raft line spacing must be zero for Auto or at least 0.0125 mm."
-msgstr "筏层线距设为零时表示自动计算；显式线距必须至少为 0.0125 mm。"
-
-#: src/libslic3r/PrintConfig.cpp:4310
 msgid "Raft middle thickness"
 msgstr "筏层中间厚度"
 
-#: src/libslic3r/PrintConfig.cpp:4311
 msgid ""
 "Thickness of each Middle layer. Zero automatically derives it from the "
 "nozzle and normal-layer settings."
 msgstr "每个中间层的厚度。设为零时，根据喷嘴和常规层高设置自动计算。"
 
-#: src/libslic3r/PrintConfig.cpp:4314
 msgid "Raft middle line width"
 msgstr "筏层中间线宽"
 
-#: src/libslic3r/PrintConfig.cpp:4315
 msgid ""
-"Absolute extrusion width of Middle lines. Zero automatically derives it "
-"from the active nozzle diameter."
+"Absolute extrusion width of Middle lines. Zero automatically derives it from "
+"the active nozzle diameter."
 msgstr "中间线条的绝对挤出线宽。设为零时，根据当前喷嘴直径自动计算。"
 
-#: src/libslic3r/PrintConfig.cpp:4318
 msgid "Raft middle line spacing"
 msgstr "筏层中间线间距"
 
-#: src/libslic3r/PrintConfig.cpp:4319
 msgid ""
-"Center-to-center spacing of Middle lines. Zero automatically derives it "
-"from the resolved Middle line width; an explicit value must be at least 0.0125 mm."
-msgstr "中间线条之间的中心距。设为零时，根据解析后的中间线宽自动计算；显式值必须至少为 0.0125 mm。"
+"Center-to-center spacing of Middle lines. Zero automatically derives it from "
+"the resolved Middle line width; an explicit value must be at least 0.0125 mm."
+msgstr ""
+"中间线条之间的中心距。设为零时，根据解析后的中间线宽自动计算；显式值必须至少"
+"为 0.0125 mm。"
 
-#: src/libslic3r/PrintConfig.cpp:4322
 msgid "Raft middle flow"
 msgstr "筏层中间流量"
 
-#: src/libslic3r/PrintConfig.cpp:4323
-msgid "Material flow of the Middle phase relative to the resolved extrusion flow."
+msgid ""
+"Material flow of the Middle phase relative to the resolved extrusion flow."
 msgstr "中间阶段的材料流量相对于解析后挤出流量的比例。"
 
-#: src/libslic3r/PrintConfig.cpp:4325
 msgid "Raft middle speed"
 msgstr "筏层中间速度"
 
-#: src/libslic3r/PrintConfig.cpp:4325
 msgid "Print speed of the Middle phase."
 msgstr "中间阶段的打印速度。"
 
-#: src/libslic3r/PrintConfig.cpp
 msgid "Raft middle acceleration"
 msgstr "筏层中间加速度"
 
-#: src/libslic3r/PrintConfig.cpp
 msgid ""
 "Acceleration of the Middle phase. Default uses the normal printing "
 "acceleration. A phase override is applied only when the normal printing "
 "acceleration is non-zero."
-msgstr "中间阶段的加速度。选择默认值时使用常规打印加速度。仅当常规打印加速度非零时才应用阶段覆盖。"
+msgstr ""
+"中间阶段的加速度。选择默认值时使用常规打印加速度。仅当常规打印加速度非零时才"
+"应用阶段覆盖。"
 
-#: src/libslic3r/PrintConfig.cpp:4327
 msgid "Raft middle fan speed"
 msgstr "筏层中间风扇速度"
 
-#: src/libslic3r/PrintConfig.cpp:4328
 msgid "Part-cooling fan speed during the Middle phase."
 msgstr "中间阶段的部件冷却风扇速度。"
 
-#: src/libslic3r/PrintConfig.cpp:4329
 msgid "Raft middle wall count"
 msgstr "筏层中间墙层数"
 
-#: src/libslic3r/PrintConfig.cpp:4330
 msgid "Number of contours around the linear Middle pattern."
 msgstr "线性中间图案外围的轮廓层数。"
 
-#: src/libslic3r/PrintConfig.cpp:4331
 msgid "Raft middle margin"
 msgstr "筏层中间外扩量"
 
-#: src/libslic3r/PrintConfig.cpp:4332
 msgid "Additional XY margin around the model footprint for the Middle phase."
 msgstr "中间阶段在模型投影轮廓周围增加的 XY 外扩距离。"
 
-#: src/libslic3r/PrintConfig.cpp:4334
 msgid "Raft top thickness"
 msgstr "筏层顶部厚度"
 
-#: src/libslic3r/PrintConfig.cpp:4335
 msgid ""
-"Thickness of each dense Top layer. Zero automatically derives it from "
-"the normal model layer height."
+"Thickness of each dense Top layer. Zero automatically derives it from the "
+"normal model layer height."
 msgstr "每个致密顶层的厚度。设为零时，根据常规模型层高自动计算。"
 
-#: src/libslic3r/PrintConfig.cpp:4338
 msgid "Raft top line width"
 msgstr "筏层顶层线宽"
 
-#: src/libslic3r/PrintConfig.cpp:4339
 msgid ""
-"Absolute extrusion width of Top lines. Auto uses the resolved default "
-"line width; if that is also zero, it uses 105% of the nozzle diameter used by "
-"the support interface or Raft Top."
+"Absolute extrusion width of Top lines. Auto uses the resolved default line "
+"width; if that is also zero, it uses 105% of the nozzle diameter used by the "
+"support interface or Raft Top."
 msgstr ""
-"顶层线条的绝对挤出线宽。自动模式使用解析后的默认线宽；如果默认线宽也为零，则使"
-"用支撑界面/筏层顶部所用喷嘴直径的 105%。"
+"顶层线条的绝对挤出线宽。自动模式使用解析后的默认线宽；如果默认线宽也为零，则"
+"使用支撑界面/筏层顶部所用喷嘴直径的 105%。"
 
-#: src/libslic3r/PrintConfig.cpp:4342
 msgid "Raft top line spacing"
 msgstr "筏层顶层线间距"
 
-#: src/libslic3r/PrintConfig.cpp:4343
 msgid ""
 "Center-to-center spacing of Top lines. Zero makes it equal to the resolved "
 "Top line width for a solid top; an explicit value must be at least 0.0125 mm."
-msgstr "顶层线条之间的中心距。设为零时，该值等于解析后的顶层线宽，以形成实心顶面；显式值必须至少为 0.0125 mm。"
+msgstr ""
+"顶层线条之间的中心距。设为零时，该值等于解析后的顶层线宽，以形成实心顶面；显"
+"式值必须至少为 0.0125 mm。"
 
-#: src/libslic3r/PrintConfig.cpp:4346
 msgid "Raft top flow"
 msgstr "筏层顶层流量"
 
-#: src/libslic3r/PrintConfig.cpp:4347
 msgid "Material flow of the Top phase relative to the resolved extrusion flow."
 msgstr "顶部阶段的材料流量相对于解析后挤出流量的比例。"
 
-#: src/libslic3r/PrintConfig.cpp:4348
 msgid "Raft top speed"
 msgstr "筏层顶层速度"
 
-#: src/libslic3r/PrintConfig.cpp:4348
 msgid "Print speed of the Top phase."
 msgstr "顶部阶段的打印速度。"
 
-#: src/libslic3r/PrintConfig.cpp
 msgid "Raft top acceleration"
 msgstr "筏层顶层加速度"
 
-#: src/libslic3r/PrintConfig.cpp
 msgid ""
-"Acceleration of the Top phase. Default uses the normal printing acceleration. "
-"A phase override is applied only when the normal printing acceleration is "
-"non-zero."
-msgstr "顶部阶段的加速度。选择默认值时使用常规打印加速度。仅当常规打印加速度非零时才应用阶段覆盖。"
+"Acceleration of the Top phase. Default uses the normal printing "
+"acceleration. A phase override is applied only when the normal printing "
+"acceleration is non-zero."
+msgstr ""
+"顶部阶段的加速度。选择默认值时使用常规打印加速度。仅当常规打印加速度非零时才"
+"应用阶段覆盖。"
 
-#: src/libslic3r/PrintConfig.cpp:4350
 msgid "Raft top fan speed"
 msgstr "筏层顶层风扇速度"
 
-#: src/libslic3r/PrintConfig.cpp:4351
 msgid "Part-cooling fan speed during the Top phase."
 msgstr "顶部阶段的部件冷却风扇速度。"
 
-#: src/libslic3r/PrintConfig.cpp:4352
 msgid "Raft top wall count"
 msgstr "筏层顶层墙层数"
 
-#: src/libslic3r/PrintConfig.cpp:4353
 msgid "Number of contours around the dense Top pattern."
 msgstr "致密顶部图案外围的轮廓层数。"
 
-#: src/libslic3r/PrintConfig.cpp:4354
 msgid "Raft top margin"
 msgstr "筏层顶层外扩量"
 
-#: src/libslic3r/PrintConfig.cpp:4355
 msgid "Additional XY margin around the model footprint for the Top phase."
 msgstr "顶部阶段在模型投影轮廓周围增加的 XY 外扩距离。"
 
@@ -13353,6 +13703,14 @@ msgstr "禁用M73剩余打印时间"
 msgid ""
 "Disable generating of the M73: Set remaining print time in the final G-code."
 msgstr "在最终生成的G-code中禁用M73命令：设置剩余打印时间"
+
+msgid "Smooth M73 progress"
+msgstr ""
+
+msgid ""
+"Use a separate progress clock for M73 percent so blocking startup commands "
+"affect remaining time but do not make progress jump suddenly."
+msgstr ""
 
 msgid "Seam position"
 msgstr "接缝位置"
@@ -13935,8 +14293,12 @@ msgstr "移除可能并不需要支撑的小悬空。"
 msgid "Top Z distance"
 msgstr "顶部Z距离"
 
-msgid "The Z gap between the top support interface and object."
-msgstr "支撑顶部和模型之间的z间隙"
+msgid ""
+"The Z gap between the top support interface and the object. Zero means "
+"direct contact and should only be used with a compatible soluble or "
+"breakaway support interface. This setting does not control the Cura-style "
+"raft air gap."
+msgstr ""
 
 msgid "Bottom Z distance"
 msgstr "底部Z距离"
@@ -14675,6 +15037,14 @@ msgid ""
 "QOI for low memory firmware."
 msgstr "G-Code 缩略图格式: PNG 质量最佳，JPG 尺寸最小，QOI 用于低内存固件"
 
+msgid "Thumbnail Image"
+msgstr ""
+
+msgid ""
+"Specify an image file to be embedded as thumbnail in G-code. Supported "
+"formats: PNG, JPG."
+msgstr ""
+
 msgid "Use relative E distances"
 msgstr "使用相对E距离"
 
@@ -14832,6 +15202,14 @@ msgstr "导出3MF"
 msgid "Export project as 3MF."
 msgstr "导出项目为3MF。"
 
+msgid "Export Texture OBJ"
+msgstr ""
+
+msgid ""
+"Convert a textured GLB/GLTF model and export its printable color regions as "
+"OBJ and MTL."
+msgstr ""
+
 msgid "Export slicing data"
 msgstr "导出切片数据"
 
@@ -14891,6 +15269,14 @@ msgstr "最小保存"
 msgid "export 3mf with minimum size."
 msgstr "以最小尺寸导出3mf。"
 
+msgid "Export Model Transforms"
+msgstr ""
+
+msgid ""
+"Export model position, rotation and scale information after orient and "
+"arrange to result.json"
+msgstr ""
+
 msgid "mtcpp"
 msgstr "材料温度补偿"
 
@@ -14938,6 +15324,61 @@ msgstr "摆放选项"
 
 msgid "Arrange options: 0-disable, 1-enable, others-auto"
 msgstr "摆放选项：0-关闭，1-开启，其他-自动"
+
+msgid "Auto Plate Options"
+msgstr ""
+
+msgid ""
+"Auto plate options: 0-single plate (allow overflow), 1-auto create multiple "
+"plates"
+msgstr ""
+
+msgid "Arrange Spacing"
+msgstr ""
+
+msgid ""
+"Spacing between objects during arrange (mm). 0 = auto spacing based on brim/"
+"support."
+msgstr ""
+
+msgid "Ignore Wipe Tower"
+msgstr ""
+
+msgid ""
+"Disable the wipe tower for CLI arranging and slicing, regardless of loaded "
+"process settings."
+msgstr ""
+
+msgid "CLI Nozzle Temperature"
+msgstr ""
+
+msgid ""
+"Override nozzle temperature for all filament slots (layers after initial). "
+"Applied after --load-filaments."
+msgstr ""
+
+msgid "CLI Nozzle Temperature Initial Layer"
+msgstr ""
+
+msgid ""
+"Override first layer nozzle temperature for all filament slots. Applied "
+"after --load-filaments."
+msgstr ""
+
+msgid "Force Machine"
+msgstr ""
+
+msgid ""
+"Force replace machine/process/filament from 3mf, bypass compatibility checks."
+msgstr ""
+
+msgid "Split by Color"
+msgstr ""
+
+msgid ""
+"Split multi-color objects by extruder and keep different extruders on "
+"separate plates during arranging."
+msgstr ""
 
 msgid "Repetition count"
 msgstr "重复次数"
@@ -14989,6 +15430,49 @@ msgstr "绕Y轴的旋转角度（以度为单位）"
 msgid "Scale the model by a float factor."
 msgstr "根据因子缩放模型"
 
+msgid "Specify model files for multi-model slicing."
+msgstr ""
+
+msgid "Model Filaments"
+msgstr ""
+
+msgid ""
+"Semicolon-separated filament configuration paths for the current --model "
+"block, matching OBJ usemtl first-use order."
+msgstr ""
+
+msgid "Model Position"
+msgstr ""
+
+msgid "Specify center position (x,y,z) for each model in millimeters."
+msgstr ""
+
+msgid "Model Scale"
+msgstr ""
+
+msgid "Specify scale factor for each model."
+msgstr ""
+
+msgid "Model Rotation"
+msgstr ""
+
+msgid "Specify rotation angles (x,y,z) in degrees for each model."
+msgstr ""
+
+msgid "Model Support"
+msgstr ""
+
+msgid "Specify support settings for each model (0=disabled, 1=enabled)."
+msgstr ""
+
+msgid "Model Process"
+msgstr ""
+
+msgid ""
+"Per-model process JSON file path. Overrides global process settings for the "
+"specified model."
+msgstr ""
+
 msgid "Load General Settings"
 msgstr "加载通用设置"
 
@@ -15000,6 +15484,30 @@ msgstr "加载耗材丝设置"
 
 msgid "Load filament settings from the specified file list."
 msgstr "从指定文件加载耗材丝设置"
+
+msgid "Texture Color Count"
+msgstr ""
+
+msgid ""
+"Target color count used when converting GLB/GLTF textures. 0 detects the "
+"count automatically."
+msgstr ""
+
+msgid "Texture Smooth Weight"
+msgstr ""
+
+msgid ""
+"Color-region boundary smoothing weight. 0 preserves boundaries; 1 applies "
+"the strongest smoothing."
+msgstr ""
+
+msgid "Texture Oversampling"
+msgstr ""
+
+msgid ""
+"Triangle subdivision iterations before texture sampling. 0 uses adaptive "
+"subdivision."
+msgstr ""
 
 msgid "Skip Objects"
 msgstr "零件跳过"
@@ -15064,6 +15572,14 @@ msgstr "输出路径"
 
 msgid "Output directory for the exported files."
 msgstr "导出文件的输出路径。"
+
+msgid "Automatically repair imported model"
+msgstr ""
+
+msgid ""
+"Automatically repair STL mesh connectivity and normals while importing the "
+"model."
+msgstr ""
 
 msgid "Debug level"
 msgstr "调试等级"
@@ -15457,6 +15973,15 @@ msgstr ""
 "没有检测到层。您可能需要修复STL文件，或检查模型尺寸、厚度等，之后再重试。\n"
 
 msgid ""
+"Multi-material segmentation layer count does not match the sliced model."
+msgstr ""
+
+msgid ""
+"Multi-material segmentation count does not match the configured filament "
+"slots."
+msgstr ""
+
+msgid ""
 "An object's XY size compensation will not be used because it is also color-"
 "painted.\n"
 "XY Size compensation cannot be combined with color-painting."
@@ -15483,8 +16008,9 @@ msgid "The supplied file couldn't be read because it's empty"
 msgstr "无法读取提供的文件，因为该文件为空。"
 
 msgid ""
-"Unknown file format. Input file must have .stl, .obj, .amf(.xml) extension."
-msgstr "未知的文件格式。输入文件的扩展名必须为.stl、.obj 或 .amf（.xml）。"
+"Unknown file format. Input file must have .stl, .obj, .amf(.xml), .gltf "
+"or .glb extension."
+msgstr ""
 
 msgid "Unknown file format. Input file must have .3mf or .zip.amf extension."
 msgstr "未知的文件格式。输入文件的扩展名必须为.3mf或.zip .amf。"
@@ -17739,6 +18265,24 @@ msgid ""
 msgstr ""
 "避免翘曲\n"
 "您知道吗？打印ABS这类易翘曲材料时，适当提高热床温度可以降低翘曲的概率。"
+
+#~ msgid ""
+#~ "An object is laid over the boundary of plate or exceeds the height "
+#~ "limit.\n"
+#~ "Please solve the problem by moving it totally on or off the plate, and "
+#~ "confirming that the height is within the build volume."
+#~ msgstr ""
+#~ "有对象被放置在构建板的边界上或超过高度限制。\n"
+#~ "请通过将其完全移动到构建板内或构建板外，并确认高度在构建空间以内来解决问"
+#~ "题。"
+
+#~ msgid "The Z gap between the top support interface and object."
+#~ msgstr "支撑顶部和模型之间的z间隙"
+
+#~ msgid ""
+#~ "Unknown file format. Input file must have .stl, .obj, .amf(.xml) "
+#~ "extension."
+#~ msgstr "未知的文件格式。输入文件的扩展名必须为.stl、.obj 或 .amf（.xml）。"
 
 #~ msgid ""
 #~ "Improve shell precision by adjusting outer wall spacing. This also "

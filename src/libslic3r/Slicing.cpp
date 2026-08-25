@@ -104,6 +104,9 @@ RaftPlanConfig resolve_cura_raft_plan_config(const PrintConfig &print_config, co
         return phase;
     };
 
+    // Keep invalid externally-authored configurations constructible until
+    // Print::validate() can reject the original phase count and identify its
+    // exact option key. These fallbacks are not accepted slicing semantics.
     config.base_config = resolve_phase(size_t(std::max(1, object_config.raft_base_layers.value)), base_height, base_width,
                                        object_config.raft_base_line_spacing.value, 2.5 * base_width,
                                        object_config.raft_base_flow.value, object_config.raft_base_speed.value,

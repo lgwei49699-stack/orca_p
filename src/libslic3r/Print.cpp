@@ -1060,6 +1060,21 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
     if (extruders.empty())
         return { L("No extrusions under current settings.") };
 
+    // GUI bounds normally prevent these values, but 3MF / CLI / hand-edited
+    // presets may bypass them. Reject the original values instead of silently
+    // accepting the defensive phase counts produced by the raft resolver.
+    for (const PrintObject *object : m_objects) {
+        const PrintObjectConfig &object_config = object->config();
+        if (object_config.raft_mode.value != RaftMode::CuraV1)
+            continue;
+        if (object_config.raft_base_layers.value < 1)
+            return {L("Cura-style raft requires at least one Base layer."), object, "raft_base_layers"};
+        if (object_config.raft_interface_layers.value < 0)
+            return {L("Cura-style raft Middle layer count cannot be negative."), object, "raft_interface_layers"};
+        if (object_config.raft_surface_layers.value < 1)
+            return {L("Cura-style raft requires at least one Top layer."), object, "raft_surface_layers"};
+    }
+
     // Cura-style raft layers share plate-level first-layer consumers such as the skirt,
     // brim and wipe tower. Those consumers cannot safely select a physical first-layer
     // height or phase from m_objects.front() if objects use different raft schedules.

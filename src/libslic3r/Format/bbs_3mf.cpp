@@ -597,23 +597,71 @@ static void allow_unknown_cura_raft_options(ConfigSubstitutionContext &context)
     };
 }
 
+template <typename Config>
+static bool config_uses_cura_raft_v1(const Config &config)
+{
+    const ConfigOption *raft_mode = config.option("raft_mode");
+    return raft_mode != nullptr && RaftMode(raft_mode->getInt()) == RaftMode::CuraV1;
+}
+
+template <typename Config>
+static void set_deserialize_with_raft_fallback(Config &config, const t_config_option_key &option_key,
+                                               const std::string &value, ConfigSubstitutionContext &context,
+                                               bool force_legacy_raft)
+{
+    if (force_legacy_raft && option_key == "raft_mode")
+        config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    else
+        config.set_deserialize(option_key, value, context);
+}
+
+static void normalize_json_raft_mode_to_legacy(const std::string &filename)
+{
+    nlohmann::json document;
+    {
+        boost::nowide::ifstream input(filename);
+        if (!input)
+            throw std::runtime_error("unable to open extracted config");
+        input >> document;
+    }
+
+    if (!document.is_object())
+        throw std::runtime_error("config root is not an object");
+
+    auto raft_mode = document.find("raft_mode");
+    if (raft_mode == document.end())
+        return;
+
+    *raft_mode = "legacy";
+    boost::nowide::ofstream output(filename, std::ios::trunc);
+    if (!output)
+        throw std::runtime_error("unable to rewrite extracted config");
+    output << document.dump(4);
+    if (!output.good())
+        throw std::runtime_error("unable to persist Legacy raft fallback");
+}
+
 static bool project_requires_cura_raft_v1(const Model &model,
                                           const DynamicPrintConfig *project_config,
                                           const std::vector<Preset *> *project_presets)
 {
-    if (project_config != nullptr) {
-        const ConfigOption *raft_mode = project_config->option("raft_mode");
-        if (raft_mode != nullptr && RaftMode(raft_mode->getInt()) == RaftMode::CuraV1)
-            return true;
-    }
+    if (project_config != nullptr && config_uses_cura_raft_v1(*project_config))
+        return true;
 
     for (const ModelObject *object : model.objects) {
         if (object == nullptr)
             continue;
 
-        const ConfigOption *raft_mode = object->config.option("raft_mode");
-        if (raft_mode != nullptr && RaftMode(raft_mode->getInt()) == RaftMode::CuraV1)
+        if (config_uses_cura_raft_v1(object->config))
             return true;
+
+        for (const ModelVolume *volume : object->volumes)
+            if (volume != nullptr && config_uses_cura_raft_v1(volume->config))
+                return true;
+
+        for (const auto &range : object->layer_config_ranges)
+            if (config_uses_cura_raft_v1(range.second))
+                return true;
     }
 
     if (project_presets != nullptr) {
@@ -621,8 +669,7 @@ static bool project_requires_cura_raft_v1(const Model &model,
             if (preset == nullptr || preset->type != Preset::TYPE_PRINT)
                 continue;
 
-            const ConfigOption *raft_mode = preset->config.option("raft_mode");
-            if (raft_mode != nullptr && RaftMode(raft_mode->getInt()) == RaftMode::CuraV1)
+            if (config_uses_cura_raft_v1(preset->config))
                 return true;
         }
     }
@@ -636,8 +683,19 @@ static void force_legacy_raft_mode(Model &model, DynamicPrintConfig &project_con
     project_config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
 
     for (ModelObject *object : model.objects) {
-        if (object != nullptr && object->config.option("raft_mode") != nullptr)
+        if (object == nullptr)
+            continue;
+
+        if (object->config.option("raft_mode") != nullptr)
             object->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+
+        for (ModelVolume *volume : object->volumes)
+            if (volume != nullptr && volume->config.option("raft_mode") != nullptr)
+                volume->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+
+        for (auto &range : object->layer_config_ranges)
+            if (range.second.option("raft_mode") != nullptr)
+                range.second.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
     }
 
     if (project_presets == nullptr)
@@ -2132,11 +2190,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     //BBS: add module name
                     else if (metadata.key == "module")
                         model_object->module_name = metadata.value;
-                    else if (m_force_legacy_raft && metadata.key == "raft_mode")
-                        model_object->config.set_key_value(
-                            "raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
                     else
-                        model_object->config.set_deserialize(metadata.key, metadata.value, config_substitutions);
+                        set_deserialize_with_raft_fallback(model_object->config, metadata.key, metadata.value,
+                                                           config_substitutions, m_force_legacy_raft);
                 }
 
                 // select object's detected volumes
@@ -2650,27 +2706,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             // leave all unrelated forward-compatibility handling unchanged.
             if (m_force_legacy_raft) {
                 try {
-                    nlohmann::json project_json;
-                    {
-                        boost::nowide::ifstream input(dest_file);
-                        if (!input)
-                            throw std::runtime_error("unable to open extracted project config");
-                        input >> project_json;
-                    }
-
-                    if (!project_json.is_object())
-                        throw std::runtime_error("project config root is not an object");
-
-                    auto raft_mode = project_json.find("raft_mode");
-                    if (raft_mode != project_json.end()) {
-                        *raft_mode = "legacy";
-                        boost::nowide::ofstream output(dest_file, std::ios::trunc);
-                        if (!output)
-                            throw std::runtime_error("unable to rewrite extracted project config");
-                        output << project_json.dump(4);
-                        if (!output.good())
-                            throw std::runtime_error("unable to persist Legacy raft fallback");
-                    }
+                    normalize_json_raft_mode_to_legacy(dest_file);
                 } catch (const std::exception &error) {
                     add_error(std::string("Error applying Legacy raft fallback to project config: ") + error.what());
                     return;
@@ -2713,6 +2749,14 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             std::string reason;
             ConfigSubstitutions config_substitutions;
             if (use_json) {
+                if (type == Preset::TYPE_PRINT && m_force_legacy_raft) {
+                    try {
+                        normalize_json_raft_mode_to_legacy(dest_file);
+                    } catch (const std::exception &error) {
+                        add_error(std::string("Error applying Legacy raft fallback to embedded print preset: ") + error.what());
+                        return;
+                    }
+                }
                 ConfigSubstitutionContext embedded_substitutions(ForwardCompatibilitySubstitutionRule::Enable);
                 if (type == Preset::TYPE_PRINT && m_allow_unknown_cura_raft_options)
                     allow_unknown_cura_raft_options(embedded_substitutions);
@@ -2961,7 +3005,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                         std::string opt_key = option.second.get<std::string>("<xmlattr>.opt_key");
                         std::string value = option.second.data();
 
-                        config.set_deserialize(opt_key, value, config_substitutions);
+                        set_deserialize_with_raft_fallback(config, opt_key, value, config_substitutions,
+                                                           m_force_legacy_raft);
                     }
 
                     config_ranges[{ min_z, max_z }].assign_config(std::move(config));
@@ -5021,7 +5066,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 else if ((metadata.key == MATRIX_KEY) || (metadata.key == MESH_SHARED_KEY))
                     continue;
                 else
-                    volume->config.set_deserialize(metadata.key, metadata.value, config_substitutions);
+                    set_deserialize_with_raft_fallback(volume->config, metadata.key, metadata.value,
+                                                       config_substitutions, m_force_legacy_raft);
             }
 
             // this may happen for 3mf saved by 3rd part softwares

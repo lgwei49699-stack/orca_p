@@ -312,6 +312,71 @@ TEST_CASE("Cura V1 raft validates phase geometry against its active nozzle", "[S
     REQUIRE(error.opt_key == expected_key);
 }
 
+TEST_CASE("Cura V1 rejects invalid phase counts before defensive resolution", "[SupportMaterial][Raft][CuraV1][Validation]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+
+    const char *expected_key = nullptr;
+    SECTION("all zero counts still mean an enabled but invalid Cura V1 raft")
+    {
+        config.set("raft_base_layers", 0);
+        config.set("raft_interface_layers", 0);
+        config.set("raft_surface_layers", 0);
+        expected_key = "raft_base_layers";
+    }
+    SECTION("Base is mandatory")
+    {
+        config.set("raft_base_layers", 0);
+        expected_key = "raft_base_layers";
+    }
+    SECTION("Middle may be zero but not negative")
+    {
+        config.set("raft_interface_layers", -1);
+        expected_key = "raft_interface_layers";
+    }
+    SECTION("Top is mandatory in the current Orca Cura V1 implementation")
+    {
+        config.set("raft_surface_layers", 0);
+        expected_key = "raft_surface_layers";
+    }
+
+    Model model;
+    ModelObject *model_object = model.add_object();
+    model_object->add_volume(Slic3r::Test::mesh(TestMesh::cube_20x20x20));
+    model_object->add_instance();
+    model_object->ensure_on_bed();
+
+    Print print;
+    print.auto_assign_extruders(model_object);
+    print.apply(model, config);
+
+    REQUIRE(print.objects().front()->has_raft());
+    const StringObjectException error = print.validate();
+    INFO("validation error: " << error.string << "; key: " << error.opt_key);
+    REQUIRE_FALSE(error.string.empty());
+    REQUIRE(error.opt_key == expected_key);
+}
+
+TEST_CASE("Legacy zero layers remains unrafted after Cura V1 mode validation", "[SupportMaterial][Raft][Legacy][Validation]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    config.set("raft_layers", 0);
+
+    Model model;
+    ModelObject *model_object = model.add_object();
+    model_object->add_volume(Slic3r::Test::mesh(TestMesh::cube_20x20x20));
+    model_object->add_instance();
+    model_object->ensure_on_bed();
+
+    Print print;
+    print.auto_assign_extruders(model_object);
+    print.apply(model, config);
+
+    REQUIRE_FALSE(print.objects().front()->has_raft());
+}
+
 TEST_CASE("Cura V1 raft accepts safe explicit spacing and representable margins", "[SupportMaterial][Raft][CuraV1][Validation]")
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
@@ -332,6 +397,10 @@ TEST_CASE("Cura V1 raft accepts safe explicit spacing and representable margins"
         config.set("raft_base_line_spacing", 0.);
         config.set("raft_interface_line_spacing", 0.);
         config.set("raft_surface_line_spacing", 0.);
+    }
+    SECTION("zero Middle layers remains valid")
+    {
+        config.set("raft_interface_layers", 0);
     }
     SECTION("path resolution is an accepted explicit boundary")
     {

@@ -565,6 +565,32 @@ TEST_CASE("BBS 3MF advertises the Cura V1 raft reader requirement", "[3mf][bbs][
         REQUIRE(model_xml.find(required_feature_metadata()) != std::string::npos);
     }
 
+    SECTION("a volume-level Cura V1 override marks a globally legacy project")
+    {
+        configure_raft(config, RaftMode::Legacy, 1, 2, 2);
+        REQUIRE(store_bbs_project(archive.path(), config, nullptr, {}, [](ModelObject &object) {
+            REQUIRE(object.volumes.size() == 1);
+            object.volumes.front()->config.set_key_value(
+                "raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+        }));
+
+        const std::string model_xml = read_zip_entry_text(archive.path(), BBS_3MF_MODEL_FILE);
+        REQUIRE(model_xml.find(required_feature_metadata()) != std::string::npos);
+    }
+
+    SECTION("a layer-range Cura V1 override marks a globally legacy project")
+    {
+        configure_raft(config, RaftMode::Legacy, 1, 2, 2);
+        REQUIRE(store_bbs_project(archive.path(), config, nullptr, {}, [](ModelObject &object) {
+            DynamicPrintConfig range_config;
+            range_config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+            object.layer_config_ranges[{1., 2.}].assign_config(std::move(range_config));
+        }));
+
+        const std::string model_xml = read_zip_entry_text(archive.path(), BBS_3MF_MODEL_FILE);
+        REQUIRE(model_xml.find(required_feature_metadata()) != std::string::npos);
+    }
+
     SECTION("a legacy raft project does not advertise the Cura V1 reader requirement")
     {
         configure_raft(config, RaftMode::Legacy, 1, 2, 2);
@@ -630,6 +656,7 @@ TEST_CASE("BBS 3MF reader keeps Cura V1 while ignoring additive unknown raft opt
     const RaftMode object_raft_mode = RaftMode::CuraV1;
     const auto configure_nested_raft_overrides = [](ModelObject &object) {
         REQUIRE(object.volumes.size() == 1);
+        object.config.set("raft_surface_speed", 39.);
         object.volumes.front()->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
         object.volumes.front()->config.set("raft_surface_speed", 43.);
 
@@ -705,6 +732,8 @@ TEST_CASE("BBS 3MF reader keeps Cura V1 while ignoring additive unknown raft opt
     REQUIRE(loaded_model.objects.size() == 1);
     const ModelObject &loaded_object = *loaded_model.objects.front();
     REQUIRE(loaded_object.config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
+    REQUIRE(loaded_object.config.get().opt_float("raft_surface_speed") == Approx(39.));
+    REQUIRE_FALSE(loaded_object.config.has(object_unknown_key));
     REQUIRE(loaded_object.volumes.size() == 1);
     REQUIRE(loaded_object.volumes.front()->config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
     REQUIRE(loaded_object.volumes.front()->config.get().opt_float("raft_surface_speed") == Approx(43.));
@@ -723,6 +752,7 @@ TEST_CASE("BBS 3MF reader keeps Cura V1 while ignoring additive unknown raft opt
     REQUIRE(embedded_print_it != loaded_artifacts.presets.end());
     REQUIRE((*embedded_print_it)->config.opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
     REQUIRE((*embedded_print_it)->config.opt_float("raft_airgap") == Approx(0.35));
+    REQUIRE_FALSE((*embedded_print_it)->config.has(embedded_unknown_key));
 }
 
 TEST_CASE("BBS 3MF reader falls back unknown Cura raft algorithm versions to Legacy",
@@ -737,9 +767,22 @@ TEST_CASE("BBS 3MF reader falls back unknown Cura raft algorithm versions to Leg
     embedded_print.is_project_embedded = true;
     embedded_print.config.set_key_value("print_settings_id", new ConfigOptionString(embedded_print.name));
     embedded_print.config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    embedded_print.config.set_key_value("raft_airgap", new ConfigOptionFloat(0.35));
 
     const RaftMode object_raft_mode = RaftMode::CuraV1;
-    REQUIRE(store_bbs_project(source_archive.path(), stored_config, &object_raft_mode, {&embedded_print}));
+    REQUIRE(store_bbs_project(source_archive.path(), stored_config, &object_raft_mode, {&embedded_print},
+                              [](ModelObject &object) {
+                                  REQUIRE(object.volumes.size() == 1);
+                                  object.volumes.front()->config.set_key_value(
+                                      "raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+                                  object.volumes.front()->config.set("raft_surface_speed", 43.);
+
+                                  DynamicPrintConfig range_config;
+                                  range_config.set_key_value(
+                                      "raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+                                  range_config.set_key_value("raft_surface_speed", new ConfigOptionFloat(41.));
+                                  object.layer_config_ranges[{1., 2.}].assign_config(std::move(range_config));
+                              }));
 
     const std::string future_raft_feature = "orca_cura_raft_v999";
     std::string       model_xml           = read_zip_entry_text(source_archive.path(), BBS_3MF_MODEL_FILE);
@@ -748,7 +791,7 @@ TEST_CASE("BBS 3MF reader falls back unknown Cura raft algorithm versions to Leg
     Temporary3mfPath future_marker_archive("orca-required-feature-future-raft-marker");
     copy_zip_replacing_entry(source_archive.path(), future_marker_archive.path(), BBS_3MF_MODEL_FILE, model_xml);
 
-    // Simulate a future raft enum in both project and object scopes. The reader
+    // Simulate a future raft enum in every persisted print scope. The reader
     // must normalize this one option without enabling broad substitutions for
     // unrelated future settings.
     std::string project_config = read_zip_entry_text(future_marker_archive.path(), "Metadata/project_settings.config");
@@ -759,8 +802,22 @@ TEST_CASE("BBS 3MF reader falls back unknown Cura raft algorithm versions to Leg
 
     std::string object_config = read_zip_entry_text(future_project_archive.path(), "Metadata/model_settings.config");
     replace_first_or_throw(object_config, "cura_v1", "cura_v999");
+    replace_first_or_throw(object_config, "cura_v1", "cura_v999");
+    Temporary3mfPath future_object_archive("orca-required-feature-future-raft-object");
+    copy_zip_replacing_entry(future_project_archive.path(), future_object_archive.path(), "Metadata/model_settings.config",
+                             object_config);
+
+    std::string layer_range_config = read_zip_entry_text(future_object_archive.path(), "Metadata/layer_config_ranges.xml");
+    replace_first_or_throw(layer_range_config, "cura_v1", "cura_v999");
+    Temporary3mfPath future_layer_range_archive("orca-required-feature-future-raft-layer-range");
+    copy_zip_replacing_entry(future_object_archive.path(), future_layer_range_archive.path(),
+                             "Metadata/layer_config_ranges.xml", layer_range_config);
+
+    std::string embedded_config = read_zip_entry_text(future_layer_range_archive.path(), "Metadata/process_settings_1.config");
+    replace_first_or_throw(embedded_config, "cura_v1", "cura_v999");
     Temporary3mfPath future_archive("orca-required-feature-future-raft");
-    copy_zip_replacing_entry(future_project_archive.path(), future_archive.path(), "Metadata/model_settings.config", object_config);
+    copy_zip_replacing_entry(future_layer_range_archive.path(), future_archive.path(),
+                             "Metadata/process_settings_1.config", embedded_config);
 
     DynamicPrintConfig loaded_config = DynamicPrintConfig::full_print_config();
     configure_raft(loaded_config, RaftMode::CuraV1, 7, 0, 0);
@@ -783,7 +840,15 @@ TEST_CASE("BBS 3MF reader falls back unknown Cura raft algorithm versions to Leg
     REQUIRE(loaded_config.opt_int("raft_interface_layers") == 3);
     REQUIRE(loaded_config.opt_int("raft_surface_layers") == 4);
     REQUIRE(loaded_model.objects.size() == 1);
-    REQUIRE(loaded_model.objects.front()->config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    const ModelObject &loaded_object = *loaded_model.objects.front();
+    REQUIRE(loaded_object.config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(loaded_object.volumes.size() == 1);
+    REQUIRE(loaded_object.volumes.front()->config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(loaded_object.volumes.front()->config.get().opt_float("raft_surface_speed") == Approx(43.));
+    REQUIRE(loaded_object.layer_config_ranges.size() == 1);
+    const ModelConfig &loaded_layer_range = loaded_object.layer_config_ranges.begin()->second;
+    REQUIRE(loaded_layer_range.get().opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(loaded_layer_range.get().opt_float("raft_surface_speed") == Approx(41.));
 
     const auto embedded_print_it = std::find_if(
         loaded_artifacts.presets.begin(), loaded_artifacts.presets.end(), [](const Preset *preset) {
@@ -791,6 +856,73 @@ TEST_CASE("BBS 3MF reader falls back unknown Cura raft algorithm versions to Leg
         });
     REQUIRE(embedded_print_it != loaded_artifacts.presets.end());
     REQUIRE((*embedded_print_it)->config.opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE((*embedded_print_it)->config.opt_float("raft_airgap") == Approx(0.35));
+
+    // Once an unsupported future Cura raft mode has been normalized to
+    // Legacy, saving the loaded project must not carry the stale feature
+    // marker or enum token into the new archive.
+    Temporary3mfPath resaved_archive("orca-required-feature-future-raft-resaved");
+    const std::string resaved_path = resaved_archive.path();
+    StoreParams       resave_params;
+    resave_params.path            = resaved_path.c_str();
+    resave_params.model           = &loaded_model;
+    resave_params.config          = &loaded_config;
+    resave_params.project_presets = loaded_artifacts.presets;
+    resave_params.strategy        = SaveStrategy::Zip64 | SaveStrategy::Silence;
+    REQUIRE(store_bbs_3mf(resave_params));
+
+    const std::string resaved_model_xml = read_zip_entry_text(resaved_path, BBS_3MF_MODEL_FILE);
+    REQUIRE(resaved_model_xml.find(future_raft_feature) == std::string::npos);
+    REQUIRE(resaved_model_xml.find(required_feature_namespace_declaration()) == std::string::npos);
+    REQUIRE(resaved_model_xml.find(BBS_3MF_REQUIRED_FEATURES_TAG) == std::string::npos);
+
+    const std::array<const char *, 4> resaved_config_entries = {
+        "Metadata/project_settings.config",
+        "Metadata/model_settings.config",
+        "Metadata/layer_config_ranges.xml",
+        "Metadata/process_settings_1.config",
+    };
+    for (const char *entry : resaved_config_entries) {
+        CAPTURE(entry);
+        REQUIRE(read_zip_entry_text(resaved_path, entry).find("cura_v999") == std::string::npos);
+    }
+
+    DynamicPrintConfig reloaded_config = DynamicPrintConfig::full_print_config();
+    configure_raft(reloaded_config, RaftMode::CuraV1, 7, 0, 1);
+    reloaded_config.set("layer_height", 0.41);
+    attach_enum_vector_serialization_maps(reloaded_config);
+
+    Model                reloaded_model;
+    ModelBackupPathGuard reloaded_backup_path_guard(reloaded_model);
+    BbsLoadArtifacts     reloaded_artifacts;
+    ConfigSubstitutionContext reloaded_substitutions {ForwardCompatibilitySubstitutionRule::Disable};
+    REQUIRE(load_bbs_3mf(resaved_path.c_str(), &reloaded_config, &reloaded_substitutions, &reloaded_model,
+                         &reloaded_artifacts.plates, &reloaded_artifacts.presets, &is_bbl_3mf, &file_version, nullptr,
+                         LoadStrategy::LoadModel | LoadStrategy::LoadConfig));
+
+    REQUIRE(reloaded_config.opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(reloaded_config.opt_float("layer_height") == Approx(0.23));
+    REQUIRE(reloaded_config.opt_int("raft_base_layers") == 2);
+    REQUIRE(reloaded_config.opt_int("raft_interface_layers") == 3);
+    REQUIRE(reloaded_config.opt_int("raft_surface_layers") == 4);
+    REQUIRE(reloaded_model.objects.size() == 1);
+    const ModelObject &reloaded_object = *reloaded_model.objects.front();
+    REQUIRE(reloaded_object.config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(reloaded_object.volumes.size() == 1);
+    REQUIRE(reloaded_object.volumes.front()->config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(reloaded_object.volumes.front()->config.get().opt_float("raft_surface_speed") == Approx(43.));
+    REQUIRE(reloaded_object.layer_config_ranges.size() == 1);
+    const ModelConfig &reloaded_layer_range = reloaded_object.layer_config_ranges.begin()->second;
+    REQUIRE(reloaded_layer_range.get().opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(reloaded_layer_range.get().opt_float("raft_surface_speed") == Approx(41.));
+
+    const auto reloaded_embedded_print_it = std::find_if(
+        reloaded_artifacts.presets.begin(), reloaded_artifacts.presets.end(), [](const Preset *preset) {
+            return preset != nullptr && preset->type == Preset::TYPE_PRINT;
+        });
+    REQUIRE(reloaded_embedded_print_it != reloaded_artifacts.presets.end());
+    REQUIRE((*reloaded_embedded_print_it)->config.opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE((*reloaded_embedded_print_it)->config.opt_float("raft_airgap") == Approx(0.35));
 
     // A recoverable Cura-raft token must not mask an unrelated unknown feature.
     std::string mixed_model_xml = read_zip_entry_text(source_archive.path(), BBS_3MF_MODEL_FILE);

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-09-28 18:44+0800\n"
+"POT-Creation-Date: 2026-08-24 19:45+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -2570,6 +2570,11 @@ msgid ""
 "Arrange failed. Found some exceptions when processing object geometries."
 msgstr ""
 
+msgid ""
+"The objects cannot fit on the current plate with the required spacing. Their "
+"original positions were kept."
+msgstr ""
+
 #, possible-c-format, possible-boost-format
 msgid ""
 "Arrangement ignored the following objects which can't fit into a single "
@@ -4384,6 +4389,135 @@ msgstr ""
 msgid "Open a new window"
 msgstr ""
 
+msgid "上传配置"
+msgstr ""
+
+msgid "配置名称"
+msgstr ""
+
+msgid "请输入配置名称"
+msgstr ""
+
+msgid "备注"
+msgstr ""
+
+msgid "请输入备注"
+msgstr ""
+
+msgid "取消"
+msgstr ""
+
+msgid "确定"
+msgstr ""
+
+msgid "云端导入"
+msgstr ""
+
+msgid "设备机型"
+msgstr ""
+
+msgid "刷新"
+msgstr ""
+
+msgid "点击刷新获取当前机型的云端配置"
+msgstr ""
+
+msgid "未找到可用机型"
+msgstr ""
+
+msgid "正在获取云端配置..."
+msgstr ""
+
+msgid "正在获取云端配置，请稍候..."
+msgstr ""
+
+msgid "当前机型暂无云端配置"
+msgstr ""
+
+msgid "机型"
+msgstr ""
+
+msgid "方案文件"
+msgstr ""
+
+msgid "操作"
+msgstr ""
+
+msgid "设置此参数"
+msgstr ""
+
+msgid "请选择要导入的云端配置"
+msgstr ""
+
+msgid "正在应用云端配置..."
+msgstr ""
+
+msgid "云端配置已应用"
+msgstr ""
+
+msgid "云端配置应用失败"
+msgstr ""
+
+msgid "材料设置"
+msgstr ""
+
+msgid "耗材"
+msgstr ""
+
+msgid "耗材SN:"
+msgstr ""
+
+msgid "-"
+msgstr ""
+
+msgid "保存"
+msgstr ""
+
+msgid "Plater 未初始化"
+msgstr ""
+
+msgid "正在获取耗材列表..."
+msgstr ""
+
+msgid "暂无耗材"
+msgstr ""
+
+msgid "当前耗材缺少 SN，无法获取详情"
+msgstr ""
+
+msgid "正在获取动态参数..."
+msgstr ""
+
+msgid "未查询到当前耗材动态参数，已使用当前耗材参数"
+msgstr ""
+
+msgid "请选择耗材"
+msgstr ""
+
+msgid "正在保存..."
+msgstr ""
+
+msgid "保存成功"
+msgstr ""
+
+msgid "提示"
+msgstr ""
+
+msgid "动态参数"
+msgstr ""
+
+msgid "参数名"
+msgstr ""
+
+msgid "参数"
+msgstr ""
+
+msgid "参数值"
+msgstr ""
+
+msgid "未找到当前耗材的机型参数"
+msgstr ""
+
 msgid "Application is closing"
 msgstr ""
 
@@ -4415,6 +4549,9 @@ msgid "Slice plate"
 msgstr ""
 
 msgid "Print plate"
+msgstr ""
+
+msgid "请先完成切片后再打印。"
 msgstr ""
 
 msgid "Export G-code file"
@@ -4856,6 +4993,9 @@ msgid ""
 msgstr ""
 
 msgid "Import result"
+msgstr ""
+
+msgid "请输入配置名称。"
 msgstr ""
 
 msgid "File is missing"
@@ -5938,6 +6078,12 @@ msgstr ""
 msgid "Multi-part object detected"
 msgstr ""
 
+msgid "Texture conversion failed. The model will be imported as geometry only."
+msgstr ""
+
+msgid "Texture Import Warning"
+msgstr ""
+
 msgid "Load these files as a single object with multiple parts?\n"
 msgstr ""
 
@@ -6036,11 +6182,77 @@ msgstr ""
 msgid "Slicing Canceled"
 msgstr ""
 
+msgid "G-code 文件导出失败，无法上传打印。"
+msgstr ""
+
+msgid "G-code 已导出到临时路径，正在上传 OBS："
+msgstr ""
+
 #, possible-c-format, possible-boost-format
 msgid "Slicing Plate %d"
 msgstr ""
 
 msgid "Please resolve the slicing errors and publish again."
+msgstr ""
+
+msgid "登录状态无效，请重新登录。"
+msgstr ""
+
+msgid "生成配置 3MF 路径失败。"
+msgstr ""
+
+msgid "导出配置 3MF 失败。"
+msgstr ""
+
+msgid "上传配置成功。"
+msgstr ""
+
+msgid "当前没有可保存的云端导入配置。"
+msgstr ""
+
+msgid "云端配置"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid "确认将修改保存到云端配置“%s”？"
+msgstr ""
+
+msgid "确认保存"
+msgstr ""
+
+msgid "保存配置成功。"
+msgstr ""
+
+msgid "云端配置已导入并应用。"
+msgstr ""
+
+msgid "当前 G-code 文件无效，无法打印。"
+msgstr ""
+
+msgid "当前导入文件不是 3MF，无法按 3MF 下发。"
+msgstr ""
+
+msgid "3MF 文件导出失败，无法上传打印。"
+msgstr ""
+
+msgid "请选择打印机"
+msgstr ""
+
+msgid "请输入打印文件 URL"
+msgstr ""
+
+#, possible-boost-format
+msgid "测试 3MF 下发成功，共 %1% 台"
+msgstr ""
+
+msgid "下发成功"
+msgstr ""
+
+#, possible-boost-format
+msgid "上传打印设备成功，共 %1% 台"
+msgstr ""
+
+msgid "上传成功"
 msgstr ""
 
 msgid ""
@@ -6245,12 +6457,6 @@ msgstr ""
 msgid "Optimize Rotation"
 msgstr ""
 
-msgid ""
-"An object is laid over the boundary of plate or exceeds the height limit.\n"
-"Please solve the problem by moving it totally on or off the plate, and "
-"confirming that the height is within the build volume."
-msgstr ""
-
 msgid "Plate Settings"
 msgstr ""
 
@@ -6324,6 +6530,60 @@ msgid "Changing the region will log out your account.\n"
 msgstr ""
 
 msgid "Region selection"
+msgstr ""
+
+msgid "正式环境"
+msgstr ""
+
+msgid "测试环境"
+msgstr ""
+
+msgid "GFD 云环境"
+msgstr ""
+
+msgid "切换 GFD 中台的正式环境或测试环境"
+msgstr ""
+
+msgid ""
+"切换 GFD 环境会退出当前账号，并立即要求重新登录。\n"
+"\n"
+"是否继续？"
+msgstr ""
+
+msgid "切换 GFD 云环境"
+msgstr ""
+
+msgid "GFD 账号"
+msgstr ""
+
+msgid "查看当前 GFD 登录状态，或退出后重新登录"
+msgstr ""
+
+msgid "登录"
+msgstr ""
+
+msgid "将退出当前 GFD 账号并重新打开登录窗口。是否继续？"
+msgstr ""
+
+msgid "重新登录"
+msgstr ""
+
+msgid "退出登录"
+msgstr ""
+
+msgid "确定退出当前 GFD 账号？已记住的账号密码会继续保留。"
+msgstr ""
+
+msgid "已登录"
+msgstr ""
+
+msgid "已登录："
+msgstr ""
+
+msgid "未登录"
+msgstr ""
+
+msgid "当前没有有效的 GFD 登录会话"
 msgstr ""
 
 msgid "Second"
@@ -7239,6 +7499,54 @@ msgstr ""
 msgid "Failed to log out."
 msgstr ""
 
+msgid "本地耗材同步到云端"
+msgstr ""
+
+msgid "云端耗材同步到本地"
+msgstr ""
+
+msgid "本地耗材"
+msgstr ""
+
+msgid "云端机型"
+msgstr ""
+
+msgid "云端耗材"
+msgstr ""
+
+msgid "正在获取云端耗材列表..."
+msgstr ""
+
+msgid "同步到云端"
+msgstr ""
+
+msgid "同步到本地"
+msgstr ""
+
+msgid "请选择云端耗材"
+msgstr ""
+
+msgid "暂无可同步的云端耗材"
+msgstr ""
+
+msgid "请选择云端耗材，系统不会按名称自动匹配"
+msgstr ""
+
+msgid "耗材同步失败"
+msgstr ""
+
+msgid "云端→本地"
+msgstr ""
+
+msgid "从 GFD 云端同步到当前本地耗材编辑状态"
+msgstr ""
+
+msgid "本地→云端"
+msgstr ""
+
+msgid "把当前本地耗材编辑值同步到 GFD 云端"
+msgstr ""
+
 #. TRN "Save current Settings"
 #, possible-c-format, possible-boost-format
 msgid "Save current %s"
@@ -7248,6 +7556,83 @@ msgid "Delete this preset"
 msgstr ""
 
 msgid "Search in preset"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid ""
+"将把本地耗材“%s”的当前页面参数同步到云端耗材：\n"
+"\n"
+"耗材 SN：%s\n"
+"机型：%s\n"
+"\n"
+msgstr ""
+
+msgid "云端当前没有该机型参数，本次将创建参数。"
+msgstr ""
+
+msgid "云端已存在该机型参数，本次将覆盖已知字段。"
+msgstr ""
+
+msgid ""
+"\n"
+"\n"
+"当前本地耗材存在未保存修改；本次会上传页面中的当前值，但不会自动保存到本地。"
+msgstr ""
+
+msgid "确认同步到云端"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid ""
+"本地耗材参数已同步到云端。\n"
+"\n"
+"耗材 SN：%s\n"
+"机型：%s"
+msgstr ""
+
+msgid "同步成功"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid ""
+"将把云端耗材参数加载到当前本地耗材编辑状态：\n"
+"\n"
+"本地耗材：%s\n"
+"耗材 SN：%s\n"
+"机型：%s\n"
+"可应用字段：%llu"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid ""
+"\n"
+"本地身份/继承保护字段：%llu（名称、ID、继承和兼容关系保留本地值）"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid ""
+"\n"
+"当前版本未知字段：%llu（已跳过）"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid ""
+"\n"
+"格式不兼容字段：%llu（已跳过）"
+msgstr ""
+
+msgid ""
+"\n"
+"\n"
+"同步后只会标记本地耗材为已修改，不会自动写入本地文件；请检查后使用原“保存”按"
+"钮落盘。"
+msgstr ""
+
+msgid "确认同步到本地"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid "云端参数已加载到本地耗材编辑状态，共应用 %llu 个字段。"
 msgstr ""
 
 msgid "Click to reset all settings to the last saved preset."
@@ -7467,9 +7852,6 @@ msgstr ""
 msgid "Jerk(XY)"
 msgstr ""
 
-msgid "Raft"
-msgstr ""
-
 msgid "Support filament"
 msgstr ""
 
@@ -7477,6 +7859,36 @@ msgid "Support ironing"
 msgstr ""
 
 msgid "Tree supports"
+msgstr ""
+
+msgid "Raft"
+msgstr ""
+
+msgid "Raft General"
+msgstr ""
+
+msgid "Raft Base"
+msgstr ""
+
+msgid "Raft Middle"
+msgstr ""
+
+msgid "Raft Top"
+msgstr ""
+
+msgid "Raft Wall Count"
+msgstr ""
+
+msgid "Raft Print Speed"
+msgstr ""
+
+msgid "Raft Acceleration"
+msgstr ""
+
+msgid "Raft Fan Speed"
+msgstr ""
+
+msgid "Raft Flow"
 msgstr ""
 
 msgid "Multimaterial"
@@ -7504,6 +7916,24 @@ msgid "Post-processing Scripts"
 msgstr ""
 
 msgid "Notes"
+msgstr ""
+
+msgid "Resolved:"
+msgstr ""
+
+msgid "Inactive:"
+msgstr ""
+
+msgid "Normal printing acceleration is 0"
+msgstr ""
+
+msgid "Inherited:"
+msgstr ""
+
+msgid "Firmware controlled"
+msgstr ""
+
+msgid "(first / later)"
 msgstr ""
 
 msgid "Frequent"
@@ -8675,6 +9105,11 @@ msgid "Open G-code file:"
 msgstr ""
 
 msgid ""
+"One object has an empty initial layer even though supports are enabled. "
+"Please re-orient it, cut a flat bottom, or use a raft."
+msgstr ""
+
+msgid ""
 "One object has empty initial layer and can't be printed. Please Cut the "
 "bottom or enable supports."
 msgstr ""
@@ -8887,6 +9322,25 @@ msgstr ""
 msgid "No extrusions under current settings."
 msgstr ""
 
+msgid "Cura-style raft requires at least one Base layer."
+msgstr ""
+
+msgid "Cura-style raft Middle layer count cannot be negative."
+msgstr ""
+
+msgid "Cura-style raft requires at least one Top layer."
+msgstr ""
+
+msgid ""
+"Cura-style raft cannot be mixed with unrafted or legacy-raft objects on the "
+"same plate."
+msgstr ""
+
+msgid ""
+"Cura-style raft requires all objects on the same plate to use the same raft "
+"phase Z schedule."
+msgstr ""
+
 msgid ""
 "Smooth mode of timelapse is not supported when \"by object\" sequence is "
 "enabled."
@@ -9023,6 +9477,19 @@ msgid ""
 msgstr ""
 
 msgid "Layer height cannot exceed nozzle diameter."
+msgstr ""
+
+msgid "Raft line spacing must be zero for Auto or at least 0.0125 mm."
+msgstr ""
+
+msgid ""
+"For normal support, Raft Base margin must be at least 0.5 mm larger than "
+"Raft Top margin."
+msgstr ""
+
+msgid ""
+"Cura-style raft cannot use the current tool when printer nozzles have "
+"different diameters."
 msgstr ""
 
 msgid ""
@@ -12048,6 +12515,12 @@ msgid ""
 "environment variables."
 msgstr ""
 
+msgid "GFD device type"
+msgstr ""
+
+msgid "Internal device type for GFD printers."
+msgstr ""
+
 msgid "Printer type"
 msgstr ""
 
@@ -12093,6 +12566,265 @@ msgstr ""
 msgid ""
 "Object will be raised by this number of support layers. Use this function to "
 "avoid warping when printing ABS."
+msgstr ""
+
+msgid "Raft mode"
+msgstr ""
+
+msgid ""
+"Select the raft implementation. Legacy preserves the existing OrcaSlicer "
+"raft behavior and settings. Cura-style v1 is a new opt-in mode that uses the "
+"independent Base, Middle, and Top settings below."
+msgstr ""
+
+msgid "Legacy"
+msgstr ""
+
+msgid "Cura-style v1 (new)"
+msgstr ""
+
+msgid "Inherit"
+msgstr ""
+
+msgid "Raft air gap"
+msgstr ""
+
+msgid ""
+"Exact Z gap between the final raft top layer and the first model layer in "
+"Cura-style mode. It is not rounded to the normal layer height and is "
+"independent of the ordinary support Top Z distance. Use zero only with a "
+"compatible soluble or breakaway material for the Raft Top."
+msgstr ""
+
+msgid "Initial Layer Z Overlap"
+msgstr ""
+
+msgid ""
+"Shift model layers above the first model layer down by this amount to "
+"compensate for material lost across the raft air gap."
+msgstr ""
+
+msgid "Raft base layers"
+msgstr ""
+
+msgid ""
+"Number of build-plate-facing Base layers in Cura-style mode. At least one "
+"Base layer is required."
+msgstr ""
+
+msgid "Raft middle layers"
+msgstr ""
+
+msgid ""
+"Number of transitional Middle layers between the Base and Top phases in Cura-"
+"style mode."
+msgstr ""
+
+msgid "Raft top layers"
+msgstr ""
+
+msgid ""
+"Number of dense Top layers directly below the model in Cura-style mode. At "
+"least one Top layer is required."
+msgstr ""
+
+msgid "Raft base thickness"
+msgstr ""
+
+msgid ""
+"Thickness of each Base layer. Auto uses the larger of the normal model layer "
+"height and 75% of the support/raft base nozzle diameter."
+msgstr ""
+
+msgid "Raft base line width"
+msgstr ""
+
+msgid ""
+"Absolute extrusion width of Base lines. Zero automatically derives it from "
+"the active nozzle diameter."
+msgstr ""
+
+msgid "Raft base line spacing"
+msgstr ""
+
+msgid ""
+"Center-to-center spacing of Base lines. Zero automatically derives it from "
+"the resolved Base line width; an explicit value must be at least 0.0125 mm."
+msgstr ""
+
+msgid "Raft base flow"
+msgstr ""
+
+msgid ""
+"Material flow of the Base phase relative to the resolved extrusion flow."
+msgstr ""
+
+msgid "Raft base speed"
+msgstr ""
+
+msgid "Print speed of the Base phase."
+msgstr ""
+
+msgid "Raft base acceleration"
+msgstr ""
+
+msgid ""
+"Acceleration of the Base phase. Default preserves the existing behavior: the "
+"physical first Base layer uses the initial-layer acceleration, while any "
+"additional Base layers use the normal printing acceleration. A phase "
+"override is applied only when the normal printing acceleration is non-zero, "
+"so Orca can restore it after the Raft."
+msgstr ""
+
+msgid "Raft base fan speed"
+msgstr ""
+
+msgid "Part-cooling fan speed during the Base phase."
+msgstr ""
+
+msgid "Raft base wall count"
+msgstr ""
+
+msgid "Number of contours around the linear Base pattern."
+msgstr ""
+
+msgid "walls"
+msgstr ""
+
+msgid "Raft base margin"
+msgstr ""
+
+msgid ""
+"Additional XY margin around the model footprint for the Base phase. With "
+"normal support, it must be at least 0.5 mm larger than the Raft Top margin."
+msgstr ""
+
+msgid "Raft middle thickness"
+msgstr ""
+
+msgid ""
+"Thickness of each Middle layer. Zero automatically derives it from the "
+"nozzle and normal-layer settings."
+msgstr ""
+
+msgid "Raft middle line width"
+msgstr ""
+
+msgid ""
+"Absolute extrusion width of Middle lines. Zero automatically derives it from "
+"the active nozzle diameter."
+msgstr ""
+
+msgid "Raft middle line spacing"
+msgstr ""
+
+msgid ""
+"Center-to-center spacing of Middle lines. Zero automatically derives it from "
+"the resolved Middle line width; an explicit value must be at least 0.0125 mm."
+msgstr ""
+
+msgid "Raft middle flow"
+msgstr ""
+
+msgid ""
+"Material flow of the Middle phase relative to the resolved extrusion flow."
+msgstr ""
+
+msgid "Raft middle speed"
+msgstr ""
+
+msgid "Print speed of the Middle phase."
+msgstr ""
+
+msgid "Raft middle acceleration"
+msgstr ""
+
+msgid ""
+"Acceleration of the Middle phase. Default uses the normal printing "
+"acceleration. A phase override is applied only when the normal printing "
+"acceleration is non-zero."
+msgstr ""
+
+msgid "Raft middle fan speed"
+msgstr ""
+
+msgid "Part-cooling fan speed during the Middle phase."
+msgstr ""
+
+msgid "Raft middle wall count"
+msgstr ""
+
+msgid "Number of contours around the linear Middle pattern."
+msgstr ""
+
+msgid "Raft middle margin"
+msgstr ""
+
+msgid "Additional XY margin around the model footprint for the Middle phase."
+msgstr ""
+
+msgid "Raft top thickness"
+msgstr ""
+
+msgid ""
+"Thickness of each dense Top layer. Zero automatically derives it from the "
+"normal model layer height."
+msgstr ""
+
+msgid "Raft top line width"
+msgstr ""
+
+msgid ""
+"Absolute extrusion width of Top lines. Auto uses the resolved default line "
+"width; if that is also zero, it uses 105% of the nozzle diameter used by the "
+"support interface or Raft Top."
+msgstr ""
+
+msgid "Raft top line spacing"
+msgstr ""
+
+msgid ""
+"Center-to-center spacing of Top lines. Zero makes it equal to the resolved "
+"Top line width for a solid top; an explicit value must be at least 0.0125 mm."
+msgstr ""
+
+msgid "Raft top flow"
+msgstr ""
+
+msgid "Material flow of the Top phase relative to the resolved extrusion flow."
+msgstr ""
+
+msgid "Raft top speed"
+msgstr ""
+
+msgid "Print speed of the Top phase."
+msgstr ""
+
+msgid "Raft top acceleration"
+msgstr ""
+
+msgid ""
+"Acceleration of the Top phase. Default uses the normal printing "
+"acceleration. A phase override is applied only when the normal printing "
+"acceleration is non-zero."
+msgstr ""
+
+msgid "Raft top fan speed"
+msgstr ""
+
+msgid "Part-cooling fan speed during the Top phase."
+msgstr ""
+
+msgid "Raft top wall count"
+msgstr ""
+
+msgid "Number of contours around the dense Top pattern."
+msgstr ""
+
+msgid "Raft top margin"
+msgstr ""
+
+msgid "Additional XY margin around the model footprint for the Top phase."
 msgstr ""
 
 msgid ""
@@ -12272,6 +13004,14 @@ msgstr ""
 
 msgid ""
 "Disable generating of the M73: Set remaining print time in the final G-code."
+msgstr ""
+
+msgid "Smooth M73 progress"
+msgstr ""
+
+msgid ""
+"Use a separate progress clock for M73 percent so blocking startup commands "
+"affect remaining time but do not make progress jump suddenly."
 msgstr ""
 
 msgid "Seam position"
@@ -12799,7 +13539,11 @@ msgstr ""
 msgid "Top Z distance"
 msgstr ""
 
-msgid "The Z gap between the top support interface and object."
+msgid ""
+"The Z gap between the top support interface and the object. Zero means "
+"direct contact and should only be used with a compatible soluble or "
+"breakaway support interface. This setting does not control the Cura-style "
+"raft air gap."
 msgstr ""
 
 msgid "Bottom Z distance"
@@ -13457,6 +14201,14 @@ msgid ""
 "QOI for low memory firmware."
 msgstr ""
 
+msgid "Thumbnail Image"
+msgstr ""
+
+msgid ""
+"Specify an image file to be embedded as thumbnail in G-code. Supported "
+"formats: PNG, JPG."
+msgstr ""
+
 msgid "Use relative E distances"
 msgstr ""
 
@@ -13587,6 +14339,14 @@ msgstr ""
 msgid "Export project as 3MF."
 msgstr ""
 
+msgid "Export Texture OBJ"
+msgstr ""
+
+msgid ""
+"Convert a textured GLB/GLTF model and export its printable color regions as "
+"OBJ and MTL."
+msgstr ""
+
 msgid "Export slicing data"
 msgstr ""
 
@@ -13646,6 +14406,14 @@ msgstr ""
 msgid "export 3mf with minimum size."
 msgstr ""
 
+msgid "Export Model Transforms"
+msgstr ""
+
+msgid ""
+"Export model position, rotation and scale information after orient and "
+"arrange to result.json"
+msgstr ""
+
 msgid "mtcpp"
 msgstr ""
 
@@ -13692,6 +14460,61 @@ msgid "Arrange Options"
 msgstr ""
 
 msgid "Arrange options: 0-disable, 1-enable, others-auto"
+msgstr ""
+
+msgid "Auto Plate Options"
+msgstr ""
+
+msgid ""
+"Auto plate options: 0-single plate (allow overflow), 1-auto create multiple "
+"plates"
+msgstr ""
+
+msgid "Arrange Spacing"
+msgstr ""
+
+msgid ""
+"Spacing between objects during arrange (mm). 0 = auto spacing based on brim/"
+"support."
+msgstr ""
+
+msgid "Ignore Wipe Tower"
+msgstr ""
+
+msgid ""
+"Disable the wipe tower for CLI arranging and slicing, regardless of loaded "
+"process settings."
+msgstr ""
+
+msgid "CLI Nozzle Temperature"
+msgstr ""
+
+msgid ""
+"Override nozzle temperature for all filament slots (layers after initial). "
+"Applied after --load-filaments."
+msgstr ""
+
+msgid "CLI Nozzle Temperature Initial Layer"
+msgstr ""
+
+msgid ""
+"Override first layer nozzle temperature for all filament slots. Applied "
+"after --load-filaments."
+msgstr ""
+
+msgid "Force Machine"
+msgstr ""
+
+msgid ""
+"Force replace machine/process/filament from 3mf, bypass compatibility checks."
+msgstr ""
+
+msgid "Split by Color"
+msgstr ""
+
+msgid ""
+"Split multi-color objects by extruder and keep different extruders on "
+"separate plates during arranging."
 msgstr ""
 
 msgid "Repetition count"
@@ -13743,6 +14566,49 @@ msgstr ""
 msgid "Scale the model by a float factor."
 msgstr ""
 
+msgid "Specify model files for multi-model slicing."
+msgstr ""
+
+msgid "Model Filaments"
+msgstr ""
+
+msgid ""
+"Semicolon-separated filament configuration paths for the current --model "
+"block, matching OBJ usemtl first-use order."
+msgstr ""
+
+msgid "Model Position"
+msgstr ""
+
+msgid "Specify center position (x,y,z) for each model in millimeters."
+msgstr ""
+
+msgid "Model Scale"
+msgstr ""
+
+msgid "Specify scale factor for each model."
+msgstr ""
+
+msgid "Model Rotation"
+msgstr ""
+
+msgid "Specify rotation angles (x,y,z) in degrees for each model."
+msgstr ""
+
+msgid "Model Support"
+msgstr ""
+
+msgid "Specify support settings for each model (0=disabled, 1=enabled)."
+msgstr ""
+
+msgid "Model Process"
+msgstr ""
+
+msgid ""
+"Per-model process JSON file path. Overrides global process settings for the "
+"specified model."
+msgstr ""
+
 msgid "Load General Settings"
 msgstr ""
 
@@ -13753,6 +14619,30 @@ msgid "Load Filament Settings"
 msgstr ""
 
 msgid "Load filament settings from the specified file list."
+msgstr ""
+
+msgid "Texture Color Count"
+msgstr ""
+
+msgid ""
+"Target color count used when converting GLB/GLTF textures. 0 detects the "
+"count automatically."
+msgstr ""
+
+msgid "Texture Smooth Weight"
+msgstr ""
+
+msgid ""
+"Color-region boundary smoothing weight. 0 preserves boundaries; 1 applies "
+"the strongest smoothing."
+msgstr ""
+
+msgid "Texture Oversampling"
+msgstr ""
+
+msgid ""
+"Triangle subdivision iterations before texture sampling. 0 uses adaptive "
+"subdivision."
 msgstr ""
 
 msgid "Skip Objects"
@@ -13815,6 +14705,14 @@ msgid "Output directory"
 msgstr ""
 
 msgid "Output directory for the exported files."
+msgstr ""
+
+msgid "Automatically repair imported model"
+msgstr ""
+
+msgid ""
+"Automatically repair STL mesh connectivity and normals while importing the "
+"model."
 msgstr ""
 
 msgid "Debug level"
@@ -14206,6 +15104,15 @@ msgid ""
 msgstr ""
 
 msgid ""
+"Multi-material segmentation layer count does not match the sliced model."
+msgstr ""
+
+msgid ""
+"Multi-material segmentation count does not match the configured filament "
+"slots."
+msgstr ""
+
+msgid ""
 "An object's XY size compensation will not be used because it is also color-"
 "painted.\n"
 "XY Size compensation cannot be combined with color-painting."
@@ -14230,7 +15137,8 @@ msgid "The supplied file couldn't be read because it's empty"
 msgstr ""
 
 msgid ""
-"Unknown file format. Input file must have .stl, .obj, .amf(.xml) extension."
+"Unknown file format. Input file must have .stl, .obj, .amf(.xml), .gltf "
+"or .glb extension."
 msgstr ""
 
 msgid "Unknown file format. Input file must have .3mf or .zip.amf extension."
