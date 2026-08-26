@@ -316,6 +316,11 @@ std::string Config::device_query_url(const AppConfig* config)
     return environment.api_base_url + PATH_DEVICE_QUERY;
 }
 
+std::string Config::device_filament_info_url(const AppConfig* config)
+{
+    return current_environment(config).api_base_url + PATH_DEVICE_FILAMENT_INFO;
+}
+
 std::string Config::device_slice_type_url(const AppConfig* config)
 {
     return current_environment(config).api_base_url + PATH_DEVICE_SLICE_TYPE;

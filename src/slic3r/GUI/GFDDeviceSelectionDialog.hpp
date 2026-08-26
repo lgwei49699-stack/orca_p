@@ -2,6 +2,7 @@
 #define slic3r_GFDDeviceSelectionDialog_hpp_
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
@@ -35,13 +36,21 @@ struct GFDDeviceInfo
 class GFDDeviceSelectionDialog : public wxDialog
 {
 public:
-    GFDDeviceSelectionDialog(wxWindow* parent, std::string gcode_path, std::string default_device_type, std::vector<std::string> allowed_device_types = {});
+    using PrintHandler = std::function<void(GFDDeviceSelectionDialog*,
+                                            const std::vector<GFDDeviceInfo>&,
+                                            bool)>;
+
+    GFDDeviceSelectionDialog(wxWindow*                parent,
+                             std::string              gcode_path,
+                             std::string              default_device_type,
+                             std::vector<std::string> allowed_device_types = {},
+                             PrintHandler             print_handler = {});
     ~GFDDeviceSelectionDialog() override;
 
     const std::vector<GFDDeviceInfo>& selected_devices() const { return m_selected_devices; }
     const std::string&                gcode_path() const { return m_gcode_path; }
     bool                              use_3mf_file() const { return m_use_3mf_file; }
-    const std::string&                test_3mf_url() const { return m_test_3mf_url; }
+    void                              complete_print_submission(bool success);
 
 private:
     void build();
@@ -51,7 +60,7 @@ private:
     void refresh_filter_choices(const std::string& selected_type, const std::string& selected_status);
     void refresh_table(bool apply_filters = true, bool sync_checked_keys = true);
     void reset_filters();
-    void accept_selection(bool use_3mf_file = false, bool prompt_test_3mf_url = false);
+    void accept_selection(bool use_3mf_file = false);
     void update_confirm_button_state();
     void toggle_row_checked(long row);
     void sync_checked_keys_from_table();
@@ -76,9 +85,9 @@ private:
 
 private:
     std::string m_gcode_path;
-    std::string m_test_3mf_url;
     std::string m_default_device_type;
     std::vector<std::string> m_allowed_device_types;
+    PrintHandler             m_print_handler;
 
     std::vector<GFDDeviceInfo> m_devices;
     std::vector<GFDDeviceInfo> m_all_devices;
@@ -89,6 +98,7 @@ private:
     wxTimer                           m_loading_timer;
     bool                              m_suppress_filter_events{false};
     bool                              m_loading{false};
+    bool                              m_print_submitting{false};
     bool                              m_use_3mf_file{false};
 
     wxTextCtrl*   m_mac_input{nullptr};
@@ -102,7 +112,6 @@ private:
     wxGauge*      m_loading_gauge{nullptr};
     Button*       m_search_button{nullptr};
     Button*       m_reset_button{nullptr};
-    Button*       m_test_3mf_button{nullptr};
     Button*       m_confirm_3mf_button{nullptr};
     Button*       m_confirm_button{nullptr};
 };

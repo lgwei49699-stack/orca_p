@@ -11,6 +11,8 @@
 #include <regex>
 #include <future>
 #include <fstream>
+#include <map>
+#include <set>
 #include <boost/algorithm/string.hpp>
 #include <boost/iterator/counting_iterator.hpp>
 #include <boost/optional.hpp>
@@ -104,6 +106,7 @@
 #include "SendMultiMachinePage.hpp"
 #include "SendToPrinter.hpp"
 #include "GFDAuthManager.hpp"
+#include "GFDConsumableMappingDialog.hpp"
 #include "GFDDeviceSelectionDialog.hpp"
 #include "PublishDialog.hpp"
 #include "ModelMall.hpp"
@@ -3135,11 +3138,16 @@ struct Plater::priv
     std::string gfd_current_device_type() const;
     fs::path    gfd_temp_gcode_path();
     fs::path    gfd_temp_gcode_3mf_path();
-    void        start_gfd_print_export();
-    void        show_gfd_device_selection_dialog();
-    bool        ensure_gfd_login();
+    enum class GFDPrintStartResult { Failed, Completed, Pending };
+    GFDPrintStartResult start_gfd_print_export();
+    void                show_gfd_device_selection_dialog();
+    void                complete_gfd_print_submission(bool success);
+    bool        ensure_gfd_login(wxWindow* parent = nullptr);
     std::string gfd_auth_token() const;
-    bool        gfd_request_obs_token(const std::string& suffix, std::string& body, std::string& error_message) const;
+    bool        gfd_request_obs_token(const std::string& suffix,
+                                      std::string&       body,
+                                      std::string&       error_message,
+                                      wxWindow*          auth_parent = nullptr) const;
     bool        gfd_upload_file_with_token(const std::string& file_path,
                                            const nlohmann::json& token_data,
                                            std::string&          file_url,
@@ -3209,12 +3217,23 @@ struct Plater::priv
                                                         std::string&       error_message) const;
     nlohmann::json gfd_load_cloud_process_records() const;
     void           gfd_save_cloud_process_records(const nlohmann::json& records) const;
-    bool        gfd_send_print_command(const GFDDeviceInfo& device,
-                                       const std::string&  file_url,
-                                       const std::string&  file_type,
-                                       std::string&        body,
-                                       std::string&        error_message) const;
-    bool        gfd_execute_print_url(const std::vector<GFDDeviceInfo>& devices, const std::string& file_url, const std::string& file_type);
+    bool        gfd_send_print_command(const GFDDeviceInfo&  device,
+                                       const std::string&    file_url,
+                                       const std::string&    file_type,
+                                       const std::string&    request_id,
+                                       std::string&          body,
+                                       std::string&          error_message,
+                                       const std::vector<int>& consumable) const;
+    bool        gfd_fetch_device_filament_info(const GFDDeviceInfo& device,
+                                               GFDDeviceFilamentInfo& filament_info,
+                                               std::string& error_message,
+                                               wxWindow*    dialog_parent = nullptr) const;
+    std::vector<FilamentInfo> gfd_current_plate_filaments();
+    bool        gfd_prepare_multicolor_consumable(const GFDDeviceInfo& device,
+                                                  std::vector<int>&    consumable,
+                                                  bool&               cancelled,
+                                                  std::string&        error_message,
+                                                  wxWindow*           dialog_parent = nullptr);
     bool        gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, const std::string& print_file_path);
     void        on_action_export_gcode(SimpleEvent&);
     void        on_action_send_gcode(SimpleEvent&);
@@ -3315,6 +3334,8 @@ struct Plater::priv
     std::string     gfd_print_gcode_path;
     bool            gfd_print_use_3mf_file{false};
     std::vector<GFDDeviceInfo> gfd_selected_devices;
+    std::map<std::string, std::string> gfd_print_request_ids;
+    GFDDeviceSelectionDialog*  gfd_active_device_dialog{nullptr};
     // BBS store machine_sn and 3mf_path for PrintJob
     PrintPrepareData m_print_job_data;
     bool             inside_snapshot_capture() { return m_prevent_snapshots != 0; }
@@ -7749,7 +7770,12 @@ void Plater::priv::on_export_finished(wxCommandEvent& evt)
                                 << ", selected_devices=" << gfd_selected_devices.size();
         gfd_print_export_scheduled = false;
         exporting_status           = ExportingStatus::NOT_EXPORTING;
-        gfd_execute_print(gfd_selected_devices, gcode_path);
+        if (gfd_active_device_dialog == nullptr) {
+            BOOST_LOG_TRIVIAL(warning) << "GFD export finished after the device dialog was closed; skip print downlink"
+                                       << ", gcode_path=" << gcode_path;
+            return;
+        }
+        complete_gfd_print_submission(gfd_execute_print(gfd_selected_devices, gcode_path));
         return;
     }
 
@@ -7975,16 +8001,21 @@ void Plater::priv::on_process_completed(SlicingProcessCompletedEvent& evt)
             gfd_print_export_scheduled = false;
             exporting_status           = ExportingStatus::NOT_EXPORTING;
 
-            if (gcode_path.empty() || !fs::exists(gcode_path)) {
+            if (gfd_active_device_dialog == nullptr) {
+                BOOST_LOG_TRIVIAL(warning) << "GFD process completed after the device dialog was closed; skip print downlink"
+                                           << ", gcode_path=" << gcode_path;
+            } else if (gcode_path.empty() || !fs::exists(gcode_path)) {
                 BOOST_LOG_TRIVIAL(error) << "GFD export finished but G-code file is missing"
                                          << ", gcode_path=" << gcode_path
                                          << ", selected_devices=" << gfd_selected_devices.size();
-                show_error(q, _L("G-code 文件导出失败，无法上传打印。"));
+                show_error(gfd_active_device_dialog != nullptr ? static_cast<wxWindow*>(gfd_active_device_dialog) : q,
+                           _L("G-code 文件导出失败，无法上传打印。"));
+                complete_gfd_print_submission(false);
             } else {
                 notification_manager->push_notification(NotificationType::CustomNotification,
                                                         NotificationManager::NotificationLevel::RegularNotificationLevel,
                                                         _u8L("G-code 已导出到临时路径，正在上传 OBS：") + "\n" + gcode_path);
-                gfd_execute_print(gfd_selected_devices, gcode_path);
+                complete_gfd_print_submission(gfd_execute_print(gfd_selected_devices, gcode_path));
             }
         } else if (exporting_status == ExportingStatus::EXPORTING_TO_REMOVABLE && !has_error) {
             // If writing to removable drive was scheduled, show notification with eject button
@@ -8015,8 +8046,10 @@ void Plater::priv::on_process_completed(SlicingProcessCompletedEvent& evt)
     }
 
     exporting_status = ExportingStatus::NOT_EXPORTING;
-    if (has_error || evt.cancelled())
+    if ((has_error || evt.cancelled()) && gfd_print_export_scheduled) {
         gfd_print_export_scheduled = false;
+        complete_gfd_print_submission(false);
+    }
 
     // BBS stop publishing if error occur
     // if (m_is_publishing) {
@@ -8197,10 +8230,10 @@ std::string Plater::priv::gfd_current_device_type() const
     return GFD::Config::current_device_type(printer_config);
 }
 
-bool Plater::priv::ensure_gfd_login()
+bool Plater::priv::ensure_gfd_login(wxWindow* parent)
 {
     std::string error_message;
-    return GFDAuthManager::ensure_logged_in(q, &error_message);
+    return GFDAuthManager::ensure_logged_in(parent != nullptr ? parent : q, &error_message);
 }
 
 std::string Plater::priv::gfd_auth_token() const
@@ -9733,8 +9766,10 @@ fs::path Plater::priv::gfd_temp_gcode_3mf_path()
     return output_path;
 }
 
-void Plater::priv::start_gfd_print_export()
+Plater::priv::GFDPrintStartResult Plater::priv::start_gfd_print_export()
 {
+    wxWindow* const dialog_parent =
+        gfd_active_device_dialog != nullptr ? static_cast<wxWindow*>(gfd_active_device_dialog) : q;
     BOOST_LOG_TRIVIAL(info) << "GFD start print export"
                             << ", model_objects=" << model.objects.size()
                             << ", current_plate=" << partplate_list.get_curr_plate_index()
@@ -9744,7 +9779,7 @@ void Plater::priv::start_gfd_print_export()
     PartPlate* current_plate = partplate_list.get_curr_plate();
     if (current_plate == nullptr) {
         BOOST_LOG_TRIVIAL(warning) << "GFD start print export skipped: current plate is null";
-        return;
+        return GFDPrintStartResult::Failed;
     }
 
     if (q->only_gcode_mode()) {
@@ -9752,8 +9787,8 @@ void Plater::priv::start_gfd_print_export()
             BOOST_LOG_TRIVIAL(warning) << "GFD start print export skipped: imported gcode is invalid"
                                        << ", slice_result_valid=" << current_plate->is_slice_result_valid()
                                        << ", gcode_valid=" << current_plate->is_valid_gcode_file();
-            show_error(q, _L("当前 G-code 文件无效，无法打印。"));
-            return;
+            show_error(dialog_parent, _L("当前 G-code 文件无效，无法打印。"));
+            return GFDPrintStartResult::Failed;
         }
 
         gfd_print_device_type = gfd_current_device_type();
@@ -9761,32 +9796,32 @@ void Plater::priv::start_gfd_print_export()
         if (gfd_print_use_3mf_file && !boost::algorithm::iends_with(gfd_print_gcode_path, ".3mf")) {
             BOOST_LOG_TRIVIAL(warning) << "GFD 3MF print skipped: imported file is not 3MF"
                                        << ", file_path=" << gfd_print_gcode_path;
-            show_error(q, _L("当前导入文件不是 3MF，无法按 3MF 下发。"));
-            return;
+            show_error(dialog_parent, _L("当前导入文件不是 3MF，无法按 3MF 下发。"));
+            return GFDPrintStartResult::Failed;
         }
         BOOST_LOG_TRIVIAL(info) << "GFD start print export uses imported gcode directly"
                                 << ", gcode_path=" << gfd_print_gcode_path
                                 << ", device_type=" << gfd_print_device_type
                                 << ", use_3mf_file=" << gfd_print_use_3mf_file
                                 << ", selected_devices=" << gfd_selected_devices.size();
-        gfd_execute_print(gfd_selected_devices, gfd_print_gcode_path);
-        return;
+        const bool submitted = gfd_execute_print(gfd_selected_devices, gfd_print_gcode_path);
+        return submitted ? GFDPrintStartResult::Completed : GFDPrintStartResult::Failed;
     }
 
     if (model.objects.empty()) {
         BOOST_LOG_TRIVIAL(warning) << "GFD start print export skipped: empty model";
-        return;
+        return GFDPrintStartResult::Failed;
     }
 
     if (process_completed_with_error == partplate_list.get_curr_plate_index()) {
         BOOST_LOG_TRIVIAL(warning) << "GFD start print export skipped: process completed with error";
-        return;
+        return GFDPrintStartResult::Failed;
     }
 
     if (background_process.is_export_scheduled()) {
         BOOST_LOG_TRIVIAL(warning) << "GFD start print export skipped: another export job is running";
-        GUI::show_error(q, _L("Another export job is running."));
-        return;
+        GUI::show_error(dialog_parent, _L("Another export job is running."));
+        return GFDPrintStartResult::Failed;
     }
 
     try {
@@ -9794,7 +9829,7 @@ void Plater::priv::start_gfd_print_export()
         if (state & priv::UPDATE_BACKGROUND_PROCESS_INVALID) {
             BOOST_LOG_TRIVIAL(warning) << "GFD start print export skipped: background process invalid"
                                        << ", state=" << state;
-            return;
+            return GFDPrintStartResult::Failed;
         }
 
         if (gfd_print_use_3mf_file) {
@@ -9809,8 +9844,8 @@ void Plater::priv::start_gfd_print_export()
                 BOOST_LOG_TRIVIAL(error) << "GFD 3MF export failed"
                                          << ", result=" << export_result
                                          << ", output_path=" << output_path.string();
-                show_error(q, _L("3MF 文件导出失败，无法上传打印。"));
-                return;
+                show_error(dialog_parent, _L("3MF 文件导出失败，无法上传打印。"));
+                return GFDPrintStartResult::Failed;
             }
 
             gfd_print_device_type = gfd_current_device_type();
@@ -9824,8 +9859,8 @@ void Plater::priv::start_gfd_print_export()
                                     << ", output_dir=" << last_output_dir_path
                                     << ", device_type=" << gfd_print_device_type
                                     << ", selected_devices=" << gfd_selected_devices.size();
-            gfd_execute_print(gfd_selected_devices, gfd_print_gcode_path);
-            return;
+            const bool submitted = gfd_execute_print(gfd_selected_devices, gfd_print_gcode_path);
+            return submitted ? GFDPrintStartResult::Completed : GFDPrintStartResult::Failed;
         }
 
         const fs::path output_path = gfd_temp_gcode_path();
@@ -9846,20 +9881,25 @@ void Plater::priv::start_gfd_print_export()
                                 << ", output_path=" << gfd_print_gcode_path;
         background_process.set_task(PrintBase::TaskParams());
         restart_background_process(priv::UPDATE_BACKGROUND_PROCESS_FORCE_EXPORT);
+        return GFDPrintStartResult::Pending;
     } catch (const Slic3r::PlaceholderParserError& ex) {
         gfd_print_export_scheduled = false;
         BOOST_LOG_TRIVIAL(error) << "GFD temporary G-code export failed before scheduling"
                                  << ", error=" << ex.what();
-        show_error(q, ex.what(), true);
+        show_error(dialog_parent, ex.what(), true);
     } catch (const std::exception& ex) {
         gfd_print_export_scheduled = false;
         BOOST_LOG_TRIVIAL(error) << "GFD temporary G-code export failed before scheduling"
                                  << ", error=" << ex.what();
-        show_error(q, ex.what(), false);
+        show_error(dialog_parent, ex.what(), false);
     }
+    return GFDPrintStartResult::Failed;
 }
 
-bool Plater::priv::gfd_request_obs_token(const std::string& suffix, std::string& body, std::string& error_message) const
+bool Plater::priv::gfd_request_obs_token(const std::string& suffix,
+                                         std::string&       body,
+                                         std::string&       error_message,
+                                         wxWindow*          auth_parent) const
 {
     const std::string requested_suffix = suffix.empty() ? "3mf" : suffix;
     const std::string url = GFD::Config::obs_token_url(wxGetApp().app_config) + "?ruleCode=print3dPermanently&suffix=" + requested_suffix;
@@ -9897,7 +9937,7 @@ bool Plater::priv::gfd_request_obs_token(const std::string& suffix, std::string&
         },
         body,
         error_message,
-        q);
+        auth_parent != nullptr ? auth_parent : q);
 }
 
 bool Plater::priv::gfd_upload_file_with_token(const std::string&       file_path,
@@ -9989,19 +10029,32 @@ bool Plater::priv::gfd_upload_file_with_token(const std::string&       file_path
     return true;
 }
 
-bool Plater::priv::gfd_send_print_command(const GFDDeviceInfo& device,
-                                          const std::string&  file_url,
-                                          const std::string&  file_type,
-                                          std::string&        body,
-                                          std::string&        error_message) const
+static nlohmann::json gfd_build_print_command_request(const GFDDeviceInfo&  device,
+                                                      const std::string&    file_url,
+                                                      const std::string&    file_type,
+                                                      const std::string&    request_id,
+                                                      const std::vector<int>& consumable)
 {
     nlohmann::json request_json;
     request_json["url"]       = file_url;
     request_json["deviceId"]  = device.device_id;
-    request_json["printSn"]   = device.device_sn;
-    request_json["requestId"] = device.device_sn;
+    request_json["printSn"]   = request_id;
+    request_json["requestId"] = request_id;
     request_json["fileType"]  = file_type;
+    if (!consumable.empty())
+        request_json["consumable"] = consumable;
+    return request_json;
+}
 
+bool Plater::priv::gfd_send_print_command(const GFDDeviceInfo&  device,
+                                          const std::string&    file_url,
+                                          const std::string&    file_type,
+                                          const std::string&    request_id,
+                                          std::string&          body,
+                                          std::string&          error_message,
+                                          const std::vector<int>& consumable) const
+{
+    const nlohmann::json request_json = gfd_build_print_command_request(device, file_url, file_type, request_id, consumable);
     const std::string print_cmd_url = GFD::Config::device_print_cmd_url(wxGetApp().app_config);
     const std::string request_body  = request_json.dump();
     BOOST_LOG_TRIVIAL(info) << "GFD send print command request"
@@ -10011,6 +10064,7 @@ bool Plater::priv::gfd_send_print_command(const GFDDeviceInfo& device,
                             << ", device_id=" << device.device_id
                             << ", file_url=" << file_url
                             << ", file_type=" << file_type
+                            << ", consumable=" << nlohmann::json(consumable).dump()
                             << ", body=" << request_body;
     return GFDAuthManager::perform_authenticated_request(
         [&](const std::string& token) {
@@ -10047,7 +10101,215 @@ bool Plater::priv::gfd_send_print_command(const GFDDeviceInfo& device,
         },
         body,
         error_message,
-        q);
+        gfd_active_device_dialog != nullptr ? static_cast<wxWindow*>(gfd_active_device_dialog) : q);
+}
+
+bool Plater::priv::gfd_fetch_device_filament_info(const GFDDeviceInfo& device,
+                                                  GFDDeviceFilamentInfo& filament_info,
+                                                  std::string& error_message,
+                                                  wxWindow*    dialog_parent) const
+{
+    if (device.mac.empty()) {
+        error_message = "打印机 MAC 为空，无法查询耗材槽位";
+        return false;
+    }
+
+    const std::string request_url = GFD::Config::device_filament_info_url(wxGetApp().app_config) + "?mac=" + Http::url_encode(device.mac);
+    std::string       response_body;
+    BOOST_LOG_TRIVIAL(info) << "GFD device filament info request"
+                            << ", url=" << request_url
+                            << ", device_mac=" << device.mac;
+
+    if (!GFDAuthManager::perform_authenticated_request(
+            [&](const std::string& token) {
+                GFDHttpResult result;
+                Http::get(request_url)
+                    .header("Authorization", token)
+                    .header("Biz", "ZXBMan")
+                    .on_complete([&](std::string body, unsigned status) {
+                        result.body   = std::move(body);
+                        result.status = status;
+                        result.ok     = true;
+                        BOOST_LOG_TRIVIAL(info) << "GFD device filament info response"
+                                                << ", http_status=" << status
+                                                << ", device_mac=" << device.mac;
+                    })
+                    .on_error([&](std::string body, std::string error, unsigned status) {
+                        result.body          = std::move(body);
+                        result.status        = status;
+                        result.error_message = error.empty() ? result.body : error;
+                        result.ok            = false;
+                        BOOST_LOG_TRIVIAL(error) << "GFD device filament info failed"
+                                                 << ", http_status=" << status
+                                                 << ", device_mac=" << device.mac
+                                                 << ", error=" << result.error_message;
+                    })
+                    .perform_sync();
+                return result;
+            },
+            response_body,
+            error_message,
+            dialog_parent != nullptr ? dialog_parent : q))
+        return false;
+
+    return parse_gfd_device_filament_info(response_body, filament_info, error_message);
+}
+
+std::vector<FilamentInfo> Plater::priv::gfd_current_plate_filaments()
+{
+    std::map<int, FilamentInfo> filament_metadata_by_id;
+    std::set<int>               used_filament_ids;
+    PartPlate*                  current_plate = partplate_list.get_curr_plate();
+    if (current_plate == nullptr)
+        return {};
+
+    // Keep the metadata separate from the set of actually used tools. A plate may
+    // carry configured filament entries whose generated G-code usage is exactly 0.
+    for (const FilamentInfo& filament : current_plate->get_slice_filaments_info()) {
+        if (filament.id >= 0 && filament.id <= GFD_MAX_LOGICAL_TOOL_ID)
+            filament_metadata_by_id[filament.id] = filament;
+    }
+
+    // For a freshly sliced plate, positive extruded volume is authoritative. The
+    // statistics map can contain a zero-volume T0 even when the file starts at T1.
+    bool has_volume_statistics = false;
+    if (GCodeProcessorResult* result = current_plate->get_slice_result(); result != nullptr) {
+        const auto& volumes = result->print_statistics.total_volumes_per_extruder;
+        has_volume_statistics = !volumes.empty();
+        for (const auto& [filament_id, volume] : volumes) {
+            if (filament_id <= static_cast<size_t>(GFD_MAX_LOGICAL_TOOL_ID) && volume > EPSILON)
+                used_filament_ids.insert(static_cast<int>(filament_id));
+        }
+    }
+
+    // Imported .gcode.3mf metadata stores per-filament usage even though its live
+    // GCodeProcessorResult may not contain the volume map after loading.
+    if (!has_volume_statistics) {
+        bool has_positive_metadata_usage = false;
+        for (const auto& [filament_id, filament] : filament_metadata_by_id) {
+            if (filament.used_m > EPSILON || filament.used_g > EPSILON) {
+                used_filament_ids.insert(filament_id);
+                has_positive_metadata_usage = true;
+            }
+        }
+
+        // Compatibility fallback for older 3MF files without usage attributes.
+        if (!has_positive_metadata_usage) {
+            for (const int extruder : current_plate->get_used_extruders()) {
+                if (extruder > 0 && extruder <= GFD_MAX_LOGICAL_TOOL_ID + 1)
+                    used_filament_ids.insert(extruder - 1);
+            }
+        }
+    }
+
+    std::map<int, FilamentInfo> filaments_by_id;
+    for (const int filament_id : used_filament_ids) {
+        const auto metadata = filament_metadata_by_id.find(filament_id);
+        if (metadata != filament_metadata_by_id.end()) {
+            filaments_by_id.emplace(filament_id, metadata->second);
+        } else {
+            FilamentInfo filament{};
+            filament.id = filament_id;
+            filaments_by_id.emplace(filament_id, std::move(filament));
+        }
+    }
+
+    PresetBundle* preset_bundle = wxGetApp().preset_bundle;
+    if (preset_bundle == nullptr)
+        return {};
+
+    const auto* colors = dynamic_cast<const ConfigOptionStrings*>(preset_bundle->project_config.option("filament_colour"));
+    const auto* preset_names = dynamic_cast<const ConfigOptionStrings*>(preset_bundle->project_config.option("filament_settings_id"));
+    for (auto& [filament_id, filament] : filaments_by_id) {
+        if (filament.color.empty() && colors != nullptr && static_cast<size_t>(filament_id) < colors->values.size())
+            filament.color = colors->values[filament_id];
+
+        std::string preset_name;
+        if (preset_names != nullptr && static_cast<size_t>(filament_id) < preset_names->values.size())
+            preset_name = preset_names->values[filament_id];
+        else if (static_cast<size_t>(filament_id) < preset_bundle->filament_presets.size())
+            preset_name = preset_bundle->filament_presets[filament_id];
+
+        if (filament.filament_id.empty())
+            filament.filament_id = preset_name;
+        if (filament.type.empty() && !preset_name.empty()) {
+            if (Preset* preset = preset_bundle->filaments.find_preset(preset_name); preset != nullptr) {
+                std::string display_type;
+                filament.type = preset->config.get_filament_type(display_type);
+                if (filament.type.empty())
+                    filament.type = display_type;
+            }
+        }
+    }
+
+    std::vector<FilamentInfo> result;
+    result.reserve(filaments_by_id.size());
+    for (auto& entry : filaments_by_id)
+        result.push_back(std::move(entry.second));
+    return result;
+}
+
+bool Plater::priv::gfd_prepare_multicolor_consumable(const GFDDeviceInfo& device,
+                                                     std::vector<int>&    consumable,
+                                                     bool&               cancelled,
+                                                     std::string&        error_message,
+                                                     wxWindow*           dialog_parent)
+{
+    consumable.clear();
+    cancelled = false;
+
+    GFDDeviceFilamentInfo filament_info;
+    if (!gfd_fetch_device_filament_info(device, filament_info, error_message, dialog_parent))
+        return false;
+
+    // mulColorFlag is the backend's capability result. A multicolor device with only
+    // one installed internal spool must still enter the multicolor confirmation flow.
+    if (!filament_info.mul_color_flag) {
+        BOOST_LOG_TRIVIAL(info) << "GFD device uses single-color 3MF flow"
+                                << ", device_mac=" << device.mac;
+        return true;
+    }
+
+    std::vector<GFDDeviceFilamentSlot> available_slots;
+    std::set<int>                      seen_slots;
+    for (const GFDDeviceFilamentSlot& slot : filament_info.slots) {
+        if (slot.slot_no < 0 || slot.slot_no > 15 || slot.filament_sn.empty() || !seen_slots.insert(slot.slot_no).second)
+            continue;
+        available_slots.push_back(slot);
+    }
+    if (available_slots.empty()) {
+        error_message = "该多色打印机没有可用的内部耗材槽位，请先装载耗材";
+        return false;
+    }
+
+    std::vector<FilamentInfo> logical_filaments = gfd_current_plate_filaments();
+    if (logical_filaments.empty()) {
+        error_message = "未能从当前 3MF 切片结果中读取逻辑耗材";
+        return false;
+    }
+
+    const std::vector<size_t> matched_slots = match_gfd_filaments_to_slots(logical_filaments, available_slots);
+    GFDConsumableMappingDialog dialog(
+        dialog_parent != nullptr ? dialog_parent : q,
+        device.mac,
+        std::move(logical_filaments),
+        std::move(available_slots),
+        matched_slots);
+    if (dialog.ShowModal() != wxID_OK) {
+        cancelled = true;
+        return false;
+    }
+
+    consumable = dialog.selected_consumables();
+    if (consumable.empty()) {
+        error_message = "请选择至少一个可用耗材槽位";
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "GFD multicolor consumable mapping confirmed"
+                            << ", device_mac=" << device.mac
+                            << ", consumable=" << nlohmann::json(consumable).dump();
+    return true;
 }
 
 bool Plater::priv::gfd_fetch_dynamic_filament_list(std::string& body, std::string& error_message) const
@@ -10200,92 +10462,10 @@ bool Plater::priv::gfd_update_dynamic_filament_slice_param(const std::string& fi
         q);
 }
 
-bool Plater::priv::gfd_execute_print_url(const std::vector<GFDDeviceInfo>& devices, const std::string& file_url, const std::string& file_type)
-{
-    BOOST_LOG_TRIVIAL(info) << "GFD execute print URL begin"
-                            << ", selected_devices=" << devices.size()
-                            << ", file_url=" << file_url
-                            << ", file_type=" << file_type;
-
-    if (devices.empty()) {
-        BOOST_LOG_TRIVIAL(warning) << "GFD execute print URL skipped: no selected devices";
-        show_error(q, _L("请选择打印机"));
-        return false;
-    }
-
-    if (file_url.empty()) {
-        BOOST_LOG_TRIVIAL(warning) << "GFD execute print URL skipped: empty file URL";
-        show_error(q, _L("请输入打印文件 URL"));
-        return false;
-    }
-
-    if (!ensure_gfd_login()) {
-        BOOST_LOG_TRIVIAL(warning) << "GFD execute print URL skipped: login failed or cancelled";
-        show_error(q, _L("登录状态无效，请重新登录。"));
-        return false;
-    }
-
-    size_t      success_count = 0;
-    std::string failed_message;
-    for (const GFDDeviceInfo& device : devices) {
-        std::string print_body;
-        std::string error_message;
-        BOOST_LOG_TRIVIAL(info) << boost::format("GFD send print URL command: mac=%1%, sn=%2%, id=%3%") % device.mac %
-                                       device.device_sn % device.device_id;
-        if (!gfd_send_print_command(device, file_url, file_type, print_body, error_message)) {
-            failed_message += (boost::format("%1%: %2%\n") % device.mac %
-                               (error_message.empty() ? std::string("下发打印失败") : error_message))
-                                  .str();
-            continue;
-        }
-
-        try {
-            const nlohmann::json response = nlohmann::json::parse(print_body);
-            if (response.value("msg", std::string()) != "success") {
-                failed_message += (boost::format("%1%: %2%\n") % device.mac %
-                                   response.value("msg", std::string("下发打印失败")))
-                                      .str();
-                BOOST_LOG_TRIVIAL(error) << "GFD print URL command business failure"
-                                         << ", device_mac=" << device.mac
-                                         << ", device_sn=" << device.device_sn
-                                         << ", response=" << print_body;
-                continue;
-            }
-        } catch (...) {
-            // Keep success if the request returned 2xx but no JSON payload.
-        }
-
-        ++success_count;
-        BOOST_LOG_TRIVIAL(info) << "GFD print URL command success"
-                                << ", device_mac=" << device.mac
-                                << ", device_sn=" << device.device_sn
-                                << ", device_id=" << device.device_id
-                                << ", file_url=" << file_url;
-    }
-
-    if (!failed_message.empty()) {
-        BOOST_LOG_TRIVIAL(error) << "GFD execute print URL completed with failures"
-                                 << ", success_count=" << success_count
-                                 << ", failed_message=" << failed_message
-                                 << ", file_url=" << file_url;
-        show_error(q, from_u8((boost::format("部分设备下发失败：\n%1%") % failed_message).str()));
-        return success_count > 0;
-    }
-
-    BOOST_LOG_TRIVIAL(info) << "GFD execute print URL finished"
-                            << ", success_count=" << success_count
-                            << ", file_url=" << file_url
-                            << ", file_type=" << file_type;
-    MessageDialog msg_dlg(nullptr,
-                          format_wxstr(_L("测试 3MF 下发成功，共 %1% 台"), success_count),
-                          _L("下发成功"),
-                          wxOK | wxICON_INFORMATION);
-    msg_dlg.ShowModal();
-    return true;
-}
-
 bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, const std::string& print_file_path)
 {
+    wxWindow* const dialog_parent =
+        gfd_active_device_dialog != nullptr ? static_cast<wxWindow*>(gfd_active_device_dialog) : q;
     const bool        use_3mf_file = gfd_print_use_3mf_file || boost::algorithm::iends_with(print_file_path, ".3mf");
     const std::string file_suffix  = use_3mf_file ? "gcode.3mf" : "gcode";
     const std::string file_type    = use_3mf_file ? "3mf" : "gcode";
@@ -10298,20 +10478,38 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
 
     if (devices.empty()) {
         BOOST_LOG_TRIVIAL(warning) << "GFD execute print skipped: no selected devices";
-        show_error(q, _L("请选择打印机"));
+        show_error(dialog_parent, _L("请选择打印机"));
         return false;
     }
 
-    if (!ensure_gfd_login()) {
-        BOOST_LOG_TRIVIAL(warning) << "GFD execute print skipped: login failed or cancelled";
-        show_error(q, _L("登录状态无效，请重新登录。"));
+    if (use_3mf_file && devices.size() != 1) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD execute print skipped: 3MF requires exactly one device"
+                                   << ", selected_devices=" << devices.size();
+        show_error(dialog_parent, _L("3MF 下发当前仅支持选择一台打印机"));
         return false;
+    }
+
+    if (!ensure_gfd_login(dialog_parent)) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD execute print skipped: login failed or cancelled";
+        show_error(dialog_parent, _L("登录状态无效，请重新登录。"));
+        return false;
+    }
+
+    std::string      error_message;
+    std::vector<int> consumable;
+    if (use_3mf_file) {
+        bool cancelled = false;
+        if (!gfd_prepare_multicolor_consumable(devices.front(), consumable, cancelled, error_message, dialog_parent)) {
+            if (!cancelled)
+                show_error(dialog_parent, from_u8(error_message.empty() ? "准备多色耗材槽位失败" : error_message));
+            return false;
+        }
     }
 
     std::string obs_body;
-    std::string error_message;
-    if (!gfd_request_obs_token(file_suffix, obs_body, error_message)) {
-        show_error(q, from_u8(error_message.empty() ? "获取 OBS 上传令牌失败" : error_message));
+    error_message.clear();
+    if (!gfd_request_obs_token(file_suffix, obs_body, error_message, dialog_parent)) {
+        show_error(dialog_parent, from_u8(error_message.empty() ? "获取 OBS 上传令牌失败" : error_message));
         return false;
     }
 
@@ -10322,14 +10520,14 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
         BOOST_LOG_TRIVIAL(error) << "GFD parse OBS token response failed"
                                  << ", error=" << ex.what()
                                  << ", body=" << obs_body;
-        show_error(q, from_u8(std::string("OBS 响应格式无效: ") + ex.what()));
+        show_error(dialog_parent, from_u8(std::string("OBS 响应格式无效: ") + ex.what()));
         return false;
     }
 
     if (obs_response.value("msg", std::string()) != "success" || !obs_response.contains("data") || !obs_response["data"].is_object()) {
         BOOST_LOG_TRIVIAL(error) << "GFD OBS token response invalid"
                                  << ", body=" << obs_body;
-        show_error(q, from_u8(obs_response.value("msg", std::string("获取 OBS 上传令牌失败"))));
+        show_error(dialog_parent, from_u8(obs_response.value("msg", std::string("获取 OBS 上传令牌失败"))));
         return false;
     }
 
@@ -10344,7 +10542,7 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
 
     std::string file_url;
     if (!gfd_upload_file_with_token(print_file_path, obs_data, file_url, error_message)) {
-        show_error(q, from_u8(error_message.empty() ? "打印文件上传失败" : error_message));
+        show_error(dialog_parent, from_u8(error_message.empty() ? "打印文件上传失败" : error_message));
         return false;
     }
 
@@ -10359,9 +10557,16 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
     for (const GFDDeviceInfo& device : devices) {
         std::string print_body;
         error_message.clear();
+        const std::string request_key = !device.device_id.empty() ? "id:" + device.device_id :
+                                        !device.mac.empty()       ? "mac:" + device.mac :
+                                                                  "sn:" + device.device_sn;
+        const auto request_it = gfd_print_request_ids
+                                    .try_emplace(request_key, boost::uuids::to_string(boost::uuids::random_generator()()))
+                                    .first;
+        const std::string& request_id = request_it->second;
         BOOST_LOG_TRIVIAL(info) << boost::format("GFD send print command: mac=%1%, sn=%2%, id=%3%") % device.mac %
                                        device.device_sn % device.device_id;
-        if (!gfd_send_print_command(device, file_url, file_type, print_body, error_message)) {
+        if (!gfd_send_print_command(device, file_url, file_type, request_id, print_body, error_message, consumable)) {
             failed_message += (boost::format("%1%: %2%\n") % device.mac %
                                (error_message.empty() ? std::string("下发打印失败") : error_message))
                                   .str();
@@ -10380,8 +10585,14 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
                                          << ", response=" << print_body;
                 continue;
             }
-        } catch (...) {
-            // Keep success if the request returned 2xx but no JSON payload.
+        } catch (const std::exception& ex) {
+            failed_message += (boost::format("%1%: 打印服务响应格式无效\n") % device.mac).str();
+            BOOST_LOG_TRIVIAL(error) << "GFD print command response parse failed"
+                                     << ", device_mac=" << device.mac
+                                     << ", device_sn=" << device.device_sn
+                                     << ", error=" << ex.what()
+                                     << ", response=" << print_body;
+            continue;
         }
 
         ++success_count;
@@ -10397,8 +10608,17 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
                                  << ", success_count=" << success_count
                                  << ", failed_message=" << failed_message
                                  << ", obs_file_url=" << file_url;
-        show_error(q, from_u8((boost::format("部分设备下发失败：\n%1%") % failed_message).str()));
-        return success_count > 0;
+        if (success_count > 0) {
+            show_error(dialog_parent,
+                       from_u8((boost::format("已有 %1% 台设备成功下发，以下设备失败：\n%2%\n"
+                                              "为避免重复打印，设备列表将关闭；如需重试，请重新打开并只选择失败设备。") %
+                                success_count % failed_message)
+                                   .str()));
+            return true;
+        }
+
+        show_error(dialog_parent, from_u8((boost::format("设备下发失败：\n%1%") % failed_message).str()));
+        return false;
     }
 
     BOOST_LOG_TRIVIAL(info) << "GFD execute print finished"
@@ -10406,7 +10626,7 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
                             << ", obs_file_url=" << file_url
                             << ", local_file_path=" << print_file_path
                             << ", file_type=" << file_type;
-    MessageDialog msg_dlg(nullptr,
+    MessageDialog msg_dlg(dialog_parent,
                           format_wxstr(_L("上传打印设备成功，共 %1% 台"), success_count),
                           _L("上传成功"),
                           wxOK | wxICON_INFORMATION);
@@ -10414,21 +10634,33 @@ bool Plater::priv::gfd_execute_print(const std::vector<GFDDeviceInfo>& devices, 
     return true;
 }
 
+void Plater::priv::complete_gfd_print_submission(bool success)
+{
+    GFDDeviceSelectionDialog* dialog = gfd_active_device_dialog;
+    if (dialog == nullptr)
+        return;
+
+    if (success)
+        gfd_active_device_dialog = nullptr;
+    dialog->complete_print_submission(success);
+}
+
 void Plater::priv::show_gfd_device_selection_dialog()
 {
     gfd_print_device_type = gfd_current_device_type();
     gfd_print_use_3mf_file = false;
+    gfd_print_request_ids.clear();
     std::vector<std::string> allowed_device_types = GFD::Config::all_print_device_types();
-    GFDDeviceSelectionDialog dialog(q, std::string(), gfd_print_device_type, allowed_device_types);
-    if (dialog.ShowModal() == wxID_OK) {
-        gfd_selected_devices = dialog.selected_devices();
-        gfd_print_use_3mf_file = dialog.use_3mf_file();
-        const std::string test_3mf_url = dialog.test_3mf_url();
+    auto print_handler = [this](GFDDeviceSelectionDialog* dialog,
+                                const std::vector<GFDDeviceInfo>& devices,
+                                bool use_3mf_file) {
+        gfd_active_device_dialog = dialog;
+        gfd_selected_devices     = devices;
+        gfd_print_use_3mf_file   = use_3mf_file;
         BOOST_LOG_TRIVIAL(info) << "GFD selected devices"
                                 << ", count=" << gfd_selected_devices.size()
                                 << ", device_type=" << gfd_print_device_type
-                                << ", use_3mf_file=" << gfd_print_use_3mf_file
-                                << ", test_3mf_url=" << test_3mf_url;
+                                << ", use_3mf_file=" << gfd_print_use_3mf_file;
         for (const GFDDeviceInfo& device : gfd_selected_devices) {
             BOOST_LOG_TRIVIAL(info) << "GFD selected device detail"
                                     << ", mac=" << device.mac
@@ -10440,11 +10672,21 @@ void Plater::priv::show_gfd_device_selection_dialog()
                                     << ", device_id=" << device.device_id
                                     << ", use_3mf_file=" << gfd_print_use_3mf_file;
         }
-        if (!test_3mf_url.empty()) {
-            gfd_execute_print_url(gfd_selected_devices, test_3mf_url, "3mf");
-            return;
+
+        const GFDPrintStartResult result = start_gfd_print_export();
+        if (result != GFDPrintStartResult::Pending)
+            complete_gfd_print_submission(result == GFDPrintStartResult::Completed);
+    };
+    GFDDeviceSelectionDialog dialog(
+        q, std::string(), gfd_print_device_type, allowed_device_types, print_handler);
+    dialog.ShowModal();
+    if (gfd_active_device_dialog == &dialog) {
+        gfd_active_device_dialog = nullptr;
+        if (gfd_print_export_scheduled) {
+            BOOST_LOG_TRIVIAL(warning) << "GFD device dialog closed before print downlink; cancel scheduled downlink";
+            gfd_print_export_scheduled = false;
+            exporting_status           = ExportingStatus::NOT_EXPORTING;
         }
-        start_gfd_print_export();
     }
 }
 

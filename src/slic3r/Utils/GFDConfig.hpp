@@ -34,7 +34,7 @@ struct ButtonVisibility
     bool upload_config  = true;
     bool save_config    = true;
     bool print          = true;
-    // Enables both normal 3MF print and test 3MF print actions for this device type.
+    // Enables the formal 3MF print action for this device type.
     bool print_3mf      = false;
     // Device types shown in the "下发打印" dialog dropdown; empty = fall back to cloud-returned types.
     std::vector<std::string> print_device_types;
@@ -75,6 +75,7 @@ public:
     static constexpr const char* PATH_CONFIG_ADD        = "/app/print3d/manage/v1/slice-param-config/add";
     static constexpr const char* PATH_CONFIG_UPDATE     = "/app/print3d/manage/v1/slice-param-config/edit";
     static constexpr const char* PATH_DEVICE_QUERY      = "/app/print3d/manage/v1/md/query";
+    static constexpr const char* PATH_DEVICE_FILAMENT_INFO = "/app/print3d/manage/v1/device/filamentInfo";
     static constexpr const char* PATH_DEVICE_SLICE_TYPE = "/app/print3d/manage/v1/slice-param-config/device-and-slice-type";
     static constexpr const char* PATH_FILAMENT_TEMPERATURE_LIST = "/app/print3d/manage/v1/filamentTemperature/list";
     static constexpr const char* PATH_FILAMENT_TEMPERATURE_DETAIL = "/app/print3d/manage/v1/filamentTemperature/detail";
@@ -93,6 +94,7 @@ public:
     static std::string config_add_url(const AppConfig* config);
     static std::string config_update_url(const AppConfig* config);
     static std::string device_query_url(const AppConfig* config);
+    static std::string device_filament_info_url(const AppConfig* config);
     static std::string device_slice_type_url(const AppConfig* config);
     static std::string filament_temperature_list_url(const AppConfig* config);
     static std::string filament_temperature_detail_url(const AppConfig* config);
