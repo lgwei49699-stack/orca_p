@@ -5,8 +5,11 @@
 #include <cmath>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <optional>
 #include <sstream>
+
+#include <nlohmann/json.hpp>
 
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Geometry.hpp"
@@ -608,6 +611,118 @@ TEST_CASE("Mixed object-level raft settings prefer the first valid CuraV1 config
     REQUIRE(print.objects()[1]->support_layers().empty());
     REQUIRE(print.objects()[2]->support_layers().empty());
     REQUIRE(print.objects()[3]->support_layers().empty());
+}
+
+TEST_CASE("CLI process JSON preserves CuraV1 compatibility across global and object scopes",
+          "[SupportMaterial][Raft][CuraV1][Compatibility][CLIConfig]")
+{
+    const auto load_process_json = [](const char *prefix, const nlohmann::json &document) {
+        const boost::filesystem::path path = boost::filesystem::temp_directory_path() /
+                                             boost::filesystem::unique_path(std::string(prefix) + "-%%%%-%%%%.json");
+        {
+            std::ofstream output(path.string());
+            output << document.dump(2);
+        }
+
+        DynamicPrintConfig                 config;
+        std::map<std::string, std::string> key_values;
+        std::string                        reason;
+        config.load_from_json(path.string(), ForwardCompatibilitySubstitutionRule::Enable, key_values, reason);
+        boost::filesystem::remove(path);
+
+        REQUIRE(reason.empty());
+        REQUIRE(key_values.at("type") == "process");
+        REQUIRE(key_values.at("from") == "user");
+        return config;
+    };
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    const DynamicPrintConfig global_process = load_process_json(
+        "orca-cli-global-process",
+        {{"name", "global process"},
+         {"type", "process"},
+         {"from", "user"},
+         {"raft_mode", "legacy"},
+         {"raft_layers", "0"},
+         {"layer_height", "0.18"},
+         {"before_layer_change_gcode", "G92 E0"}});
+    config.apply(global_process, true);
+    config.normalize_fdm();
+
+    const DynamicPrintConfig legacy_process = load_process_json(
+        "orca-cli-object-legacy-process",
+        {{"name", "active Legacy object process"},
+         {"type", "process"},
+         {"from", "user"},
+         {"raft_mode", "legacy"},
+         {"raft_layers", "3"},
+         {"raft_contact_distance", "0.11"},
+         {"layer_height", "0.17"},
+         {"raft_future_optional_bias", "19"}});
+    const DynamicPrintConfig cura_process = load_process_json(
+        "orca-cli-object-cura-process",
+        {{"name", "CuraV1 object process"},
+         {"type", "process"},
+         {"from", "user"},
+         {"raft_mode", "cura_v1"},
+         {"raft_base_layers", "1"},
+         {"raft_interface_layers", "2"},
+         {"raft_surface_layers", "2"},
+         {"raft_airgap", "0.29"},
+         {"raft_surface_speed", "41"},
+         {"layer_height", "0.21"},
+         {"raft_future_surface_bias", "23"}});
+
+    REQUIRE_FALSE(legacy_process.has("raft_future_optional_bias"));
+    REQUIRE_FALSE(cura_process.has("raft_future_surface_bias"));
+
+    Model model;
+    const auto add_cube = [&model](const char *name, double x) -> ModelObject * {
+        ModelObject *object = model.add_object();
+        object->name = name;
+        object->add_volume(Slic3r::Test::mesh(TestMesh::cube_20x20x20));
+        ModelInstance *instance = object->add_instance();
+        instance->set_offset(Vec3d(x, 100., 0.));
+        object->ensure_on_bed();
+        return object;
+    };
+
+    ModelObject *active_legacy   = add_cube("active Legacy JSON object", 60.);
+    ModelObject *cura            = add_cube("CuraV1 JSON object", 100.);
+    ModelObject *global_disabled = add_cube("global disabled Legacy object", 140.);
+    active_legacy->config.apply(legacy_process, true);
+    cura->config.apply(cura_process, true);
+
+    Print print;
+    for (ModelObject *object : model.objects)
+        print.auto_assign_extruders(object);
+    print.apply(model, config);
+    const StringObjectException error = print.validate();
+    INFO("validation error: " << error.string << "; key: " << error.opt_key);
+    REQUIRE(error.string.empty());
+    REQUIRE(print.objects().size() == 3);
+
+    const PrintObjectConfig &converted_legacy = print.objects()[0]->config();
+    const PrintObjectConfig &cura_config       = print.objects()[1]->config();
+    const PrintObjectConfig &disabled_config   = print.objects()[2]->config();
+
+    REQUIRE(converted_legacy.raft_mode.value == RaftMode::CuraV1);
+    REQUIRE(converted_legacy.raft_airgap.value == Approx(0.29));
+    REQUIRE(converted_legacy.raft_surface_speed.value == Approx(41.));
+    REQUIRE(converted_legacy.layer_height.value == Approx(0.17));
+    REQUIRE(cura_config.raft_mode.value == RaftMode::CuraV1);
+    REQUIRE(cura_config.layer_height.value == Approx(0.21));
+    REQUIRE(disabled_config.raft_mode.value == RaftMode::Legacy);
+    REQUIRE(disabled_config.raft_layers.value == 0);
+    REQUIRE(disabled_config.layer_height.value == Approx(0.18));
+
+    // The compatibility conversion is runtime-only: source JSON/model data
+    // remains intact for saving, reloading, and a later apply without CuraV1.
+    REQUIRE(active_legacy->config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    REQUIRE(active_legacy->config.get().opt_int("raft_layers") == 3);
+    REQUIRE(active_legacy->config.get().opt_float("raft_contact_distance") == Approx(0.11));
+    REQUIRE(cura->config.get().opt_enum<RaftMode>("raft_mode") == RaftMode::CuraV1);
+    REQUIRE(global_disabled->config.empty());
 }
 
 TEST_CASE("Mixed unrafted brim and CuraV1 raft keep their physical first-layer flows",
