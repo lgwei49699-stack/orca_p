@@ -13,6 +13,8 @@
 
 #include <string>
 #include <map>
+#include <atomic>
+#include <memory>
 
 #include "GUI_Utils.hpp"
 #include "Event.hpp"
@@ -202,7 +204,7 @@ protected:
 
 public:
     MainFrame();
-    ~MainFrame() = default;
+    ~MainFrame();
 
     //BBS GUI refactor
     enum TabPosition
@@ -397,6 +399,8 @@ public:
     SideButton* m_print_btn{ nullptr };
     SideButton* m_print_option_btn{ nullptr };
     SideButton* m_gfd_print_btn{ nullptr };
+    bool        m_gfd_config_operation_in_progress{false};
+    std::shared_ptr<std::atomic_bool> m_gfd_config_callback_alive{std::make_shared<std::atomic_bool>(true)};
     mutable bool          m_slice_enable{ true };
     mutable bool          m_print_enable{ true };
     bool get_enable_slice_status();

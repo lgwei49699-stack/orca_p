@@ -252,16 +252,16 @@ void Button::SetStyle(const ButtonStyle style, const ButtonType type)
                                                     btn_regular  ;
 
     this->SetBackgroundColor(StateColor(
-        std::pair(wxColour(clr_arr[3]), (int)StateColor::NotHovered),
         std::pair(wxColour(clr_arr[0]), (int)StateColor::Disabled),
+        std::pair(wxColour(clr_arr[3]), (int)StateColor::NotHovered),
         std::pair(wxColour(clr_arr[1]), (int)StateColor::Pressed),
         std::pair(wxColour(clr_arr[2]), (int)StateColor::Hovered),
         std::pair(wxColour(clr_arr[3]), (int)StateColor::Normal),
         std::pair(wxColour(clr_arr[4]), (int)StateColor::Enabled)
     ));
     this->SetBorderColor(StateColor(
-        std::pair(wxColour(clr_arr[3]), (int)StateColor::NotFocused),
         std::pair(wxColour(clr_arr[0]), (int)StateColor::Disabled),
+        std::pair(wxColour(clr_arr[3]), (int)StateColor::NotFocused),
         std::pair(wxColour(clr_arr[is_dark ? 8 : 9]), (int)StateColor::Focused)
     ));
     this->SetTextColor(StateColor(

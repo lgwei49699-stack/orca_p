@@ -1,7 +1,9 @@
 #ifndef slic3r_Plater_hpp_
 #define slic3r_Plater_hpp_
 
+#include <cstdint>
 #include <memory>
+#include <functional>
 #include <vector>
 #include <boost/filesystem/path.hpp>
 
@@ -85,6 +87,45 @@ struct GFDCloudConfigFetchResult
     std::string                     error_message;
     std::vector<GFDCloudConfigInfo> configs;
 };
+
+struct GFDCloudConfigImportResult
+{
+    GFDCloudConfigImportResult() = default;
+    ~GFDCloudConfigImportResult();
+    GFDCloudConfigImportResult(const GFDCloudConfigImportResult&)            = delete;
+    GFDCloudConfigImportResult& operator=(const GFDCloudConfigImportResult&) = delete;
+
+    bool                                 ok{false};
+    unsigned                             status{0};
+    std::string                          response_body;
+    std::string                          error_message;
+    boost::filesystem::path              temporary_path;
+    DynamicPrintConfig                   config;
+    Semver                               file_version;
+    std::vector<std::unique_ptr<Preset>> project_presets;
+};
+
+using GFDCloudConfigFetchFinishedFn  = std::function<void(GFDCloudConfigFetchResult, bool)>;
+using GFDCloudConfigImportFinishedFn = std::function<void(std::shared_ptr<GFDCloudConfigImportResult>, bool)>;
+
+struct GFDAsyncRequestResult
+{
+    bool        ok{false};
+    bool        auth_failed{false};
+    unsigned    status{0};
+    std::string body;
+    std::string error_message;
+};
+
+struct GFDConfigUploadResult
+{
+    bool        ok{false};
+    bool        auth_failed{false};
+    std::string error_message;
+};
+
+using GFDDynamicRequestFinishedFn = std::function<void(GFDAsyncRequestResult, bool)>;
+using GFDConfigUploadFinishedFn   = std::function<void(GFDConfigUploadResult, bool)>;
 
 class MainFrame;
 class ConfigOptionsGroup;
@@ -449,6 +490,7 @@ public:
     //BBS add extra param for exporting 3mf silence
     // BBS: backup
     int export_3mf(const boost::filesystem::path& output_path = boost::filesystem::path(), SaveStrategy strategy = SaveStrategy::Default, int export_plate_idx = -1, Export3mfProgressFn proFn = nullptr);
+    bool is_3mf_export_in_progress() const;
 
     //BBS
     void publish_project();
@@ -480,10 +522,28 @@ public:
     int export_config_3mf(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
     bool upload_current_config_to_cloud(const std::string& config_name, const std::string& remarks = std::string());
     bool save_active_imported_cloud_config();
+    bool upload_current_config_to_cloud_async(const std::string& config_name,
+                                              const std::string& remarks,
+                                              GFDConfigUploadFinishedFn finished);
+    bool save_active_imported_cloud_config_async(GFDConfigUploadFinishedFn finished);
     bool fetch_cloud_configs(const std::string& device_type, std::vector<GFDCloudConfigInfo>& configs, std::string& error_message);
     static GFDCloudConfigFetchResult fetch_cloud_configs_with_token(const std::string& device_type,
                                                                     const std::string& request_url,
                                                                     const std::string& token);
+    static std::shared_ptr<GFDCloudConfigImportResult> prepare_cloud_config_import_with_token(const GFDCloudConfigInfo& config,
+                                                                                              const std::string& token,
+                                                                                              const std::function<bool()>& cancel_callback = {});
+    bool fetch_cloud_configs_async(const std::string& device_type,
+                                   const std::string& request_url,
+                                   const std::string& token,
+                                   GFDCloudConfigFetchFinishedFn finished);
+    bool prepare_cloud_config_import_async(const GFDCloudConfigInfo& config,
+                                           const std::string& token,
+                                           GFDCloudConfigImportFinishedFn finished);
+    void cancel_cloud_config_requests();
+    bool apply_prepared_cloud_config(const GFDCloudConfigInfo& config,
+                                     GFDCloudConfigImportResult& prepared,
+                                     std::string& error_message);
     bool import_cloud_config(const GFDCloudConfigInfo& config);
     bool fetch_dynamic_filament_list(std::string& body, std::string& error_message);
     bool fetch_dynamic_filament_detail(const std::string& filament_sn, std::string& body, std::string& error_message);
@@ -492,6 +552,13 @@ public:
                                              const std::string& slice_param,
                                              std::string&       body,
                                              std::string&       error_message);
+    bool fetch_dynamic_filament_list_async(GFDDynamicRequestFinishedFn finished);
+    bool fetch_dynamic_filament_detail_async(const std::string& filament_sn, GFDDynamicRequestFinishedFn finished);
+    bool update_dynamic_filament_slice_param_async(const std::string& filament_sn,
+                                                   const std::string& device_type,
+                                                   const std::string& slice_param,
+                                                   GFDDynamicRequestFinishedFn finished);
+    void cancel_dynamic_filament_reads();
     //BBS jump to nonitor after print job finished
     void send_calibration_job_finished(wxCommandEvent &evt);
     void print_job_finished(wxCommandEvent &evt);
@@ -842,6 +909,22 @@ public:
 private:
     struct priv;
     std::unique_ptr<priv> p;
+
+    enum class GFDDynamicRequestType { FilamentList, FilamentDetail, UpdateSliceParam };
+
+    bool start_dynamic_filament_request(GFDDynamicRequestType       request_type,
+                                        const std::string&          filament_sn,
+                                        const std::string&          device_type,
+                                        const std::string&          slice_param,
+                                        bool                        allow_auth_retry,
+                                        uint64_t                    read_generation,
+                                        GFDDynamicRequestFinishedFn finished);
+
+    bool start_gfd_config_upload_async(const std::string&       config_name,
+                                       const std::string&       remarks,
+                                       const std::string&       save_mode,
+                                       const std::string&       cloud_config_id,
+                                       GFDConfigUploadFinishedFn finished);
 
     // Set true during PopupMenu() tracking to suppress immediate error message boxes.
     // The error messages are collected to m_tracking_popup_menu_error_message instead and these error messages

@@ -95,6 +95,7 @@ public:
     ::CheckBox * m_dark_mode_ckeckbox        = {nullptr};
     ::TextInput *m_backup_interval_textinput = {nullptr};
     ::CheckBox * m_legacy_networking_ckeckbox     = {nullptr};
+    ::ComboBox * m_gfd_environment_combobox      = {nullptr};
     wxStaticText *m_gfd_account_status            = {nullptr};
     ::Button *    m_gfd_login_button              = {nullptr};
     ::Button *    m_gfd_logout_button             = {nullptr};

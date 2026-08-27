@@ -16,11 +16,13 @@ template<class WorkerSubclass>
 class PlaterWorker: public Worker {
     WorkerSubclass m_w;
     wxWindow *m_plater;
+    bool      m_busy_cursor_enabled{true};
 
     class PlaterJob : public Job {
         std::unique_ptr<Job> m_job;
         wxWindow *m_plater;
-        long long m_process_duration; // [ms]
+        bool                 m_busy_cursor_enabled{true};
+        long long            m_process_duration{0}; // [ms]
 
     public:
         void process(Ctl &c) override
@@ -62,7 +64,9 @@ class PlaterWorker: public Worker {
 
             } wctl{c};
 
-            CursorSetterRAII busycursor{wctl};
+            std::unique_ptr<CursorSetterRAII> busycursor;
+            if (m_busy_cursor_enabled)
+                busycursor = std::make_unique<CursorSetterRAII>(wctl);
             
             using namespace std::chrono;
             steady_clock::time_point process_start = steady_clock::now();
@@ -93,8 +97,8 @@ class PlaterWorker: public Worker {
             }
         }
 
-        PlaterJob(wxWindow *p, std::unique_ptr<Job> j)
-            : m_job{std::move(j)}, m_plater{p}
+        PlaterJob(wxWindow *p, std::unique_ptr<Job> j, bool busy_cursor_enabled)
+            : m_job{std::move(j)}, m_plater{p}, m_busy_cursor_enabled{busy_cursor_enabled}
         {
             // TODO: decide if disabling slice button during UI job is what we
             // want.
@@ -124,17 +128,26 @@ public:
         : m_w{std::forward<WorkerArgs>(args)...}
         , m_plater{plater}
         // Ensure that messages from the worker thread to the UI thread are
-        // processed continuously.
-        , on_idle_evt(plater, wxEVT_IDLE, [this](wxIdleEvent&) { process_events(); })
-        , on_paint_evt(plater, wxEVT_PAINT, [this](wxPaintEvent&) { process_events(); })
+        // processed continuously as a fallback. BoostThreadWorker also posts
+        // concrete GUI events, so modal dialogs do not depend on this handler.
+        , on_idle_evt(plater, wxEVT_IDLE, [this](wxIdleEvent& event) {
+            process_events();
+            event.Skip();
+        })
+        , on_paint_evt(plater, wxEVT_PAINT, [this](wxPaintEvent& event) {
+            process_events();
+            event.Skip();
+        })
     {
     }
 
     // Always package the job argument into a PlaterJob
     bool push(std::unique_ptr<Job> job) override
     {
-        return m_w.push(std::make_unique<PlaterJob>(m_plater, std::move(job)));
+        return m_w.push(std::make_unique<PlaterJob>(m_plater, std::move(job), m_busy_cursor_enabled));
     }
+
+    void set_busy_cursor_enabled(bool enabled) { m_busy_cursor_enabled = enabled; }
 
     bool is_idle() const override { return m_w.is_idle(); }
     void cancel() override { m_w.cancel(); }

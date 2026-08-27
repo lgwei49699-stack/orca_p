@@ -4,6 +4,9 @@
 #include "GUI_App.hpp"
 #include "GUI.hpp"
 #include "MainFrame.hpp"
+#include "Jobs/BoostThreadWorker.hpp"
+#include "Jobs/PlaterWorker.hpp"
+#include "Jobs/Worker.hpp"
 #include "Widgets/Button.hpp"
 #include "Widgets/CheckBox.hpp"
 #include "Widgets/ComboBox.hpp"
@@ -25,6 +28,7 @@
 #include <regex>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
+#include <wx/weakref.h>
 
 #include <ctime>
 
@@ -34,7 +38,9 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr long VERIFY_VALID_SECONDS = 24 * 60 * 60;
+constexpr long VERIFY_VALID_SECONDS          = 24 * 60 * 60;
+constexpr long LOGIN_CONNECT_TIMEOUT_SECONDS = 10;
+constexpr long LOGIN_REQUEST_TIMEOUT_SECONDS = 20;
 
 std::string trim_copy(const std::string& value)
 {
@@ -153,24 +159,90 @@ bool persist_login_state(const std::string& email,
     return true;
 }
 
-bool post_json_request(const std::string& url, const std::string& request_body, std::string& body, std::string& error_message)
+struct LoginAttemptResult
 {
-    bool ok = false;
+    bool        ok{false};
+    std::string uuid;
+    std::string auth_token;
+    std::string error_message;
+};
 
-    Http::post(url)
+struct VerifyAttemptResult
+{
+    bool        ok{false};
+    std::string verify_token;
+    std::string error_message;
+};
+
+bool get_json_request(const std::string& url,
+                      Job::Ctl&          ctl,
+                      std::string&       body,
+                      unsigned&          status,
+                      std::string&       error_message)
+{
+    bool ok                     = false;
+    bool cancellation_requested = false;
+
+    Http::get(url)
         .header("Content-Type", "application/json")
-        .set_post_body(request_body)
-        .on_complete([&](std::string response_body, unsigned) {
-            body = std::move(response_body);
-            ok   = true;
+        .timeout_connect(LOGIN_CONNECT_TIMEOUT_SECONDS)
+        .timeout_max(LOGIN_REQUEST_TIMEOUT_SECONDS)
+        .on_progress([&](Http::Progress, bool& cancel) {
+            cancellation_requested = ctl.was_canceled();
+            cancel                 = cancellation_requested;
         })
-        .on_error([&](std::string response_body, std::string error, unsigned) {
+        .on_complete([&](std::string response_body, unsigned http_status) {
+            body   = std::move(response_body);
+            status = http_status;
+            ok     = true;
+        })
+        .on_error([&](std::string response_body, std::string error, unsigned http_status) {
             body          = std::move(response_body);
+            status        = http_status;
             error_message = std::move(error);
             ok            = false;
         })
         .perform_sync();
 
+    if (cancellation_requested && !ok)
+        error_message = "操作已取消";
+    return ok;
+}
+
+bool post_json_request(const std::string& url,
+                       const std::string& request_body,
+                       Job::Ctl&          ctl,
+                       std::string&       body,
+                       unsigned&          status,
+                       std::string&       error_message)
+{
+    bool ok                     = false;
+    bool cancellation_requested = false;
+
+    Http::post(url)
+        .header("Content-Type", "application/json")
+        .set_post_body(request_body)
+        .timeout_connect(LOGIN_CONNECT_TIMEOUT_SECONDS)
+        .timeout_max(LOGIN_REQUEST_TIMEOUT_SECONDS)
+        .on_progress([&](Http::Progress, bool& cancel) {
+            cancellation_requested = ctl.was_canceled();
+            cancel                 = cancellation_requested;
+        })
+        .on_complete([&](std::string response_body, unsigned http_status) {
+            body   = std::move(response_body);
+            status = http_status;
+            ok     = true;
+        })
+        .on_error([&](std::string response_body, std::string error, unsigned http_status) {
+            body          = std::move(response_body);
+            status        = http_status;
+            error_message = std::move(error);
+            ok            = false;
+        })
+        .perform_sync();
+
+    if (cancellation_requested && !ok)
+        error_message = "操作已取消";
     return ok;
 }
 
@@ -188,6 +260,149 @@ std::string extract_response_message(const std::string& body, const std::string&
     } catch (...) {}
 
     return fallback.empty() ? body : fallback;
+}
+
+bool parse_public_key_response(const std::string& body,
+                               const std::string& environment,
+                               std::string&       public_key,
+                               std::string&       error_message)
+{
+    json        response;
+    std::string parse_error;
+    if (!try_parse_response_json(body, response, parse_error)) {
+        BOOST_LOG_TRIVIAL(error) << "GFD public key response parse failed"
+                                 << ", env=" << environment
+                                 << ", error=" << parse_error
+                                 << ", body_preview=" << preview_response_body(body);
+        error_message = "登录服务返回异常，请稍后重试";
+        return false;
+    }
+
+    try {
+        if (response.contains("msg") && response["msg"].is_string() && response["msg"].get<std::string>() == "success") {
+            public_key = response.value("data", std::string());
+            return !public_key.empty();
+        }
+        error_message = extract_response_message(body, "获取公钥失败");
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(error) << "GFD public key response handling failed"
+                                 << ", env=" << environment
+                                 << ", error=" << ex.what()
+                                 << ", body_preview=" << preview_response_body(body);
+        error_message = "登录服务返回异常，请稍后重试";
+    } catch (...) {
+        BOOST_LOG_TRIVIAL(error) << "GFD public key response handling failed"
+                                 << ", env=" << environment
+                                 << ", error=unknown"
+                                 << ", body_preview=" << preview_response_body(body);
+        error_message = "登录服务返回异常，请稍后重试";
+    }
+    return false;
+}
+
+bool parse_login_response(const std::string& body, const std::string& environment, LoginAttemptResult& result)
+{
+    json        response;
+    std::string parse_error;
+    if (!try_parse_response_json(body, response, parse_error)) {
+        BOOST_LOG_TRIVIAL(error) << "GFD login response parse failed"
+                                 << ", env=" << environment
+                                 << ", error=" << parse_error
+                                 << ", body_preview=" << preview_response_body(body);
+        result.error_message = "登录服务返回异常，请稍后重试";
+        return false;
+    }
+
+    try {
+        BOOST_LOG_TRIVIAL(info) << "GFD login response parsed"
+                                << ", env=" << environment
+                                << ", has_data=" << (response.contains("data") && response["data"].is_object())
+                                << ", data_has_uuid="
+                                << (response.contains("data") && response["data"].is_object() && response["data"].contains("uuid"))
+                                << ", data_has_token="
+                                << (response.contains("data") && response["data"].is_object() && response["data"].contains("token"))
+                                << ", data_has_access_token="
+                                << (response.contains("data") && response["data"].is_object() && response["data"].contains("accessToken"));
+        if (response.contains("msg") && response["msg"].is_string() && response["msg"].get<std::string>() == "success") {
+            if (response.contains("data") && response["data"].is_object()) {
+                const json& data = response["data"];
+                result.uuid      = json_string_or_empty(data, "uuid");
+                result.auth_token = json_string_or_empty(data, "token");
+                if (result.auth_token.empty())
+                    result.auth_token = json_string_or_empty(data, "accessToken");
+            }
+            result.ok = !result.uuid.empty() || !result.auth_token.empty();
+            if (!result.ok)
+                result.error_message = "登录服务未返回有效身份信息";
+            return result.ok;
+        }
+        BOOST_LOG_TRIVIAL(warning) << "GFD login rejected"
+                                   << ", env=" << environment
+                                   << ", body=" << body;
+        result.error_message = extract_response_message(body, "登录失败");
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(error) << "GFD login response handling failed"
+                                 << ", env=" << environment
+                                 << ", error=" << ex.what()
+                                 << ", body_preview=" << preview_response_body(body);
+        result.error_message = "登录服务返回异常，请稍后重试";
+    } catch (...) {
+        BOOST_LOG_TRIVIAL(error) << "GFD login response handling failed"
+                                 << ", env=" << environment
+                                 << ", error=unknown"
+                                 << ", body_preview=" << preview_response_body(body);
+        result.error_message = "登录服务返回异常，请稍后重试";
+    }
+    return false;
+}
+
+bool parse_verify_response(const std::string& body, const std::string& environment, VerifyAttemptResult& result)
+{
+    json        response;
+    std::string parse_error;
+    if (!try_parse_response_json(body, response, parse_error)) {
+        BOOST_LOG_TRIVIAL(error) << "GFD verify response parse failed"
+                                 << ", env=" << environment
+                                 << ", error=" << parse_error
+                                 << ", body_preview=" << preview_response_body(body);
+        result.error_message = "验证码服务返回异常，请稍后重试";
+        return false;
+    }
+
+    try {
+        BOOST_LOG_TRIVIAL(info) << "GFD verify response parsed"
+                                << ", env=" << environment
+                                << ", has_data=" << (response.contains("data") && response["data"].is_object());
+        if (response.contains("msg") && response["msg"].is_string() && response["msg"].get<std::string>() == "success") {
+            if (response.contains("data") && response["data"].is_object()) {
+                const json& data   = response["data"];
+                result.verify_token = json_string_or_empty(data, "token");
+                if (result.verify_token.empty())
+                    result.verify_token = json_string_or_empty(data, "accessToken");
+            }
+            result.ok = !result.verify_token.empty();
+            if (!result.ok)
+                result.error_message = "验证码服务未返回有效凭据";
+            return result.ok;
+        }
+        BOOST_LOG_TRIVIAL(warning) << "GFD verify rejected"
+                                   << ", env=" << environment
+                                   << ", body=" << body;
+        result.error_message = extract_response_message(body, "验证码校验失败");
+    } catch (const std::exception& ex) {
+        BOOST_LOG_TRIVIAL(error) << "GFD verify response handling failed"
+                                 << ", env=" << environment
+                                 << ", error=" << ex.what()
+                                 << ", body_preview=" << preview_response_body(body);
+        result.error_message = "验证码服务返回异常，请稍后重试";
+    } catch (...) {
+        BOOST_LOG_TRIVIAL(error) << "GFD verify response handling failed"
+                                 << ", env=" << environment
+                                 << ", error=unknown"
+                                 << ", body_preview=" << preview_response_body(body);
+        result.error_message = "验证码服务返回异常，请稍后重试";
+    }
+    return false;
 }
 
 void apply_window_button_style(Button* button, ButtonStyle style)
@@ -210,11 +425,16 @@ wxWindow* resolve_verify_parent(wxWindow* preferred_parent)
     if (preferred_parent != nullptr && preferred_parent->IsShownOnScreen())
         return preferred_parent;
 
-    wxWindow* fallback_parent = login_parent_window();
-    if (fallback_parent != nullptr)
+    if (wxGetApp().mainframe != nullptr && wxGetApp().mainframe->IsShownOnScreen())
+        return static_cast<wxWindow*>(wxGetApp().mainframe);
+
+    wxWindow* fallback_parent = wxTheApp != nullptr ? wxTheApp->GetTopWindow() : nullptr;
+    if (fallback_parent != nullptr && fallback_parent != preferred_parent && fallback_parent->IsShownOnScreen())
         return fallback_parent;
 
-    return preferred_parent;
+    // During cold startup the automatic-login dialog is intentionally hidden and may be the only
+    // top-level window. A parentless modal verification dialog remains visible on both macOS and Windows.
+    return nullptr;
 }
 
 wxBoxSizer* create_environment_item(wxWindow* parent,
@@ -242,19 +462,46 @@ wxBoxSizer* create_environment_item(wxWindow* parent,
 
 } // namespace
 
-GFDLoginDialog::GFDLoginDialog(wxWindow* parent)
-    : wxDialog(login_parent_window(parent), wxID_ANY, _L("功夫豆Orca - 登录"), wxDefaultPosition, wxDefaultSize,
+GFDLoginDialog::GFDLoginDialog(wxWindow* parent, bool use_fallback_parent)
+    : wxDialog(use_fallback_parent ? login_parent_window(parent) : parent,
+               wxID_ANY,
+               _L("功夫豆Orca - 登录"),
+               wxDefaultPosition,
+               wxDefaultSize,
                wxCAPTION | wxCLOSE_BOX)
 {
+    auto worker = std::make_unique<PlaterWorker<BoostThreadWorker>>(this, std::shared_ptr<ProgressIndicator>{}, "gfd_login_worker");
+    worker->set_busy_cursor_enabled(false);
+    m_worker = std::move(worker);
+
     build();
     bind_events();
     load_cached_credentials();
     wxGetApp().UpdateDlgDarkUI(this);
 }
 
-GFDLoginDialog::~GFDLoginDialog() = default;
+GFDLoginDialog::~GFDLoginDialog()
+{
+    m_destroying     = true;
+    m_login_finished = {};
+    if (m_worker != nullptr) {
+        m_worker->cancel_all();
+        m_worker->wait_for_idle();
+    }
+}
 
 bool GFDLoginDialog::run() { return ShowModal() == wxID_OK; }
+
+GFDLoginDialog::LoginResult GFDLoginDialog::login_with_credentials(wxWindow*          parent,
+                                                                   const std::string& username,
+                                                                   const std::string& password,
+                                                                   std::string&       error_message,
+                                                                   bool               persist_credentials,
+                                                                   bool               remember_credentials)
+{
+    GFDLoginDialog dialog(parent);
+    return dialog.login_with_credentials_local(username, password, error_message, persist_credentials, remember_credentials);
+}
 
 GFDLoginDialog::LoginResult GFDLoginDialog::login_with_credentials(const std::string& username,
                                                                    const std::string& password,
@@ -262,8 +509,20 @@ GFDLoginDialog::LoginResult GFDLoginDialog::login_with_credentials(const std::st
                                                                    bool               persist_credentials,
                                                                    bool               remember_credentials)
 {
-    GFDLoginDialog dialog;
-    return dialog.login_with_credentials_local(username, password, error_message, persist_credentials, remember_credentials);
+    return login_with_credentials(nullptr, username, password, error_message, persist_credentials, remember_credentials);
+}
+
+bool GFDLoginDialog::login_with_credentials_async(
+    const std::string& username, const std::string& password, LoginFinishedFn finished, bool persist_credentials, bool remember_credentials)
+{
+    if (!finished)
+        return false;
+
+    auto* dialog             = new GFDLoginDialog(nullptr, false);
+    dialog->m_login_finished = std::move(finished);
+    if (!dialog->prepare_login_attempt(username, password, persist_credentials, remember_credentials))
+        dialog->finish_async_login();
+    return true;
 }
 
 GFDLoginDialog::LoginResult GFDLoginDialog::login_with_credentials_local(const std::string& username,
@@ -272,62 +531,74 @@ GFDLoginDialog::LoginResult GFDLoginDialog::login_with_credentials_local(const s
                                                                          bool               persist_credentials,
                                                                          bool               remember_credentials)
 {
+    if (!prepare_login_attempt(username, password, persist_credentials, remember_credentials)) {
+        error_message = m_last_error;
+        return m_login_result;
+    }
+
+    ShowModal();
+    error_message = m_last_error;
+    return m_login_result;
+}
+
+bool GFDLoginDialog::prepare_login_attempt(const std::string& username,
+                                           const std::string& password,
+                                           bool               persist_credentials,
+                                           bool               remember_credentials)
+{
     const std::string email = trim_copy(username);
     if (email.empty()) {
-        error_message = "请输入账户";
-        return LoginResult::Failed;
+        m_login_result = LoginResult::Failed;
+        m_last_error   = "请输入账户";
+        return false;
     }
 
     static const std::regex email_regex(R"(^[^@\s]+@[^@\s]+\.[^@\s]+$)");
     if (!std::regex_match(email, email_regex)) {
-        error_message = "邮箱格式错误";
-        return LoginResult::Failed;
+        m_login_result = LoginResult::Failed;
+        m_last_error   = "邮箱格式错误";
+        return false;
     }
 
     if (password.empty()) {
-        error_message = "请输入密码";
-        return LoginResult::Failed;
+        m_login_result = LoginResult::Failed;
+        m_last_error   = "请输入密码";
+        return false;
     }
 
-    clear_verify_cache_if_user_changed(email);
+    m_username_input->SetValue(from_u8(email));
+    m_password_input->GetTextCtrl()->SetValue(from_u8(password));
+    m_remember_checkbox->SetValue(remember_credentials);
+    m_login_result = LoginResult::Cancelled;
+    m_last_error.clear();
 
-    std::string public_key;
-    if (!request_public_key(public_key, error_message))
-        return LoginResult::Failed;
-
-    const std::string encrypted_password = rsa_encrypt_password(password, public_key, error_message);
-    if (encrypted_password.empty()) {
-        if (error_message.empty())
-            error_message = "密码加密失败";
-        return LoginResult::Failed;
+    if (!apply_selected_environment()) {
+        m_login_result = LoginResult::Failed;
+        m_last_error   = "环境配置初始化失败";
+        return false;
     }
-
-    std::string uuid;
-    std::string auth_token;
-    if (!request_login(email, encrypted_password, uuid, auth_token, error_message))
-        return LoginResult::Failed;
-
-    std::string verify_token = GFD::Config::verify_token(wxGetApp().app_config);
-    if (!has_valid_verify_cache()) {
-        wxWindow* verify_parent = resolve_verify_parent(this);
-        BOOST_LOG_TRIVIAL(info) << "GFD login password step succeeded, opening verify dialog"
-                                << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                << ", uuid_empty=" << uuid.empty()
-                                << ", verify_parent_visible="
-                                << (verify_parent != nullptr && verify_parent->IsShownOnScreen());
-        GFDVerifyDialog verify_dialog(verify_parent);
-        if (!verify_dialog.verify_login(uuid, verify_token)) {
-            error_message = "验证码校验已取消或失败";
-            return LoginResult::Cancelled;
-        }
+    if (!start_login_attempt(email, password, persist_credentials, remember_credentials)) {
+        if (m_last_error.empty())
+            m_last_error = "无法启动登录任务，请稍后重试";
+        return false;
     }
+    return true;
+}
 
-    if (!persist_login_state(email, password, uuid, auth_token, verify_token, persist_credentials, remember_credentials)) {
-        error_message = "保存登录状态失败";
-        return LoginResult::Failed;
-    }
+void GFDLoginDialog::finish_async_login()
+{
+    if (m_destroying || !m_login_finished)
+        return;
 
-    return LoginResult::Success;
+    LoginFinishedFn           finished = std::move(m_login_finished);
+    const LoginResult         result   = m_login_result;
+    std::string               error    = m_last_error;
+    wxWeakRef<GFDLoginDialog> weak_this(this);
+    wxGetApp().CallAfter([weak_this, finished = std::move(finished), result, error = std::move(error)]() mutable {
+        if (weak_this)
+            weak_this->Destroy();
+        finished(result, std::move(error));
+    });
 }
 
 void GFDLoginDialog::build()
@@ -430,6 +701,7 @@ void GFDLoginDialog::bind_events()
     });
     m_qa_environment_radio->Bind(wxEVT_TOGGLEBUTTON, [this](wxCommandEvent&) { select_environment(GFD::Config::ENV_QA); });
     m_production_environment_radio->Bind(wxEVT_TOGGLEBUTTON, [this](wxCommandEvent&) { select_environment(GFD::Config::ENV_PRODUCTION); });
+    Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent&) { cancel_request_and_close(); });
 }
 
 void GFDLoginDialog::load_cached_credentials()
@@ -501,6 +773,9 @@ void GFDLoginDialog::save_cached_credentials()
 
 void GFDLoginDialog::select_environment(const std::string& environment)
 {
+    if (m_request_active)
+        return;
+
     const bool use_qa = environment == GFD::Config::ENV_QA;
     if (m_qa_environment_radio != nullptr)
         m_qa_environment_radio->SetValue(use_qa);
@@ -561,6 +836,8 @@ bool GFDLoginDialog::validate_input()
 
 void GFDLoginDialog::on_login(wxCommandEvent&)
 {
+    if (m_request_active)
+        return;
     if (!validate_input())
         return;
 
@@ -573,202 +850,230 @@ void GFDLoginDialog::on_login(wxCommandEvent&)
 
     const std::string email    = trim_copy(into_u8(m_username_input->GetTextCtrl()->GetValue()));
     const std::string password = into_u8(m_password_input->GetTextCtrl()->GetValue());
-    std::string error_message;
-    const LoginResult result = login_with_credentials_local(email, password, error_message, true, m_remember_checkbox->GetValue());
-    if (result != LoginResult::Success) {
-        m_tip_label->SetLabel(from_u8(error_message));
-        m_tip_label->Wrap(FromDIP(336));
-        Layout();
+    start_login_attempt(email, password, true, m_remember_checkbox->GetValue());
+}
+
+void GFDLoginDialog::on_cancel(wxCommandEvent&) { cancel_request_and_close(); }
+
+void GFDLoginDialog::cancel_request_and_close()
+{
+    m_login_result = LoginResult::Cancelled;
+    if (!m_request_active) {
+        if (IsModal())
+            EndModal(wxID_CANCEL);
+        else
+            Hide();
         return;
     }
 
-    save_cached_credentials();
-    EndModal(wxID_OK);
+    m_close_when_idle = true;
+    m_last_error      = "登录已取消";
+    m_tip_label->SetLabel(_L("正在取消登录..."));
+    m_tip_label->Wrap(FromDIP(336));
+    m_cancel_button->Enable(false);
+    Layout();
+    m_worker->cancel_all();
 }
 
-void GFDLoginDialog::on_cancel(wxCommandEvent&) { EndModal(wxID_CANCEL); }
-
-bool GFDLoginDialog::request_public_key(std::string& public_key, std::string& error_message)
+void GFDLoginDialog::set_login_controls_enabled(bool enabled)
 {
-    std::string body;
-    unsigned    status = 0;
-    bool        ok     = false;
-
-    Http::get(GFD::Config::public_key_url(wxGetApp().app_config))
-        .header("Content-Type", "application/json")
-        .on_complete([&](std::string response_body, unsigned http_status) {
-            body   = std::move(response_body);
-            status = http_status;
-            ok     = true;
-        })
-        .on_error([&](std::string response_body, std::string error, unsigned http_status) {
-            body          = std::move(response_body);
-            status        = http_status;
-            error_message = error.empty() ? extract_response_message(body, "获取公钥失败") : error;
-            ok            = false;
-        })
-        .perform_sync();
-
-    if (!ok)
-        return false;
-
-    json        response;
-    std::string parse_error;
-    if (!try_parse_response_json(body, response, parse_error)) {
-        BOOST_LOG_TRIVIAL(error) << "GFD public key response parse failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=" << parse_error
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "登录服务返回异常，请稍后重试";
-        return false;
+    if (m_username_input != nullptr)
+        m_username_input->Enable(enabled);
+    if (m_password_input != nullptr)
+        m_password_input->Enable(enabled);
+    if (m_qa_environment_radio != nullptr) {
+        if (enabled)
+            m_qa_environment_radio->Enable();
+        else
+            m_qa_environment_radio->Disable();
     }
-
-    try {
-        if (response.contains("msg") && response["msg"].is_string() && response["msg"].get<std::string>() == "success") {
-            public_key = response.value("data", std::string());
-            return !public_key.empty();
-        }
-        error_message = extract_response_message(body, "获取公钥失败");
-    } catch (const std::exception& ex) {
-        BOOST_LOG_TRIVIAL(error) << "GFD public key response handling failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=" << ex.what()
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "登录服务返回异常，请稍后重试";
-    } catch (...) {
-        BOOST_LOG_TRIVIAL(error) << "GFD public key response handling failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=unknown"
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "登录服务返回异常，请稍后重试";
+    if (m_production_environment_radio != nullptr) {
+        if (enabled)
+            m_production_environment_radio->Enable();
+        else
+            m_production_environment_radio->Disable();
     }
-    (void) status;
-    return false;
+    if (m_remember_checkbox != nullptr)
+        m_remember_checkbox->Enable(enabled);
+    if (m_login_button != nullptr)
+        m_login_button->Enable(enabled);
+    if (m_cancel_button != nullptr)
+        m_cancel_button->Enable(true);
 }
 
-bool GFDLoginDialog::request_login(const std::string& email,
-                                   const std::string& password_encrypted,
-                                   std::string&       uuid,
-                                   std::string&       auth_token,
-                                   std::string&       error_message)
+bool GFDLoginDialog::start_login_attempt(const std::string& email,
+                                         const std::string& password,
+                                         bool               persist_credentials,
+                                         bool               remember_credentials)
 {
-    json request_json;
-    request_json["email"]    = email;
-    request_json["password"] = password_encrypted;
-
-    std::string body;
-    if (!post_json_request(GFD::Config::login_url(wxGetApp().app_config), request_json.dump(), body, error_message)) {
-        if (error_message.empty())
-            error_message = extract_response_message(body, "登录失败");
+    if (m_request_active || m_worker == nullptr || wxGetApp().app_config == nullptr)
         return false;
-    }
 
-    json        response;
-    std::string parse_error;
-    if (!try_parse_response_json(body, response, parse_error)) {
-        BOOST_LOG_TRIVIAL(error) << "GFD login response parse failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=" << parse_error
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "登录服务返回异常，请稍后重试";
-        return false;
-    }
+    clear_verify_cache_if_user_changed(email);
+    const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
+    const std::string public_key_url      = GFD::Config::public_key_url(wxGetApp().app_config);
+    const std::string login_url           = GFD::Config::login_url(wxGetApp().app_config);
+    auto              result              = std::make_shared<LoginAttemptResult>();
 
-    try {
-        BOOST_LOG_TRIVIAL(info) << "GFD login response parsed"
-                                << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                << ", has_data=" << (response.contains("data") && response["data"].is_object())
-                                << ", data_has_uuid=" << (response.contains("data") && response["data"].is_object() && response["data"].contains("uuid"))
-                                << ", data_has_token=" << (response.contains("data") && response["data"].is_object() && response["data"].contains("token"))
-                                << ", data_has_access_token="
-                                << (response.contains("data") && response["data"].is_object() && response["data"].contains("accessToken"));
-        if (response.contains("msg") && response["msg"].is_string() && response["msg"].get<std::string>() == "success") {
-            if (response.contains("data") && response["data"].is_object()) {
-                const json& data = response["data"];
-                uuid = json_string_or_empty(data, "uuid");
-                auth_token = json_string_or_empty(data, "token");
-                if (auth_token.empty())
-                    auth_token = json_string_or_empty(data, "accessToken");
+    m_request_active = true;
+    m_close_when_idle = false;
+    m_last_error.clear();
+    set_login_controls_enabled(false);
+    m_tip_label->SetLabel(_L("正在登录，请稍候..."));
+    m_tip_label->Wrap(FromDIP(336));
+    Layout();
+
+    const bool queued = queue_job(
+        *m_worker,
+        [result, email, password, public_key_url, login_url, request_environment](Job::Ctl& ctl) {
+            std::string public_key;
+            std::string body;
+            unsigned    status = 0;
+            if (!get_json_request(public_key_url, ctl, body, status, result->error_message)) {
+                if (result->error_message.empty())
+                    result->error_message = extract_response_message(body, "获取公钥失败");
+                return;
             }
-            return !uuid.empty() || !auth_token.empty();
-        }
-        BOOST_LOG_TRIVIAL(warning) << "GFD login rejected"
-                                   << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                   << ", body=" << body;
-        error_message = extract_response_message(body, "登录失败");
-    } catch (const std::exception& ex) {
-        BOOST_LOG_TRIVIAL(error) << "GFD login response handling failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=" << ex.what()
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "登录服务返回异常，请稍后重试";
-    } catch (...) {
-        BOOST_LOG_TRIVIAL(error) << "GFD login response handling failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=unknown"
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "登录服务返回异常，请稍后重试";
-    }
+            if (ctl.was_canceled() || !parse_public_key_response(body, request_environment, public_key, result->error_message))
+                return;
 
-    return false;
-}
-
-bool GFDLoginDialog::request_verify(const std::string& uuid, const std::string& code, std::string& verify_token, std::string& error_message)
-{
-    json request_json;
-    request_json["uuid"]    = uuid;
-    request_json["tfaCode"] = code;
-
-    std::string body;
-    if (!post_json_request(GFD::Config::verify_url(wxGetApp().app_config), request_json.dump(), body, error_message)) {
-        if (error_message.empty())
-            error_message = extract_response_message(body, "验证码校验失败");
-        return false;
-    }
-
-    json        response;
-    std::string parse_error;
-    if (!try_parse_response_json(body, response, parse_error)) {
-        BOOST_LOG_TRIVIAL(error) << "GFD verify response parse failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=" << parse_error
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "验证码服务返回异常，请稍后重试";
-        return false;
-    }
-
-    try {
-        BOOST_LOG_TRIVIAL(info) << "GFD verify response parsed"
-                                << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                << ", has_data=" << (response.contains("data") && response["data"].is_object());
-        if (response.contains("msg") && response["msg"].is_string() && response["msg"].get<std::string>() == "success") {
-            if (response.contains("data") && response["data"].is_object()) {
-                const json& data = response["data"];
-                verify_token = json_string_or_empty(data, "token");
-                if (verify_token.empty())
-                    verify_token = json_string_or_empty(data, "accessToken");
+            const std::string encrypted_password = rsa_encrypt_password(password, public_key, result->error_message);
+            if (encrypted_password.empty()) {
+                if (result->error_message.empty())
+                    result->error_message = "密码加密失败";
+                return;
             }
-            return !verify_token.empty();
-        }
-        BOOST_LOG_TRIVIAL(warning) << "GFD verify rejected"
-                                   << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                   << ", body=" << body;
-        error_message = extract_response_message(body, "验证码校验失败");
-    } catch (const std::exception& ex) {
-        BOOST_LOG_TRIVIAL(error) << "GFD verify response handling failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=" << ex.what()
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "验证码服务返回异常，请稍后重试";
-    } catch (...) {
-        BOOST_LOG_TRIVIAL(error) << "GFD verify response handling failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=unknown"
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "验证码服务返回异常，请稍后重试";
-    }
+            if (ctl.was_canceled())
+                return;
 
-    return false;
+            json request_json;
+            request_json["email"]    = email;
+            request_json["password"] = encrypted_password;
+            body.clear();
+            status = 0;
+            if (!post_json_request(login_url, request_json.dump(), ctl, body, status, result->error_message)) {
+                if (result->error_message.empty())
+                    result->error_message = extract_response_message(body, "登录失败");
+                return;
+            }
+            if (!ctl.was_canceled())
+                parse_login_response(body, request_environment, *result);
+        },
+        [this, result, email, password, persist_credentials, remember_credentials, request_environment](bool                canceled,
+                                                                                                        std::exception_ptr& eptr) mutable {
+            if (m_destroying) {
+                eptr = nullptr;
+                return;
+            }
+            if (eptr != nullptr) {
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (const std::exception& ex) {
+                    result->error_message = ex.what();
+                } catch (...) {
+                    result->error_message = "登录任务发生未知异常";
+                }
+                eptr = nullptr;
+            }
+
+            if (canceled || m_close_when_idle) {
+                m_request_active = false;
+                m_login_result   = LoginResult::Cancelled;
+                if (m_last_error.empty())
+                    m_last_error = "登录已取消";
+                if (IsModal())
+                    EndModal(wxID_CANCEL);
+                finish_async_login();
+                return;
+            }
+
+            if (request_environment != GFD::Config::current_environment_name(wxGetApp().app_config)) {
+                result->ok            = false;
+                result->error_message = "云环境已切换，请重新登录";
+            }
+
+            if (!result->ok) {
+                m_request_active = false;
+                m_login_result   = LoginResult::Failed;
+                m_last_error     = result->error_message.empty() ? "登录失败" : result->error_message;
+                set_login_controls_enabled(true);
+                m_tip_label->SetLabel(from_u8(m_last_error));
+                m_tip_label->Wrap(FromDIP(336));
+                Layout();
+                finish_async_login();
+                return;
+            }
+
+            std::string verify_token;
+            if (has_valid_verify_cache())
+                verify_token = GFD::Config::verify_token(wxGetApp().app_config);
+            if (verify_token.empty()) {
+                wxWindow* verify_parent = resolve_verify_parent(this);
+                BOOST_LOG_TRIVIAL(info) << "GFD login password step succeeded, opening verify dialog"
+                                        << ", env=" << request_environment << ", uuid_empty=" << result->uuid.empty()
+                                        << ", verify_parent_visible=" << (verify_parent != nullptr && verify_parent->IsShownOnScreen());
+                GFDVerifyDialog verify_dialog(verify_parent);
+                if (!verify_dialog.verify_login(result->uuid, verify_token)) {
+                    m_request_active = false;
+                    m_login_result   = LoginResult::Cancelled;
+                    m_last_error     = "验证码校验已取消或失败";
+                    if (m_close_when_idle) {
+                        if (IsModal())
+                            EndModal(wxID_CANCEL);
+                        return;
+                    }
+                    set_login_controls_enabled(true);
+                    m_tip_label->SetLabel(from_u8(m_last_error));
+                    m_tip_label->Wrap(FromDIP(336));
+                    Layout();
+                    finish_async_login();
+                    return;
+                }
+            }
+
+            if (m_close_when_idle) {
+                m_request_active = false;
+                m_login_result   = LoginResult::Cancelled;
+                m_last_error     = "登录已取消";
+                if (IsModal())
+                    EndModal(wxID_CANCEL);
+                finish_async_login();
+                return;
+            }
+
+            if (!persist_login_state(email, password, result->uuid, result->auth_token, verify_token, persist_credentials,
+                                     remember_credentials)) {
+                m_request_active = false;
+                m_login_result   = LoginResult::Failed;
+                m_last_error     = "保存登录状态失败";
+                set_login_controls_enabled(true);
+                m_tip_label->SetLabel(from_u8(m_last_error));
+                m_tip_label->Wrap(FromDIP(336));
+                Layout();
+                finish_async_login();
+                return;
+            }
+
+            m_request_active = false;
+            m_login_result   = LoginResult::Success;
+            m_last_error.clear();
+            if (persist_credentials)
+                save_cached_credentials();
+            if (IsModal())
+                EndModal(wxID_OK);
+            finish_async_login();
+        });
+
+    if (!queued) {
+        m_request_active = false;
+        m_login_result   = LoginResult::Failed;
+        m_last_error     = "无法启动登录任务，请稍后重试";
+        set_login_controls_enabled(true);
+        m_tip_label->SetLabel(from_u8(m_last_error));
+        m_tip_label->Wrap(FromDIP(336));
+        Layout();
+    }
+    return queued;
 }
 
 std::string GFDLoginDialog::rsa_encrypt_password(const std::string& password,
@@ -823,12 +1128,24 @@ std::string GFDLoginDialog::rsa_encrypt_password(const std::string& password,
 }
 
 GFDVerifyDialog::GFDVerifyDialog(wxWindow* parent)
-    : wxDialog(parent != nullptr ? parent : login_parent_window(), wxID_ANY, _L("验证码校验"), wxDefaultPosition, wxDefaultSize,
-               wxCAPTION | wxCLOSE_BOX)
+    : wxDialog(parent, wxID_ANY, _L("验证码校验"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX)
 {
+    auto worker = std::make_unique<PlaterWorker<BoostThreadWorker>>(this, std::shared_ptr<ProgressIndicator>{}, "gfd_verify_worker");
+    worker->set_busy_cursor_enabled(false);
+    m_worker = std::move(worker);
+
     build();
     bind_events();
     wxGetApp().UpdateDlgDarkUI(this);
+}
+
+GFDVerifyDialog::~GFDVerifyDialog()
+{
+    m_destroying = true;
+    if (m_worker != nullptr) {
+        m_worker->cancel_all();
+        m_worker->wait_for_idle();
+    }
 }
 
 void GFDVerifyDialog::build()
@@ -873,77 +1190,127 @@ void GFDVerifyDialog::build()
 void GFDVerifyDialog::bind_events()
 {
     m_confirm_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { on_confirm(); });
-    m_cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_CANCEL); });
+    m_cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { cancel_request_and_close(); });
     m_code_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent& event) {
         on_confirm();
         event.Skip(false);
     });
+    Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent&) { cancel_request_and_close(); });
 }
 
 void GFDVerifyDialog::on_confirm()
 {
+    if (m_request_active)
+        return;
     const std::string code = trim_copy(into_u8(m_code_input->GetTextCtrl()->GetValue()));
     if (code.empty()) {
         set_tip(_L("请输入验证码"));
         return;
     }
 
-    std::string error_message;
-    std::string body;
-    json        request_json;
+    if (m_worker == nullptr || wxGetApp().app_config == nullptr) {
+        set_tip(_L("验证码服务不可用，请稍后重试"));
+        return;
+    }
+
+    const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
+    const std::string verify_url          = GFD::Config::verify_url(wxGetApp().app_config);
+    auto              result              = std::make_shared<VerifyAttemptResult>();
+
+    json request_json;
     request_json["uuid"]    = m_uuid;
     request_json["tfaCode"] = code;
-    if (!post_json_request(GFD::Config::verify_url(wxGetApp().app_config), request_json.dump(), body, error_message)) {
-        if (error_message.empty())
-            error_message = extract_response_message(body, "验证码校验失败");
-        set_tip(from_u8(error_message));
-        return;
-    }
+    const std::string request_body = request_json.dump();
 
-    json        response;
-    std::string parse_error;
-    if (!try_parse_response_json(body, response, parse_error)) {
-        BOOST_LOG_TRIVIAL(error) << "GFD verify dialog response parse failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=" << parse_error
-                                 << ", body_preview=" << preview_response_body(body);
-        set_tip(_L("验证码服务返回异常，请稍后重试"));
-        return;
-    }
+    m_request_active = true;
+    m_close_when_idle = false;
+    set_verify_controls_enabled(false);
+    set_tip(_L("正在校验，请稍候..."));
 
-    try {
-        if (response.contains("msg") && response["msg"].is_string() && response["msg"].get<std::string>() == "success") {
-            if (response.contains("data") && response["data"].is_object()) {
-                const json& data = response["data"];
-                m_verify_token = json_string_or_empty(data, "token");
-                if (m_verify_token.empty())
-                    m_verify_token = json_string_or_empty(data, "accessToken");
+    const bool queued = queue_job(
+        *m_worker,
+        [result, verify_url, request_body, request_environment](Job::Ctl& ctl) {
+            std::string body;
+            unsigned    status = 0;
+            if (!post_json_request(verify_url, request_body, ctl, body, status, result->error_message)) {
+                if (result->error_message.empty())
+                    result->error_message = extract_response_message(body, "验证码校验失败");
+                return;
             }
-        } else {
-            error_message = extract_response_message(body, "验证码校验失败");
-        }
-    } catch (const std::exception& ex) {
-        BOOST_LOG_TRIVIAL(error) << "GFD verify dialog response handling failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=" << ex.what()
-                                 << ", body_preview=" << preview_response_body(body);
-        set_tip(_L("验证码服务返回异常，请稍后重试"));
-        return;
-    } catch (...) {
-        BOOST_LOG_TRIVIAL(error) << "GFD verify dialog response handling failed"
-                                 << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                                 << ", error=unknown"
-                                 << ", body_preview=" << preview_response_body(body);
-        set_tip(_L("验证码服务返回异常，请稍后重试"));
+            if (!ctl.was_canceled())
+                parse_verify_response(body, request_environment, *result);
+        },
+        [this, result, request_environment](bool canceled, std::exception_ptr& eptr) {
+            if (m_destroying) {
+                eptr = nullptr;
+                return;
+            }
+            m_request_active = false;
+
+            if (eptr != nullptr) {
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (const std::exception& ex) {
+                    result->error_message = ex.what();
+                } catch (...) {
+                    result->error_message = "验证码任务发生未知异常";
+                }
+                eptr = nullptr;
+            }
+
+            if (canceled || m_close_when_idle) {
+                if (IsModal())
+                    EndModal(wxID_CANCEL);
+                return;
+            }
+
+            if (request_environment != GFD::Config::current_environment_name(wxGetApp().app_config)) {
+                result->ok            = false;
+                result->error_message = "云环境已切换，请重新校验";
+            }
+
+            if (!result->ok) {
+                set_verify_controls_enabled(true);
+                set_tip(from_u8(result->error_message.empty() ? "验证码校验失败" : result->error_message));
+                return;
+            }
+
+            m_verify_token = std::move(result->verify_token);
+            if (IsModal())
+                EndModal(wxID_OK);
+        });
+
+    if (!queued) {
+        m_request_active = false;
+        set_verify_controls_enabled(true);
+        set_tip(_L("无法启动验证码校验任务，请稍后重试"));
+    }
+}
+
+void GFDVerifyDialog::cancel_request_and_close()
+{
+    if (!m_request_active) {
+        if (IsModal())
+            EndModal(wxID_CANCEL);
+        else
+            Hide();
         return;
     }
 
-    if (m_verify_token.empty()) {
-        set_tip(from_u8(error_message.empty() ? "验证码校验失败" : error_message));
-        return;
-    }
+    m_close_when_idle = true;
+    set_tip(_L("正在取消校验..."));
+    m_cancel_button->Enable(false);
+    m_worker->cancel_all();
+}
 
-    EndModal(wxID_OK);
+void GFDVerifyDialog::set_verify_controls_enabled(bool enabled)
+{
+    if (m_code_input != nullptr)
+        m_code_input->Enable(enabled);
+    if (m_confirm_button != nullptr)
+        m_confirm_button->Enable(enabled);
+    if (m_cancel_button != nullptr)
+        m_cancel_button->Enable(true);
 }
 
 bool GFDVerifyDialog::verify_login(const std::string& uuid, std::string& verify_token)

@@ -39,6 +39,7 @@
 #include <wx/stdpaths.h>
 #include <wx/imagpng.h>
 #include <wx/display.h>
+#include <wx/evtloop.h>
 #include <wx/menu.h>
 #include <wx/menuitem.h>
 #include <wx/filedlg.h>
@@ -2410,8 +2411,23 @@ bool GUI_App::on_init_inner()
             BOOST_LOG_TRIVIAL(info) << "Skip GFD login UI because no desktop session is available.";
         } else {
             BOOST_LOG_TRIVIAL(info) << "GFD login required before loading client.";
+            bool        login_finished = false;
+            bool        logged_in      = false;
             std::string login_error;
-            if (!GFDAuthManager::ensure_logged_in(nullptr, &login_error)) {
+            wxEventLoop login_event_loop;
+            const bool  login_started = GFDAuthManager::ensure_logged_in_async(nullptr,
+                                                                               [&login_finished, &logged_in, &login_error,
+                                                                               &login_event_loop](bool        success,
+                                                                                                  std::string error_message) mutable {
+                                                                                  login_finished = true;
+                                                                                  logged_in      = success;
+                                                                                  login_error    = std::move(error_message);
+                                                                                  if (login_event_loop.IsRunning())
+                                                                                      login_event_loop.Exit();
+                                                                              });
+            if (login_started && !login_finished)
+                login_event_loop.Run();
+            if (!login_started || !logged_in) {
                 BOOST_LOG_TRIVIAL(info) << "GFD login canceled or failed, quit application before loading client.";
                 return false;
             }

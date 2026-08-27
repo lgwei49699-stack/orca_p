@@ -21,6 +21,8 @@ class wxTextCtrl;
 
 namespace Slic3r { namespace GUI {
 
+class Worker;
+
 struct GFDDeviceInfo
 {
     std::string mac;
@@ -50,6 +52,8 @@ public:
     const std::vector<GFDDeviceInfo>& selected_devices() const { return m_selected_devices; }
     const std::string&                gcode_path() const { return m_gcode_path; }
     bool                              use_3mf_file() const { return m_use_3mf_file; }
+    std::shared_ptr<std::atomic_bool> lifetime_token() const { return m_alive; }
+    void                              update_print_progress(const wxString& message, int percent = -1);
     void                              complete_print_submission(bool success);
 
 private:
@@ -95,9 +99,12 @@ private:
     std::vector<GFDDeviceInfo> m_selected_devices;
     std::set<std::string>             m_checked_device_keys;
     std::shared_ptr<std::atomic_bool> m_alive;
+    std::unique_ptr<Worker>           m_device_worker;
     wxTimer                           m_loading_timer;
+    size_t                            m_device_query_generation{0};
     bool                              m_suppress_filter_events{false};
     bool                              m_loading{false};
+    bool                              m_loading_determinate{false};
     bool                              m_print_submitting{false};
     bool                              m_use_3mf_file{false};
 

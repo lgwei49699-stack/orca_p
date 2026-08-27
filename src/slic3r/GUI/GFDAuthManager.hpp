@@ -26,17 +26,22 @@ class GFDAuthManager
 {
 public:
     using RequestFn = std::function<GFDHttpResult(const std::string&)>;
+    using LoginFinishedFn = std::function<void(bool, std::string)>;
 
     static bool        has_valid_session(const AppConfig* config);
     static std::string current_auth_token(const AppConfig* config);
     static void        clear_session(AppConfig* config);
     static void        logout(AppConfig* config, bool forget_credentials = false);
     static bool        ensure_logged_in(wxWindow* parent, std::string* error_message = nullptr);
+    static bool        ensure_logged_in_async(wxWindow* parent, LoginFinishedFn finished);
     static bool        perform_authenticated_request(const RequestFn& request,
                                                      std::string&     body,
                                                      std::string&     error_message,
                                                      wxWindow*        parent = nullptr);
     static bool        is_auth_failure_response(unsigned status, const std::string& body, const std::string& error_message);
+    static bool        is_retryable_auth_failure_response(unsigned           status,
+                                                          const std::string& body,
+                                                          const std::string& error_message);
 };
 
 }} // namespace Slic3r::GUI

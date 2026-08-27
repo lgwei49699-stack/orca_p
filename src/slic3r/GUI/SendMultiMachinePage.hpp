@@ -100,6 +100,7 @@ private:
     int                                 m_print_plate_idx;
     bool                                m_is_canceled{ false };
     bool                                m_export_3mf_cancel{ false };
+    bool                                m_send_in_progress{ false };
     AppConfig*                          app_config;
 
     wxPanel*                            m_main_page{ nullptr };

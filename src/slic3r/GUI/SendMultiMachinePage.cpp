@@ -298,6 +298,14 @@ SendMultiMachinePage::SendMultiMachinePage(Plater* plater)
 
     init_timer();
     Bind(wxEVT_TIMER, &SendMultiMachinePage::on_timer, this);
+    Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& event) {
+        m_is_canceled       = true;
+        m_export_3mf_cancel = true;
+        if (event.CanVeto())
+            EndModal(wxID_CANCEL);
+        else
+            event.Skip();
+    });
     wxGetApp().UpdateDlgDarkUI(this);
 }
 
@@ -632,13 +640,36 @@ void SendMultiMachinePage::on_send(wxCommandEvent& event)
     event.Skip();
     BOOST_LOG_TRIVIAL(info) << "SendMultiMachinePage: on_send";
 
-    int result = m_plater->send_gcode(m_print_plate_idx, [this](int export_stage, int current, int total, bool& cancel) {
-        if (m_is_canceled) return;
+    if (m_send_in_progress)
+        return;
+    m_send_in_progress = true;
+    const bool refresh_was_running = m_refresh_timer != nullptr && m_refresh_timer->IsRunning();
+    if (m_refresh_timer != nullptr)
+        m_refresh_timer->Stop();
+    if (m_main_page != nullptr)
+        m_main_page->Enable(false);
+    ScopeGuard restore_send_state([this, refresh_was_running] {
+        m_send_in_progress = false;
+        if (m_main_page != nullptr)
+            m_main_page->Enable(true);
+        if (refresh_was_running && m_refresh_timer != nullptr && IsShown())
+            m_refresh_timer->Start(4000);
+    });
+
+    m_is_canceled       = false;
+    m_export_3mf_cancel = false;
+
+    Export3mfProgressFn export_progress = [this](int export_stage, int current, int total, bool& cancel) {
+        if (m_is_canceled) {
+            m_export_3mf_cancel = cancel = true;
+            return;
+        }
         bool     cancelled = false;
         wxString msg = _L("Preparing print job");
         //m_status_bar->update_status(msg, cancelled, 10, true);
-        //m_export_3mf_cancel = cancel = cancelled;
-        });
+        m_export_3mf_cancel = cancel = cancelled || m_is_canceled;
+    };
+    int result = m_plater->send_gcode(m_print_plate_idx, export_progress);
 
     if (m_is_canceled || m_export_3mf_cancel) {
         BOOST_LOG_TRIVIAL(info) << "print_job: m_export_3mf_cancel or m_is_canceled";
@@ -653,7 +684,7 @@ void SendMultiMachinePage::on_send(wxCommandEvent& event)
     }
 
     // export config 3mf if needed
-    result = m_plater->export_config_3mf(m_print_plate_idx);
+    result = m_plater->export_config_3mf(m_print_plate_idx, export_progress);
     if (result < 0) {
         BOOST_LOG_TRIVIAL(trace) << "export_config_3mf failed, result = " << result;
         return;

@@ -1,6 +1,9 @@
 #ifndef BOOSTTHREADWORKER_HPP
 #define BOOSTTHREADWORKER_HPP
 
+#include <atomic>
+#include <memory>
+
 #include <boost/variant.hpp>
 
 #include "Worker.hpp"
@@ -73,8 +76,12 @@ class BoostThreadWorker : public Worker, private Job::Ctl
     JobQueue     m_input_queue;  // from main thread to worker
     MessageQueue m_output_queue; // form worker to main thread
     std::string  m_name;
+    std::shared_ptr<void>     m_ui_lifetime{std::make_shared<char>()};
+    const std::weak_ptr<void> m_ui_lifetime_weak{m_ui_lifetime};
+    std::atomic<bool>         m_ui_dispatch_pending{false};
 
     void run();
+    void notify_main_thread();
 
     bool join(int timeout_ms = 0);
 

@@ -1360,7 +1360,7 @@ void PresetCollection::load_project_embedded_presets(std::vector<Preset*>& proje
     std::vector<Preset*>::iterator it;
 
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(" enter, type %1% , total preset counts %2%")%Preset::get_type_string(m_type) %project_presets.size();
-    lock();
+    std::lock_guard<std::mutex> collection_lock(m_mutex);
     for (it = project_presets.begin(); it != project_presets.end(); it++) {
         Preset* preset = *it;
         if (preset->type != Preset::get_type_from_string(type)) continue;
@@ -1374,7 +1374,7 @@ void PresetCollection::load_project_embedded_presets(std::vector<Preset*>& proje
             DynamicPrintConfig config = preset->config;
             if (preset->loading_substitutions && ! preset->loading_substitutions->empty()) {
                 substitutions.push_back({ preset->name, m_type, PresetConfigSubstitutions::Source::ProjectFile, preset->name, std::move(*(preset->loading_substitutions))});
-                free(preset->loading_substitutions);
+                delete preset->loading_substitutions;
                 preset->loading_substitutions = NULL;
             }
             //BBS: use inherit config as the base
@@ -1423,8 +1423,6 @@ void PresetCollection::load_project_embedded_presets(std::vector<Preset*>& proje
     std::sort(m_presets.begin() + m_num_default_presets, m_presets.end());
     //don't select it here
     //this->select_preset(first_visible_idx());
-    unlock();
-
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(" finished, %1% got %2% presets, errors_cummulative %3%")%Preset::get_type_string(m_type) %presets_loaded.size() %errors_cummulative;
     if (! errors_cummulative.empty())
         throw Slic3r::RuntimeError(errors_cummulative);

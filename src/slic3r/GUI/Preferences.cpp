@@ -386,6 +386,7 @@ wxBoxSizer *PreferencesDialog::create_gfd_environment_combobox(wxWindow *parent)
     auto [sizer, combobox] = create_item_combobox_base(_L("GFD 云环境"), parent,
                                                         _L("切换 GFD 中台的正式环境或测试环境"),
                                                         "gfd_environment", labels, use_qa ? 1 : 0);
+    m_gfd_environment_combobox = combobox;
 
     combobox->GetDropDown().Bind(wxEVT_COMBOBOX, [this, combobox](wxCommandEvent &event) {
         const std::string current_environment = GFD::Config::current_environment_name(app_config);
@@ -473,6 +474,11 @@ wxBoxSizer *PreferencesDialog::create_gfd_account_controls(wxWindow *parent)
 
 void PreferencesDialog::update_gfd_account_controls()
 {
+    if (m_gfd_environment_combobox != nullptr) {
+        const bool use_qa = GFD::Config::current_environment_name(app_config) == GFD::Config::ENV_QA;
+        m_gfd_environment_combobox->SetSelection(use_qa ? 1 : 0);
+    }
+
     if (m_gfd_account_status == nullptr || m_gfd_login_button == nullptr || m_gfd_logout_button == nullptr)
         return;
 

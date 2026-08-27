@@ -419,6 +419,8 @@ public:
         m_loading_timer.Stop();
         if (m_alive)
             m_alive->store(false);
+        if (m_plater != nullptr)
+            m_plater->cancel_cloud_config_requests();
     }
 
     void refresh_configs() { fetch_configs_for_selected_device(); }
@@ -435,6 +437,7 @@ private:
     Button*                           m_refresh_button{nullptr};
     Button*                           m_cancel_button{nullptr};
     std::vector<GFDCloudConfigInfo>   m_configs;
+    std::string                       m_configs_environment;
     std::shared_ptr<std::atomic_bool> m_alive;
     wxTimer                           m_loading_timer;
     size_t                            m_request_generation{0};
@@ -498,11 +501,26 @@ private:
 
     void bind_events()
     {
-        m_cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_CANCEL); });
+        m_cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (m_alive)
+                m_alive->store(false);
+            ++m_request_generation;
+            if (m_plater != nullptr)
+                m_plater->cancel_cloud_config_requests();
+            EndModal(wxID_CANCEL);
+        });
         m_refresh_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { fetch_configs_for_selected_device(); });
         m_device_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { fetch_configs_for_selected_device(); });
         m_config_list->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
             position_loading_panel();
+            event.Skip();
+        });
+        Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& event) {
+            if (m_alive)
+                m_alive->store(false);
+            ++m_request_generation;
+            if (m_plater != nullptr)
+                m_plater->cancel_cloud_config_requests();
             event.Skip();
         });
         Bind(
@@ -546,6 +564,7 @@ private:
     void fetch_configs_for_selected_device(bool allow_auth_retry = true)
     {
         m_configs.clear();
+        m_configs_environment.clear();
         rebuild_config_rows();
 
         const std::string device_type = selected_device_type();
@@ -560,13 +579,25 @@ private:
             m_loading_text->SetLabel(_L("正在获取云端配置，请稍候..."));
         set_loading_state(true);
 
-        std::string error_message;
         if (m_plater == nullptr) {
             apply_cloud_config_response({}, "切片界面不可用");
             return;
         }
-        if (!GFDAuthManager::ensure_logged_in(this, &error_message)) {
-            apply_cloud_config_response({}, error_message.empty() ? "获取云端配置失败" : std::move(error_message));
+        if (!GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
+            const auto   alive      = m_alive;
+            const size_t generation = ++m_request_generation;
+            const bool login_started = GFDAuthManager::ensure_logged_in_async(
+                this, [this, alive, generation, allow_auth_retry](bool logged_in, std::string error_message) mutable {
+                    if (!alive || !alive->load() || generation != m_request_generation)
+                        return;
+                    if (!logged_in) {
+                        apply_cloud_config_response({}, error_message.empty() ? "获取云端配置失败" : std::move(error_message));
+                        return;
+                    }
+                    fetch_configs_for_selected_device(allow_auth_retry);
+                });
+            if (!login_started)
+                apply_cloud_config_response({}, "无法启动自动登录任务，请稍后重试");
             return;
         }
 
@@ -577,29 +608,30 @@ private:
         }
 
         const std::string request_url = GFD::Config::device_slice_type_url(wxGetApp().app_config);
+        const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
         const auto        alive       = m_alive;
         const size_t      generation  = ++m_request_generation;
 
-        std::thread([this, alive, generation, allow_auth_retry, device_type, request_url, token]() {
-            GFDCloudConfigFetchResult result;
-            try {
-                result = Plater::fetch_cloud_configs_with_token(device_type, request_url, token);
-            } catch (const std::exception& ex) {
-                result.error_message = std::string("获取云端配置失败: ") + ex.what();
-                BOOST_LOG_TRIVIAL(error) << "GFD cloud import dialog background fetch failed"
-                                         << ", device_type=" << device_type << ", error=" << ex.what();
-            } catch (...) {
-                result.error_message = "获取云端配置失败";
-                BOOST_LOG_TRIVIAL(error) << "GFD cloud import dialog background fetch failed with unknown exception"
-                                         << ", device_type=" << device_type;
-            }
-
-            wxGetApp().CallAfter([this, alive, generation, allow_auth_retry, result = std::move(result)]() mutable {
+        const bool queued = m_plater->fetch_cloud_configs_async(
+            device_type, request_url, token,
+            [this, alive, generation, allow_auth_retry, request_environment, token](GFDCloudConfigFetchResult result, bool canceled) mutable {
                 if (!alive || !alive->load() || generation != m_request_generation)
                     return;
+                if (canceled) {
+                    set_loading_state(false);
+                    m_tip_label->SetLabel(_L("操作已取消"));
+                    return;
+                }
 
-                if (GFDAuthManager::is_auth_failure_response(result.status, result.body, result.error_message)) {
-                    GFDAuthManager::clear_session(wxGetApp().app_config);
+                if (request_environment != GFD::Config::current_environment_name(wxGetApp().app_config)) {
+                    set_loading_state(false);
+                    fetch_configs_for_selected_device();
+                    return;
+                }
+
+                if (GFDAuthManager::is_retryable_auth_failure_response(result.status, result.body, result.error_message)) {
+                    if (GFDAuthManager::current_auth_token(wxGetApp().app_config) == token)
+                        GFDAuthManager::clear_session(wxGetApp().app_config);
                     if (allow_auth_retry) {
                         fetch_configs_for_selected_device(false);
                         return;
@@ -608,15 +640,19 @@ private:
                         result.error_message = "登录状态无效，请重新登录";
                 }
 
+                if (result.ok)
+                    m_configs_environment = request_environment;
                 apply_cloud_config_response(std::move(result.configs), std::move(result.error_message), result.ok);
             });
-        }).detach();
+        if (!queued)
+            apply_cloud_config_response({}, "无法启动云端配置查询任务");
     }
 
     void apply_cloud_config_response(std::vector<GFDCloudConfigInfo> configs, std::string error_message, bool request_ok = false)
     {
         if (!request_ok) {
             m_configs.clear();
+            m_configs_environment.clear();
             rebuild_config_rows();
             m_tip_label->SetLabel(from_u8(error_message.empty() ? "获取云端配置失败" : error_message));
             set_loading_state(false);
@@ -842,22 +878,130 @@ private:
             return;
         }
 
-        const GFDCloudConfigInfo config = m_configs[index];
+        apply_config(m_configs[index], true);
+    }
+
+    void apply_config(const GFDCloudConfigInfo& config, bool allow_auth_retry)
+    {
+        if (m_loading || m_plater == nullptr)
+            return;
+
+        const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
+        if (m_configs_environment.empty() || m_configs_environment != request_environment) {
+            m_tip_label->SetLabel(_L("云环境已变化，正在重新获取配置..."));
+            fetch_configs_for_selected_device();
+            return;
+        }
+
         BOOST_LOG_TRIVIAL(info) << "GFD cloud import apply row"
                                 << ", id=" << config.id
                                 << ", name=" << config.name
                                 << ", device_type=" << config.device_type;
-        m_tip_label->SetLabel(_L("正在应用云端配置..."));
-        m_refresh_button->Enable(false);
-        Layout();
 
-        const bool imported = m_plater->import_cloud_config(config);
-        m_refresh_button->Enable(true);
-        if (imported) {
-            m_tip_label->SetLabel(_L("云端配置已应用"));
-            EndModal(wxID_CANCEL);
-        } else {
-            m_tip_label->SetLabel(_L("云端配置应用失败"));
+        if (!GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
+            const auto   alive      = m_alive;
+            const size_t generation = ++m_request_generation;
+            m_tip_label->SetLabel(_L("正在恢复登录状态..."));
+            const bool login_started = GFDAuthManager::ensure_logged_in_async(
+                this, [this, alive, generation, config, allow_auth_retry](bool logged_in, std::string error_message) mutable {
+                    if (!alive || !alive->load() || generation != m_request_generation)
+                        return;
+                    if (!logged_in) {
+                        m_tip_label->SetLabel(from_u8(error_message.empty() ? "登录状态无效，请重新登录" : error_message));
+                        return;
+                    }
+                    apply_config(config, allow_auth_retry);
+                });
+            if (!login_started)
+                m_tip_label->SetLabel(_L("无法启动自动登录任务，请稍后重试"));
+            return;
+        }
+
+        if (request_environment != GFD::Config::current_environment_name(wxGetApp().app_config)) {
+            m_tip_label->SetLabel(_L("云环境已变化，正在重新获取配置..."));
+            fetch_configs_for_selected_device();
+            return;
+        }
+
+        const std::string token = GFDAuthManager::current_auth_token(wxGetApp().app_config);
+        if (token.empty()) {
+            m_tip_label->SetLabel(_L("登录状态无效，请重新登录"));
+            return;
+        }
+
+        m_tip_label->SetLabel(_L("正在下载并解析云端配置..."));
+        if (m_loading_text != nullptr)
+            m_loading_text->SetLabel(_L("正在下载并解析云端配置，请稍候..."));
+        set_loading_state(true);
+
+        const auto   alive      = m_alive;
+        const size_t generation = ++m_request_generation;
+        const bool queued = m_plater->prepare_cloud_config_import_async(
+            config, token,
+            [this, alive, generation, config, allow_auth_retry,
+             request_environment, token](std::shared_ptr<GFDCloudConfigImportResult> result, bool canceled) mutable {
+                if (!alive || !alive->load() || generation != m_request_generation)
+                    return;
+                if (canceled) {
+                    set_loading_state(false);
+                    m_tip_label->SetLabel(_L("操作已取消"));
+                    return;
+                }
+
+                if (request_environment != GFD::Config::current_environment_name(wxGetApp().app_config)) {
+                    set_loading_state(false);
+                    m_tip_label->SetLabel(_L("云环境已变化，正在重新获取配置..."));
+                    fetch_configs_for_selected_device();
+                    return;
+                }
+
+                if (result == nullptr) {
+                    set_loading_state(false);
+                    m_tip_label->SetLabel(_L("云端配置应用失败"));
+                    return;
+                }
+
+                if (GFDAuthManager::is_retryable_auth_failure_response(result->status, result->response_body,
+                                                                       result->error_message)) {
+                    if (GFDAuthManager::current_auth_token(wxGetApp().app_config) == token)
+                        GFDAuthManager::clear_session(wxGetApp().app_config);
+                    set_loading_state(false);
+                    if (allow_auth_retry) {
+                        apply_config(config, false);
+                        return;
+                    }
+                    if (result->error_message.empty())
+                        result->error_message = "登录状态无效，请重新登录";
+                }
+
+                if (!result->ok) {
+                    const std::string message = result->error_message.empty() ? "读取云端配置失败" : result->error_message;
+                    set_loading_state(false);
+                    m_tip_label->SetLabel(from_u8(message));
+                    show_error(this, from_u8(message));
+                    return;
+                }
+
+                m_tip_label->SetLabel(_L("正在应用云端配置..."));
+                if (m_loading_text != nullptr)
+                    m_loading_text->SetLabel(_L("正在应用云端配置，请稍候..."));
+                Layout();
+
+                std::string apply_error;
+                const bool imported = m_plater != nullptr && m_plater->apply_prepared_cloud_config(config, *result, apply_error);
+                set_loading_state(false);
+                if (imported) {
+                    m_tip_label->SetLabel(_L("云端配置已应用"));
+                    EndModal(wxID_CANCEL);
+                } else {
+                    const std::string message = apply_error.empty() ? "云端配置应用失败" : apply_error;
+                    m_tip_label->SetLabel(from_u8(message));
+                    show_error(this, from_u8(message));
+                }
+            });
+        if (!queued) {
+            set_loading_state(false);
+            m_tip_label->SetLabel(_L("无法启动云端配置导入任务"));
         }
     }
 };
@@ -1422,6 +1566,7 @@ public:
     GFDDynamicMaterialDialog(wxWindow* parent, Plater* plater)
         : DPIDialog(parent, wxID_ANY, _L("材料设置"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
         , m_plater(plater)
+        , m_alive(std::make_shared<std::atomic_bool>(true))
     {
         m_bundle = wxGetApp().preset_bundle != nullptr ? std::make_unique<PresetBundle>(*wxGetApp().preset_bundle) : std::make_unique<PresetBundle>();
 
@@ -1430,7 +1575,16 @@ public:
         wxGetApp().UpdateDlgDarkUI(this);
 
         load_device_types();
-        refresh_filament_options();
+        const auto alive = m_alive;
+        wxGetApp().CallAfter([this, alive]() {
+            if (alive && alive->load())
+                refresh_filament_options();
+        });
+    }
+
+    ~GFDDynamicMaterialDialog() override
+    {
+        deactivate_async_callbacks();
     }
 
 private:
@@ -1447,6 +1601,13 @@ private:
     std::vector<GFDDynamicFilamentOption> m_filaments;
     nlohmann::json                        m_current_detail;
     std::string                           m_selected_sn;
+    std::shared_ptr<std::atomic_bool>     m_alive;
+    size_t                                m_list_request_generation{0};
+    size_t                                m_detail_request_generation{0};
+    size_t                                m_save_request_generation{0};
+    bool                                  m_list_loading{false};
+    bool                                  m_detail_loading{false};
+    bool                                  m_save_in_progress{false};
 
     void build()
     {
@@ -1555,7 +1716,39 @@ private:
             m_filament_choice->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) { on_filament_changed(true); });
         if (m_device_choice != nullptr)
             m_device_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { apply_detail_for_selected_device(); });
-        Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent&) { EndModal(wxID_CANCEL); });
+        Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& event) {
+            if (m_save_in_progress && event.CanVeto()) {
+                event.Veto();
+                return;
+            }
+            deactivate_async_callbacks();
+            EndModal(wxID_CANCEL);
+        });
+    }
+
+    void deactivate_async_callbacks()
+    {
+        if (m_alive == nullptr || !m_alive->exchange(false))
+            return;
+
+        ++m_list_request_generation;
+        ++m_detail_request_generation;
+        ++m_save_request_generation;
+        if (m_plater != nullptr)
+            m_plater->cancel_dynamic_filament_reads();
+    }
+
+    void update_control_state()
+    {
+        const bool busy = m_list_loading || m_detail_loading || m_save_in_progress;
+        if (m_filament_tab != nullptr)
+            m_filament_tab->Enable(!busy);
+        if (m_filament_choice != nullptr)
+            m_filament_choice->Enable(!busy && !m_filaments.empty());
+        if (m_device_choice != nullptr)
+            m_device_choice->Enable(!busy && m_device_choice->GetCount() > 0);
+        if (m_save_button != nullptr)
+            m_save_button->Enable(!busy && !m_selected_sn.empty());
     }
 
     void configure_filament_dropdown()
@@ -1631,14 +1824,44 @@ private:
 
     bool response_success_or_message(const std::string& body, std::string& message) const
     {
-        try {
-            const nlohmann::json response = nlohmann::json::parse(body);
-            const int code = response.value("code", 0);
-            const std::string msg = response.value("msg", std::string());
-            message = msg;
-            return msg == "success" || msg.empty() || code == 0 || code == 200;
-        } catch (...) {
+        const std::string trimmed_body = gfd_trim_copy(body);
+        if (trimmed_body.empty()) {
+            message.clear();
             return true;
+        }
+
+        try {
+            const nlohmann::json response = nlohmann::json::parse(trimmed_body);
+            if (!response.is_object()) {
+                message = "服务返回格式异常";
+                return false;
+            }
+
+            if (const auto it = response.find("msg"); it != response.end() && it->is_string())
+                message = it->get<std::string>();
+
+            bool has_code = false;
+            bool code_ok  = false;
+            if (const auto it = response.find("code"); it != response.end()) {
+                if (it->is_number_integer()) {
+                    has_code       = true;
+                    const int code = it->get<int>();
+                    code_ok        = code == 0 || code == 200;
+                } else if (it->is_string()) {
+                    has_code              = true;
+                    const std::string code = it->get<std::string>();
+                    code_ok                = code.empty() || code == "0" || code == "200";
+                }
+            }
+
+            if ((has_code && code_ok) || (!has_code && (message.empty() || message == "success")))
+                return true;
+            if (message.empty())
+                message = "云端接口返回失败";
+            return false;
+        } catch (...) {
+            message = "服务返回格式异常";
+            return false;
         }
     }
 
@@ -1704,41 +1927,63 @@ private:
     {
         if (m_plater == nullptr) {
             set_tip(_L("Plater 未初始化"));
+            update_control_state();
             return;
         }
 
+        const size_t generation = ++m_list_request_generation;
+        ++m_detail_request_generation;
+        m_list_loading   = true;
+        m_detail_loading = false;
+        m_current_detail = nlohmann::json();
         set_tip(_L("正在获取耗材列表..."));
-        std::string body;
-        std::string error_message;
-        if (!m_plater->fetch_dynamic_filament_list(body, error_message)) {
-            set_tip(from_u8(error_message.empty() ? "获取耗材列表失败" : error_message));
-            return;
+        update_control_state();
+
+        const auto alive = m_alive;
+        const bool queued = m_plater->fetch_dynamic_filament_list_async(
+            [this, alive, generation](GFDAsyncRequestResult result, bool canceled) mutable {
+                if (!alive || !alive->load() || generation != m_list_request_generation)
+                    return;
+
+                m_list_loading = false;
+                if (canceled || !result.ok) {
+                    set_tip(from_u8(result.error_message.empty() ? "获取耗材列表失败" : result.error_message));
+                    update_control_state();
+                    return;
+                }
+
+                std::string response_message;
+                if (!response_success_or_message(result.body, response_message)) {
+                    set_tip(from_u8(response_message.empty() ? "获取耗材列表失败" : response_message));
+                    update_control_state();
+                    return;
+                }
+
+                try {
+                    parse_filament_options(result.body);
+                } catch (const std::exception& ex) {
+                    set_tip(from_u8(std::string("解析耗材列表失败: ") + ex.what()));
+                    update_control_state();
+                    return;
+                }
+
+                m_filament_choice->Clear();
+                for (const GFDDynamicFilamentOption& option : m_filaments)
+                    m_filament_choice->Append(from_u8(option.text), new wxStringClientData(from_u8(option.sn)));
+
+                const int initial_index = find_initial_filament_index();
+                if (initial_index != wxNOT_FOUND)
+                    m_filament_choice->SetSelection(initial_index);
+                else
+                    set_tip(_L("暂无耗材"));
+
+                on_filament_changed(true);
+            });
+        if (!queued && alive && alive->load() && generation == m_list_request_generation) {
+            m_list_loading = false;
+            set_tip(_L("无法启动耗材列表查询任务"));
+            update_control_state();
         }
-
-        std::string response_message;
-        if (!response_success_or_message(body, response_message)) {
-            set_tip(from_u8(response_message.empty() ? "获取耗材列表失败" : response_message));
-            return;
-        }
-
-        try {
-            parse_filament_options(body);
-        } catch (const std::exception& ex) {
-            set_tip(from_u8(std::string("解析耗材列表失败: ") + ex.what()));
-            return;
-        }
-
-        m_filament_choice->Clear();
-        for (const GFDDynamicFilamentOption& option : m_filaments)
-            m_filament_choice->Append(from_u8(option.text), new wxStringClientData(from_u8(option.sn)));
-
-        const int initial_index = find_initial_filament_index();
-        if (initial_index != wxNOT_FOUND)
-            m_filament_choice->SetSelection(initial_index);
-        else
-            set_tip(_L("暂无耗材"));
-
-        on_filament_changed(true);
     }
 
     void on_filament_changed(bool force_fetch)
@@ -1746,8 +1991,10 @@ private:
         const int selection = m_filament_choice != nullptr ? m_filament_choice->GetSelection() : wxNOT_FOUND;
         if (selection == wxNOT_FOUND || selection < 0 || selection >= static_cast<int>(m_filaments.size())) {
             m_selected_sn.clear();
+            m_current_detail = nlohmann::json();
             if (m_sn_label != nullptr)
                 m_sn_label->SetLabel(_L("-"));
+            update_control_state();
             return;
         }
 
@@ -1769,37 +2016,68 @@ private:
 
         if (m_selected_sn.empty()) {
             set_tip(_L("当前耗材缺少 SN，无法获取详情"));
+            update_control_state();
             return;
         }
 
-        std::string body;
-        std::string error_message;
+        const std::string request_sn = m_selected_sn;
+        const size_t      generation = ++m_detail_request_generation;
+        m_current_detail             = nlohmann::json();
+        m_detail_loading             = true;
         set_tip(_L("正在获取动态参数..."));
-        if (m_plater == nullptr || !m_plater->fetch_dynamic_filament_detail(m_selected_sn, body, error_message)) {
-            set_tip(from_u8(error_message.empty() ? "获取动态参数失败" : error_message));
+        update_control_state();
+
+        if (m_plater == nullptr) {
+            m_detail_loading = false;
+            set_tip(_L("获取动态参数失败"));
+            update_control_state();
             return;
         }
 
-        std::string response_message;
-        if (!response_success_or_message(body, response_message)) {
-            set_tip(from_u8(response_message.empty() ? "获取动态参数失败" : response_message));
-            return;
-        }
+        const auto alive = m_alive;
+        const bool queued = m_plater->fetch_dynamic_filament_detail_async(
+            request_sn,
+            [this, alive, generation, request_sn](GFDAsyncRequestResult result, bool canceled) mutable {
+                if (!alive || !alive->load() || generation != m_detail_request_generation || request_sn != m_selected_sn)
+                    return;
 
-        try {
-            m_current_detail = nlohmann::json::parse(body);
-        } catch (const std::exception& ex) {
-            m_current_detail = nlohmann::json();
-            set_tip(from_u8(std::string("解析动态参数失败: ") + ex.what()));
-            return;
-        }
+                m_detail_loading = false;
+                if (canceled || !result.ok) {
+                    set_tip(from_u8(result.error_message.empty() ? "获取动态参数失败" : result.error_message));
+                    update_control_state();
+                    return;
+                }
 
-        apply_detail_for_selected_device();
+                std::string response_message;
+                if (!response_success_or_message(result.body, response_message)) {
+                    set_tip(from_u8(response_message.empty() ? "获取动态参数失败" : response_message));
+                    update_control_state();
+                    return;
+                }
+
+                try {
+                    m_current_detail = nlohmann::json::parse(result.body);
+                } catch (const std::exception& ex) {
+                    m_current_detail = nlohmann::json();
+                    set_tip(from_u8(std::string("解析动态参数失败: ") + ex.what()));
+                    update_control_state();
+                    return;
+                }
+
+                apply_detail_for_selected_device(false);
+                update_control_state();
+            });
+        if (!queued && alive && alive->load() && generation == m_detail_request_generation) {
+            m_detail_loading = false;
+            set_tip(_L("无法启动动态参数查询任务"));
+            update_control_state();
+        }
     }
 
-    void apply_detail_for_selected_device()
+    void apply_detail_for_selected_device(bool reset_to_base = true)
     {
-        reset_filament_to_base_config();
+        if (reset_to_base)
+            reset_filament_to_base_config();
         if (m_current_detail.is_null())
         {
             set_tip(_L("未查询到当前耗材动态参数，已使用当前耗材参数"));
@@ -1951,34 +2229,54 @@ private:
 
     void save_slice_params()
     {
+        if (m_save_in_progress)
+            return;
         if (m_selected_sn.empty()) {
             set_tip(_L("请选择耗材"));
             return;
         }
 
-        std::string body;
-        std::string error_message;
+        if (m_plater == nullptr) {
+            set_tip(_L("保存失败"));
+            return;
+        }
+
+        const std::string request_sn          = m_selected_sn;
+        const std::string request_device_type = selected_device_type();
+        const std::string slice_param         = build_orca_slice_param_json();
+        const size_t      generation          = ++m_save_request_generation;
+        m_save_in_progress                    = true;
         set_tip(_L("正在保存..."));
-        if (m_save_button != nullptr)
-            m_save_button->Enable(false);
-        const bool ok = m_plater != nullptr &&
-                        m_plater->update_dynamic_filament_slice_param(m_selected_sn, selected_device_type(), build_orca_slice_param_json(), body, error_message);
-        if (m_save_button != nullptr)
-            m_save_button->Enable(true);
+        update_control_state();
 
-        if (!ok) {
-            set_tip(from_u8(error_message.empty() ? "保存失败" : error_message));
-            return;
+        const auto alive = m_alive;
+        const bool queued = m_plater->update_dynamic_filament_slice_param_async(
+            request_sn, request_device_type, slice_param,
+            [this, alive, generation](GFDAsyncRequestResult result, bool canceled) mutable {
+                if (!alive || !alive->load() || generation != m_save_request_generation)
+                    return;
+
+                m_save_in_progress = false;
+                update_control_state();
+                if (canceled || !result.ok) {
+                    set_tip(from_u8(result.error_message.empty() ? "保存失败" : result.error_message));
+                    return;
+                }
+
+                std::string response_message;
+                if (!response_success_or_message(result.body, response_message)) {
+                    set_tip(from_u8(response_message.empty() ? "保存失败" : response_message));
+                    return;
+                }
+
+                set_tip(wxEmptyString);
+                GUI::show_info(this, _L("保存成功"), _L("提示"));
+            });
+        if (!queued && alive && alive->load() && generation == m_save_request_generation) {
+            m_save_in_progress = false;
+            set_tip(_L("无法启动动态参数保存任务"));
+            update_control_state();
         }
-
-        std::string response_message;
-        if (!response_success_or_message(body, response_message)) {
-            set_tip(from_u8(response_message.empty() ? "保存失败" : response_message));
-            return;
-        }
-
-        set_tip(wxEmptyString);
-        GUI::show_info(this, _L("保存成功"), _L("提示"));
     }
 
     void on_dpi_changed(const wxRect& suggested_rect) override
@@ -2811,6 +3109,11 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     // declare events
     Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& event) {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< ": mainframe received close_widow event";
+        if (event.CanVeto() && m_plater != nullptr && m_plater->is_3mf_export_in_progress()) {
+            event.Veto();
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": cancelled while a 3MF export is in progress";
+            return;
+        }
         if (event.CanVeto() && m_plater->get_view3D_canvas3D()->get_gizmos_manager().is_in_editing_mode(true)) {
             // prevents to open the save dirty project dialog
             event.Veto();
@@ -2909,8 +3212,8 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
             }
             else if (action == 1) {
                 if (!m_plater->up_to_date(false, true)) {
-                    m_plater->export_3mf(m_plater->model().get_backup_path() + "/.3mf", SaveStrategy::Backup);
-                    m_plater->up_to_date(true, true);
+                    if (m_plater->export_3mf(m_plater->model().get_backup_path() + "/.3mf", SaveStrategy::Backup) == 0)
+                        m_plater->up_to_date(true, true);
                 }
             }
          });
@@ -2991,6 +3294,12 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     // bind events from DiffDlg
 
     bind_diff_dialog();
+}
+
+MainFrame::~MainFrame()
+{
+    if (m_gfd_config_callback_alive)
+        m_gfd_config_callback_alive->store(false);
 }
 
 void MainFrame::bind_diff_dialog()
@@ -3780,7 +4089,7 @@ void MainFrame::save_project()
 
 bool MainFrame::save_project_as(const wxString& filename)
 {
-    bool ret = (m_plater != nullptr) ? m_plater->export_3mf(into_path(filename)) : false;
+    const bool ret = m_plater != nullptr && m_plater->export_3mf(into_path(filename)) == 0;
     if (ret) {
 //        wxGetApp().update_saved_preset_from_current_preset();
         m_plater->reset_project_dirty_after_save();
@@ -6157,6 +6466,9 @@ void MainFrame::bind_gfd_config_buttons()
         dialog.ShowModal();
     });
     bind_gfd_config_button(m_plater->gfd_upload_config_button(), "upload_config", [this]() {
+        if (m_gfd_config_operation_in_progress)
+            return;
+
         GFDUploadConfigDialog dialog(this);
         if (dialog.ShowModal() != wxID_OK)
             return;
@@ -6168,10 +6480,53 @@ void MainFrame::bind_gfd_config_buttons()
         }
 
         const wxString remarks = dialog.remarks().Trim(true).Trim(false);
-        m_plater->upload_current_config_to_cloud(into_u8(name), into_u8(remarks));
+        m_gfd_config_operation_in_progress = true;
+        update_gfd_config_buttons();
+        const auto callback_alive = m_gfd_config_callback_alive;
+        const bool started = m_plater->upload_current_config_to_cloud_async(
+            into_u8(name), into_u8(remarks), [this, callback_alive](GFDConfigUploadResult result, bool canceled) {
+                if (!callback_alive || !callback_alive->load())
+                    return;
+                m_gfd_config_operation_in_progress = false;
+                update_gfd_config_buttons();
+                if (canceled)
+                    return;
+                if (!result.ok) {
+                    GUI::show_error(this, from_u8(result.error_message.empty() ? "上传配置失败" : result.error_message));
+                    return;
+                }
+                GUI::show_info(this, _L("上传配置成功。"), _L("提示"));
+            });
+        if (!started) {
+            m_gfd_config_operation_in_progress = false;
+            update_gfd_config_buttons();
+            GUI::show_error(this, _L("当前已有云配置上传或保存任务，请稍后重试。"));
+        }
     });
     bind_gfd_config_button(m_plater->gfd_save_config_button(), "save_config", [this]() {
-        m_plater->save_active_imported_cloud_config();
+        if (m_gfd_config_operation_in_progress)
+            return;
+
+        m_gfd_config_operation_in_progress = true;
+        update_gfd_config_buttons();
+        const auto callback_alive = m_gfd_config_callback_alive;
+        const bool started = m_plater->save_active_imported_cloud_config_async([this, callback_alive](GFDConfigUploadResult result, bool canceled) {
+            if (!callback_alive || !callback_alive->load())
+                return;
+            m_gfd_config_operation_in_progress = false;
+            update_gfd_config_buttons();
+            if (canceled)
+                return;
+            if (!result.ok) {
+                GUI::show_error(this, from_u8(result.error_message.empty() ? "保存配置失败" : result.error_message));
+                return;
+            }
+            GUI::show_info(this, _L("保存配置成功。"), _L("提示"));
+        });
+        if (!started) {
+            m_gfd_config_operation_in_progress = false;
+            update_gfd_config_buttons();
+        }
     });
 }
 
@@ -6198,12 +6553,14 @@ void MainFrame::update_gfd_config_buttons()
     panel->Show(should_show);
     if (m_plater->gfd_cloud_import_button() != nullptr)
         m_plater->gfd_cloud_import_button()->Show(should_show && button_vis.cloud_import);
-    if (m_plater->gfd_upload_config_button() != nullptr)
+    if (m_plater->gfd_upload_config_button() != nullptr) {
         m_plater->gfd_upload_config_button()->Show(should_show && button_vis.upload_config);
+        m_plater->gfd_upload_config_button()->Enable(!m_gfd_config_operation_in_progress);
+    }
     if (m_plater->gfd_dynamic_params_button() != nullptr)
         m_plater->gfd_dynamic_params_button()->Show(should_show && button_vis.dynamic_params);
     if (m_plater->gfd_save_config_button() != nullptr) {
-        m_plater->gfd_save_config_button()->Enable(show_save_config);
+        m_plater->gfd_save_config_button()->Enable(show_save_config && !m_gfd_config_operation_in_progress);
         if (panel->GetSizer() != nullptr)
             panel->GetSizer()->Show(m_plater->gfd_save_config_button(), show_save_config, true);
         if (show_save_config)

@@ -4,6 +4,9 @@
 #include "GUI_App.hpp"
 #include "GFDAuthManager.hpp"
 #include "I18N.hpp"
+#include "Jobs/BoostThreadWorker.hpp"
+#include "Jobs/PlaterWorker.hpp"
+#include "Jobs/Worker.hpp"
 #include "MsgDialog.hpp"
 #include "Widgets/Button.hpp"
 #include "Widgets/Label.hpp"
@@ -13,8 +16,8 @@
 #include "slic3r/Utils/Http.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <set>
-#include <thread>
 
 #include <nlohmann/json.hpp>
 
@@ -34,9 +37,10 @@ namespace {
 
 using json = nlohmann::json;
 
-constexpr const char* ALL_VALUE = "All";
-constexpr const char* BIZ_VALUE = "ZXBMan";
-constexpr long DEVICE_QUERY_TIMEOUT_SECONDS = 20;
+constexpr const char* ALL_VALUE                            = "All";
+constexpr const char* BIZ_VALUE                            = "ZXBMan";
+constexpr long        DEVICE_QUERY_CONNECT_TIMEOUT_SECONDS = 10;
+constexpr long        DEVICE_QUERY_TIMEOUT_SECONDS         = 20;
 
 std::string trim_copy(const std::string& value)
 {
@@ -181,13 +185,19 @@ void apply_flat_filter_choice_style(wxChoice* choice)
     choice->SetBackgroundColour(*wxWHITE);
 }
 
-GFDHttpResult request_gfd_devices(const std::string& query_url, const std::string& token)
+GFDHttpResult request_gfd_devices(const std::string& query_url, const std::string& token, Job::Ctl& ctl)
 {
     GFDHttpResult result;
+    bool          cancellation_requested = false;
     Http::get(query_url)
         .header("Authorization", token)
         .header("Biz", BIZ_VALUE)
+        .timeout_connect(DEVICE_QUERY_CONNECT_TIMEOUT_SECONDS)
         .timeout_max(DEVICE_QUERY_TIMEOUT_SECONDS)
+        .on_progress([&](Http::Progress, bool& cancel) {
+            cancellation_requested = ctl.was_canceled();
+            cancel                 = cancellation_requested;
+        })
         .on_complete([&](std::string response_body, unsigned status) {
             result.body   = std::move(response_body);
             result.status = status;
@@ -200,6 +210,8 @@ GFDHttpResult request_gfd_devices(const std::string& query_url, const std::strin
             result.ok            = false;
         })
         .perform_sync();
+    if (cancellation_requested && !result.ok)
+        result.error_message = "操作已取消";
     return result;
 }
 
@@ -223,6 +235,11 @@ GFDDeviceSelectionDialog::GFDDeviceSelectionDialog(wxWindow*                pare
     , m_alive(std::make_shared<std::atomic_bool>(true))
     , m_loading_timer(this)
 {
+    auto worker = std::make_unique<PlaterWorker<BoostThreadWorker>>(this, std::shared_ptr<ProgressIndicator>{},
+                                                                    "gfd_device_query_worker");
+    worker->set_busy_cursor_enabled(false);
+    m_device_worker = std::move(worker);
+
     SetDoubleBuffered(true);
     build();
     bind_events();
@@ -241,6 +258,11 @@ GFDDeviceSelectionDialog::~GFDDeviceSelectionDialog()
 {
     if (m_alive)
         m_alive->store(false);
+    ++m_device_query_generation;
+    if (m_device_worker != nullptr) {
+        m_device_worker->cancel_all();
+        m_device_worker->wait_for_idle();
+    }
 }
 
 void GFDDeviceSelectionDialog::build()
@@ -381,10 +403,13 @@ void GFDDeviceSelectionDialog::bind_events()
         position_loading_panel();
         event.Skip();
     });
-    Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
-        if (m_loading && m_loading_gauge != nullptr)
-            m_loading_gauge->Pulse();
-    }, m_loading_timer.GetId());
+    Bind(
+        wxEVT_TIMER,
+        [this](wxTimerEvent&) {
+            if (m_loading && !m_loading_determinate && m_loading_gauge != nullptr)
+                m_loading_gauge->Pulse();
+        },
+        m_loading_timer.GetId());
     Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& event) {
         if (!m_print_submitting) {
             event.Skip();
@@ -408,6 +433,7 @@ void GFDDeviceSelectionDialog::bind_events()
 
 void GFDDeviceSelectionDialog::load_devices(bool keep_current_filters, bool allow_auth_retry)
 {
+    const size_t query_generation = ++m_device_query_generation;
     const wxString loading_message = keep_current_filters ? _L("正在查找打印设备，请稍候...") : _L("正在加载打印设备，请稍候...");
     set_tip_message(loading_message);
     if (m_loading_text != nullptr) {
@@ -418,14 +444,29 @@ void GFDDeviceSelectionDialog::load_devices(bool keep_current_filters, bool allo
     set_loading_state(true);
     sync_checked_keys_from_table();
 
-    std::string error_message;
-    if (!GFDAuthManager::ensure_logged_in(this, &error_message)) {
-        set_tip_message(from_u8(error_message.empty() ? "查询设备失败，请检查网络后重试。" : error_message), true);
-        set_loading_state(false);
-        show_error(this, from_u8(error_message.empty() ? "查询设备失败" : error_message));
+    const auto alive = m_alive;
+    if (!GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
+        const bool login_started = GFDAuthManager::ensure_logged_in_async(
+            this, [this, alive, query_generation, keep_current_filters, allow_auth_retry](bool logged_in,
+                                                                                         std::string error_message) mutable {
+                if (!alive || !alive->load() || query_generation != m_device_query_generation)
+                    return;
+                if (!logged_in) {
+                    set_tip_message(from_u8(error_message.empty() ? "查询设备失败，请检查网络后重试。" : error_message), true);
+                    set_loading_state(false);
+                    show_error(this, from_u8(error_message.empty() ? "查询设备失败" : error_message));
+                    return;
+                }
+                load_devices(keep_current_filters, allow_auth_retry);
+            });
+        if (!login_started) {
+            set_tip_message(_L("无法启动自动登录任务，请稍后重试。"), true);
+            set_loading_state(false);
+        }
         return;
     }
 
+    std::string error_message;
     const std::string query_url = build_query_url();
     const std::string token     = GFDAuthManager::current_auth_token(wxGetApp().app_config);
     if (token.empty()) {
@@ -436,30 +477,62 @@ void GFDDeviceSelectionDialog::load_devices(bool keep_current_filters, bool allo
         return;
     }
 
-    const auto alive = m_alive;
-    std::thread([this, alive, keep_current_filters, allow_auth_retry, query_url, token]() {
-        GFDHttpResult result = request_gfd_devices(query_url, token);
+    if (m_device_worker == nullptr) {
+        apply_device_response(keep_current_filters, false, {}, "无法启动设备查询任务，请稍后重试");
+        return;
+    }
 
-        wxGetApp().CallAfter([this, alive, keep_current_filters, allow_auth_retry, result = std::move(result)]() mutable {
-            if (!alive || !alive->load())
+    const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
+    auto              result              = std::make_shared<GFDHttpResult>();
+    const bool queued = replace_job(
+        *m_device_worker,
+        [result, query_url, token](Job::Ctl& ctl) { *result = request_gfd_devices(query_url, token, ctl); },
+        [this, alive, query_generation, keep_current_filters, allow_auth_retry, token, request_environment,
+         result](bool canceled, std::exception_ptr& eptr) mutable {
+            if (!alive || !alive->load() || query_generation != m_device_query_generation) {
+                eptr = nullptr;
                 return;
+            }
 
-            std::string error_message = result.error_message;
-            if (GFDAuthManager::is_auth_failure_response(result.status, result.body, error_message)) {
-                GFDAuthManager::clear_session(wxGetApp().app_config);
+            if (eptr != nullptr) {
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (const std::exception& ex) {
+                    result->error_message = ex.what();
+                } catch (...) {
+                    result->error_message = "设备查询任务发生未知异常";
+                }
+                result->ok = false;
+                eptr       = nullptr;
+            }
+            if (canceled) {
+                set_loading_state(false);
+                return;
+            }
+
+            if (request_environment != GFD::Config::current_environment_name(wxGetApp().app_config)) {
+                load_devices(keep_current_filters);
+                return;
+            }
+
+            std::string error_message = result->error_message;
+            if (GFDAuthManager::is_retryable_auth_failure_response(result->status, result->body, error_message)) {
+                if (GFDAuthManager::current_auth_token(wxGetApp().app_config) == token)
+                    GFDAuthManager::clear_session(wxGetApp().app_config);
                 if (allow_auth_retry) {
                     load_devices(keep_current_filters, false);
                     return;
                 }
                 if (error_message.empty())
                     error_message = "登录状态无效，请重新登录";
-                apply_device_response(keep_current_filters, false, std::move(result.body), std::move(error_message));
+                apply_device_response(keep_current_filters, false, std::move(result->body), std::move(error_message));
                 return;
             }
 
-            apply_device_response(keep_current_filters, result.ok, std::move(result.body), std::move(error_message));
+            apply_device_response(keep_current_filters, result->ok, std::move(result->body), std::move(error_message));
         });
-    }).detach();
+    if (!queued)
+        apply_device_response(keep_current_filters, false, {}, "无法启动设备查询任务，请稍后重试");
 }
 
 void GFDDeviceSelectionDialog::apply_device_response(bool keep_current_filters, bool request_ok, std::string body, std::string error_message)
@@ -577,6 +650,11 @@ void GFDDeviceSelectionDialog::reset_filters()
 
 void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
 {
+    if (m_print_submitting) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD device selection confirm ignored: print submission already in progress";
+        return;
+    }
+
     BOOST_LOG_TRIVIAL(info) << "GFD device selection confirm clicked"
                             << ", visible_rows=" << m_visible_indices.size()
                             << ", list_items=" << (m_device_list != nullptr ? m_device_list->GetItemCount() : 0)
@@ -683,6 +761,32 @@ void GFDDeviceSelectionDialog::complete_print_submission(bool success)
     Raise();
 }
 
+void GFDDeviceSelectionDialog::update_print_progress(const wxString& message, int percent)
+{
+    if (!m_print_submitting)
+        return;
+
+    set_tip_message(message);
+    if (m_loading_text != nullptr)
+        m_loading_text->SetLabel(message);
+
+    m_loading_determinate = percent >= 0;
+    if (m_loading_gauge != nullptr) {
+        if (m_loading_determinate) {
+            m_loading_gauge->SetRange(100);
+            m_loading_gauge->SetValue(std::clamp(percent, 0, 100));
+        } else {
+            m_loading_gauge->Pulse();
+        }
+    }
+
+    if (m_loading_panel != nullptr) {
+        m_loading_panel->Layout();
+        m_loading_panel->Refresh();
+        m_loading_panel->Update();
+    }
+}
+
 void GFDDeviceSelectionDialog::update_confirm_button_state()
 {
     if (m_loading) {
@@ -776,6 +880,8 @@ void GFDDeviceSelectionDialog::set_tip_message(const wxString& message, bool is_
 void GFDDeviceSelectionDialog::set_loading_state(bool loading)
 {
     m_loading = loading;
+    if (!loading)
+        m_loading_determinate = false;
 
     if (loading)
         update_loading_panel_style();

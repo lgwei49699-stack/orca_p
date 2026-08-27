@@ -36,12 +36,36 @@ void BoostThreadWorker::WorkerMessage::deliver(BoostThreadWorker &runner)
     }
 }
 
+void BoostThreadWorker::notify_main_thread()
+{
+    if (!wxTheApp || m_ui_dispatch_pending.exchange(true))
+        return;
+
+    // CallAfter queues a real, thread-safe wx event. Unlike wxWakeUpIdle(),
+    // it does not depend on an idle handler being reached through a modal
+    // event loop. The weak token prevents a queued callback from accessing a
+    // worker that has already begun destruction.
+    const std::weak_ptr<void> lifetime = m_ui_lifetime_weak;
+    wxTheApp->CallAfter([this, lifetime]() {
+        const std::shared_ptr<void> keep_alive = lifetime.lock();
+        if (!keep_alive)
+            return;
+
+        // Clear before draining. If the worker posts another message while
+        // process_events() is running, it will schedule a follow-up callback
+        // instead of leaving the message without a wake-up.
+        m_ui_dispatch_pending.store(false);
+        process_events();
+    });
+}
+
 void BoostThreadWorker::run()
 {
     bool stop = false;
     while (!stop) {
+        bool finalization_queued = false;
         m_input_queue
-            .consume_one(BlockingWait{0, &m_running}, [this, &stop](JobEntry &e) {
+            .consume_one(BlockingWait{0, &m_running}, [this, &stop, &finalization_queued](JobEntry &e) {
                 if (!e.job)
                     stop = true;
                 else {
@@ -55,15 +79,22 @@ void BoostThreadWorker::run()
 
                     e.canceled = m_canceled.load();
                     m_output_queue.push(std::move(e)); // finalization message
+                    finalization_queued = true;
                 }
                 m_running.store(false);
             });
+        if (finalization_queued) {
+            // Send the completion notification only after this job is no
+            // longer marked as running.
+            notify_main_thread();
+        }
     };
 }
 
 void BoostThreadWorker::update_status(int st, const std::string &msg)
 {
     m_output_queue.push(st, msg);
+    notify_main_thread();
 }
 
 std::future<void> BoostThreadWorker::call_on_main_thread(std::function<void ()> fn)
@@ -72,6 +103,7 @@ std::future<void> BoostThreadWorker::call_on_main_thread(std::function<void ()> 
     std::future<void> future = cbdata.promise.get_future();
 
     m_output_queue.push(std::move(cbdata));
+    notify_main_thread();
 
     return future;
 }
@@ -94,6 +126,11 @@ constexpr int ABORT_WAIT_MAX_MS = 10000;
 
 BoostThreadWorker::~BoostThreadWorker()
 {
+    // Any CallAfter already queued on the GUI thread must become a no-op
+    // before teardown starts. The worker thread is joined below, so the weak
+    // token member remains valid while it can still call notify_main_thread().
+    m_ui_lifetime.reset();
+
     bool joined = false;
     try {
         cancel_all();

@@ -1541,6 +1541,8 @@ void SelectMachineDialog::on_cancel(wxCloseEvent &event)
     if (m_mapping_popup.IsShown())
         m_mapping_popup.Dismiss();
 
+    m_is_canceled       = true;
+    m_export_3mf_cancel = true;
     m_worker->cancel_all();
     this->EndModal(wxID_CANCEL);
 }
@@ -1957,7 +1959,8 @@ void SelectMachineDialog::connect_printer_mqtt()
 void SelectMachineDialog::on_send_print()
 {
     BOOST_LOG_TRIVIAL(info) << "print_job: on_ok to send";
-    m_is_canceled = false;
+    m_is_canceled       = false;
+    m_export_3mf_cancel = false;
     Enable_Send_Button(false);
 
     if (m_mapping_popup.IsShown())
@@ -2021,13 +2024,17 @@ void SelectMachineDialog::on_send_print()
     }
 
     if (m_print_type == PrintFromType::FROM_NORMAL) {
-        result = m_plater->send_gcode(m_print_plate_idx, [this](int export_stage, int current, int total, bool& cancel) {
-            if (this->m_is_canceled) return;
+        Export3mfProgressFn export_progress = [this](int export_stage, int current, int total, bool& cancel) {
+            if (m_is_canceled) {
+                m_export_3mf_cancel = cancel = true;
+                return;
+            }
             bool     cancelled = false;
             wxString msg = _L("Preparing print job");
             m_status_bar->update_status(msg, cancelled, 10, true);
-            m_export_3mf_cancel = cancel = cancelled;
-            });
+            m_export_3mf_cancel = cancel = cancelled || m_is_canceled;
+        };
+        result = m_plater->send_gcode(m_print_plate_idx, export_progress);
 
         if (m_is_canceled || m_export_3mf_cancel) {
             BOOST_LOG_TRIVIAL(info) << "print_job: m_export_3mf_cancel or m_is_canceled";
@@ -2043,7 +2050,7 @@ void SelectMachineDialog::on_send_print()
 
         // export config 3mf if needed
         if (!obj_->is_lan_mode_printer()) {
-            result = m_plater->export_config_3mf(m_print_plate_idx);
+            result = m_plater->export_config_3mf(m_print_plate_idx, export_progress);
             if (result < 0) {
                 BOOST_LOG_TRIVIAL(trace) << "export_config_3mf failed, result = " << result;
                 return;

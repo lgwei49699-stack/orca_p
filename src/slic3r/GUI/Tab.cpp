@@ -58,13 +58,18 @@
 #include <unordered_set>
 
 #include <wx/combobox.h>
+#include <wx/gauge.h>
 #include <wx/stattext.h>
+#include <wx/timer.h>
 
 #include "BedShapeDialog.hpp"
 // #include "BonjourDialog.hpp"
 #ifdef WIN32
 	#include <commctrl.h>
 #endif // WIN32
+
+#include <atomic>
+#include <memory>
 
 namespace Slic3r {
 namespace GUI {
@@ -463,11 +468,22 @@ public:
             event.Skip();
         });
 
-        load_filaments();
+        const std::shared_ptr<std::atomic_bool> alive = m_alive;
+        CallAfter([this, alive]() {
+            if (alive->load())
+                load_filaments();
+        });
         wxGetApp().UpdateDlgDarkUI(this);
         update_confirm_button_state(!selected_sn().empty());
         Layout();
         CentreOnParent();
+    }
+
+    ~GFDLocalFilamentSyncTargetDialog() override
+    {
+        m_alive->store(false);
+        if (m_loading && m_plater != nullptr)
+            m_plater->cancel_dynamic_filament_reads();
     }
 
     std::string selected_sn() const
@@ -486,6 +502,8 @@ private:
     wxStaticText*                        m_tip_label{nullptr};
     Button*                              m_confirm_button{nullptr};
     std::vector<GFDLocalFilamentOption> m_filaments;
+    std::shared_ptr<std::atomic_bool>    m_alive{std::make_shared<std::atomic_bool>(true)};
+    bool                                 m_loading{false};
 
     void update_confirm_button_state(bool enabled)
     {
@@ -506,32 +524,222 @@ private:
         m_filament_choice->Clear();
         m_filament_choice->Append(_L("请选择云端耗材"));
         m_filament_choice->SetSelection(0);
+        m_filament_choice->Enable(false);
+        update_confirm_button_state(false);
+        m_tip_label->SetLabel(_L("正在获取云端耗材列表..."));
 
-        std::string body;
-        std::string error_message;
-        if (m_plater == nullptr || !m_plater->fetch_dynamic_filament_list(body, error_message)) {
-            m_tip_label->SetLabel(from_u8(error_message.empty() ? "获取云端耗材列表失败" : error_message));
+        if (m_plater == nullptr) {
+            m_tip_label->SetLabel(_L("获取云端耗材列表失败"));
             return;
         }
 
-        try {
-            const json response = json::parse(body);
-            if (!gfd_local_sync_response_ok(response, error_message)) {
-                m_tip_label->SetLabel(from_u8(error_message));
+        m_loading = true;
+        const std::shared_ptr<std::atomic_bool> alive = m_alive;
+        const bool started = m_plater->fetch_dynamic_filament_list_async(
+            [this, alive](GFDAsyncRequestResult result, bool canceled) mutable {
+                if (!alive->load())
+                    return;
+
+                m_loading = false;
+                m_filament_choice->Enable(true);
+                if (canceled) {
+                    m_tip_label->SetLabel(_L("获取云端耗材列表已取消"));
+                    update_confirm_button_state(false);
+                    return;
+                }
+                if (!result.ok) {
+                    m_tip_label->SetLabel(from_u8(result.error_message.empty() ? "获取云端耗材列表失败" : result.error_message));
+                    update_confirm_button_state(false);
+                    return;
+                }
+
+                std::string error_message;
+                try {
+                    const json response = json::parse(result.body);
+                    if (!gfd_local_sync_response_ok(response, error_message)) {
+                        m_tip_label->SetLabel(from_u8(error_message));
+                        update_confirm_button_state(false);
+                        return;
+                    }
+                    std::set<std::string> seen_sn;
+                    gfd_local_sync_collect_filaments(response, m_filaments, seen_sn);
+                } catch (const std::exception& ex) {
+                    m_tip_label->SetLabel(from_u8(std::string("解析云端耗材列表失败：") + ex.what()));
+                    update_confirm_button_state(false);
+                    return;
+                }
+
+                for (const GFDLocalFilamentOption& filament : m_filaments)
+                    m_filament_choice->Append(from_u8(filament.label + "  [" + filament.sn + "]"));
+                m_tip_label->SetLabel(m_filaments.empty() ?
+                                          _L("暂无可同步的云端耗材") :
+                                          _L("请选择云端耗材，系统不会按名称自动匹配"));
+                update_confirm_button_state(!selected_sn().empty());
+            });
+        if (!started) {
+            m_loading = false;
+            m_filament_choice->Enable(true);
+            m_tip_label->SetLabel(_L("获取云端耗材列表失败"));
+            update_confirm_button_state(false);
+        }
+    }
+};
+
+class GFDLocalSyncRequestDialog : public wxDialog
+{
+public:
+    using StartRequestFn = std::function<bool(GFDDynamicRequestFinishedFn)>;
+
+    GFDLocalSyncRequestDialog(wxWindow*             parent,
+                              Plater*               plater,
+                              const wxString&       message,
+                              const std::string&    fallback_error,
+                              bool                  cancellable_read,
+                              StartRequestFn        start_request)
+        : wxDialog(gfd_local_sync_top_level_parent(parent),
+                   wxID_ANY,
+                   _L("耗材同步"),
+                   wxDefaultPosition,
+                   wxDefaultSize,
+                   wxCAPTION | wxCLOSE_BOX)
+        , m_plater(plater)
+        , m_fallback_error(fallback_error)
+        , m_cancellable_read(cancellable_read)
+        , m_start_request(std::move(start_request))
+        , m_pulse_timer(this)
+    {
+        auto* main_sizer = new wxBoxSizer(wxVERTICAL);
+        main_sizer->AddSpacer(FromDIP(20));
+
+        auto* message_label = new wxStaticText(this, wxID_ANY, message);
+        message_label->SetFont(Label::Body_13);
+        main_sizer->Add(message_label, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+        main_sizer->AddSpacer(FromDIP(14));
+
+        m_loading_gauge = new wxGauge(this,
+                                      wxID_ANY,
+                                      100,
+                                      wxDefaultPosition,
+                                      wxSize(FromDIP(320), FromDIP(5)),
+                                      wxGA_HORIZONTAL);
+        main_sizer->Add(m_loading_gauge, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+
+        if (m_cancellable_read) {
+            main_sizer->AddSpacer(FromDIP(18));
+            auto* button_row = new wxBoxSizer(wxHORIZONTAL);
+            button_row->AddStretchSpacer(1);
+            auto* cancel_button = new Button(this, _L("取消"));
+            cancel_button->SetStyle(ButtonStyle::Regular, ButtonType::Choice);
+            const wxSize button_size(FromDIP(96), FromDIP(32));
+            cancel_button->SetMinSize(button_size);
+            cancel_button->SetSize(button_size);
+            cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { cancel_read(); });
+            button_row->Add(cancel_button, 0);
+            main_sizer->Add(button_row, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, FromDIP(24));
+        } else {
+            main_sizer->AddSpacer(FromDIP(20));
+        }
+
+        SetSizerAndFit(main_sizer);
+        SetMinClientSize(GetClientSize());
+
+        Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
+            if (m_loading_gauge != nullptr)
+                m_loading_gauge->Pulse();
+        });
+        Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& event) {
+            if (!m_finished && m_cancellable_read) {
+                cancel_read();
                 return;
             }
-            std::set<std::string> seen_sn;
-            gfd_local_sync_collect_filaments(response, m_filaments, seen_sn);
-        } catch (const std::exception& ex) {
-            m_tip_label->SetLabel(from_u8(std::string("解析云端耗材列表失败：") + ex.what()));
-            return;
-        }
+            if (!m_finished) {
+                if (event.CanVeto()) {
+                    event.Veto();
+                    return;
+                }
+                m_alive->store(false);
+                m_canceled = true;
+                m_finished = true;
+                m_pulse_timer.Stop();
+                event.Skip();
+                return;
+            }
+            event.Skip();
+        });
 
-        for (const GFDLocalFilamentOption& filament : m_filaments)
-            m_filament_choice->Append(from_u8(filament.label + "  [" + filament.sn + "]"));
-        m_tip_label->SetLabel(m_filaments.empty() ?
-                                  _L("暂无可同步的云端耗材") :
-                                  _L("请选择云端耗材，系统不会按名称自动匹配"));
+        wxGetApp().UpdateDlgDarkUI(this);
+        CentreOnParent();
+    }
+
+    ~GFDLocalSyncRequestDialog() override
+    {
+        m_alive->store(false);
+        m_pulse_timer.Stop();
+    }
+
+    bool run(GFDAsyncRequestResult& result, bool& canceled)
+    {
+        m_pulse_timer.Start(100);
+        const std::shared_ptr<std::atomic_bool> alive = m_alive;
+        CallAfter([this, alive]() {
+            if (!alive->load())
+                return;
+
+            const bool started = m_start_request([this, alive](GFDAsyncRequestResult request_result, bool request_canceled) mutable {
+                if (alive->load())
+                    finish(std::move(request_result), request_canceled);
+            });
+            if (!started && alive->load()) {
+                GFDAsyncRequestResult request_result;
+                request_result.error_message = m_fallback_error;
+                finish(std::move(request_result), false);
+            }
+        });
+
+        const int modal_result = ShowModal();
+        result                 = std::move(m_result);
+        canceled               = m_canceled;
+        return modal_result == wxID_OK;
+    }
+
+private:
+    Plater*                           m_plater{nullptr};
+    wxGauge*                          m_loading_gauge{nullptr};
+    std::string                       m_fallback_error;
+    bool                              m_cancellable_read{false};
+    StartRequestFn                    m_start_request;
+    wxTimer                           m_pulse_timer;
+    std::shared_ptr<std::atomic_bool> m_alive{std::make_shared<std::atomic_bool>(true)};
+    GFDAsyncRequestResult             m_result;
+    bool                              m_finished{false};
+    bool                              m_canceled{false};
+
+    void cancel_read()
+    {
+        if (m_finished)
+            return;
+
+        m_alive->store(false);
+        m_canceled = true;
+        m_finished = true;
+        m_pulse_timer.Stop();
+        if (m_plater != nullptr)
+            m_plater->cancel_dynamic_filament_reads();
+        if (IsModal())
+            EndModal(wxID_CANCEL);
+    }
+
+    void finish(GFDAsyncRequestResult result, bool canceled)
+    {
+        if (m_finished)
+            return;
+
+        m_result   = std::move(result);
+        m_canceled = canceled;
+        m_finished = true;
+        m_pulse_timer.Stop();
+        if (IsModal())
+            EndModal(canceled ? wxID_CANCEL : wxID_OK);
     }
 };
 
@@ -1097,15 +1305,32 @@ void Tab::sync_gfd_filament(bool upload_to_cloud)
         return;
     }
 
-    std::string detail_body;
-    std::string error_message;
-    if (!plater->fetch_dynamic_filament_detail(filament_sn, detail_body, error_message)) {
-        gfd_local_sync_show_error(this, error_message.empty() ? "获取云端耗材详情失败" : error_message);
+    GFDAsyncRequestResult detail_result;
+    bool                  detail_canceled = false;
+    GFDLocalSyncRequestDialog detail_dialog(
+        this,
+        plater,
+        _L("正在获取云端耗材详情..."),
+        "获取云端耗材详情失败",
+        true,
+        [plater, filament_sn](GFDDynamicRequestFinishedFn finished) {
+            return plater->fetch_dynamic_filament_detail_async(filament_sn, std::move(finished));
+        });
+    if (!detail_dialog.run(detail_result, detail_canceled)) {
+        if (!detail_canceled)
+            gfd_local_sync_show_error(
+                this, detail_result.error_message.empty() ? "获取云端耗材详情失败" : detail_result.error_message);
+        return;
+    }
+    if (!detail_result.ok) {
+        gfd_local_sync_show_error(
+            this, detail_result.error_message.empty() ? "获取云端耗材详情失败" : detail_result.error_message);
         return;
     }
 
+    std::string error_message;
     json remote_values;
-    if (!gfd_local_sync_extract_cloud_params(detail_body, device_type, remote_values, error_message)) {
+    if (!gfd_local_sync_extract_cloud_params(detail_result.body, device_type, remote_values, error_message)) {
         gfd_local_sync_show_error(this, error_message.empty() ? "解析云端耗材参数失败" : error_message);
         return;
     }
@@ -1137,15 +1362,33 @@ void Tab::sync_gfd_filament(bool upload_to_cloud)
                 this, confirmation, _L("确认同步到云端"), wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION) != wxID_YES)
             return;
 
-        std::string response_body;
-        if (!plater->update_dynamic_filament_slice_param(
-                filament_sn, device_type, upload_values.dump(), response_body, error_message)) {
-            gfd_local_sync_show_error(this, error_message.empty() ? "同步到云端失败" : error_message);
+        GFDAsyncRequestResult update_result;
+        bool                  update_canceled = false;
+        const std::string     slice_param     = upload_values.dump();
+        GFDLocalSyncRequestDialog update_dialog(
+            this,
+            plater,
+            _L("正在同步耗材参数到云端..."),
+            "同步到云端失败",
+            false,
+            [plater, filament_sn, device_type, slice_param](GFDDynamicRequestFinishedFn finished) {
+                return plater->update_dynamic_filament_slice_param_async(
+                    filament_sn, device_type, slice_param, std::move(finished));
+            });
+        if (!update_dialog.run(update_result, update_canceled)) {
+            if (!update_canceled)
+                gfd_local_sync_show_error(
+                    this, update_result.error_message.empty() ? "同步到云端失败" : update_result.error_message);
+            return;
+        }
+        if (!update_result.ok) {
+            gfd_local_sync_show_error(
+                this, update_result.error_message.empty() ? "同步到云端失败" : update_result.error_message);
             return;
         }
 
         try {
-            const json response = json::parse(response_body);
+            const json response = json::parse(update_result.body);
             if (!gfd_local_sync_response_ok(response, error_message)) {
                 gfd_local_sync_show_error(this, error_message.empty() ? "同步到云端失败" : error_message);
                 return;
