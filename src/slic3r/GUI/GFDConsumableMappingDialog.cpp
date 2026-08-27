@@ -905,7 +905,8 @@ void GFDConsumableMappingDialog::refresh_mapping_card(size_t filament_index)
     const wxString              color_values = color_value_text(slot_colors);
     const wxString              title = _L("槽位 ") + slot_position_text(slot.slot_no) + wxString::Format(_L("（%d）"), slot.slot_no);
     const wxString              material = slot_detail_text(slot);
-    const wxString tooltip = wxString::Format("T%d → ", filament.id) + slot_display_text(slot) + _L("\n实体耗材色值：") + color_values;
+    const wxString tooltip = wxString::Format(wxString::FromUTF8("T%d → "), filament.id) + slot_display_text(slot) +
+                             _L("\n实体耗材色值：") + color_values;
 
     m_slot_color_swatches[filament_index]->set_colors(slot_colors);
     m_slot_title_labels[filament_index]->SetLabel(title);
