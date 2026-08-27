@@ -5,7 +5,7 @@
     "instantiation": "true",
     "printer_technology": "FFF",
     "deretraction_speed": [
-        "28"
+        "25"
     ],
     "extruder_colour": [
         "#FCE94F"
@@ -84,10 +84,10 @@
         "0.8"
     ],
     "retract_before_wipe": [
-        "0%"
+        "100%"
     ],
     "retract_when_changing_layer": [
-        "0"
+        "1"
     ],
     "retraction_length": [
         "3"
@@ -105,28 +105,34 @@
         "0"
     ],
     "retraction_speed": [
-        "28"
+        "50"
     ],
     "single_extruder_multi_material": "1",
     "change_filament_gcode": "",
     "wipe": [
-        "0"
+        "1"
+    ],
+    "wipe_distance": [
+        "5"
+    ],
+    "travel_slope": [
+        "5"
     ],
     "z_hop_types": [
-        "Normal Lift"
+        "Auto Lift"
     ],
     "before_layer_change_gcode": ";BEFORE_LAYER_CHANGE\n;[layer_z]\nG92 E0\n",
     "default_print_profile": "0.20mm Standard @EPONE",
-    "machine_start_gcode": ";MachineType:EPONE\n;FilamentType:[filament_type]\n;InfillDensity:[sparse_infill_density]\n;Extruder0Temperature:[nozzle_temperature_initial_layer]\n;BedTemperature:[bed_temperature_initial_layer_single]\n\n;(**** start.gcode for EPONE****)\nM203 Z15\nM104 S150\nM140 S50\nG28 Z\nG28 X Y\nG1 X55 Y55 F1000\nG29\nM107\nG90\nM82\nM109 S[nozzle_temperature_initial_layer]\nM190 S[bed_temperature_initial_layer_single]\nG92 E0\nG1 X90 Y3 Z0.27 F2000\nG1 X20 Y3 Z0.27 E15 F1000\nG92 E0\nM203 Z5",
-    "machine_end_gcode": ";(**** end.gcode for EPONE****)\nM203 Z15\nM104 S0\nM140 S0\nM107\nG92 E0\nG0 E-1 F300\nG28 Z F300\nG28 X0 Y0\nG1 Y90 F1000",
+    "machine_start_gcode": "M104 S150\nG90\nM83\nM106 P2 S255\nG1 Z2 F1000\nG1 X-23 Y0 F1000\nM109 S[nozzle_temperature_initial_layer]\nG4 P400\nG1 E30 F100\nG1 E-1.2 F600\nG4 P200\n\n;洗料往复不变\nG1 X0 F7000\nG1 X-23 F3000\nG1 X0 F6000\nG1 X-23 F3000\nG1 X0 F5000\nG1 X-23 F3000\nG1 X0 F5000\nG1 X-23 F3000\nG1 X0 F5000\n\n;滚胶擦拭不变\nM117 Wipe\nG0 X100 Y105 F1000\nG1 Z0.5 F1200\nG1 X120 F6000\nG1 X105 F6000\nG1 X120 F6000\nG1 X105 F6000\nG1 X120 F4000\nG1 X105 F4000\nG1 X120 F4000\nG1 X105 F4000\nG1 X120 F4000\n\nG1 Z2.0 F1200 ;抬Z离开滚胶\n\n;复压\nG1 E1.4 F300\nG4 P200\n\nG92 E0 ; 只在这里归零一次\n\n;测试线 现在M83相对E，E15正常联动挤出！\nG1 X90 Y3 Z0.27 F2000\nG1 X20 Y3 Z0.27 E15 F600\nG1 E-0.2 F600\nG92 E0",
+    "machine_end_gcode": ";(**** end.gcode for EPONE****)\nM203 Z15\nM104 S0\nM107\nG92 E0\nG0 E-1 F300\nG28 Z F300\nG28 X0 Y0\nG1 Y90 F1000",
     "setting_id": "GFD_EPONE_M_04",
     "inherits": "fdm_machine_common",
     "printer_model": "EPONE",
     "version": "2.3.0.3",
     "printable_area": [
         "0x0",
-        "100x0",
-        "100x100",
+        "123x0",
+        "123x100",
         "0x100"
     ],
     "bed_mesh_min": "-0,-0",

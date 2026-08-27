@@ -9,8 +9,7 @@
     "EPONE-PLA Overhang @EPONE Pro"
   ],
   "compatible_printers": [
-    "MyMarlin 0.4 nozzle",
-    "EPONE 0.4 nozzle",
-    "EPONE Pro 0.4 nozzle"
+    "EPONE Pro 0.4 nozzle",
+    "MyMarlin 0.4 nozzle"
   ]
 }

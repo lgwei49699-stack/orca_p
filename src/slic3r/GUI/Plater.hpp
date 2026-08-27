@@ -489,7 +489,11 @@ public:
     //void export_amf();
     //BBS add extra param for exporting 3mf silence
     // BBS: backup
-    int export_3mf(const boost::filesystem::path& output_path = boost::filesystem::path(), SaveStrategy strategy = SaveStrategy::Default, int export_plate_idx = -1, Export3mfProgressFn proFn = nullptr);
+    int export_3mf(const boost::filesystem::path& output_path                    = boost::filesystem::path(),
+                   SaveStrategy                   strategy                       = SaveStrategy::Default,
+                   int                            export_plate_idx               = -1,
+                   Export3mfProgressFn            proFn                          = nullptr,
+                   bool                           sanitize_cloud_preset_metadata = false);
     bool is_3mf_export_in_progress() const;
 
     //BBS
@@ -519,7 +523,7 @@ public:
      * -2: send all gcode to target machine */
     int send_gcode(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
     void send_gcode_legacy(int plate_idx = -1, Export3mfProgressFn proFn = nullptr, bool use_3mf = false);
-    int export_config_3mf(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
+    int  export_config_3mf(int plate_idx = -1, Export3mfProgressFn proFn = nullptr, bool sanitize_cloud_preset_metadata = false);
     bool upload_current_config_to_cloud(const std::string& config_name, const std::string& remarks = std::string());
     bool save_active_imported_cloud_config();
     bool upload_current_config_to_cloud_async(const std::string& config_name,
