@@ -10,6 +10,7 @@
 #include <map>
 #include <numeric>
 
+#include <boost/next_prior.hpp>
 #include <CGAL/AABB_face_graph_triangle_primitive.h>
 #include <CGAL/AABB_traits.h>
 #include <CGAL/AABB_tree.h>
