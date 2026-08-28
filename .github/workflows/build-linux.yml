@@ -1,9 +1,21 @@
 name: Build Linux AppImage for x86_64
 
 on:
+  # 在默认分支手动运行一次可预热 Tag 构建能够读取的依赖和 ccache。
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: '要预热的源码分支，例如 linux/release2_3_2；留空使用当前分支'
+        required: false
+        default: ''
   push:
     tags:
       - 'manual-build-linux-*'
+
+concurrency:
+  # Linux 打包很耗资源；新任务启动时取消仍在运行的旧任务。
+  group: linux-appimage-x86_64
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -12,11 +24,13 @@ jobs:
   build-linux-x86_64:
     # 使用 Ubuntu 24.04 匹配服务器环境
     runs-on: ubuntu-24.04
+    timeout-minutes: 180
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
+        ref: ${{ inputs.source_ref || github.ref }}
         submodules: recursive
         fetch-depth: 0
     
@@ -53,37 +67,39 @@ jobs:
       uses: hendrikmuhs/ccache-action@v1.2
       with:
         key: ${{ runner.os }}-24.04-ccache
-        max-size: 2G
+        max-size: 3G
         variant: ccache
-    
-    - name: Cache dependencies
+        create-symlink: true
+
+    # 只缓存依赖安装结果，不缓存 Ninja/CMake 的整个中间构建目录。
+    # 精确命中时可以安全地完全跳过耗时的第三方依赖编译。
+    - name: Cache compiled dependencies
+      id: deps-cache
       uses: actions/cache@v4
       with:
-        path: |
-          deps/build
-          deps/DL_CACHE
-        key: ${{ runner.os }}-24.04-deps-${{ hashFiles('deps/CMakeLists.txt', 'deps/**/*.cmake', 'deps/**/CMakeLists.txt') }}
+        path: deps/build/destdir
+        key: ${{ runner.os }}-24.04-x86_64-compiled-deps-v1-${{ hashFiles('deps/**') }}
+
+    # 下载缓存允许使用旧缓存作为前缀匹配；依赖脚本会通过校验值保证源码包正确。
+    - name: Cache dependency downloads
+      uses: actions/cache@v4
+      with:
+        path: deps/DL_CACHE
+        key: ${{ runner.os }}-24.04-x86_64-dep-downloads-v1-${{ hashFiles('deps/**') }}
         restore-keys: |
-          ${{ runner.os }}-24.04-deps-
-          ${{ runner.os }}-deps-
-    
-    - name: Fix package manager state
-      shell: bash -e {0}
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --fix-broken
-        sudo apt-get install -y libunwind-dev ccache
+          ${{ runner.os }}-24.04-x86_64-dep-downloads-v1-
     
     - name: Install system dependencies
       shell: bash -e {0}
       run: |
         sudo ./build_linux.sh -u
+        sudo apt-get install -y libunwind-dev
     
     - name: Configure ccache
       shell: bash -e {0}
       run: |
         # 配置 ccache
-        ccache --set-config=max_size=2G
+        ccache --set-config=max_size=3G
         ccache --set-config=compression=true
         ccache --set-config=compression_level=6
         ccache --zero-stats
@@ -92,6 +108,7 @@ jobs:
         ccache --show-config
     
     - name: Build dependencies
+      if: steps.deps-cache.outputs.cache-hit != 'true'
       shell: bash -e {0}
       run: |
         # 不在依赖构建阶段使用 ccache，避免与某些库的构建系统冲突
@@ -100,22 +117,18 @@ jobs:
         echo "Building dependencies with $(nproc) parallel jobs..."
         ./build_linux.sh -d
     
-    - name: Build OrcaSlicer
+    - name: Build OrcaSlicer and AppImage
       shell: bash -e {0}
       run: |
         # 在主程序编译时使用 ccache
         export PATH="/usr/lib/ccache:$PATH"
         export CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)
-        export CCACHE_DIR="${HOME}/.ccache"
+        export CCACHE_BASEDIR="${GITHUB_WORKSPACE}"
+        export CCACHE_COMPILERCHECK=content
         
-        echo "Building OrcaSlicer with $(nproc) parallel jobs and ccache..."
-        time ./build_linux.sh -s
-    
-    - name: Build AppImage
-      shell: bash -e {0}
-      run: |
-        echo "Creating AppImage..."
-        time ./build_linux.sh -i
+        echo "Building OrcaSlicer and AppImage with $(nproc) parallel jobs and ccache..."
+        # -p 关闭预编译头，提升后续 ccache 的命中率。
+        time ./build_linux.sh -sip
     
     - name: Get version info
       id: version
