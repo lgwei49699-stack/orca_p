@@ -207,6 +207,10 @@ void IMSlider::SetMaxValue(const int max_value)
 void IMSlider::SetSliderValues(const std::vector<double> &values)
 {
     m_values = values;
+
+    // This mapping is derived from m_values for the currently loaded G-code.
+    // Never let a subsequent slice reuse the mapping from the previous one.
+    m_layers_values.clear();
 }
 
 Info IMSlider::GetTicksValues() const
@@ -284,6 +288,7 @@ void IMSlider::SetTicksValues(const Info &custom_gcode_per_print_z)
 void IMSlider::SetLayersTimes(const std::vector<float> &layers_times, float total_time)
 {
     m_layers_times.clear();
+    m_layers_values.clear();
     if (layers_times.empty()) return;
     m_layers_times.resize(layers_times.size(), 0.0);
     m_layers_times[0] = layers_times[0];
@@ -309,6 +314,7 @@ void IMSlider::SetLayersTimes(const std::vector<double> &layers_times)
 {
     m_is_wipe_tower = false;
     m_layers_times  = layers_times;
+    m_layers_values.clear();
     for (size_t i = 1; i < m_layers_times.size(); i++) m_layers_times[i] += m_layers_times[i - 1];
 }
 
@@ -1674,5 +1680,4 @@ std::array<int, 2> IMSlider::get_active_extruders_for_tick(int tick) const
 }
 
 } // Slic3r
-
 
