@@ -28,7 +28,7 @@
     "55"
   ],
   "overhang_fan_threshold": [
-    "50%"
+    "25%"
   ],
   "overhang_fan_speed": [
     "100"
@@ -43,7 +43,7 @@
     "; filament end gcode\n"
   ],
   "filament_flow_ratio": [
-    "0.95"
+    "1"
   ],
   "reduce_fan_stop_start_freq": [
     "1"
@@ -58,40 +58,40 @@
     "1.24"
   ],
   "filament_deretraction_speed": [
-    "nil"
+    "30"
   ],
   "filament_diameter": [
     "1.75"
   ],
   "filament_max_volumetric_speed": [
-    "12"
+    "10"
   ],
   "filament_minimal_purge_on_wipe_tower": [
     "15"
   ],
   "filament_retraction_minimum_travel": [
-    "nil"
+    "0.5"
   ],
   "filament_retract_before_wipe": [
-    "nil"
+    "70%"
   ],
   "filament_retract_when_changing_layer": [
-    "nil"
+    "1"
   ],
   "filament_retraction_length": [
-    "nil"
+    "3"
   ],
   "filament_z_hop": [
-    "nil"
+    "0"
   ],
   "filament_z_hop_types": [
-    "nil"
+    "Slope Lift"
   ],
   "filament_retract_restart_extra": [
     "nil"
   ],
   "filament_retraction_speed": [
-    "nil"
+    "40"
   ],
   "filament_settings_id": [
     "EPONE-PLA Overhang @EPONE"
@@ -106,16 +106,16 @@
     "Generic"
   ],
   "filament_wipe": [
-    "nil"
+    "1"
   ],
   "filament_wipe_distance": [
-    "nil"
+    "1.5"
   ],
   "bed_type": [
     "Cool Plate"
   ],
   "nozzle_temperature_initial_layer": [
-    "205"
+    "210"
   ],
   "full_fan_speed_layer": [
     "0"
@@ -127,16 +127,16 @@
     "100"
   ],
   "slow_down_min_speed": [
-    "5"
+    "10"
   ],
   "slow_down_layer_time": [
-    "10"
+    "5"
   ],
   "filament_start_gcode": [
     "; Filament gcode\n"
   ],
   "nozzle_temperature": [
-    "195"
+    "200"
   ],
   "temperature_vitrification": [
     "45"
@@ -153,8 +153,8 @@
   ],
   "setting_id": "GFD_EPONE_FIL_PLA_OVERHANG",
   "compatible_printers": [
-    "MyMarlin 0.4 nozzle",
-    "EPONE 0.4 nozzle"
+    "EPONE 0.4 nozzle",
+    "MyMarlin 0.4 nozzle"
   ],
   "filament_id": "GFL99",
   "filament_cooling_final_speed": [
@@ -285,7 +285,7 @@
     "0.4157"
   ],
   "pressure_advance": [
-    "0.02"
+    "0.03"
   ],
   "required_nozzle_HRC": [
     "3"

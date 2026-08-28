@@ -97,7 +97,7 @@ arrangement::ArrangePolygon get_arrange_poly(ModelInstance* inst, const DynamicP
 
 ArrangePolygon get_instance_arrange_poly(ModelInstance* instance, const DynamicPrintConfig& config);
 
-// Lightweight support-footprint estimate used by both GUI and CLI arranging.
+// Lightweight support/Cura V1 raft-footprint estimate used by both GUI and CLI arranging.
 double estimate_arrange_support_margin(const ModelInstance &instance, const DynamicPrintConfig &config);
 
 // Keep the CLI's arrange and transform-export paths on the same auto-plate

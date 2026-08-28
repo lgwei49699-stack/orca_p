@@ -570,6 +570,21 @@ set(OCCT_LIBS
 )
 
 find_package(libnoise REQUIRED)
+
+# Older Windows dependency bundles exported OpenCV with its private
+# libjpeg-turbo target in the transitive link interface. OrcaSlicer already
+# links JPEG::JPEG, which is also libjpeg-turbo, so MSVC reports duplicate JPEG
+# symbols at the final executable link. New dependency builds no longer export
+# this entry, but filtering it here also keeps existing Windows build trees
+# usable. Other platforms retain their original link interfaces.
+if(MSVC AND TARGET opencv_world)
+    get_target_property(_opencv_world_link_libraries opencv_world INTERFACE_LINK_LIBRARIES)
+    if(_opencv_world_link_libraries)
+        list(FILTER _opencv_world_link_libraries EXCLUDE REGEX "libjpeg-turbo")
+        set_property(TARGET opencv_world PROPERTY INTERFACE_LINK_LIBRARIES "${_opencv_world_link_libraries}")
+    endif()
+endif()
+
 target_link_libraries(libslic3r
     PUBLIC
         admesh

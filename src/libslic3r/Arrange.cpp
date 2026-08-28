@@ -97,6 +97,11 @@ void update_arrange_params(ArrangeParams& params, const DynamicPrintConfig* prin
     }
 }
 
+coord_t resolve_arrange_inflation(const ArrangePolygon& item, coord_t requested_inflation)
+{
+    return std::max(scaled(item.minimum_inflation), requested_inflation);
+}
+
 void update_selected_items_inflation(ArrangePolygons& selected, const DynamicPrintConfig* print_cfg, ArrangeParams& params) {
     // do not inflate brim_width. Objects are allowed to have overlapped brim.
     Points      bedpts = get_shrink_bedpts(print_cfg, params);
@@ -113,13 +118,16 @@ void update_selected_items_inflation(ArrangePolygons& selected, const DynamicPri
     std::for_each(selected.begin(), selected.end(), [&](ArrangePolygon& ap) {
         // 1. if user input a distance, use it
         // 2. otherwise, use each object's own support-aware footprint margin
-        ap.inflation = params.min_obj_distance != 0 ? params.min_obj_distance / 2 : scaled(ap.brim_width);
+        // 3. Cura V1's generated footprint is physical and must not be reduced by
+        //    an explicit object distance smaller than the raft/support footprint
+        const coord_t minimum_inflation = scaled(ap.minimum_inflation);
+        ap.inflation = resolve_arrange_inflation(ap, params.min_obj_distance != 0 ? params.min_obj_distance / 2 : scaled(ap.brim_width));
         BoundingBox apbb = ap.poly.contour.bounding_box();
         auto        diffx = bedbb.size().x() - apbb.size().x() - 5;
         auto        diffy = bedbb.size().y() - apbb.size().y() - 5;
         if (diffx > 0 && diffy > 0) {
             auto min_diff = std::min(diffx, diffy);
-            ap.inflation = std::min(min_diff / 2, ap.inflation);
+            ap.inflation = std::max(minimum_inflation, std::min(min_diff / 2, ap.inflation));
         }
         });
 }
@@ -140,9 +148,11 @@ void update_unselected_items_inflation(ArrangePolygons& unselected, const Dynami
     // 屏蔽区域只需要膨胀brim宽度，防止brim长过去；挤出标定区域不需要膨胀，brim可以长过去。
     // 以前我们认为还需要膨胀clearance_radius/2，这其实是不需要的，因为这些区域并不会真的摆放物体，
     // 其他物体的膨胀轮廓是可以跟它们重叠的。
-    std::for_each(unselected.begin(), unselected.end(),
-        [&](auto& ap) { ap.inflation = !ap.is_virt_object ? (params.min_obj_distance == 0 ? scaled(ap.brim_width) : params.min_obj_distance / 2)
-        : (ap.is_extrusion_cali_object ? 0 : scale_(exclusion_gap)); });
+    std::for_each(unselected.begin(), unselected.end(), [&](auto& ap) {
+        ap.inflation = !ap.is_virt_object ? resolve_arrange_inflation(ap, params.min_obj_distance == 0 ? scaled(ap.brim_width) :
+                                                                                                         params.min_obj_distance / 2) :
+                                             (ap.is_extrusion_cali_object ? 0 : scale_(exclusion_gap));
+    });
 }
 
 void update_selected_items_axis_align(ArrangePolygons& selected, const DynamicPrintConfig* print_cfg, const ArrangeParams& params)

@@ -6,8 +6,8 @@
     "machine_tech": "FFF",
     "family": "Custom",
     "gfd_device_type": "EPONEPro",
-    "bed_model": "ep3_bed_model.stl",
-    "bed_texture": "ep3_bed_texture.png",
+    "bed_model": "epone_bed_model.stl",
+    "bed_texture": "epone_bed_texture.png",
     "hotend_model": "",
     "default_materials": "EPONE-PLA Overhang @EPONE Pro;Generic PLA @System"
 }

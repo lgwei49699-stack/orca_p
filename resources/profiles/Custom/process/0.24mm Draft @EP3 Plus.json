@@ -4,5 +4,8 @@
   "inherits": "0.24mm Draft @EP3 Pro",
   "from": "system",
   "setting_id": "GFD_EP3PLUS_P_024",
-  "instantiation": "true"
+  "instantiation": "true",
+  "compatible_printers": [
+    "EP3 Plus 0.4 nozzle"
+  ]
 }

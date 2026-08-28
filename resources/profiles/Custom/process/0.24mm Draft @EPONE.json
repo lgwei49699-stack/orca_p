@@ -5,6 +5,10 @@
   "from": "system",
   "setting_id": "GFD_EPONE_P_024",
   "instantiation": "true",
+  "compatible_printers": [
+    "EPONE 0.4 nozzle",
+    "MyMarlin 0.4 nozzle"
+  ],
   "layer_height": "0.24",
   "support_top_z_distance": "0.23",
   "support_bottom_z_distance": "0.23"

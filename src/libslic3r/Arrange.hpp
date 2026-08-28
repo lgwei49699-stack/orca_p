@@ -73,6 +73,7 @@ struct ArrangePolygon {
     int       is_applied{ 0 };     // transform has been applied
     double    height{ 0 };         // item height
     double    brim_width{ 0 };     // brim width
+    double    minimum_inflation{ 0 }; // non-overridable physical footprint margin in mm
     std::string name;
 
     // If empty, any rotation is allowed (currently unsupported)
@@ -178,6 +179,8 @@ struct ArrangeParams {
 };
 
 void update_arrange_params(ArrangeParams& params, const DynamicPrintConfig* print_cfg, const ArrangePolygons& selected);
+
+coord_t resolve_arrange_inflation(const ArrangePolygon& item, coord_t requested_inflation);
 
 void update_selected_items_inflation(ArrangePolygons& selected, const DynamicPrintConfig* print_cfg, ArrangeParams& params);
 

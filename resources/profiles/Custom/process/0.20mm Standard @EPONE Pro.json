@@ -6,9 +6,8 @@
   "setting_id": "GFD_EPONEPRO_P_020",
   "instantiation": "true",
   "compatible_printers": [
-    "MyMarlin 0.4 nozzle",
-    "EPONE 0.4 nozzle",
-    "EPONE Pro 0.4 nozzle"
+    "EPONE Pro 0.4 nozzle",
+    "MyMarlin 0.4 nozzle"
   ],
   "print_settings_id": "0.20mm Standard @EPONE Pro"
 }
