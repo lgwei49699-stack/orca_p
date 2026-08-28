@@ -127,8 +127,8 @@ jobs:
         export CCACHE_COMPILERCHECK=content
         
         echo "Building OrcaSlicer and AppImage with $(nproc) parallel jobs and ccache..."
-        # -p 关闭预编译头，提升后续 ccache 的命中率。
-        time ./build_linux.sh -sip
+        # 保持默认预编译头，避免旧源码依赖预编译头提供的间接声明时编译失败。
+        time ./build_linux.sh -si
     
     - name: Get version info
       id: version
