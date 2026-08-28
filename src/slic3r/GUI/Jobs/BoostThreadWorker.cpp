@@ -1,5 +1,7 @@
 #include <exception>
 
+#include <wx/app.h>
+
 #include "BoostThreadWorker.hpp"
 
 namespace Slic3r { namespace GUI {

@@ -209,6 +209,13 @@ if [[ -n "${BUILD_DEPS}" ]] ; then
 fi
 
 if [[ -n "${BUILD_ORCA}" ]] ; then
+    CMAKE_BUILD_NATIVE_ARGS=()
+    if [[ "${ORCA_NINJA_KEEP_GOING:-0}" == "1" ]] ; then
+        # Ninja -k 0 keeps building independent targets after an error so CI can
+        # report all missing includes in one diagnostic run.
+        CMAKE_BUILD_NATIVE_ARGS=(-- -k 0)
+    fi
+
     echo "Configuring OrcaSlicer..."
     if [[ -n "${CLEAN_BUILD}" ]] ; then
         rm -fr build
@@ -242,15 +249,15 @@ if [[ -n "${BUILD_ORCA}" ]] ; then
     echo "done"
     echo "Building OrcaSlicer ..."
     if [[ -n "${BUILD_DEBUG}" ]] ; then
-        cmake --build build --config Debug --target OrcaSlicer
+        cmake --build build --config Debug --target OrcaSlicer "${CMAKE_BUILD_NATIVE_ARGS[@]}"
     else
-        cmake --build build --config Release --target OrcaSlicer
+        cmake --build build --config Release --target OrcaSlicer "${CMAKE_BUILD_NATIVE_ARGS[@]}"
     fi
     echo "Building OrcaSlicer_profile_validator .."
     if [[ -n "${BUILD_DEBUG}" ]] ; then
-        cmake --build build --config Debug --target OrcaSlicer_profile_validator
+        cmake --build build --config Debug --target OrcaSlicer_profile_validator "${CMAKE_BUILD_NATIVE_ARGS[@]}"
     else
-        cmake --build build --config Release --target OrcaSlicer_profile_validator
+        cmake --build build --config Release --target OrcaSlicer_profile_validator "${CMAKE_BUILD_NATIVE_ARGS[@]}"
     fi
     ./scripts/run_gettext.sh
     echo "done"

@@ -73,16 +73,17 @@ jobs:
 
     # 只缓存依赖安装结果，不缓存 Ninja/CMake 的整个中间构建目录。
     # 精确命中时可以安全地完全跳过耗时的第三方依赖编译。
-    - name: Cache compiled dependencies
+    - name: Restore compiled dependencies
       id: deps-cache
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: deps/build/destdir
         key: ${{ runner.os }}-24.04-x86_64-compiled-deps-v1-${{ hashFiles('deps/**') }}
 
     # 下载缓存允许使用旧缓存作为前缀匹配；依赖脚本会通过校验值保证源码包正确。
-    - name: Cache dependency downloads
-      uses: actions/cache@v4
+    - name: Restore dependency downloads
+      id: deps-download-cache
+      uses: actions/cache/restore@v4
       with:
         path: deps/DL_CACHE
         key: ${{ runner.os }}-24.04-x86_64-dep-downloads-v1-${{ hashFiles('deps/**') }}
@@ -116,6 +117,21 @@ jobs:
         
         echo "Building dependencies with $(nproc) parallel jobs..."
         ./build_linux.sh -d
+
+    # 依赖一旦编译完成就立即保存。这样即使后续源码诊断失败，下次也不必重新编译依赖。
+    - name: Save compiled dependencies
+      if: steps.deps-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: deps/build/destdir
+        key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
+    - name: Save dependency downloads
+      if: steps.deps-download-cache.outputs.cache-hit != 'true' && steps.deps-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: deps/DL_CACHE
+        key: ${{ steps.deps-download-cache.outputs.cache-primary-key }}
     
     - name: Build OrcaSlicer and AppImage
       shell: bash -e {0}
@@ -125,10 +141,12 @@ jobs:
         export CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)
         export CCACHE_BASEDIR="${GITHUB_WORKSPACE}"
         export CCACHE_COMPILERCHECK=content
+        # 仅影响 Ninja 遇到编译错误后的行为：继续编译其他独立文件，一次收集更多错误。
+        export ORCA_NINJA_KEEP_GOING=1
         
         echo "Building OrcaSlicer and AppImage with $(nproc) parallel jobs and ccache..."
-        # 保持默认预编译头，避免旧源码依赖预编译头提供的间接声明时编译失败。
-        time ./build_linux.sh -si
+        # -p 关闭预编译头，提高后续 ccache 命中率；缺失的直接 include 会在诊断日志中集中暴露。
+        time ./build_linux.sh -sip
     
     - name: Get version info
       id: version
