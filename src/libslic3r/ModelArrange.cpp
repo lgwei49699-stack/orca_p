@@ -22,6 +22,7 @@ constexpr double NORMAL_SUPPORT_MARGIN_MM = 6.0;
 // derivation visible while storing only the final margin in ArrangePolygon.
 constexpr double TREE_SUPPORT_FIRST_LAYER_DIAMETER_MM = 24.0;
 constexpr double TREE_SUPPORT_MARGIN_MM = TREE_SUPPORT_FIRST_LAYER_DIAMETER_MM / 2.0;
+constexpr double CURA_V1_COMMON_RAFT_FINE_EXPANSION_MM = 0.5;
 constexpr size_t MAX_OVERHANG_FACES_TO_INSPECT = 20000;
 
 bool has_manual_support(const ModelObject &object)
@@ -100,17 +101,100 @@ double support_margin(SupportType support_type)
     return is_tree(support_type) ? TREE_SUPPORT_MARGIN_MM : NORMAL_SUPPORT_MARGIN_MM;
 }
 
+struct CuraV1RaftMargins
+{
+    bool   enabled{false};
+    double base{0.0};
+    double interface_margin{0.0};
+    double surface{0.0};
+    bool   has_interface{false};
+
+    double widest() const
+    {
+        return has_interface ? std::max({base, interface_margin, surface}) : std::max(base, surface);
+    }
+
+    // SupportCommon expands its contact outline by 0.5 mm before deriving the
+    // Base phase. Even when Surface is the widest configured phase, that fine
+    // stability expansion is part of the generated physical footprint.
+    double common_absolute() const
+    {
+        return has_interface ? std::max({base, interface_margin, surface + CURA_V1_COMMON_RAFT_FINE_EXPANSION_MM}) :
+                               std::max(base, surface + CURA_V1_COMMON_RAFT_FINE_EXPANSION_MM);
+    }
+
+    // Normal and Organic support generation starts from a contact outline that
+    // already contains Surface margin. Base and Interface only add the positive
+    // difference relative to Surface around the existing support footprint.
+    double common_support_expansion() const
+    {
+        return std::max({0.0, base - surface - CURA_V1_COMMON_RAFT_FINE_EXPANSION_MM,
+                         has_interface ? interface_margin - surface : 0.0});
+    }
+};
+
+CuraV1RaftMargins cura_v1_raft_margins(ModelObject &object, const DynamicPrintConfig &config)
+{
+    const auto *raft_mode = object.get_config_value<ConfigOptionEnum<RaftMode>>(config, "raft_mode");
+    if (raft_mode == nullptr || raft_mode->value != RaftMode::CuraV1)
+        return {};
+
+    const auto *base_margin = object.get_config_value<ConfigOptionFloat>(config, "raft_base_margin");
+    const auto *interface_margin = object.get_config_value<ConfigOptionFloat>(config, "raft_interface_margin");
+    const auto *interface_layers = object.get_config_value<ConfigOptionInt>(config, "raft_interface_layers");
+    const auto *surface_margin = object.get_config_value<ConfigOptionFloat>(config, "raft_surface_margin");
+    if (base_margin == nullptr || surface_margin == nullptr)
+        return {};
+
+    CuraV1RaftMargins margins;
+    margins.enabled = true;
+    margins.base = std::max(0.0, base_margin->value);
+    margins.surface = std::max(0.0, surface_margin->value);
+    margins.has_interface = interface_margin != nullptr && interface_layers != nullptr && interface_layers->value > 0;
+    if (margins.has_interface)
+        margins.interface_margin = std::max(0.0, interface_margin->value);
+    return margins;
+}
+
+bool uses_offset_tree_raft(SupportType support_type, SupportMaterialStyle support_style)
+{
+    if (!is_tree(support_type))
+        return false;
+
+    // SupportParameters resolves Default (and invalid Grid/Snug tree styles) to
+    // Organic. Only these three styles use TreeSupport's raft path, which offsets
+    // an area that already contains the complete first-layer support footprint.
+    return support_style == smsTreeSlim || support_style == smsTreeStrong || support_style == smsTreeHybrid;
+}
+
 } // namespace
 
 double estimate_arrange_support_margin(const ModelInstance &instance, const DynamicPrintConfig &config)
 {
     ModelObject *object = instance.get_object();
+    const CuraV1RaftMargins raft_margins = cura_v1_raft_margins(*object, config);
+    double margin = DEFAULT_ARRANGE_MARGIN_MM;
+    const auto *support_type = object->get_config_value<ConfigOptionEnum<SupportType>>(config, "support_type");
+    const auto *support_style = object->get_config_value<ConfigOptionEnum<SupportMaterialStyle>>(config, "support_style");
+    const bool offset_tree_raft = raft_margins.enabled && support_type != nullptr && support_style != nullptr &&
+                                  uses_offset_tree_raft(support_type->value, support_style->value);
+    const double raft_footprint = !raft_margins.enabled ? 0.0 :
+                                  offset_tree_raft ? raft_margins.widest() : raft_margins.common_absolute();
     const auto *support_enabled = object->get_config_value<ConfigOptionBool>(config, "enable_support");
     if (support_enabled == nullptr || !support_enabled->value || !has_arrange_overhang(instance, config))
-        return DEFAULT_ARRANGE_MARGIN_MM;
+        return std::max(margin, raft_footprint);
 
-    const auto *support_type = object->get_config_value<ConfigOptionEnum<SupportType>>(config, "support_type");
-    return support_margin(support_type->value);
+    if (support_type == nullptr)
+        return std::max(margin, raft_footprint);
+
+    margin = support_margin(support_type->value);
+    if (!raft_margins.enabled)
+        return margin;
+
+    if (offset_tree_raft)
+        return margin + raft_margins.widest();
+
+    return std::max(raft_margins.common_absolute(), margin + raft_margins.common_support_expansion());
 }
 
 int resolve_arrange_auto_plate_value(bool option_was_specified, int configured_value)
@@ -405,6 +489,8 @@ ArrangePolygon get_instance_arrange_poly(ModelInstance* instance, const Slic3r::
     auto obj = instance->get_object();
 
     ap.brim_width = estimate_arrange_support_margin(*instance, config);
+    if (cura_v1_raft_margins(*obj, config).enabled)
+        ap.minimum_inflation = ap.brim_width;
 
     auto size = obj->instance_convex_hull_bounding_box(instance).size();
     ap.height = size.z();

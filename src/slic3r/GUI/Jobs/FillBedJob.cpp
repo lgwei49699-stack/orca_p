@@ -8,6 +8,7 @@
 #include "slic3r/GUI/GUI_ObjectList.hpp"
 #include "libnest2d/common.hpp"
 
+#include <algorithm>
 #include <numeric>
 
 namespace Slic3r {
@@ -145,7 +146,8 @@ void FillBedJob::prepare()
 
     double sc = scaled<double>(1.) * scaled(1.);
 
-    auto polys = offset_ex(m_selected.front().poly, params.min_obj_distance / 2);
+    const coord_t candidate_inflation = resolve_arrange_inflation(m_selected.front(), params.min_obj_distance / 2);
+    auto polys = offset_ex(m_selected.front().poly, candidate_inflation);
     ExPolygon poly = polys.empty() ? m_selected.front().poly : polys.front();
     double poly_area = poly.area() / sc;
     double unsel_area = std::accumulate(m_unselected.begin(),
@@ -233,9 +235,15 @@ void FillBedJob::process(Ctl &ctl)
     // final align用的是凸包，在有fixed item的情况下可能找到的参考点位置是错的，这里就不做了。见STUDIO-3265
     params.do_final_align = !is_bbl;
 
-    if (m_selected.size() > 100){
+    const bool has_cura_v1_footprint = m_selected.front().minimum_inflation > 0.0;
+    const bool has_physical_excludes = std::any_of(m_unselected.begin(), m_unselected.end(),
+                                                   [](const ArrangePolygon &item) { return !item.is_virt_object; });
+    const bool use_fast_grid = m_selected.size() > 100 && (!has_cura_v1_footprint || !has_physical_excludes);
+    if (use_fast_grid){
         // too many items, just find grid empty cells to put them
-        Vec2f step = unscaled<float>(get_extents(m_selected.front().poly).size()) + Vec2f(m_selected.front().brim_width, m_selected.front().brim_width);
+        const float footprint_spacing = has_cura_v1_footprint ? 2.0f * unscaled<float>(m_selected.front().inflation) :
+                                                                float(m_selected.front().brim_width);
+        Vec2f step = unscaled<float>(get_extents(m_selected.front().poly).size()) + Vec2f(footprint_spacing, footprint_spacing);
         std::vector<Vec2f> empty_cells = Plater::get_empty_cells(step);
         size_t n=std::min(m_selected.size(), empty_cells.size());
         for (size_t i = 0; i < n; i++) {
