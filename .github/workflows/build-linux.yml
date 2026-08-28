@@ -71,14 +71,42 @@ jobs:
         variant: ccache
         create-symlink: true
 
+    - name: Install system dependencies
+      shell: bash -e {0}
+      run: |
+        sudo ./build_linux.sh -u
+        sudo apt-get install -y libunwind-dev
+
+    # 已编译依赖必须与实际工具链完全匹配。GitHub 更新 Runner 工具后，
+    # 指纹会自动变化并触发依赖重建，避免复用旧编译器生成的静态库。
+    - name: Compute dependency toolchain fingerprint
+      id: deps-toolchain
+      shell: bash -e {0}
+      run: |
+        TOOLCHAIN_INFO="${RUNNER_TEMP}/orca-deps-toolchain.txt"
+        {
+          echo "runner_os=${RUNNER_OS}"
+          echo "runner_arch=${RUNNER_ARCH}"
+          echo "image_os=${ImageOS:-unknown}"
+          echo "gcc=$(/usr/bin/gcc -dumpfullversion -dumpversion)"
+          echo "gxx=$(/usr/bin/g++ -dumpfullversion -dumpversion)"
+          echo "ld=$(/usr/bin/ld --version | head -n1)"
+          echo "cmake=$(cmake --version | head -n1)"
+          echo "ninja=$(ninja --version)"
+        } | tee "${TOOLCHAIN_INFO}"
+
+        TOOLCHAIN_FINGERPRINT=$(sha256sum "${TOOLCHAIN_INFO}" | awk '{print $1}')
+        echo "fingerprint=${TOOLCHAIN_FINGERPRINT}" >> "${GITHUB_OUTPUT}"
+        echo "Dependency toolchain fingerprint: ${TOOLCHAIN_FINGERPRINT}"
+
     # 只缓存依赖安装结果，不缓存 Ninja/CMake 的整个中间构建目录。
-    # 精确命中时可以安全地完全跳过耗时的第三方依赖编译。
+    # 缓存键同时绑定工具链、依赖定义和 Linux 构建脚本。
     - name: Restore compiled dependencies
       id: deps-cache
       uses: actions/cache/restore@v4
       with:
         path: deps/build/destdir
-        key: ${{ runner.os }}-24.04-x86_64-compiled-deps-v1-${{ hashFiles('deps/**') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-compiled-deps-v2-${{ steps.deps-toolchain.outputs.fingerprint }}-${{ hashFiles('deps/**', 'build_linux.sh') }}
 
     # 下载缓存允许使用旧缓存作为前缀匹配；依赖脚本会通过校验值保证源码包正确。
     - name: Restore dependency downloads
@@ -89,12 +117,6 @@ jobs:
         key: ${{ runner.os }}-24.04-x86_64-dep-downloads-v1-${{ hashFiles('deps/**') }}
         restore-keys: |
           ${{ runner.os }}-24.04-x86_64-dep-downloads-v1-
-    
-    - name: Install system dependencies
-      shell: bash -e {0}
-      run: |
-        sudo ./build_linux.sh -u
-        sudo apt-get install -y libunwind-dev
     
     - name: Configure ccache
       shell: bash -e {0}
