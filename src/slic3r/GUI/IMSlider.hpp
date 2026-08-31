@@ -54,6 +54,8 @@ enum LabelType
 
 class IMSlider
 {
+    friend class IMSliderTestAccess;
+
 public:
     IMSlider(int lowerValue, int higherValue, int minValue, int maxValue, long style = wxSL_VERTICAL);
 
