@@ -28,6 +28,7 @@
 #include "SVG.hpp"
 #include <Eigen/Dense>
 #include <functional>
+#include <stdexcept>
 #include "GCodeWriter.hpp"
 
 // BBS: for segment
@@ -745,6 +746,8 @@ bool Model::delete_object(ObjectID id)
 void Model::clear_objects()
 {
     for (ModelObject* o : this->objects) {
+        if (o == nullptr)
+            continue;
         // BBS: backup
         Slic3r::delete_object_mesh(*o);
         delete o;
@@ -753,6 +756,107 @@ void Model::clear_objects()
     object_backup_id_map.clear();
     next_object_backup_id = 1;
     texture_mesh.reset();
+}
+
+std::unique_ptr<Model> Model::make_object_staging_copy(const std::vector<size_t>& object_indices) const
+{
+    // Use the invalid-ID constructor and copy the source model ID so staging
+    // does not consume a global ObjectID merely to own private object copies.
+    std::unique_ptr<Model> staging(new Model(-1));
+    staging->copy_id(*this);
+    staging->objects.resize(this->objects.size(), nullptr);
+
+    std::vector<bool> copied(this->objects.size(), false);
+    for (size_t object_index : object_indices) {
+        if (object_index >= this->objects.size() || this->objects[object_index] == nullptr)
+            throw std::out_of_range("Cannot stage a missing model object.");
+        if (copied[object_index])
+            continue;
+
+        // ModelObject has a private destructor, so std::default_delete cannot
+        // own it even from this friend context. Keep ownership explicit until
+        // the no-throw pointer installation below completes.
+        ModelObject* object_copy = ModelObject::new_copy(*this->objects[object_index]);
+        object_copy->set_model(staging.get());
+        staging->objects[object_index] = object_copy;
+        copied[object_index]           = true;
+    }
+
+    return staging;
+}
+
+Model::PreparedObjectVolumeStructureMove Model::prepare_move_object_volume_structures(Model&                     source,
+                                                                                      const std::vector<size_t>& object_indices)
+{
+    PreparedObjectVolumeStructureMove prepared;
+    prepared.m_destination = this;
+    prepared.m_source      = &source;
+    prepared.m_entries.reserve(object_indices.size());
+
+    for (size_t list_index = 0; list_index < object_indices.size(); ++list_index) {
+        const size_t object_index = object_indices[list_index];
+        if (std::find(object_indices.begin(), object_indices.begin() + list_index, object_index) != object_indices.begin() + list_index)
+            throw std::invalid_argument("Cannot move a model object's volume structure more than once.");
+        if (object_index >= this->objects.size() || object_index >= source.objects.size() || this->objects[object_index] == nullptr ||
+            source.objects[object_index] == nullptr)
+            throw std::out_of_range("Cannot move a missing model object volume structure.");
+
+        ModelObject* destination_object = this->objects[object_index];
+        ModelObject* source_object      = source.objects[object_index];
+        if (destination_object == source_object || destination_object->id() != source_object->id())
+            throw std::invalid_argument("Cannot move volume structures between identical or different model objects.");
+        if (destination_object->instances.size() != source_object->instances.size())
+            throw std::invalid_argument("Cannot move volume structures when instance counts differ.");
+
+        for (const ModelVolume* destination_volume : destination_object->volumes)
+            if (destination_volume == nullptr)
+                throw std::invalid_argument("Cannot move a null model volume.");
+        for (const ModelVolume* source_volume : source_object->volumes)
+            if (source_volume == nullptr)
+                throw std::invalid_argument("Cannot move a null model volume.");
+
+        for (size_t instance_index = 0; instance_index < source_object->instances.size(); ++instance_index) {
+            const ModelInstance* source_instance      = source_object->instances[instance_index];
+            const ModelInstance* destination_instance = destination_object->instances[instance_index];
+            if (source_instance == nullptr || destination_instance == nullptr || source_instance == destination_instance ||
+                source_instance->id() != destination_instance->id())
+                throw std::invalid_argument("Cannot move volume structures between identical or different model instances.");
+        }
+
+        prepared.m_entries.push_back({destination_object, source_object});
+    }
+
+    return prepared;
+}
+
+void Model::commit_move_object_volume_structures(PreparedObjectVolumeStructureMove&& prepared) noexcept
+{
+    assert(prepared.m_destination == this);
+    assert(prepared.m_source != nullptr && prepared.m_source != this);
+    if (prepared.m_destination != this || prepared.m_source == nullptr || prepared.m_source == this)
+        return;
+
+    // All validation and token allocation happened in prepare. From here on,
+    // vector swaps, pointer rewrites and fixed-size Transformation swaps cannot
+    // allocate, so the caller may safely create its Undo snapshot immediately
+    // before this commit.
+    for (PreparedObjectVolumeStructureMove::Entry& entry : prepared.m_entries) {
+        entry.destination->volumes.swap(entry.source->volumes);
+        for (ModelVolume* volume : entry.destination->volumes)
+            volume->set_model_object(entry.destination);
+        for (ModelVolume* volume : entry.source->volumes)
+            volume->set_model_object(entry.source);
+
+        for (size_t instance_index = 0; instance_index < entry.destination->instances.size(); ++instance_index)
+            entry.destination->instances[instance_index]->m_transformation.swap(entry.source->instances[instance_index]->m_transformation);
+
+        entry.destination->invalidate_bounding_box();
+        entry.source->invalidate_bounding_box();
+    }
+
+    prepared.m_entries.clear();
+    prepared.m_destination = nullptr;
+    prepared.m_source      = nullptr;
 }
 
 // BBS: backup, reuse objects
@@ -1536,6 +1640,47 @@ void ModelObject::clear_volumes()
     // Slic3r::save_object_mesh(*this);
 }
 
+void ModelObject::replace_volume_structure(const ModelObject& source)
+{
+    if (this->instances.size() != source.instances.size())
+        throw std::invalid_argument("Cannot replace a volume structure when instance counts differ.");
+
+    ModelVolumePtrs                       replacement_volumes;
+    std::vector<Geometry::Transformation> replacement_instance_transformations;
+    replacement_volumes.reserve(source.volumes.size());
+    replacement_instance_transformations.reserve(source.instances.size());
+
+    try {
+        for (const ModelVolume* source_volume : source.volumes) {
+            if (source_volume == nullptr)
+                throw std::invalid_argument("Cannot copy a null model volume.");
+            std::unique_ptr<ModelVolume> copied_volume(new ModelVolume(*source_volume));
+            copied_volume->set_model_object(this);
+            replacement_volumes.push_back(copied_volume.get());
+            copied_volume.release();
+        }
+        for (size_t instance_index = 0; instance_index < source.instances.size(); ++instance_index) {
+            const ModelInstance* source_instance      = source.instances[instance_index];
+            const ModelInstance* destination_instance = this->instances[instance_index];
+            if (source_instance == nullptr || destination_instance == nullptr)
+                throw std::invalid_argument("Cannot copy a null model instance transformation.");
+            replacement_instance_transformations.push_back(source_instance->get_transformation());
+        }
+    } catch (...) {
+        for (ModelVolume* volume : replacement_volumes)
+            delete volume;
+        throw;
+    }
+
+    this->volumes.swap(replacement_volumes);
+    for (size_t instance_index = 0; instance_index < replacement_instance_transformations.size(); ++instance_index)
+        this->instances[instance_index]->set_transformation(replacement_instance_transformations[instance_index]);
+    this->invalidate_bounding_box();
+
+    for (ModelVolume* old_volume : replacement_volumes)
+        delete old_volume;
+}
+
 bool ModelObject::is_fdm_support_painted() const
 {
     return std::any_of(this->volumes.cbegin(), this->volumes.cend(), [](const ModelVolume *mv) { return mv->is_fdm_support_painted(); });
@@ -1899,6 +2044,9 @@ void ModelObject::center_around_origin(bool include_modifiers)
 
 void ModelObject::ensure_on_bed(bool allow_negative_z)
 {
+    if (parts_count() == 0)
+        return;
+
     double z_offset = 0.0;
 
     if (allow_negative_z) {
@@ -2153,6 +2301,50 @@ void ModelVolume::reset_extra_facets()
     this->fuzzy_skin_facets.reset();
 }
 
+std::optional<TriangleSelector::SavedPainting> ModelVolume::save_painting() const
+{
+    if (!is_model_part() || mesh().empty() || !is_any_painted())
+        return std::nullopt;
+
+    TriangleSelector::SavedPainting saved;
+    // ModelVolume meshes are immutable shared values. Retaining the current
+    // topology is sufficient for remapping and avoids a second full mesh copy.
+    saved.mesh      = mesh_ptr();
+    saved.supported = supported_facets.get_data();
+    saved.seam      = seam_facets.get_data();
+    saved.mmu       = mmu_segmentation_facets.get_data();
+    saved.fuzzy     = fuzzy_skin_facets.get_data();
+    return saved;
+}
+
+void ModelVolume::restore_painting(const std::optional<TriangleSelector::SavedPainting>& saved, bool keep_existing_paint)
+{
+    if (!keep_existing_paint)
+        reset_extra_facets();
+
+    if (!saved || !saved->mesh)
+        return;
+
+    auto remap_one = [&](const TriangleSelector::TriangleSplittingData& source, FacetsAnnotation& target) {
+        if (source.bitstream.empty())
+            return;
+
+        TriangleSelector::TriangleSplittingData remapped =
+            TriangleSelector::remap_painting(saved->mesh->its, source, mesh().its, Geometry::translation_transform(mesh().get_init_shift()),
+                                             keep_existing_paint ?
+                                                 std::optional<std::reference_wrapper<const TriangleSelector::TriangleSplittingData>>(
+                                                     std::cref(target.get_data())) :
+                                                 std::nullopt);
+        if (!remapped.bitstream.empty())
+            target.set_data(std::move(remapped));
+    };
+
+    remap_one(saved->supported, supported_facets);
+    remap_one(saved->seam, seam_facets);
+    remap_one(saved->mmu, mmu_segmentation_facets);
+    remap_one(saved->fuzzy, fuzzy_skin_facets);
+}
+
 static void invalidate_translations(ModelObject* object, const ModelInstance* src_instance)
 {
     if (!object->origin_translation.isApprox(Vec3d::Zero()) && src_instance->get_offset().isApprox(Vec3d::Zero())) {
@@ -2166,13 +2358,16 @@ static void invalidate_translations(ModelObject* object, const ModelInstance* sr
     }
 }
 
-void ModelObject::split(ModelObjectPtrs* new_objects)
+void ModelObject::split(ModelObjectPtrs* new_objects) { split(new_objects, false); }
+
+void ModelObject::split(ModelObjectPtrs* new_objects, bool keep_painting)
 {
     std::vector<TriangleMesh> all_meshes;
     std::vector<Transform3d> all_transfos;
     std::vector<std::pair<int, int>> volume_mesh_counts;
     all_meshes.reserve(this->volumes.size() * 5);
     bool is_multi_volume_object = (this->volumes.size() > 1);
+    std::optional<TriangleSelector::SavedPainting> saved_painting;
 
     for (int volume_idx = 0; volume_idx < this->volumes.size(); volume_idx++) {
         ModelVolume* volume = this->volumes[volume_idx];
@@ -2184,6 +2379,8 @@ void ModelObject::split(ModelObjectPtrs* new_objects)
             volume->text_configuration.reset();
 
         if (!is_multi_volume_object) {
+            if (keep_painting)
+                saved_painting = volume->save_painting();
             //BBS: not multi volume object, then split mesh.
             std::vector<TriangleMesh> volume_meshes = volume->mesh().split();
             int mesh_count = 0;
@@ -2251,10 +2448,18 @@ void ModelObject::split(ModelObjectPtrs* new_objects)
             ModelVolume* new_vol = new_object->add_volume(*volume, std::move(mesh));
 
             if (is_multi_volume_object) {
-                // BBS: volume geometry not changed, so we can keep the color paint facets
-                if (new_vol->mmu_segmentation_facets.timestamp() == volume->mmu_segmentation_facets.timestamp())
-                    new_vol->mmu_segmentation_facets.reset(); // BBS: let next assign take effect
-                new_vol->mmu_segmentation_facets.assign(volume->mmu_segmentation_facets);
+                // The geometry did not change: copy every annotation without remapping.
+#define COPY_FACETS(annotation) \
+    if (new_vol->annotation.timestamp() == volume->annotation.timestamp()) \
+        new_vol->annotation.reset(); \
+    new_vol->annotation.assign(volume->annotation)
+                COPY_FACETS(supported_facets);
+                COPY_FACETS(seam_facets);
+                COPY_FACETS(mmu_segmentation_facets);
+                COPY_FACETS(fuzzy_skin_facets);
+#undef COPY_FACETS
+            } else if (saved_painting) {
+                new_vol->restore_painting(saved_painting);
             }
 
             // BBS: clear volume's config, as we already set them into object
@@ -2844,7 +3049,9 @@ std::string ModelVolume::type_to_string(const ModelVolumeType t)
 // Split this volume, append the result to the object owning this volume.
 // Return the number of volumes created from this one.
 // This is useful to assign different materials to different volumes of an object.
-size_t ModelVolume::split(unsigned int max_extruders)
+size_t ModelVolume::split(unsigned int max_extruders) { return split(max_extruders, false); }
+
+size_t ModelVolume::split(unsigned int max_extruders, bool keep_painting)
 {
     std::vector<TriangleMesh> meshes = this->mesh().split();
     if (meshes.size() <= 1)
@@ -2854,8 +3061,11 @@ size_t ModelVolume::split(unsigned int max_extruders)
     if (text_configuration.has_value())
         text_configuration.reset();
 
+    const std::optional<TriangleSelector::SavedPainting> saved_painting = keep_painting ? save_painting() : std::nullopt;
+
     size_t idx = 0;
     size_t ivolume = std::find(this->object->volumes.begin(), this->object->volumes.end(), this) - this->object->volumes.begin();
+    const size_t      first_part_index = ivolume;
     const std::string name = this->name;
 
     unsigned int extruder_counter = 0;
@@ -2893,19 +3103,21 @@ size_t ModelVolume::split(unsigned int max_extruders)
         this->object->volumes[ivolume]->config.set("extruder", this->extruder_id());
         //this->object->volumes[ivolume]->config.set("extruder", auto_extruder_id(max_extruders, extruder_counter));
         this->object->volumes[ivolume]->m_is_splittable = 0;
+        this->object->volumes[ivolume]->restore_painting(saved_painting);
         ++ idx;
     }
 
-    // discard volumes for which the convex hull was not generated or is degenerate
-    size_t i = 0;
-    while (i < this->object->volumes.size()) {
-        const std::shared_ptr<const TriangleMesh> &hull = this->object->volumes[i]->get_convex_hull_shared_ptr();
+    // Discard only parts created by this split for which the convex hull was
+    // not generated or is degenerate. Scanning the whole object here may delete
+    // an unrelated, unselected volume as a side effect of splitting this one.
+    size_t part_end = std::min(first_part_index + idx, this->object->volumes.size());
+    for (size_t i = part_end; i > first_part_index; --i) {
+        const size_t                               part_index = i - 1;
+        const std::shared_ptr<const TriangleMesh>& hull       = this->object->volumes[part_index]->get_convex_hull_shared_ptr();
         if (hull == nullptr || hull->its.vertices.empty() || hull->its.indices.empty()) {
-            this->object->delete_volume(i);
+            this->object->delete_volume(part_index);
             --idx;
-            --i;
         }
-        ++i;
     }
 
     return idx;

@@ -5,6 +5,7 @@
 #include "ClipperUtils.hpp"
 #include "Geometry.hpp"
 #include "Geometry/ConvexHull.hpp"
+#include "LocalesUtils.hpp"
 #include "Point.hpp"
 #include "Execution/ExecutionTBB.hpp"
 #include "Execution/ExecutionSeq.hpp"
@@ -17,6 +18,7 @@
 
 #include <cmath>
 #include <deque>
+#include <limits>
 #include <queue>
 #include <vector>
 #include <utility>
@@ -33,6 +35,21 @@
 #include <assert.h>
 
 namespace Slic3r {
+
+static bool its_has_finite_vertices_and_valid_indices(const std::vector<stl_triangle_vertex_indices>& indices,
+                                                      const std::vector<stl_vertex>&                  vertices)
+{
+    if (indices.empty() || vertices.empty())
+        return false;
+    for (const stl_vertex& vertex : vertices)
+        if (!vertex.allFinite())
+            return false;
+    for (const stl_triangle_vertex_indices& face : indices)
+        for (size_t corner = 0; corner < 3; ++corner)
+            if (face[corner] < 0 || size_t(face[corner]) >= vertices.size())
+                return false;
+    return true;
+}
 
 static void update_bounding_box(const indexed_triangle_set &its, TriangleMeshStats &out)
 {
@@ -63,10 +80,7 @@ TriangleMesh::TriangleMesh(std::vector<Vec3f> &&vertices, const std::vector<Vec3
     fill_initial_stats(this->its, m_stats);
 }
 
-TriangleMesh::TriangleMesh(const indexed_triangle_set &its) : its(its)
-{
-    fill_initial_stats(this->its, m_stats);
-}
+TriangleMesh::TriangleMesh(const indexed_triangle_set& its) : its(its) { fill_initial_stats(this->its, m_stats); }
 
 TriangleMesh::TriangleMesh(indexed_triangle_set &&its, const RepairedMeshErrors& errors/* = RepairedMeshErrors()*/) : its(std::move(its))
 {
@@ -227,6 +241,14 @@ bool TriangleMesh::from_stl(stl_file &stl, bool repair, MeshRepairReport *repair
 #endif
 
     stl_generate_shared_vertices(&stl, this->its);
+    if (!repair) {
+        // ADMesh's shared-vertex generator follows its neighbor table, which
+        // is populated by the legacy repair pass. When that pass is disabled
+        // (for example before explicit CGAL repair), weld only exactly equal
+        // coordinates here. This is representation normalization rather than
+        // geometry repair: no facet is removed, moved or reoriented.
+        its_merge_vertices(this->its, false);
+    }
     fill_initial_stats(this->its, this->m_stats);
 
     if (repair_report != nullptr) {
@@ -239,8 +261,8 @@ bool TriangleMesh::from_stl(stl_file &stl, bool repair, MeshRepairReport *repair
     return true;
 }
 
-bool TriangleMesh::ReadSTLFile(const char *input_file, bool repair, ImportstlProgressFn stlFn, int custom_header_length,
-                               MeshRepairReport *repair_report)
+bool TriangleMesh::ReadSTLFile(
+    const char* input_file, bool repair, ImportstlProgressFn stlFn, int custom_header_length, MeshRepairReport* repair_report)
 {
     if (repair_report != nullptr) {
         *repair_report         = MeshRepairReport{};
@@ -253,15 +275,9 @@ bool TriangleMesh::ReadSTLFile(const char *input_file, bool repair, ImportstlPro
     return from_stl(stl, repair, repair_report);
 }
 
-bool TriangleMesh::write_ascii(const char* output_file)
-{
-    return its_write_stl_ascii(output_file, "", this->its);
-}
+bool TriangleMesh::write_ascii(const char* output_file) { return its_write_stl_ascii(output_file, "", this->its); }
 
-bool TriangleMesh::write_binary(const char* output_file)
-{
-    return its_write_stl_binary(output_file, "", this->its);
-}
+bool TriangleMesh::write_binary(const char* output_file) { return its_write_stl_binary(output_file, "", this->its); }
 
 float TriangleMesh::volume()
 {
@@ -270,15 +286,48 @@ float TriangleMesh::volume()
     return m_stats.volume;
 }
 
-void TriangleMesh::WriteOBJFile(const char* output_file) const
+void TriangleMesh::WriteOBJFile(const char* output_file) const { (void) this->write_obj_file(output_file); }
+
+bool TriangleMesh::write_obj_file(const char* output_file) const
 {
-    its_write_obj(this->its, output_file);
+    if (output_file == nullptr || !its_has_finite_vertices_and_valid_indices(this->its.indices, this->its.vertices)) {
+        BOOST_LOG_TRIVIAL(error) << "WriteOBJFile: Refusing to export invalid mesh data";
+        return false;
 }
 
-void TriangleMesh::scale(float factor)
-{
-    this->scale(Vec3f(factor, factor, factor));
+    CNumericLocalesSetter locales_setter;
+    FILE*                 file = boost::nowide::fopen(output_file, "w");
+    if (file == nullptr) {
+        BOOST_LOG_TRIVIAL(error) << "WriteOBJFile: Couldn't open " << output_file << " for writing";
+        return false;
 }
+
+    bool success = true;
+    for (const stl_vertex& vertex : this->its.vertices) {
+        if (std::fprintf(file, "v %f %f %f\n", vertex.x(), vertex.y(), vertex.z()) < 0) {
+            success = false;
+            break;
+        }
+    }
+    if (success) {
+        for (const stl_triangle_vertex_indices& face : this->its.indices) {
+            if (std::fprintf(file, "f %d %d %d\n", face[0] + 1, face[1] + 1, face[2] + 1) < 0) {
+                success = false;
+                break;
+            }
+        }
+    }
+
+    if (std::fflush(file) != 0)
+        success = false;
+    if (std::fclose(file) != 0)
+        success = false;
+    if (!success)
+        BOOST_LOG_TRIVIAL(error) << "WriteOBJFile: Failed writing " << output_file;
+    return success;
+}
+
+void TriangleMesh::scale(float factor) { this->scale(Vec3f(factor, factor, factor)); }
 
 void TriangleMesh::scale(const Vec3f &versor)
 {
@@ -314,10 +363,7 @@ void TriangleMesh::translate(const Vec3f &displacement)
     }
 }
 
-void TriangleMesh::translate(float x, float y, float z)
-{
-    this->translate(Vec3f(x, y, z));
-}
+void TriangleMesh::translate(float x, float y, float z) { this->translate(Vec3f(x, y, z)); }
 
 void TriangleMesh::rotate(float angle, const Axis &axis)
 {
@@ -359,9 +405,7 @@ void TriangleMesh::mirror(const Axis axis)
         for (stl_vertex &v : this->its.vertices)
             v.z() *= -1.0;
         break;
-    default:
-        assert(false);
-        return;
+    default: assert(false); return;
     };
     its_flip_triangles(this->its);
     int iaxis = int(axis);
@@ -400,10 +444,7 @@ void TriangleMesh::flip_triangles()
     m_stats.volume = - m_stats.volume;
 }
 
-void TriangleMesh::align_to_origin()
-{
-    this->translate(- m_stats.min(0), - m_stats.min(1), - m_stats.min(2));
-}
+void TriangleMesh::align_to_origin() { this->translate(-m_stats.min(0), -m_stats.min(1), -m_stats.min(2)); }
 
 void TriangleMesh::rotate(double angle, Point* center)
 {
@@ -418,10 +459,7 @@ void TriangleMesh::rotate(double angle, Point* center)
 /**
  * Calculates whether or not the mesh is splittable.
  */
-bool TriangleMesh::is_splittable() const
-{
-    return its_is_splittable(this->its);
-}
+bool TriangleMesh::is_splittable() const { return its_is_splittable(this->its); }
 
 std::vector<TriangleMesh> TriangleMesh::split() const
 {
@@ -434,7 +472,6 @@ std::vector<TriangleMesh> TriangleMesh::split() const
         if (TriangleMesh &triangle_mesh = out.back(); triangle_mesh.volume() < 0)
             // Some source mesh parts may be incorrectly oriented. Correct them.
             triangle_mesh.flip_triangles();
-
     }
     return out;
 }
@@ -554,7 +591,8 @@ size_t TriangleMesh::memsize() const
 }
 
 // Create a mapping from triangle edge into face.
-struct EdgeToFace {
+struct EdgeToFace
+{
     // Index of the 1st vertex of the triangle edge. vertex_low <= vertex_high.
     int  vertex_low;
     // Index of the 2nd vertex of the triangle edge.
@@ -564,12 +602,16 @@ struct EdgeToFace {
     // Index of edge in the face, starting with 1. Negative indices if the edge was stored reverse in (vertex_low, vertex_high).
     int  face_edge;
     bool operator==(const EdgeToFace &other) const { return vertex_low == other.vertex_low && vertex_high == other.vertex_high; }
-    bool operator<(const EdgeToFace &other) const { return vertex_low < other.vertex_low || (vertex_low == other.vertex_low && vertex_high < other.vertex_high); }
+    bool operator<(const EdgeToFace& other) const
+    {
+        return vertex_low < other.vertex_low || (vertex_low == other.vertex_low && vertex_high < other.vertex_high);
+    }
 };
 
 template<typename FaceFilter, typename ThrowOnCancelCallback>
-static std::vector<EdgeToFace> create_edge_map(
-    const indexed_triangle_set &its, FaceFilter face_filter, ThrowOnCancelCallback throw_on_cancel)
+static std::vector<EdgeToFace> create_edge_map(const indexed_triangle_set& its,
+                                               FaceFilter                  face_filter,
+                                               ThrowOnCancelCallback       throw_on_cancel)
 {
     std::vector<EdgeToFace> edges_map;
     edges_map.reserve(its.indices.size() * 3);
@@ -599,7 +641,9 @@ static std::vector<EdgeToFace> create_edge_map(
 // Map from a face edge to a unique edge identifier or -1 if no neighbor exists.
 // Two neighbor faces share a unique edge identifier even if they are flipped.
 template<typename FaceFilter, typename ThrowOnCancelCallback>
-static inline std::vector<Vec3i32> its_face_edge_ids_impl(const indexed_triangle_set &its, FaceFilter face_filter, ThrowOnCancelCallback throw_on_cancel)
+static inline std::vector<Vec3i32> its_face_edge_ids_impl(const indexed_triangle_set& its,
+                                                          FaceFilter                  face_filter,
+                                                          ThrowOnCancelCallback       throw_on_cancel)
 {
     std::vector<Vec3i32> out(its.indices.size(), Vec3i32(-1, -1, -1));
 
@@ -665,7 +709,10 @@ std::vector<Vec3i32> its_face_edge_ids(const indexed_triangle_set &its, const st
 }
 
 // Having the face neighbors available, assign unique edge IDs to face edges for chaining of polygons over slices.
-std::vector<Vec3i32> its_face_edge_ids(const indexed_triangle_set &its, std::vector<Vec3i32> &face_neighbors, bool assign_unbound_edges, int *num_edges)
+std::vector<Vec3i32> its_face_edge_ids(const indexed_triangle_set& its,
+                                       std::vector<Vec3i32>&       face_neighbors,
+                                       bool                        assign_unbound_edges,
+                                       int*                        num_edges)
 {
     // out elements are not initialized!
     std::vector<Vec3i32> out(face_neighbors.size());
@@ -777,9 +824,8 @@ void its_flip_triangles(indexed_triangle_set &its)
 
 int its_remove_degenerate_faces(indexed_triangle_set &its, bool shrink_to_fit)
 {
-    auto it = std::remove_if(its.indices.begin(), its.indices.end(), [](auto &face) {
-        return face(0) == face(1) || face(0) == face(2) || face(1) == face(2);
-    });
+    auto it = std::remove_if(its.indices.begin(), its.indices.end(),
+                             [](auto& face) { return face(0) == face(1) || face(0) == face(2) || face(1) == face(2); });
 
     int removed = std::distance(it, its.indices.end());
     its.indices.erase(it, its.indices.end());
@@ -820,29 +866,26 @@ int its_compactify_vertices(indexed_triangle_set &its, bool shrink_to_fit)
     return removed;
 }
 
-bool its_store_triangle(const indexed_triangle_set &its,
-                        const char *                obj_filename,
-                        size_t                      triangle_index)
+bool its_store_triangle(const indexed_triangle_set& its, const char* obj_filename, size_t triangle_index)
 {
-    if (its.indices.size() <= triangle_index) return false;
+    if (its.indices.size() <= triangle_index)
+        return false;
     Vec3i32                t = its.indices[triangle_index];
     indexed_triangle_set its2;
     its2.indices  = {{0, 1, 2}};
-    its2.vertices = {its.vertices[t[0]], its.vertices[t[1]],
-                     its.vertices[t[2]]};
+    its2.vertices = {its.vertices[t[0]], its.vertices[t[1]], its.vertices[t[2]]};
     return its_write_obj(its2, obj_filename);
 }
 
-bool its_store_triangles(const indexed_triangle_set &its,
-                         const char *                obj_filename,
-                         const std::vector<size_t> & triangles)
+bool its_store_triangles(const indexed_triangle_set& its, const char* obj_filename, const std::vector<size_t>& triangles)
 {
     indexed_triangle_set its2;
     its2.vertices.reserve(triangles.size() * 3);
     its2.indices.reserve(triangles.size());
     std::map<size_t, size_t> vertex_map;
     for (auto ti : triangles) {
-        if (its.indices.size() <= ti) return false;
+        if (its.indices.size() <= ti)
+            return false;
         Vec3i32 t = its.indices[ti];
         Vec3i32 new_t;
         for (size_t i = 0; i < 3; ++i) {
@@ -869,7 +912,10 @@ void its_shrink_to_fit(indexed_triangle_set &its)
 }
 
 template<typename TransformVertex>
-void its_collect_mesh_projection_points_above(const indexed_triangle_set &its, const TransformVertex &transform_fn, const float z, Points &all_pts)
+void its_collect_mesh_projection_points_above(const indexed_triangle_set& its,
+                                              const TransformVertex&      transform_fn,
+                                              const float                 z,
+                                              Points&                     all_pts)
 {
     all_pts.reserve(all_pts.size() + its.indices.size() * 3);
     for (const stl_triangle_vertex_indices &tri : its.indices) {
@@ -923,31 +969,32 @@ indexed_triangle_set its_make_cube(double xd, double yd, double zd)
 {
     auto x = float(xd), y = float(yd), z = float(zd);
     return {
-        { {0, 1, 2}, {0, 2, 3}, {4, 5, 6}, {4, 6, 7},
-          {0, 4, 7}, {0, 7, 1}, {1, 7, 6}, {1, 6, 2},
-          {2, 6, 5}, {2, 5, 3}, {4, 0, 3}, {4, 3, 5} },
-        { {x, y, 0}, {x, 0, 0}, {0, 0, 0}, {0, y, 0},
-          {x, y, z}, {0, y, z}, {0, 0, z}, {x, 0, z} }
-    };
+        {{0, 1, 2}, {0, 2, 3}, {4, 5, 6}, {4, 6, 7}, {0, 4, 7}, {0, 7, 1}, {1, 7, 6}, {1, 6, 2}, {2, 6, 5}, {2, 5, 3}, {4, 0, 3}, {4, 3, 5}},
+        {{x, y, 0}, {x, 0, 0}, {0, 0, 0}, {0, y, 0}, {x, y, z}, {0, y, z}, {0, 0, z}, {x, 0, z}}};
 }
 
 indexed_triangle_set its_make_prism(float width, float length, float height)
 {
     // We need two upward facing triangles
     float x = width / 2.f, y = length / 2.f;
-    return {
-        {
+    return {{
             {0, 1, 2}, // side 1
             {4, 3, 5}, // side 2
-            {1, 4, 2}, {2, 4, 5}, // roof 1
-            {0, 2, 5}, {0, 5, 3}, // roof 2
-            {3, 4, 1}, {3, 1, 0} // bottom
+                {1, 4, 2},
+                {2, 4, 5}, // roof 1
+                {0, 2, 5},
+                {0, 5, 3}, // roof 2
+                {3, 4, 1},
+                {3, 1, 0} // bottom
         },
         {
-            {-x, -y, 0.f}, {x, -y, 0.f}, {0.f, -y, height},
-            {-x, y, 0.f}, {x, y, 0.f}, {0.f, y, height},
-        }
-    };
+                {-x, -y, 0.f},
+                {x, -y, 0.f},
+                {0.f, -y, height},
+                {-x, y, 0.f},
+                {x, y, 0.f},
+                {0.f, y, height},
+            }};
 }
 
 // Generate the mesh for a cylinder and return it, using 
@@ -1125,20 +1172,8 @@ indexed_triangle_set its_make_cone(double r, double h, double fa)
 indexed_triangle_set its_make_pyramid(float base, float height)
 {
     float a = base / 2.f;
-    return {
-        {
-            {0, 1, 2},
-            {0, 2, 3},
-            {0, 1, 4},
-            {1, 2, 4},
-            {2, 3, 4},
-            {3, 0, 4}
-        },
-        {
-            {-a, -a, 0}, {a, -a, 0}, {a, a, 0},
-            {-a, a, 0}, {0.f, 0.f, height}
-        }
-    };
+    return {{{0, 1, 2}, {0, 2, 3}, {0, 1, 4}, {1, 2, 4}, {2, 3, 4}, {3, 0, 4}},
+            {{-a, -a, 0}, {a, -a, 0}, {a, a, 0}, {-a, a, 0}, {0.f, 0.f, height}}};
 }
 
 // Generates mesh for a sphere centered about the origin, using the generated angle
@@ -1280,8 +1315,8 @@ indexed_triangle_set its_make_snap(double r, double h, float space_proportion, f
     const Vec2f b_vec = Eigen::Vector2f(0, b_len);
     const Vec2f t_vec = Eigen::Vector2f(0, t_len);
 
-
-    auto add_side_vertices = [b_vec, t_vec, b_height, m_height, t_height](std::vector<stl_vertex>& vertices, float b_angle, float t_angle, const Vec2f& m_vec) {
+    auto add_side_vertices = [b_vec, t_vec, b_height, m_height, t_height](std::vector<stl_vertex>& vertices, float b_angle, float t_angle,
+                                                                          const Vec2f& m_vec) {
         Vec2f b_pt = Eigen::Rotation2Df(b_angle) * b_vec;
         Vec2f m_pt = Eigen::Rotation2Df(b_angle) * m_vec;
         Vec2f t_pt = Eigen::Rotation2Df(t_angle) * t_vec;
@@ -1313,9 +1348,8 @@ indexed_triangle_set its_make_snap(double r, double h, float space_proportion, f
         return sqrtf(rad_sqr / (1 + (1 / f_sqr - 1) * sin_sqr));
     };
 
-    auto add_sub_mesh = [add_side_vertices, add_side_facets, get_m_len,
-                        b_height, t_height, b_angle, t_angle, b_angle_step, t_angle_step]
-                        (indexed_triangle_set& mesh, float center_x, float angle_rotation, int frst_vertex_id) {
+    auto add_sub_mesh = [add_side_vertices, add_side_facets, get_m_len, b_height, t_height, b_angle, t_angle, b_angle_step,
+                         t_angle_step](indexed_triangle_set& mesh, float center_x, float angle_rotation, int frst_vertex_id) {
         auto& vertices = mesh.vertices;
         auto& facets     = mesh.indices;
 
@@ -1362,7 +1396,6 @@ indexed_triangle_set its_make_snap(double r, double h, float space_proportion, f
             facets.emplace_back(frst_id, id - 1, id - 2);
         }
     };
-
 
     indexed_triangle_set mesh;
 
@@ -1498,7 +1531,8 @@ void its_merge(indexed_triangle_set &A, const Pointf3s &triangles)
 
 float its_volume(const indexed_triangle_set &its)
 {
-    if (its.empty()) return 0.;
+    if (its.empty())
+        return 0.;
 
     // Choose a point, any point as the reference.
     auto p0 = its.vertices.front();
@@ -1526,33 +1560,22 @@ float its_average_edge_length(const indexed_triangle_set &its)
     double edge_length = 0.f;
     for (size_t i = 0; i < its.indices.size(); ++ i) {
         const its_triangle v = its_triangle_vertices(its, i);
-        edge_length += (v[1] - v[0]).cast<double>().norm() + 
-                       (v[2] - v[0]).cast<double>().norm() +
-                       (v[1] - v[2]).cast<double>().norm();
+        edge_length += (v[1] - v[0]).cast<double>().norm() + (v[2] - v[0]).cast<double>().norm() + (v[1] - v[2]).cast<double>().norm();
     }
     return float(edge_length / (3 * its.indices.size()));
 }
 
-std::vector<indexed_triangle_set> its_split(const indexed_triangle_set &its)
-{
-    return its_split<>(its);
-}
+std::vector<indexed_triangle_set> its_split(const indexed_triangle_set& its) { return its_split<>(its); }
 
 // Number of disconnected patches (faces are connected if they share an edge, shared edge defined with 2 shared vertex indices).
-size_t its_number_of_patches(const indexed_triangle_set &its)
-{
-    return its_number_of_patches<>(its);
-}
+size_t its_number_of_patches(const indexed_triangle_set& its) { return its_number_of_patches<>(its); }
 size_t its_number_of_patches(const indexed_triangle_set &its, const std::vector<Vec3i32> &face_neighbors)
 {
     return its_number_of_patches<>(ItsNeighborsWrapper{ its, face_neighbors });
 }
 
 // Same as its_number_of_patches(its) > 1, but faster.
-bool its_is_splittable(const indexed_triangle_set &its)
-{
-    return its_is_splittable<>(its);
-}
+bool its_is_splittable(const indexed_triangle_set& its) { return its_is_splittable<>(its); }
 bool its_is_splittable(const indexed_triangle_set &its, const std::vector<Vec3i32> &face_neighbors)
 {
     return its_is_splittable<>(ItsNeighborsWrapper{ its, face_neighbors });
@@ -1568,10 +1591,7 @@ size_t its_num_open_edges(const std::vector<Vec3i32> &face_neighbors)
     return num_open_edges;
 }
 
-size_t its_num_open_edges(const indexed_triangle_set &its)
-{
-    return its_num_open_edges(its_face_neighbors(its));
-}
+size_t its_num_open_edges(const indexed_triangle_set& its) { return its_num_open_edges(its_face_neighbors(its)); }
 
 void VertexFaceIndex::create(const indexed_triangle_set &its)
 {
@@ -1598,15 +1618,9 @@ void VertexFaceIndex::create(const indexed_triangle_set &its)
     m_vertex_to_face_start.front() = 0;
 }
 
-std::vector<Vec3i32> its_face_neighbors(const indexed_triangle_set &its)
-{
-    return create_face_neighbors_index(ex_seq, its);
-}
+std::vector<Vec3i32> its_face_neighbors(const indexed_triangle_set& its) { return create_face_neighbors_index(ex_seq, its); }
 
-std::vector<Vec3i32> its_face_neighbors_par(const indexed_triangle_set &its)
-{
-    return create_face_neighbors_index(ex_tbb, its);
-}
+std::vector<Vec3i32> its_face_neighbors_par(const indexed_triangle_set& its) { return create_face_neighbors_index(ex_tbb, its); }
 
 std::vector<Vec3f> its_face_normals(const indexed_triangle_set &its) 
 {
@@ -1629,35 +1643,80 @@ static inline void big_endian_reverse_quads(char *buf, size_t cnt)
 }
 #endif // BOOST_ENDIAN_LITTLE_BYTE
 
-bool its_write_stl_ascii(const char *file, const char *label, const std::vector<stl_triangle_vertex_indices> &indices, const std::vector<stl_vertex> &vertices)
+static bool its_is_valid_for_stl_export(const std::vector<stl_triangle_vertex_indices>& indices,
+                                        const std::vector<stl_vertex>&                  vertices,
+                                        bool                                            binary)
 {
+    if ((binary && indices.size() > std::numeric_limits<uint32_t>::max()) || !its_has_finite_vertices_and_valid_indices(indices, vertices))
+        return false;
+    for (const stl_triangle_vertex_indices& face : indices) {
+        const Vec3f edge_a = vertices[size_t(face[1])] - vertices[size_t(face[0])];
+        const Vec3f edge_b = vertices[size_t(face[2])] - vertices[size_t(face[0])];
+        if (!edge_a.allFinite() || !edge_b.allFinite())
+            return false;
+        const Vec3f cross_product = edge_a.cross(edge_b);
+        if (!cross_product.allFinite())
+            return false;
+        const float squared_norm = cross_product.squaredNorm();
+        if (!std::isfinite(squared_norm) || squared_norm <= std::numeric_limits<float>::min())
+            return false;
+        if (!cross_product.normalized().allFinite())
+            return false;
+    }
+    return true;
+}
+
+bool its_write_stl_ascii(const char*                                     file,
+                         const char*                                     label,
+                         const std::vector<stl_triangle_vertex_indices>& indices,
+                         const std::vector<stl_vertex>&                  vertices)
+{
+    if (file == nullptr || *file == '\0' || !its_is_valid_for_stl_export(indices, vertices, false)) {
+        BOOST_LOG_TRIVIAL(error) << "its_write_stl_ascii: Refusing to export invalid mesh data";
+        return false;
+    }
     FILE *fp = boost::nowide::fopen(file, "w");
     if (fp == nullptr) {
         BOOST_LOG_TRIVIAL(error) << "its_write_stl_ascii: Couldn't open " << file << " for writing";
         return false;
     }
 
-    fprintf(fp, "solid  %s\n", label);
+    const char* safe_label = label == nullptr ? "" : label;
+    bool        success    = std::fprintf(fp, "solid  %s\n", safe_label) >= 0;
 
     for (const stl_triangle_vertex_indices& face : indices) {
+        if (!success)
+            break;
         Vec3f vertex[3] = { vertices[face(0)], vertices[face(1)], vertices[face(2)] };
-        Vec3f normal    = (vertex[1] - vertex[0]).cross(vertex[2] - vertex[1]).normalized();
-        fprintf(fp, "  facet normal % .8E % .8E % .8E\n", normal(0), normal(1), normal(2));
-        fprintf(fp, "    outer loop\n");
-        fprintf(fp, "      vertex % .8E % .8E % .8E\n", vertex[0](0), vertex[0](1), vertex[0](2));
-        fprintf(fp, "      vertex % .8E % .8E % .8E\n", vertex[1](0), vertex[1](1), vertex[1](2));
-        fprintf(fp, "      vertex % .8E % .8E % .8E\n", vertex[2](0), vertex[2](1), vertex[2](2));
-        fprintf(fp, "    endloop\n");
-        fprintf(fp, "  endfacet\n");
+        Vec3f normal    = (vertex[1] - vertex[0]).cross(vertex[2] - vertex[0]).normalized();
+        success         = std::fprintf(fp, "  facet normal % .8E % .8E % .8E\n", normal(0), normal(1), normal(2)) >= 0 &&
+                  std::fprintf(fp, "    outer loop\n") >= 0 &&
+                  std::fprintf(fp, "      vertex % .8E % .8E % .8E\n", vertex[0](0), vertex[0](1), vertex[0](2)) >= 0 &&
+                  std::fprintf(fp, "      vertex % .8E % .8E % .8E\n", vertex[1](0), vertex[1](1), vertex[1](2)) >= 0 &&
+                  std::fprintf(fp, "      vertex % .8E % .8E % .8E\n", vertex[2](0), vertex[2](1), vertex[2](2)) >= 0 &&
+                  std::fprintf(fp, "    endloop\n") >= 0 && std::fprintf(fp, "  endfacet\n") >= 0;
     }
 
-    fprintf(fp, "endsolid  %s\n", label);
-    fclose(fp);
-    return true;
+    if (success)
+        success = std::fprintf(fp, "endsolid  %s\n", safe_label) >= 0;
+    if (std::fflush(fp) != 0)
+        success = false;
+    if (std::fclose(fp) != 0)
+        success = false;
+    if (!success)
+        BOOST_LOG_TRIVIAL(error) << "its_write_stl_ascii: Failed writing " << file;
+    return success;
 }
 
-bool its_write_stl_binary(const char *file, const char *label, const std::vector<stl_triangle_vertex_indices> &indices, const std::vector<stl_vertex> &vertices)
+bool its_write_stl_binary(const char*                                     file,
+                          const char*                                     label,
+                          const std::vector<stl_triangle_vertex_indices>& indices,
+                          const std::vector<stl_vertex>&                  vertices)
 {
+    if (file == nullptr || *file == '\0' || !its_is_valid_for_stl_export(indices, vertices, true)) {
+        BOOST_LOG_TRIVIAL(error) << "its_write_stl_binary: Refusing to export invalid mesh data";
+        return false;
+    }
     FILE *fp = boost::nowide::fopen(file, "wb");
     if (fp == nullptr) {
         BOOST_LOG_TRIVIAL(error) << "its_write_stl_binary: Couldn't open " << file << " for writing";
@@ -1669,27 +1728,38 @@ bool its_write_stl_binary(const char *file, const char *label, const std::vector
         std::vector<char> header(header_size, 0);
         if (int header_len = std::min((label == nullptr) ? 0 : int(strlen(label)), header_size); header_len > 0)
             ::memcpy(header.data(), label, header_len);
-        ::fwrite(header.data(), header_size, 1, fp);
+        if (::fwrite(header.data(), header_size, 1, fp) != 1) {
+            std::fclose(fp);
+            BOOST_LOG_TRIVIAL(error) << "its_write_stl_binary: Failed writing header to " << file;
+            return false;
+        }
     }
 
     uint32_t nfaces = indices.size();
     big_endian_reverse_quads(reinterpret_cast<char*>(&nfaces), 4);
-    ::fwrite(&nfaces, 4, 1, fp);
+    bool success = ::fwrite(&nfaces, 4, 1, fp) == 1;
 
     stl_facet f;
     f.extra[0] = 0;
     f.extra[1] = 0;
     for (const stl_triangle_vertex_indices& face : indices) {
+        if (!success)
+            break;
         f.vertex[0] = vertices[face(0)];
         f.vertex[1] = vertices[face(1)];
         f.vertex[2] = vertices[face(2)];
-        f.normal = (f.vertex[1] - f.vertex[0]).cross(f.vertex[2] - f.vertex[1]).normalized();
+        f.normal    = (f.vertex[1] - f.vertex[0]).cross(f.vertex[2] - f.vertex[0]).normalized();
         big_endian_reverse_quads(reinterpret_cast<char*>(&f), 48);
-        fwrite(&f, 50, 1, fp);
+        success = std::fwrite(&f, 50, 1, fp) == 1;
     }
 
-    fclose(fp);
-    return true;
+    if (std::fflush(fp) != 0)
+        success = false;
+    if (std::fclose(fp) != 0)
+        success = false;
+    if (!success)
+        BOOST_LOG_TRIVIAL(error) << "its_write_stl_binary: Failed writing " << file;
+    return success;
 }
 
 } // namespace Slic3r

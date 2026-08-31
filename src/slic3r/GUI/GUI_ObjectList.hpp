@@ -2,8 +2,9 @@
 #define slic3r_GUI_ObjectList_hpp_
 
 #include <map>
-#include <vector>
 #include <set>
+#include <utility>
+#include <vector>
 
 #include <wx/bitmap.h>
 #include <wx/dataview.h>
@@ -37,7 +38,6 @@ typedef std::pair<coordf_t, coordf_t>               t_layer_height_range;
 typedef std::map<t_layer_height_range, ModelConfig> t_layer_config_ranges;
 
 // Manifold mesh may contain self-intersections, so we want to always allow fixing the mesh.
-#define FIX_THROUGH_NETFABB_ALWAYS 1
 
 namespace GUI {
 struct ObjectVolumeID {
@@ -243,6 +243,9 @@ public:
     // Get obj_idx and vol_idx values for the selected (by default) or an adjusted item
     void                get_selected_item_indexes(int& obj_idx, int& vol_idx, const wxDataViewItem& item = wxDataViewItem(0));
     void                get_selection_indexes(std::vector<int>& obj_idxs, std::vector<int>& vol_idxs);
+    // Preserve the object / volume association for model repair selections.
+    // A volume index of -1 selects every MODEL_PART volume in that object.
+    void get_model_repair_selection_indexes(std::vector<std::pair<int, int>>& targets);
     // Get count of errors in the mesh
     int                 get_repaired_errors_count(const int obj_idx, const int vol_idx = -1) const;
     // Get list of errors in the mesh and name of the warning icon
@@ -420,9 +423,9 @@ public:
     void instances_to_separated_objects(const int obj_idx);
     void split_instances();
     void rename_item();
-    void fix_through_netfabb();
+    void fix_through_cgal();
     void simplify();
-    void update_item_error_icon(const int obj_idx, int vol_idx) const ;
+    void update_item_error_icon(int obj_idx, int model_volume_idx) const;
 
     void copy_layers_to_clipboard();
     void paste_layers_into_list();
@@ -473,6 +476,7 @@ private:
     void OnDropPossible(wxDataViewEvent &event);
     void OnDrop(wxDataViewEvent &event);
     bool can_drop(const wxDataViewItem& item, int& src_obj_id, int& src_plate, int& dest_obj_id, int& dest_plate) const ;
+    void rebuild_volume_index_map(int obj_idx);
 
     void ItemValueChanged(wxDataViewEvent &event);
     // Workaround for entering the column editing mode on Windows. Simulate keyboard enter when another column of the active line is selected.

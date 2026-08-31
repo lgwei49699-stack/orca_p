@@ -8943,6 +8943,48 @@ msgstr "透過 Windows 服務修復物件"
 msgid "Repair failed."
 msgstr "修復失敗。"
 
+msgid "No model repair was needed."
+msgstr "模型無需修復。"
+
+msgid "The selected model was not modified."
+msgstr "所選模型未被修改。"
+
+msgid "The model changed while it was being repaired. The repair result was discarded."
+msgstr "模型在修復過程中發生變更，修復結果已捨棄。"
+
+msgid "Repair commit failed."
+msgstr "提交修復結果失敗。"
+
+msgid "Painted facet annotations were cleared during repair for:"
+msgstr "以下物件的繪製面註記已在修復過程中清除："
+
+msgid "Export the model(s) as a geometry-only OBJ without materials or textures."
+msgstr "將模型匯出為僅包含幾何資料、不含材質或紋理的 OBJ。"
+
+msgid "Export Multicolor OBJ"
+msgstr "匯出多色 OBJ"
+
+msgid "Export current Orca filament and MMU face assignments as OBJ and MTL."
+msgstr "將目前 Orca 耗材和 MMU 面指派匯出為 OBJ 和 MTL。"
+
+msgid "Repair model"
+msgstr "修復模型"
+
+msgid "Repair imported model meshes before transforms and export."
+msgstr "在變換和匯出前修復匯入模型的網格。"
+
+msgid "Keep painted feature after mesh change"
+msgstr "網格變更後保留繪製特徵"
+
+msgid ""
+"Attempt to keep painted features (color/seam/support/fuzzy etc.) after changing "
+"the object mesh (such as cut/reload from disk/simplify/fix etc.)\n"
+"Highly experimental! Slow and may create artifact."
+msgstr ""
+"在變更物件網格（例如切割、從磁碟重新載入、簡化或修復等）後嘗試保留繪製特徵（顏"
+"色、接縫、支撐或絨毛等）。\n"
+"高度實驗性功能！速度較慢且可能產生瑕疵。"
+
 msgid "Loading repaired objects"
 msgstr "正在載入修復的物件"
 
@@ -17259,12 +17301,12 @@ msgstr ""
 #: resources/data/hints.ini: [hint:Fix Model]
 msgid ""
 "Fix Model\n"
-"Did you know that you can fix a corrupted 3D model to avoid a lot of slicing "
-"problems on the Windows system?"
+"Did you know that you can repair corrupted 3D models on Windows, macOS, and "
+"Linux to avoid slicing problems?"
 msgstr ""
 "修復模型\n"
-"您知道嗎？在 Windows 系統上修復損壞的 3D 模型，\n"
-"可以有效避免許多切片時的問題。"
+"您知道嗎？您可以在 Windows、macOS 和 Linux 上修復損壞的 3D 模型，以避免切片問"
+"題。"
 
 #: resources/data/hints.ini: [hint:Timelapse]
 msgid ""

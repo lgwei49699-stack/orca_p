@@ -7815,17 +7815,31 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     ConfigOptionDef* def;
 
     // Actions:
-    /*def = this->add("export_obj", coBool);
+    def          = this->add("export_obj", coBool);
     def->label = L("Export OBJ");
-    def->tooltip = L("Export the model(s) as OBJ.");
-    def->set_default_value(new ConfigOptionBool(false));*/
-
-/*
-    def = this->add("export_svg", coBool);
-    def->label = L("Export SVG");
-    def->tooltip = L("Slice the model and export solid slices as SVG.");
+    def->tooltip = L("Export the model(s) as a geometry-only OBJ without materials or textures.");
     def->set_default_value(new ConfigOptionBool(false));
-*/
+
+    def             = this->add("export_multicolor_obj", coString);
+    def->label      = L("Export Multicolor OBJ");
+    def->tooltip    = L("Export current Orca filament and MMU face assignments as OBJ and MTL.");
+    def->cli        = "export-multicolor-obj";
+    def->cli_params = "filename.obj";
+    def->set_default_value(new ConfigOptionString("multicolor.obj"));
+
+    def             = this->add("repair_model", coString);
+    def->label      = L("Repair model");
+    def->tooltip    = L("Repair imported model meshes before transforms and export.");
+    def->cli        = "repair-model";
+    def->cli_params = "cgal";
+    def->set_default_value(new ConfigOptionString());
+
+    /*
+        def = this->add("export_svg", coBool);
+        def->label = L("Export SVG");
+        def->tooltip = L("Slice the model and export solid slices as SVG.");
+        def->set_default_value(new ConfigOptionBool(false));
+    */
 
     /*def = this->add("export_sla", coBool);
     def->label = L("Export SLA");

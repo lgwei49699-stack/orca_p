@@ -1,6 +1,10 @@
 #ifndef slic3r_Format_OBJ_hpp_
 #define slic3r_Format_OBJ_hpp_
 #include "libslic3r/Color.hpp"
+#include "libslic3r/Point.hpp"
+
+#include <functional>
+#include <map>
 #include <unordered_map>
 namespace Slic3r {
 
@@ -40,6 +44,9 @@ extern bool load_obj(const char *path, Model *model, ObjInfo &vertex_colors, std
 // Read the distinct usemtl names which are actually assigned to faces, preserving
 // their first face-use order. This intentionally does not require the MTL file.
 extern bool load_obj_material_names(const char *path, std::vector<std::string> &material_names, std::string &message);
+// Resolve every mtllib referenced by an OBJ using the same path rules as the
+// importer. Missing libraries are included so exporters cannot create over them.
+extern bool load_obj_material_libraries(const char* path, std::vector<std::string>& library_paths, std::string& message);
 
 extern bool store_obj(const char *path, TriangleMesh *mesh);
 extern bool store_obj(const char *path, ModelObject *model);

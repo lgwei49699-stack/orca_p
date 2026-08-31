@@ -420,6 +420,11 @@ public:
     ModelVolume*            add_volume_with_shared_mesh(const ModelVolume &other, ModelVolumeType type = ModelVolumeType::MODEL_PART);
     void                    delete_volume(size_t idx);
     void                    clear_volumes();
+    // Atomically replace the complete volume structure with a copy of source.
+    // ModelObject and ModelInstance pointers stay valid; instance transforms are
+    // synchronized because deleting down to one volume may collapse a volume
+    // transform into the instances.
+    void                    replace_volume_structure(const ModelObject& source);
     void                    sort_volumes(bool full_sort);
     bool                    is_multiparts() const { return volumes.size() > 1; }
     // Checks if any of object volume is painted using the fdm support painting gizmo.
@@ -518,7 +523,8 @@ public:
     void delete_connectors();
     void clone_for_cut(ModelObject **obj);
 
-    void split(ModelObjectPtrs*new_objects);
+    void split(ModelObjectPtrs* new_objects);
+    void split(ModelObjectPtrs* new_objects, bool keep_painting);
     void merge();
 
     // BBS: Boolean opts - Musang King
@@ -732,6 +738,11 @@ public:
     void assign(const FacetsAnnotation &rhs) { if (! this->timestamp_matches(rhs)) { m_data = rhs.m_data; this->copy_timestamp(rhs); } }
     void assign(FacetsAnnotation &&rhs) { if (! this->timestamp_matches(rhs)) { m_data = std::move(rhs.m_data); this->copy_timestamp(rhs); } }
     const TriangleSelector::TriangleSplittingData &get_data() const noexcept { return m_data; }
+    void                                           set_data(TriangleSelector::TriangleSplittingData&& data)
+    {
+        m_data = std::move(data);
+        this->touch();
+    }
     bool set(const TriangleSelector& selector);
     indexed_triangle_set get_facets(const ModelVolume& mv, EnforcerBlockerType type) const;
     // BBS
@@ -875,6 +886,11 @@ public:
     // List of mesh facets painted for fuzzy skin.
     FacetsAnnotation    fuzzy_skin_facets;
 
+    // Capture all supported paint annotations before replacing the mesh, then
+    // spatially remap them onto the current mesh after the topology changes.
+    std::optional<TriangleSelector::SavedPainting> save_painting() const;
+    void restore_painting(const std::optional<TriangleSelector::SavedPainting>& saved, bool keep_existing_paint = false);
+
     // BBS: quick access for volume extruders, 1 based
     mutable std::vector<int> mmuseg_extruders;
     mutable Timestamp        mmuseg_ts;
@@ -922,6 +938,7 @@ public:
     // Return the number of volumes created from this one.
     // This is useful to assign different materials to different volumes of an object.
     size_t              split(unsigned int max_extruders);
+    size_t              split(unsigned int max_extruders, bool keep_painting);
     void                translate(double x, double y, double z) { translate(Vec3d(x, y, z)); }
     void                translate(const Vec3d& displacement);
     void                scale(const Vec3d& scaling_factors);
@@ -1007,7 +1024,8 @@ public:
     bool is_seam_painted() const { return !this->seam_facets.empty(); }
     bool is_mm_painted() const { return !this->mmu_segmentation_facets.empty(); }
     bool is_fuzzy_skin_painted() const { return !this->fuzzy_skin_facets.empty(); }
-    
+    bool is_any_painted() const { return is_fdm_support_painted() || is_seam_painted() || is_mm_painted() || is_fuzzy_skin_painted(); }
+
     // Orca: Implement prusa's filament shrink compensation approach
     // Returns 0-based indices of extruders painted by multi-material painting gizmo.
      std::vector<size_t> get_extruders_from_multi_material_painting() const;
@@ -1517,6 +1535,35 @@ public:
 class Model final : public ObjectBase
 {
 public:
+    // A validated, allocation-free final move of selected object volume
+    // structures from an isolated staging model. The source model must outlive
+    // this token and is left owning the replaced destination volumes after
+    // commit, so its normal destruction releases the old structures.
+    class PreparedObjectVolumeStructureMove
+    {
+    public:
+        PreparedObjectVolumeStructureMove()                                                        = default;
+        PreparedObjectVolumeStructureMove(const PreparedObjectVolumeStructureMove&)                = delete;
+        PreparedObjectVolumeStructureMove& operator=(const PreparedObjectVolumeStructureMove&)     = delete;
+        PreparedObjectVolumeStructureMove(PreparedObjectVolumeStructureMove&&) noexcept            = default;
+        PreparedObjectVolumeStructureMove& operator=(PreparedObjectVolumeStructureMove&&) noexcept = default;
+
+        bool empty() const noexcept { return m_entries.empty(); }
+
+    private:
+        struct Entry
+        {
+            ModelObject* destination = nullptr;
+            ModelObject* source      = nullptr;
+        };
+
+        Model*             m_destination = nullptr;
+        Model*             m_source      = nullptr;
+        std::vector<Entry> m_entries;
+
+        friend class Model;
+    };
+
     // Materials are owned by a model and referenced by objects through t_model_material_id.
     // Single material may be shared by multiple models.
     ModelMaterialMap    materials;
@@ -1631,6 +1678,19 @@ public:
     bool         delete_object(ObjectID id);
     bool         delete_object(ModelObject* object);
     void         clear_objects();
+    // Create a sparse private model for object-structure transactions. Object
+    // indices are preserved, but only the requested objects are copied; every
+    // other slot is null. The result is intended only for code which already
+    // handles sparse object vectors, such as ModelRepair and the prepared move
+    // commit below. Materials and unrelated model metadata are deliberately
+    // not copied because repaired volumes are reparented to this source model
+    // before they are exposed to callers.
+    std::unique_ptr<Model> make_object_staging_copy(const std::vector<size_t>& object_indices) const;
+    // Validate every object and allocate the small commit token before an Undo
+    // snapshot is taken. The matching commit only swaps already-owned vectors
+    // and fixed-size transformations, and therefore performs no allocation.
+    PreparedObjectVolumeStructureMove prepare_move_object_volume_structures(Model& source, const std::vector<size_t>& object_indices);
+    void                              commit_move_object_volume_structures(PreparedObjectVolumeStructureMove&& prepared) noexcept;
     // BBS: backup, reuse objects
     void         collect_reusable_objects(std::vector<ObjectBase *> & objects);
     void         set_object_backup_id(ModelObject const & object, int uuid);

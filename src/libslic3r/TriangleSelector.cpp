@@ -1,9 +1,13 @@
 #include "TriangleSelector.hpp"
 #include "Model.hpp"
+#include "AABBTreeIndirect.hpp"
 
 #include <boost/container/small_vector.hpp>
 #include <boost/log/trivial.hpp>
+#include <algorithm>
 #include <cstddef>
+#include <functional>
+#include <limits>
 #include <tbb/parallel_for.h>
 
 #ifndef NDEBUG
@@ -168,24 +172,60 @@ void TriangleSelector::Triangle::set_division(int sides_to_split, int special_si
     this->special_side_idx = char(special_side_idx);
 }
 
-inline bool is_point_inside_triangle(const Vec3f &pt, const Vec3f &p1, const Vec3f &p2, const Vec3f &p3)
+// Pre-computed barycentric resolver.
+// Real-Time Collision Detection, Ericson, Chapter 3.4.
+struct Barycentric
 {
-    // Real-time collision detection, Ericson, Chapter 3.4
-    auto barycentric = [&pt, &p1, &p2, &p3]() -> Vec3f {
-        std::array<Vec3f, 3> v     = {p2 - p1, p3 - p1, pt - p1};
-        float                d00   = v[0].dot(v[0]);
-        float                d01   = v[0].dot(v[1]);
-        float                d11   = v[1].dot(v[1]);
-        float                d20   = v[2].dot(v[0]);
-        float                d21   = v[2].dot(v[1]);
-        float                denom = d00 * d11 - d01 * d01;
+    Barycentric(const Vec3f& a, const Vec3f& b, const Vec3f& c) : a_(a)
+    {
+        const Vec3f v0        = b - a;
+        const Vec3f v1        = c - a;
+        const float d00       = v0.dot(v0);
+        const float d01       = v0.dot(v1);
+        const float d11       = v1.dot(v1);
+        const float inv_denom = 1.f / (d00 * d11 - d01 * d01);
 
-        Vec3f barycentric_cords(1.f, (d11 * d20 - d01 * d21) / denom, (d00 * d21 - d01 * d20) / denom);
-        barycentric_cords.x() = barycentric_cords.x() - barycentric_cords.y() - barycentric_cords.z();
-        return barycentric_cords;
-    };
+        x1_ = (d11 * v0 - d01 * v1) * inv_denom;
+        x2_ = (d00 * v1 - d01 * v0) * inv_denom;
+    }
 
-    Vec3f barycentric_cords = barycentric();
+    Vec3f calc(const Vec3f& p) const
+    {
+        const Vec3f v2 = p - a_;
+        const float v  = v2.dot(x1_);
+        const float w  = v2.dot(x2_);
+        return {1.f - v - w, v, w};
+    }
+
+    bool is_point_inside_triangle(const Vec3f& p) const
+    {
+        const Vec3f barycentric_coords = calc(p);
+        return std::all_of(begin(barycentric_coords), end(barycentric_coords), [](float coord) { return 0.f <= coord && coord <= 1.f; });
+    }
+
+    static Vec3f calc(const Vec3f& pt, const Vec3f& p1, const Vec3f& p2, const Vec3f& p3)
+    {
+        const std::array<Vec3f, 3> vec   = {p2 - p1, p3 - p1, pt - p1};
+        const float                d00   = vec[0].dot(vec[0]);
+        const float                d01   = vec[0].dot(vec[1]);
+        const float                d11   = vec[1].dot(vec[1]);
+        const float                d20   = vec[2].dot(vec[0]);
+        const float                d21   = vec[2].dot(vec[1]);
+        const float                denom = d00 * d11 - d01 * d01;
+        const float                v     = (d11 * d20 - d01 * d21) / denom;
+        const float                w     = (d00 * d21 - d01 * d20) / denom;
+        return {1.f - v - w, v, w};
+    }
+
+private:
+    Vec3f a_;
+    Vec3f x1_;
+    Vec3f x2_;
+};
+
+static bool is_point_inside_triangle(const Vec3f& pt, const Vec3f& p1, const Vec3f& p2, const Vec3f& p3)
+{
+    const Vec3f barycentric_cords = Barycentric::calc(pt, p1, p2, p3);
     return std::all_of(begin(barycentric_cords), end(barycentric_cords), [](float cord) { return 0.f <= cord && cord <= 1.0; });
 }
 
@@ -233,7 +273,23 @@ int TriangleSelector::select_unsplit_triangle(const Vec3f &hit, int facet_idx) c
     return this->select_unsplit_triangle(hit, facet_idx, neighbors);
 }
 
-void TriangleSelector::select_patch(int facet_start, std::unique_ptr<Cursor> &&cursor, EnforcerBlockerType new_state, const Transform3d& trafo_no_translate, bool triangle_splitting, float highlight_by_angle_deg)
+void TriangleSelector::select_patch(int                       facet_start,
+                                    std::unique_ptr<Cursor>&& cursor,
+                                    EnforcerBlockerType       new_state,
+                                    const Transform3d&        trafo_no_translate,
+                                    bool                      triangle_splitting,
+                                    float                     highlight_by_angle_deg)
+{
+    select_patch(facet_start, std::move(cursor), new_state, trafo_no_translate, triangle_splitting, highlight_by_angle_deg, false);
+}
+
+void TriangleSelector::select_patch(int                       facet_start,
+                                    std::unique_ptr<Cursor>&& cursor,
+                                    EnforcerBlockerType       new_state,
+                                    const Transform3d&        trafo_no_translate,
+                                    bool                      triangle_splitting,
+                                    float                     highlight_by_angle_deg,
+                                    const bool                select_partially)
 {
     assert(facet_start < m_orig_size_indices);
 
@@ -296,7 +352,7 @@ void TriangleSelector::select_patch(int facet_start, std::unique_ptr<Cursor> &&c
             Matrix3f     normal_matrix = static_cast<Matrix3f>(trafo_no_translate.matrix().block(0, 0, 3, 3).inverse().transpose().cast<float>());
             float        world_normal_z = (normal_matrix* facet_normal).normalized().z();
             if (!visited[facet] && (highlight_by_angle_deg == 0.f || world_normal_z < highlight_angle_limit)) {
-                if (select_triangle(facet, new_state, triangle_splitting)) {
+                if (select_triangle(facet, new_state, triangle_splitting, select_partially)) {
                     // add neighboring facets to list to be processed later
                     for (int neighbor_idx : m_neighbors[facet])
                         if (neighbor_idx >= 0 && m_cursor->is_facet_visible(neighbor_idx, m_face_normals))
@@ -552,7 +608,7 @@ void TriangleSelector::bucket_fill_select_triangles(const Vec3f& hit, int facet_
 // This is done by an actual recursive call. Returns false if the triangle is
 // outside the cursor.
 // Called by select_patch() and by itself.
-bool TriangleSelector::select_triangle(int facet_idx, EnforcerBlockerType type, bool triangle_splitting)
+bool TriangleSelector::select_triangle(int facet_idx, EnforcerBlockerType type, bool triangle_splitting, bool select_partially)
 {
     assert(facet_idx < int(m_triangles.size()));
 
@@ -562,7 +618,7 @@ bool TriangleSelector::select_triangle(int facet_idx, EnforcerBlockerType type, 
     Vec3i32 neighbors = m_neighbors[facet_idx];
     assert(this->verify_triangle_neighbors(m_triangles[facet_idx], neighbors));
 
-    if (! select_triangle_recursive(facet_idx, neighbors, type, triangle_splitting))
+    if (!select_triangle_recursive(facet_idx, neighbors, type, triangle_splitting, select_partially))
         return false;
 
     // In case that all children are leafs and have the same state now,
@@ -902,7 +958,8 @@ Vec3i32 TriangleSelector::child_neighbors_propagated(const Triangle &tr, const V
     return out;
 }
 
-bool TriangleSelector::select_triangle_recursive(int facet_idx, const Vec3i32 &neighbors, EnforcerBlockerType type, bool triangle_splitting)
+bool TriangleSelector::select_triangle_recursive(
+    int facet_idx, const Vec3i32& neighbors, EnforcerBlockerType type, bool triangle_splitting, bool select_partially)
 {
     assert(facet_idx < int(m_triangles.size()));
 
@@ -935,8 +992,10 @@ bool TriangleSelector::select_triangle_recursive(int facet_idx, const Vec3i32 &n
 
         if (triangle_splitting)
             split_triangle(facet_idx, neighbors);
-        else if (!m_triangles[facet_idx].is_split())
+        if ((!triangle_splitting || select_partially) && !m_triangles[facet_idx].is_split()) {
             m_triangles[facet_idx].set_state(type);
+            return true;
+        }
         tr = &m_triangles[facet_idx]; // might have been invalidated by split_triangle().
 
         int num_of_children = tr->number_of_split_sides() + 1;
@@ -946,7 +1005,8 @@ bool TriangleSelector::select_triangle_recursive(int facet_idx, const Vec3i32 &n
                 assert(tr->children[i] < int(m_triangles.size()));
                 // Recursion, deep first search over the children of this triangle.
                 // All children of this triangle were created by splitting a single source triangle of the original mesh.
-                select_triangle_recursive(tr->children[i], this->child_neighbors(*tr, neighbors, i), type, triangle_splitting);
+                select_triangle_recursive(tr->children[i], this->child_neighbors(*tr, neighbors, i), type, triangle_splitting,
+                                          select_partially);
                 tr = &m_triangles[facet_idx]; // might have been invalidated
             }
         }
@@ -2183,6 +2243,233 @@ bool TriangleSelector::Capsule2D::is_edge_inside_cursor(const Triangle &tr, cons
     }
 
     return false;
+}
+
+static bool segments_intersect_proj(const Vec3f& p1, const Vec3f& p2, const Vec3f& p3, const Vec3f& p4, const std::pair<int, int>& projection)
+{
+    auto cross2d                = [](float ax, float ay, float bx, float by) { return ax * by - ay * bx; };
+    const auto [u_axis, v_axis] = projection;
+    const float u1 = p1(u_axis), v1 = p1(v_axis);
+    const float u2 = p2(u_axis), v2 = p2(v_axis);
+    const float u3 = p3(u_axis), v3 = p3(v_axis);
+    const float u4 = p4(u_axis), v4 = p4(v_axis);
+    const float ru = u2 - u1, rv = v2 - v1;
+    const float su = u4 - u3, sv = v4 - v3;
+    const float denominator = cross2d(ru, rv, su, sv);
+    if (std::abs(denominator) < 1e-10f)
+        return false;
+
+    const float dpu = u3 - u1, dpv = v3 - v1;
+    const float t1 = cross2d(dpu, dpv, su, sv) / denominator;
+    const float t2 = cross2d(dpu, dpv, ru, rv) / denominator;
+    return 0.f <= t1 && t1 <= 1.f && 0.f <= t2 && t2 <= 1.f;
+}
+
+class TriangleCursor : public TriangleSelector::SinglePointCursor
+{
+public:
+    TriangleCursor() = delete;
+    TriangleCursor(const Vec3f&                           center,
+                   const Vec3f&                           source,
+                   float                                  radius,
+                   const Transform3d&                     transform,
+                   const TriangleSelector::ClippingPlane& clipping_plane,
+                   const std::array<const Vec3f, 3>&      vertices)
+        : TriangleSelector::SinglePointCursor(center, source, radius, transform, clipping_plane)
+        , m_barycentric(vertices[0], vertices[1], vertices[2])
+    {}
+
+    static std::unique_ptr<Cursor> build_cursor(const TriangleSelector& source_selector, const TriangleSelector::Triangle& triangle)
+    {
+        const Vec3f& p0     = source_selector.m_vertices[triangle.verts_idxs[0]].v;
+        const Vec3f& p1     = source_selector.m_vertices[triangle.verts_idxs[1]].v;
+        const Vec3f& p2     = source_selector.m_vertices[triangle.verts_idxs[2]].v;
+        const Vec3f  center = (p0 + p1 + p2) / 3.f;
+        const Vec3f& normal = source_selector.m_face_normals[triangle.source_triangle];
+        const float  radius = std::max(std::min({point_to_line_distance(center, p0, p1), point_to_line_distance(center, p0, p2),
+                                                 point_to_line_distance(center, p1, p2)}),
+                                       0.1f);
+
+        return std::make_unique<TriangleCursor>(center, center + normal, radius, Transform3d::Identity(), TriangleSelector::ClippingPlane(),
+                                                std::array<const Vec3f, 3>{p0, p1, p2});
+    }
+
+    bool is_mesh_point_inside(const Vec3f& point) const override { return m_barycentric.is_point_inside_triangle(point); }
+
+    bool is_edge_inside_cursor(const TriangleSelector::Triangle&            triangle,
+                               const std::vector<TriangleSelector::Vertex>& vertices) const override
+    {
+        std::array<Vec3f, 3> projected_points;
+        std::array<float, 3> distances;
+        for (int i = 0; i < 3; ++i) {
+            Vec3f point = vertices[triangle.verts_idxs[i]].v;
+            if (!uniform_scaling)
+                point = trafo * point;
+
+            const Vec3f diff    = point - center;
+            distances[i]        = diff.dot(dir);
+            projected_points[i] = point - distances[i] * dir;
+        }
+
+        for (int side = 0; side < 3; ++side) {
+            const int   a          = side;
+            const int   b          = side < 2 ? side + 1 : 0;
+            const float distance_a = distances[a];
+            const float distance_b = distances[b];
+            if ((distance_a > TOLERANCE && distance_b > TOLERANCE) || (distance_a < -TOLERANCE && distance_b < -TOLERANCE))
+                continue;
+
+            Vec3f point_a = projected_points[a];
+            Vec3f point_b = projected_points[b];
+            if (std::abs(distance_a) > TOLERANCE)
+                point_a = (TOLERANCE - distance_b) / (distance_a - distance_b) * (projected_points[a] - projected_points[b]) +
+                          projected_points[b];
+            if (std::abs(distance_b) > TOLERANCE)
+                point_b = (TOLERANCE - distance_a) / (distance_b - distance_a) * (projected_points[b] - projected_points[a]) +
+                          projected_points[a];
+
+            if (m_barycentric.is_point_inside_triangle(point_a) || m_barycentric.is_point_inside_triangle(point_b))
+                return true;
+
+            const Vec3f                   uvw_a = m_barycentric.calc(point_a);
+            const Vec3f                   uvw_b = m_barycentric.calc(point_b);
+            constexpr std::pair<int, int> projection{0, 1};
+            if (segments_intersect_proj(uvw_a, uvw_b, Vec3f{1.f, 0.f, 0.f}, Vec3f{0.f, 1.f, 0.f}, projection) ||
+                segments_intersect_proj(uvw_a, uvw_b, Vec3f{1.f, 0.f, 0.f}, Vec3f{0.f, 0.f, 1.f}, projection) ||
+                segments_intersect_proj(uvw_a, uvw_b, Vec3f{0.f, 1.f, 0.f}, Vec3f{0.f, 0.f, 1.f}, projection))
+                return true;
+        }
+        return false;
+    }
+
+    bool is_facet_visible(int facet_idx, const std::vector<Vec3f>& face_normals) const override
+    {
+        return check_normal(face_normals[facet_idx], dir);
+    }
+
+    static bool check_normal(const Vec3f& facet_normal, const Vec3f& camera_direction)
+    {
+        return std::clamp(-facet_normal.dot(camera_direction), 0.f, 1.f) >= FACET_ANGLE_LIMIT;
+    }
+
+    static constexpr float TOLERANCE = 0.01f;
+
+private:
+    static float point_to_line_distance(const Vec3f& point, const Vec3f& a, const Vec3f& b)
+    {
+        return Eigen::ParametrizedLine<float, 3>::Through(a, b).distance(point);
+    }
+
+    const Barycentric   m_barycentric;
+    static const double FACET_ANGLE_LIMIT;
+};
+
+const double TriangleCursor::FACET_ANGLE_LIMIT = std::cos(Geometry::deg2rad(5.0));
+
+TriangleSelector::TriangleSplittingData TriangleSelector::remap_painting(
+    const indexed_triangle_set&                                               source_its,
+    const TriangleSplittingData&                                              source_painting,
+    const indexed_triangle_set&                                               target_its,
+    const Transform3d&                                                        target_transform,
+    const std::optional<std::reference_wrapper<const TriangleSplittingData>>& existing_painting)
+{
+    TriangleSplittingData result;
+    if (source_painting.bitstream.empty())
+        return result;
+
+    TriangleMesh     source_mesh(source_its);
+    TriangleSelector source_selector(source_mesh);
+    source_selector.deserialize(source_painting, false);
+
+    std::vector<std::reference_wrapper<const Triangle>> painted_triangles;
+    painted_triangles.reserve(source_selector.m_triangles.size());
+    for (const Triangle& triangle : source_selector.m_triangles)
+        if (triangle.valid() && !triangle.is_split() && triangle.get_state() != EnforcerBlockerType::NONE)
+            painted_triangles.emplace_back(std::cref(triangle));
+
+    if (painted_triangles.empty())
+        return result;
+
+    TriangleMesh target_mesh(target_its);
+    target_mesh.transform(target_transform);
+    AABBTreeIndirect::Tree3f target_tree = AABBTreeIndirect::build_aabb_tree_over_indexed_triangle_set(target_mesh.its.vertices,
+                                                                                                       target_mesh.its.indices);
+
+    auto triangles_overlap = [](const Vec3f& pa, const Vec3f& pb, const Vec3f& pc, const Vec3f& ta, const Vec3f& tb, const Vec3f& tc) {
+        if (is_point_inside_triangle(ta, pa, pb, pc) || is_point_inside_triangle(tb, pa, pb, pc) ||
+            is_point_inside_triangle(tc, pa, pb, pc) || is_point_inside_triangle(pa, ta, tb, tc) ||
+            is_point_inside_triangle(pb, ta, tb, tc) || is_point_inside_triangle(pc, ta, tb, tc))
+            return true;
+
+        const Vec3f               normal = (pb - pa).cross(pc - pa).cwiseAbs() + (tb - ta).cross(tc - ta).cwiseAbs();
+        const int                 axis   = normal.x() >= normal.y() && normal.x() >= normal.z() ? 0 : normal.y() >= normal.z() ? 1 : 2;
+        const std::pair<int, int> projection{(axis + 1) % 3, (axis + 2) % 3};
+        return segments_intersect_proj(pa, pb, ta, tb, projection) || segments_intersect_proj(pa, pb, tb, tc, projection) ||
+               segments_intersect_proj(pa, pb, tc, ta, projection) || segments_intersect_proj(pb, pc, ta, tb, projection) ||
+               segments_intersect_proj(pb, pc, tb, tc, projection) || segments_intersect_proj(pb, pc, tc, ta, projection) ||
+               segments_intersect_proj(pc, pa, ta, tb, projection) || segments_intersect_proj(pc, pa, tb, tc, projection) ||
+               segments_intersect_proj(pc, pa, tc, ta, projection);
+    };
+
+    TriangleSelector target_selector(target_mesh);
+    if (existing_painting)
+        target_selector.deserialize(existing_painting->get(), false);
+
+    for (const std::reference_wrapper<const Triangle> triangle_ref : painted_triangles) {
+        const Triangle& triangle            = triangle_ref.get();
+        const Vec3f&    p0                  = source_selector.m_vertices[triangle.verts_idxs[0]].v;
+        const Vec3f&    p1                  = source_selector.m_vertices[triangle.verts_idxs[1]].v;
+        const Vec3f&    p2                  = source_selector.m_vertices[triangle.verts_idxs[2]].v;
+        Vec3f           source_plane_normal = (p1 - p0).cross(p2 - p0);
+        const float     source_plane_length = source_plane_normal.norm();
+        if (source_plane_length <= std::numeric_limits<float>::epsilon())
+            continue;
+        source_plane_normal /= source_plane_length;
+        const float source_edge_scale = std::max({(p1 - p0).norm(), (p2 - p1).norm(), (p0 - p2).norm()});
+        // Keep enough tolerance for float conversion and retriangulation, but
+        // well below the broad AABB tolerance so a nearby opposite thin wall
+        // is not mistaken for the repaired copy of this painted facet.
+        const float plane_tolerance = std::max(1e-5f, std::min(TriangleCursor::TOLERANCE * 0.1f, source_edge_scale * 1e-5f));
+
+        Eigen::AlignedBox3f paint_bounds;
+        paint_bounds.extend(p0);
+        paint_bounds.extend(p1);
+        paint_bounds.extend(p2);
+        paint_bounds.min() -= Vec3f::Constant(TriangleCursor::TOLERANCE);
+        paint_bounds.max() += Vec3f::Constant(TriangleCursor::TOLERANCE);
+
+        AABBTreeIndirect::traverse(target_tree, AABBTreeIndirect::intersecting(paint_bounds),
+                                   [&](const AABBTreeIndirect::Tree3f::Node& node) {
+                                       const size_t face_idx = node.idx;
+                                       if (face_idx >= target_mesh.its.indices.size())
+                                           return true;
+
+                                       const Vec3f&   source_normal  = source_selector.m_face_normals[triangle.source_triangle];
+                                       const Vec3f&   target_normal  = target_selector.m_face_normals[face_idx];
+                                       const Vec3i32& face           = target_mesh.its.indices[face_idx];
+                                       const Vec3f&   t0             = target_mesh.its.vertices[face(0)];
+                                       const Vec3f&   t1             = target_mesh.its.vertices[face(1)];
+                                       const Vec3f&   t2             = target_mesh.its.vertices[face(2)];
+                                       const float    plane_distance = std::max({std::abs(source_plane_normal.dot(t0 - p0)),
+                                                                                 std::abs(source_plane_normal.dot(t1 - p0)),
+                                                                                 std::abs(source_plane_normal.dot(t2 - p0))});
+                                       // Repairs may reverse an inward shell or
+                                       // a locally inconsistent face while
+                                       // keeping its surface in the same place.
+                                       // Painting is attached to the geometric
+                                       // facet, so accept either parallel normal
+                                       // direction, but only on the same plane.
+                                       const bool normals_parallel = TriangleCursor::check_normal(target_normal, -source_normal) ||
+                                                                     TriangleCursor::check_normal(target_normal, source_normal);
+                                       if (normals_parallel && plane_distance <= plane_tolerance &&
+                                           triangles_overlap(p0, p1, p2, t0, t1, t2))
+                                           target_selector.select_patch(face_idx, TriangleCursor::build_cursor(source_selector, triangle),
+                                                                        triangle.get_state(), Transform3d::Identity(), true, 0.f, true);
+                                       return true;
+                                   });
+    }
+
+    return target_selector.serialize();
 }
 
 } // namespace Slic3r

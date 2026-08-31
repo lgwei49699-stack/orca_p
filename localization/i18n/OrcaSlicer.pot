@@ -9061,6 +9061,45 @@ msgstr ""
 msgid "Repair failed."
 msgstr ""
 
+msgid "No model repair was needed."
+msgstr ""
+
+msgid "The selected model was not modified."
+msgstr ""
+
+msgid "The model changed while it was being repaired. The repair result was discarded."
+msgstr ""
+
+msgid "Repair commit failed."
+msgstr ""
+
+msgid "Painted facet annotations were cleared during repair for:"
+msgstr ""
+
+msgid "Export the model(s) as a geometry-only OBJ without materials or textures."
+msgstr ""
+
+msgid "Export Multicolor OBJ"
+msgstr ""
+
+msgid "Export current Orca filament and MMU face assignments as OBJ and MTL."
+msgstr ""
+
+msgid "Repair model"
+msgstr ""
+
+msgid "Repair imported model meshes before transforms and export."
+msgstr ""
+
+msgid "Keep painted feature after mesh change"
+msgstr ""
+
+msgid ""
+"Attempt to keep painted features (color/seam/support/fuzzy etc.) after changing "
+"the object mesh (such as cut/reload from disk/simplify/fix etc.)\n"
+"Highly experimental! Slow and may create artifact."
+msgstr ""
+
 msgid "Loading repaired objects"
 msgstr ""
 
@@ -16932,7 +16971,7 @@ msgid "Cut Tool\nDid you know that you can cut a model at any angle and position
 msgstr ""
 
 #: resources/data/hints.ini: [hint:Fix Model]
-msgid "Fix Model\nDid you know that you can fix a corrupted 3D model to avoid a lot of slicing problems on the Windows system?"
+msgid "Fix Model\nDid you know that you can repair corrupted 3D models on Windows, macOS, and Linux to avoid slicing problems?"
 msgstr ""
 
 #: resources/data/hints.ini: [hint:Timelapse]
