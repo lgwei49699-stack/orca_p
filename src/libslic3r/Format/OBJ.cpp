@@ -11,6 +11,7 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -26,11 +27,168 @@
 #include <cstdio>  
 #include <algorithm> 
 
-
-
 using namespace nlohmann;
 namespace fs   = boost::filesystem;
 
+namespace {
+
+struct AtomicOutputFile
+{
+    fs::path target;
+    fs::path temporary;
+    fs::path backup;
+    bool     backed_up{false};
+    bool     installed{false};
+};
+
+void remove_file_if_exists(const fs::path& path)
+{
+    boost::system::error_code ignored;
+    fs::remove(path, ignored);
+}
+
+bool is_replaceable_regular_file(const fs::path& path, const char* output_description)
+{
+    boost::system::error_code status_error;
+    const fs::file_status     status = fs::symlink_status(path, status_error);
+    if (status.type() == fs::file_not_found)
+        return true;
+    if (status_error || fs::is_symlink(status) || !fs::is_regular_file(status)) {
+        BOOST_LOG_TRIVIAL(error) << "Refusing to replace non-regular " << output_description << " output: " << path.string();
+        return false;
+    }
+    return true;
+}
+
+bool make_atomic_output_files(const std::vector<fs::path>& targets, const char* output_description, std::vector<AtomicOutputFile>& outputs)
+{
+    outputs.clear();
+    outputs.reserve(targets.size());
+    try {
+        for (const fs::path& target : targets) {
+            if (!is_replaceable_regular_file(target, output_description))
+                return false;
+
+            const fs::path directory = target.parent_path();
+            outputs.push_back({target, directory / fs::unique_path(target.filename().string() + ".tmp-%%%%-%%%%"),
+                               directory / fs::unique_path(target.filename().string() + ".bak-%%%%-%%%%")});
+        }
+    } catch (const fs::filesystem_error& exception) {
+        BOOST_LOG_TRIVIAL(error) << "Failed creating temporary " << output_description << " paths: " << exception.what();
+        outputs.clear();
+        return false;
+    }
+    return true;
+}
+
+bool restore_atomic_output_files(std::vector<AtomicOutputFile>& outputs, const char* output_description)
+{
+    bool restored = true;
+    for (auto output = outputs.rbegin(); output != outputs.rend(); ++output) {
+        if (output->installed) {
+            boost::system::error_code remove_error;
+            fs::remove(output->target, remove_error);
+            if (remove_error) {
+                restored = false;
+                BOOST_LOG_TRIVIAL(error) << "Failed removing incomplete " << output_description << " output " << output->target.string()
+                                         << " during rollback: " << remove_error.message();
+            }
+            output->installed = false;
+        }
+
+        if (output->backed_up) {
+            boost::system::error_code restore_error;
+            fs::rename(output->backup, output->target, restore_error);
+            if (restore_error) {
+                restored = false;
+                BOOST_LOG_TRIVIAL(error) << "Failed restoring " << output_description << " output " << output->target.string()
+                                         << "; the original remains at " << output->backup.string() << ": " << restore_error.message();
+            } else {
+                output->backed_up = false;
+            }
+        }
+        remove_file_if_exists(output->temporary);
+    }
+    return restored;
+}
+
+bool commit_atomic_output_files(std::vector<AtomicOutputFile>& outputs, const char* output_description)
+{
+    // Validate again immediately before moving any existing output. This keeps
+    // a symlink or directory substituted while the temporary files were being
+    // written from being followed or overwritten.
+    for (const AtomicOutputFile& output : outputs) {
+        if (!is_replaceable_regular_file(output.target, output_description)) {
+            for (const AtomicOutputFile& cleanup : outputs)
+                remove_file_if_exists(cleanup.temporary);
+            return false;
+        }
+    }
+
+    for (AtomicOutputFile& output : outputs) {
+        boost::system::error_code status_error;
+        const fs::file_status     status = fs::symlink_status(output.target, status_error);
+        if (status.type() == fs::file_not_found)
+            continue;
+        if (status_error) {
+            BOOST_LOG_TRIVIAL(error) << "Failed inspecting " << output_description << " output " << output.target.string() << ": "
+                                     << status_error.message();
+            restore_atomic_output_files(outputs, output_description);
+            return false;
+        }
+        boost::system::error_code backup_error;
+        fs::rename(output.target, output.backup, backup_error);
+        if (backup_error) {
+            BOOST_LOG_TRIVIAL(error) << "Failed backing up " << output_description << " output " << output.target.string() << ": "
+                                     << backup_error.message();
+            restore_atomic_output_files(outputs, output_description);
+            return false;
+        }
+        output.backed_up = true;
+    }
+
+    for (AtomicOutputFile& output : outputs) {
+        boost::system::error_code install_error;
+        fs::rename(output.temporary, output.target, install_error);
+        if (install_error) {
+            BOOST_LOG_TRIVIAL(error) << "Failed installing " << output_description << " output " << output.target.string() << ": "
+                                     << install_error.message();
+            restore_atomic_output_files(outputs, output_description);
+            return false;
+        }
+        output.installed = true;
+    }
+
+    for (AtomicOutputFile& output : outputs) {
+        if (output.backed_up) {
+            boost::system::error_code remove_error;
+            fs::remove(output.backup, remove_error);
+            if (remove_error)
+                BOOST_LOG_TRIVIAL(warning) << "Failed removing obsolete " << output_description << " backup " << output.backup.string()
+                                           << ": " << remove_error.message();
+            else
+                output.backed_up = false;
+        }
+    }
+    return true;
+}
+
+bool indexed_mesh_is_exportable(const indexed_triangle_set& mesh)
+{
+    if (mesh.vertices.empty() || mesh.indices.empty())
+        return false;
+    for (const stl_vertex& vertex : mesh.vertices)
+        if (!vertex.allFinite())
+            return false;
+    for (const stl_triangle_vertex_indices& face : mesh.indices) {
+        for (size_t corner = 0; corner < 3; ++corner)
+            if (face[corner] < 0 || size_t(face[corner]) >= mesh.vertices.size())
+                return false;
+    }
+    return true;
+}
+
+} // namespace
 
 #ifdef _WIN32
 #define DIR_SEPARATOR '\\'
@@ -110,6 +268,11 @@ std::string rgba_to_html(const RGBA& rgba)
     return std::string(buf);
 }
 
+std::string primary_obj_color_group(const ObjInfo& obj_info)
+{
+    return obj_info.face_colors.empty() ? std::string() : rgba_to_html(obj_info.face_colors.front());
+}
+
 std::map<unsigned char, std::string> get_extruder_color_map(const std::vector<RGBA>&          face_colors,
                                                                    const std::vector<unsigned char>& face_filament_ids)
 {
@@ -127,17 +290,14 @@ std::map<unsigned char, std::string> get_extruder_color_map(const std::vector<RG
 
 bool match_color(const RGBA& target, const RGBA& ref, float tolerance)
 {
-    return std::abs(target[0] - ref[0]) < tolerance && 
-           std::abs(target[1] - ref[1]) < tolerance &&
-           std::abs(target[2] - ref[2]) < tolerance &&
-           std::abs(target[3] - ref[3]) < tolerance;
+    return std::abs(target[0] - ref[0]) < tolerance && std::abs(target[1] - ref[1]) < tolerance &&
+           std::abs(target[2] - ref[2]) < tolerance && std::abs(target[3] - ref[3]) < tolerance;
 }
 
 void match_face_filament_ids(const std::vector<RGBA>&     face_colors,
                              const GeneralExtruderConfig& config, 
                              std::vector<unsigned char>&  face_filament_ids,
-                             unsigned char&               first_extruder_id  
-)
+                             unsigned char&               first_extruder_id)
 {
     first_extruder_id = config.default_extruder_id;
     face_filament_ids.resize(face_colors.size(), first_extruder_id); 
@@ -155,7 +315,6 @@ void match_face_filament_ids(const std::vector<RGBA>&     face_colors,
 
     BOOST_LOG_TRIVIAL(info) << "Matched " << face_filament_ids.size() << " face extruder IDs (default: " << (int) first_extruder_id << ")";
 }
-
 
 //void match_vertex_filament_ids(const std::vector<RGBA>&     vertex_colors,
 //                               const GeneralExtruderConfig& config,
@@ -178,8 +337,8 @@ void match_face_filament_ids(const std::vector<RGBA>&     face_colors,
 //                            << ")";
 //}
 
-
-std::string rgba_to_string(const RGBA& color, int precision) { 
+std::string rgba_to_string(const RGBA& color, int precision)
+{
     std::stringstream ss;
     ss << std::fixed << std::setprecision(precision) << color[0] << "," << color[1] << "," << color[2] << "," << color[3];
     return ss.str();
@@ -210,6 +369,38 @@ bool load_obj_material_names(const char *path, std::vector<std::string> &materia
     return true;
 }
 
+bool load_obj_material_libraries(const char* path, std::vector<std::string>& library_paths, std::string& message)
+{
+    library_paths.clear();
+    if (path == nullptr || *path == '\0') {
+        message = _L("load_obj: failed to parse");
+        return false;
+    }
+
+    ObjParser::ObjData data;
+    if (!ObjParser::objparse(path, data)) {
+        BOOST_LOG_TRIVIAL(error) << "load_obj_material_libraries: failed to parse " << path;
+        message = _L("load_obj: failed to parse");
+        return false;
+    }
+
+    const fs::path obj_path(path);
+    for (const std::string& library_name : data.mtllibs) {
+        if (library_name.empty())
+            continue;
+
+        fs::path library_path(library_name);
+        // The OBJ specification resolves relative mtllib references from the
+        // OBJ file, not from the process working directory. Looking in the
+        // working directory first may protect or load an unrelated same-named
+        // file while allowing the real sidecar next to the OBJ to be replaced.
+        if (!library_path.is_absolute())
+            library_path = obj_path.parent_path() / library_path;
+        library_paths.push_back(library_path.lexically_normal().string());
+    }
+    return true;
+}
+
 bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::string& message)
 {
     if (meshptr == nullptr)
@@ -224,34 +415,25 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
     }
     bool exist_mtl = false;
     if (data.mtllibs.size() > 0) { // read mtl
-        for (auto mtl_name : data.mtllibs) {
-            if (mtl_name.size() == 0){
+        const fs::path obj_path(path);
+        for (const std::string& mtl_name : data.mtllibs) {
+            if (mtl_name.empty()) {
                 continue;
             }
             exist_mtl = true;
-            bool                    mtl_name_is_path = false;
-            boost::filesystem::path mtl_abs_path(mtl_name);
-            if (boost::filesystem::exists(mtl_abs_path)) {
-                mtl_name_is_path = true;
-            }
-            boost::filesystem::path mtl_path;
-            if (!mtl_name_is_path) {
-                boost::filesystem::path full_path(path);
-                std::string             dir = full_path.parent_path().string();
-                auto                    mtl_file = dir + "/" + mtl_name;
-                boost::filesystem::path temp_mtl_path(mtl_file);
-                mtl_path = temp_mtl_path;
-            }
-            auto    _mtl_path = mtl_name_is_path ? mtl_abs_path.string().c_str() : mtl_path.string().c_str();
-            if (boost::filesystem::exists(mtl_name_is_path ? mtl_abs_path : mtl_path)) {
-                if (!ObjParser::mtlparse(_mtl_path, mtl_data)) {
-                    BOOST_LOG_TRIVIAL(error) << "load_obj:load_mtl: failed to parse " << _mtl_path;
+            fs::path mtl_path(mtl_name);
+            if (!mtl_path.is_absolute())
+                mtl_path = obj_path.parent_path() / mtl_path;
+            mtl_path = mtl_path.lexically_normal();
+            if (fs::exists(mtl_path)) {
+                const std::string mtl_path_string = mtl_path.string();
+                if (!ObjParser::mtlparse(mtl_path_string.c_str(), mtl_data)) {
+                    BOOST_LOG_TRIVIAL(error) << "load_obj:load_mtl: failed to parse " << mtl_path_string;
                     message = _L("load mtl in obj: failed to parse");
                     return false;
                 }
-            }
-            else {
-                BOOST_LOG_TRIVIAL(error) << "load_obj: failed to load mtl_path:" << _mtl_path;
+            } else {
+                BOOST_LOG_TRIVIAL(error) << "load_obj: failed to load mtl_path:" << mtl_path.string();
             }
         }
     }
@@ -261,16 +443,19 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
     for (size_t i = 0; i < data.vertices.size(); ++ i) {
         // Find the end of face.
         size_t j = i;
-        for (; j < data.vertices.size() && data.vertices[j].coordIdx != -1; ++ j) ;
+        for (; j < data.vertices.size() && data.vertices[j].coordIdx != -1; ++j)
+            ;
         if (size_t num_face_vertices = j - i; num_face_vertices > 0) {
             if (num_face_vertices > 4) {
                 // Non-triangular and non-quad faces are not supported as of now.
-                BOOST_LOG_TRIVIAL(error) << "load_obj: failed to parse " << path << ". The file contains polygons with more than 4 vertices.";
+                BOOST_LOG_TRIVIAL(error) << "load_obj: failed to parse " << path
+                                         << ". The file contains polygons with more than 4 vertices.";
                 message = _L("The file contains polygons with more than 4 vertices.");
                 return false;
             } else if (num_face_vertices < 3) {
                 // Non-triangular and non-quad faces are not supported as of now.
-                BOOST_LOG_TRIVIAL(error) << "load_obj: failed to parse " << path << ". The file contains polygons with less than 2 vertices.";
+                BOOST_LOG_TRIVIAL(error) << "load_obj: failed to parse " << path
+                                         << ". The file contains polygons with less than 2 vertices.";
                 message = _L("The file contains polygons with less than 2 vertices.");
                 return false;
             }
@@ -297,8 +482,8 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
         size_t j = i * OBJ_VERTEX_LENGTH;
         its.vertices.emplace_back(data.coordinates[j], data.coordinates[j + 1], data.coordinates[j + 2]);
         if (data.has_vertex_color) {
-            RGBA color{std::clamp(data.coordinates[j + 3], 0.f, 1.f), std::clamp(data.coordinates[j + 4], 0.f, 1.f), std::clamp(data.coordinates[j + 5], 0.f, 1.f),
-                       std::clamp(data.coordinates[j + 6], 0.f, 1.f)};
+            RGBA color{std::clamp(data.coordinates[j + 3], 0.f, 1.f), std::clamp(data.coordinates[j + 4], 0.f, 1.f),
+                       std::clamp(data.coordinates[j + 5], 0.f, 1.f), std::clamp(data.coordinates[j + 6], 0.f, 1.f)};
             obj_info.vertex_colors.emplace_back(color);
         }
     }
@@ -341,9 +526,10 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
                         }
                         for (size_t n = 0; n < 3; n++) {
                             if (is_merge_ka_kd) {
-                                face_color[n] = std::clamp(float(mtl_data.new_mtl_unmap[mtl_name]->Ka[n] + mtl_data.new_mtl_unmap[mtl_name]->Kd[n]), 0.f, 1.f);
-                            }
-                            else {
+                                face_color[n] = std::clamp(float(mtl_data.new_mtl_unmap[mtl_name]->Ka[n] +
+                                                                 mtl_data.new_mtl_unmap[mtl_name]->Kd[n]),
+                                                           0.f, 1.f);
+                            } else {
                                 face_color[n] = std::clamp(float(mtl_data.new_mtl_unmap[mtl_name]->Kd[n]), 0.f, 1.f);
                             }
                         }
@@ -351,7 +537,9 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
                         if (mtl_data.new_mtl_unmap[mtl_name]->map_Kd.size() > 0) {
                             auto png_name       = mtl_data.new_mtl_unmap[mtl_name]->map_Kd;
                             obj_info.has_uv_png = true;
-                            if (obj_info.pngs.find(png_name) == obj_info.pngs.end()) { obj_info.pngs[png_name] = false; }
+                            if (obj_info.pngs.find(png_name) == obj_info.pngs.end()) {
+                                obj_info.pngs[png_name] = false;
+                            }
                             obj_info.uv_map_pngs[face_index] = png_name;
                         }
                         if (data.textureCoordinates.size() > 0) {
@@ -431,9 +619,18 @@ bool load_obj(const char *path, Model *model, ObjInfo& obj_info, std::string &me
 
 bool store_obj(const char *path, TriangleMesh *mesh)
 {
-    //FIXME returning false even if write failed.
-    mesh->WriteOBJFile(path);
-    return true;
+    if (path == nullptr || *path == '\0' || mesh == nullptr || !indexed_mesh_is_exportable(mesh->its))
+        return false;
+
+    std::vector<AtomicOutputFile> outputs;
+    if (!make_atomic_output_files({fs::path(path)}, "OBJ", outputs))
+        return false;
+
+    if (!mesh->write_obj_file(outputs.front().temporary.string().c_str())) {
+        remove_file_if_exists(outputs.front().temporary);
+        return false;
+    }
+    return commit_atomic_output_files(outputs, "OBJ");
 }
 
 bool store_obj(const char *path, ModelObject *model_object)
@@ -459,108 +656,201 @@ bool store_multicolor_obj(const char *path, const Model &model, const std::vecto
     fs::path mtl_path = obj_path;
     mtl_path.replace_extension(".mtl");
 
-    try {
-        if (!obj_path.parent_path().empty())
-            fs::create_directories(obj_path.parent_path());
-    } catch (const fs::filesystem_error &e) {
-        BOOST_LOG_TRIVIAL(error) << "Failed creating multicolor OBJ output directory: " << e.what();
+    struct ExportGeometry
+    {
+        indexed_triangle_set mesh;
+        int                  filament_id;
+    };
+    struct ExportGroup
+    {
+        size_t      geometry_index;
+        Transform3d transform;
+    };
+
+    std::vector<ExportGeometry> geometries;
+    std::vector<ExportGroup>    groups;
+    std::set<int>               used_filaments;
+    size_t                      total_faces         = 0;
+    bool                        invalid_export_data = false;
+
+    const auto append_geometry = [&](indexed_triangle_set mesh, int filament_id) -> std::optional<size_t> {
+        if (mesh.indices.empty())
+            return std::nullopt;
+        if (!indexed_mesh_is_exportable(mesh)) {
+            BOOST_LOG_TRIVIAL(error) << "OBJ export encountered invalid mesh geometry";
+            invalid_export_data = true;
+            return std::nullopt;
+        }
+        if (filament_id < 1 || filament_id > static_cast<int>(filament_colors.size())) {
+            BOOST_LOG_TRIVIAL(error) << "OBJ face references filament " << filament_id << ", but only " << filament_colors.size()
+                                     << " colors are available";
+            invalid_export_data = true;
+            return std::nullopt;
+        }
+        const size_t index = geometries.size();
+        geometries.push_back({std::move(mesh), filament_id});
+        used_filaments.insert(filament_id);
+        return index;
+    };
+
+    // Resolve and validate the complete export before creating either output
+    // file. Every ModelInstance is materialized into world coordinates.
+    for (const ModelObject* object : model.objects) {
+        if (object == nullptr)
+            continue;
+        for (const ModelVolume* volume : object->volumes) {
+            if (volume == nullptr || !volume->is_model_part())
+                continue;
+
+            const int                                         base_filament = std::max(volume->extruder_id(), 1);
+            std::vector<std::pair<int, indexed_triangle_set>> volume_groups;
+            if (volume->mmu_segmentation_facets.empty()) {
+                volume_groups.emplace_back(base_filament, volume->mesh().its);
+            } else {
+                std::vector<indexed_triangle_set> facets_per_filament;
+                volume->mmu_segmentation_facets.get_facets(*volume, facets_per_filament);
+                for (size_t state = 0; state < facets_per_filament.size(); ++state) {
+                    const int filament_id = state == 0 ? base_filament : static_cast<int>(state);
+                    volume_groups.emplace_back(filament_id, std::move(facets_per_filament[state]));
+                }
+            }
+
+            for (auto& volume_group : volume_groups) {
+                const std::optional<size_t> geometry_index = append_geometry(std::move(volume_group.second), volume_group.first);
+                if (invalid_export_data)
+                    return false;
+                if (!geometry_index)
+                    continue;
+
+                const size_t face_count = geometries[*geometry_index].mesh.indices.size();
+                if (object->instances.empty()) {
+                    groups.push_back({*geometry_index, volume->get_matrix()});
+                    total_faces += face_count;
+                } else {
+                    for (const ModelInstance* instance : object->instances) {
+                        if (instance == nullptr)
+                            continue;
+                        groups.push_back({*geometry_index, instance->get_matrix() * volume->get_matrix()});
+                        total_faces += face_count;
+                    }
+                }
+            }
+        }
+    }
+
+    if (groups.empty() || total_faces == 0) {
+        BOOST_LOG_TRIVIAL(error) << "No printable faces were found for multicolor OBJ export";
         return false;
     }
 
-    boost::nowide::ofstream obj_stream(obj_path.string());
-    boost::nowide::ofstream mtl_stream(mtl_path.string());
-    if (!obj_stream || !mtl_stream) {
-        BOOST_LOG_TRIVIAL(error) << "Failed opening multicolor OBJ/MTL output: " << obj_path.string();
+    // TriangleMesh::transform materializes the double-precision model transform
+    // into float geometry. A finite source mesh can therefore still overflow.
+    // Validate every instance before creating either sidecar output.
+    for (const ExportGroup& group : groups) {
+        TriangleMesh transformed_mesh(geometries[group.geometry_index].mesh);
+        transformed_mesh.transform(group.transform, true);
+        if (!indexed_mesh_is_exportable(transformed_mesh.its)) {
+            BOOST_LOG_TRIVIAL(error) << "OBJ export transform produced invalid mesh geometry";
+            return false;
+        }
+    }
+
+    boost::system::error_code error_code;
+    if (!obj_path.parent_path().empty()) {
+        fs::create_directories(obj_path.parent_path(), error_code);
+        if (error_code) {
+            BOOST_LOG_TRIVIAL(error) << "Failed creating multicolor OBJ output directory: " << error_code.message();
+            return false;
+        }
+    }
+
+    std::vector<AtomicOutputFile> outputs;
+    if (!make_atomic_output_files({obj_path, mtl_path}, "multicolor OBJ/MTL", outputs))
+        return false;
+
+    boost::nowide::ofstream obj_stream(outputs[0].temporary.string(), std::ios::out | std::ios::trunc);
+    boost::nowide::ofstream mtl_stream(outputs[1].temporary.string(), std::ios::out | std::ios::trunc);
+    if (!obj_stream.is_open() || !mtl_stream.is_open()) {
+        obj_stream.close();
+        mtl_stream.close();
+        remove_file_if_exists(outputs[0].temporary);
+        remove_file_if_exists(outputs[1].temporary);
+        BOOST_LOG_TRIVIAL(error) << "Failed opening temporary multicolor OBJ/MTL output";
         return false;
     }
 
     obj_stream << "# OrcaSlicer multicolor OBJ\n";
+    obj_stream << "# semantic_source: filament_and_mmu_assignments; original_mtl_preserved: false\n";
     obj_stream << "mtllib " << mtl_path.filename().generic_string() << "\n\n";
     obj_stream << std::setprecision(std::numeric_limits<float>::max_digits10);
     mtl_stream << std::setprecision(6);
 
     size_t        vertex_offset = 1;
     size_t        group_index   = 0;
-    size_t        written_faces = 0;
-    bool          invalid_filament_id = false;
-    std::set<int> used_filaments;
-
-    auto write_group = [&](indexed_triangle_set its, const Transform3d &transform, int filament_id) {
-        if (its.indices.empty())
-            return;
-
-        if (filament_id < 1 || filament_id > static_cast<int>(filament_colors.size())) {
-            BOOST_LOG_TRIVIAL(error) << "OBJ face references filament " << filament_id
-                                     << ", but only " << filament_colors.size() << " colors are available";
-            invalid_filament_id = true;
-            return;
-        }
-        TriangleMesh mesh(std::move(its));
-        mesh.transform(transform, true);
+    for (const ExportGroup& group : groups) {
+        const ExportGeometry& geometry = geometries[group.geometry_index];
+        TriangleMesh          mesh(geometry.mesh);
+        mesh.transform(group.transform, true);
 
         obj_stream << "g color_group_" << group_index++ << "\n";
         for (const Vec3f &vertex : mesh.its.vertices)
             obj_stream << "v " << vertex.x() << " " << vertex.y() << " " << vertex.z() << "\n";
-        obj_stream << "usemtl filament_" << filament_id << "\n";
-        for (const Vec3i32 &face : mesh.its.indices) {
-            obj_stream << "f " << vertex_offset + static_cast<size_t>(face[0]) << " "
-                       << vertex_offset + static_cast<size_t>(face[1]) << " "
+        obj_stream << "usemtl filament_" << geometry.filament_id << "\n";
+        for (const Vec3i32& face : mesh.its.indices)
+            obj_stream << "f " << vertex_offset + static_cast<size_t>(face[0]) << " " << vertex_offset + static_cast<size_t>(face[1]) << " "
                        << vertex_offset + static_cast<size_t>(face[2]) << "\n";
-        }
         obj_stream << "\n";
-
         vertex_offset += mesh.its.vertices.size();
-        written_faces += mesh.its.indices.size();
-        used_filaments.insert(filament_id);
-    };
-
-    for (const ModelObject *object : model.objects) {
-        for (const ModelVolume *volume : object->volumes) {
-            if (!volume || !volume->is_model_part())
-                continue;
-
-            const int base_filament = std::max(volume->extruder_id(), 1);
-            if (volume->mmu_segmentation_facets.empty()) {
-                write_group(volume->mesh().its, volume->get_matrix(), base_filament);
-                continue;
-            }
-
-            std::vector<indexed_triangle_set> facets_per_filament;
-            volume->mmu_segmentation_facets.get_facets(*volume, facets_per_filament);
-            for (size_t state = 0; state < facets_per_filament.size(); ++state) {
-                const int filament_id = state == 0 ? base_filament : static_cast<int>(state);
-                write_group(std::move(facets_per_filament[state]), volume->get_matrix(), filament_id);
-            }
-        }
     }
 
     for (int filament_id : used_filaments) {
         const RGBA &color = filament_colors[static_cast<size_t>(filament_id - 1)];
         mtl_stream << "newmtl filament_" << filament_id << "\n";
         mtl_stream << "Ka 0 0 0\n";
-        mtl_stream << "Kd " << std::clamp(color[0], 0.f, 1.f) << " "
-                   << std::clamp(color[1], 0.f, 1.f) << " "
+        mtl_stream << "Kd " << std::clamp(color[0], 0.f, 1.f) << " " << std::clamp(color[1], 0.f, 1.f) << " "
                    << std::clamp(color[2], 0.f, 1.f) << "\n";
         mtl_stream << "d 1\nillum 1\n\n";
     }
 
     obj_stream.flush();
     mtl_stream.flush();
-    if (!obj_stream || !mtl_stream || written_faces == 0 || invalid_filament_id) {
-        BOOST_LOG_TRIVIAL(error) << "Failed writing multicolor OBJ/MTL or no printable faces were found";
+    bool streams_ok = obj_stream.good() && mtl_stream.good();
+    obj_stream.close();
+    mtl_stream.close();
+    streams_ok = streams_ok && !obj_stream.fail() && !mtl_stream.fail();
+    if (!streams_ok) {
+        remove_file_if_exists(outputs[0].temporary);
+        remove_file_if_exists(outputs[1].temporary);
+        BOOST_LOG_TRIVIAL(error) << "Failed writing temporary multicolor OBJ/MTL files";
         return false;
     }
 
-    BOOST_LOG_TRIVIAL(info) << "Exported multicolor OBJ " << obj_path.string() << ", MTL " << mtl_path.string()
-                            << ", faces " << written_faces << ", materials " << used_filaments.size();
+    if (!commit_atomic_output_files(outputs, "multicolor OBJ/MTL")) {
+        BOOST_LOG_TRIVIAL(error) << "Failed committing multicolor OBJ/MTL output pair";
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "Exported multicolor OBJ " << obj_path.string() << ", MTL " << mtl_path.string() << ", faces " << total_faces
+                            << ", materials " << used_filaments.size();
     return true;
 }
 
 bool store_painted_mesh_obj(const char* path, const PaintedMesh& painted_mesh, const std::vector<RGBA>& filament_colors)
 {
-    if (path == nullptr || painted_mesh.vertices.empty() || painted_mesh.indices.empty() ||
+    if (path == nullptr || *path == '\0' || painted_mesh.vertices.empty() || painted_mesh.indices.empty() ||
         painted_mesh.face_colors.size() != painted_mesh.indices.size() || painted_mesh.cluster_colors.empty()) {
         BOOST_LOG_TRIVIAL(error) << "Cannot export an empty or inconsistent painted mesh";
+        return false;
+    }
+    for (const std::array<float, 3>& vertex : painted_mesh.vertices)
+        if (!std::isfinite(vertex[0]) || !std::isfinite(vertex[1]) || !std::isfinite(vertex[2])) {
+            BOOST_LOG_TRIVIAL(error) << "Painted mesh contains a non-finite vertex";
+            return false;
+        }
+    for (const std::array<int, 3>& face : painted_mesh.indices)
+        for (size_t corner = 0; corner < 3; ++corner)
+            if (face[corner] < 0 || size_t(face[corner]) >= painted_mesh.vertices.size()) {
+                BOOST_LOG_TRIVIAL(error) << "Painted mesh contains an invalid vertex index";
         return false;
     }
     if (filament_colors.size() < painted_mesh.cluster_colors.size()) {
@@ -583,12 +873,9 @@ bool store_painted_mesh_obj(const char* path, const PaintedMesh& painted_mesh, c
         return false;
     }
 
-    boost::nowide::ofstream obj_stream(obj_path.string());
-    boost::nowide::ofstream mtl_stream(mtl_path.string());
-    if (!obj_stream || !mtl_stream) {
-        BOOST_LOG_TRIVIAL(error) << "Failed opening painted OBJ/MTL output: " << obj_path.string();
+    std::vector<AtomicOutputFile> outputs;
+    if (!make_atomic_output_files({obj_path, mtl_path}, "painted OBJ/MTL", outputs))
         return false;
-    }
 
     std::map<std::array<std::size_t, 3>, std::size_t> material_by_color;
     for (std::size_t index = 0; index < painted_mesh.cluster_colors.size(); ++index)
@@ -637,7 +924,8 @@ bool store_painted_mesh_obj(const char* path, const PaintedMesh& painted_mesh, c
     // This preserves intentionally separate or merely nearby geometry and does not add faces.
     using Position        = std::array<float, 3>;
     using PositionEdgeKey = std::pair<Position, Position>;
-    struct DirectedBoundaryEdge {
+    struct DirectedBoundaryEdge
+    {
         int from;
         int to;
     };
@@ -756,6 +1044,17 @@ bool store_painted_mesh_obj(const char* path, const PaintedMesh& painted_mesh, c
                                    << " nonmanifold edge(s) after best-effort exact seam stitching; continuing OBJ export";
     }
 
+    boost::nowide::ofstream obj_stream(outputs[0].temporary.string(), std::ios::out | std::ios::trunc);
+    boost::nowide::ofstream mtl_stream(outputs[1].temporary.string(), std::ios::out | std::ios::trunc);
+    if (!obj_stream.is_open() || !mtl_stream.is_open()) {
+        obj_stream.close();
+        mtl_stream.close();
+        remove_file_if_exists(outputs[0].temporary);
+        remove_file_if_exists(outputs[1].temporary);
+        BOOST_LOG_TRIVIAL(error) << "Failed opening temporary painted OBJ/MTL output: " << obj_path.string();
+        return false;
+    }
+
     obj_stream << "# OrcaSlicer painted mesh OBJ\n";
     obj_stream << "mtllib " << mtl_path.filename().generic_string() << "\n\n";
     obj_stream << std::setprecision(std::numeric_limits<float>::max_digits10);
@@ -795,8 +1094,19 @@ bool store_painted_mesh_obj(const char* path, const PaintedMesh& painted_mesh, c
 
     obj_stream.flush();
     mtl_stream.flush();
-    if (!obj_stream || !mtl_stream || written_faces != painted_mesh.indices.size()) {
+    bool success = obj_stream.good() && mtl_stream.good() && written_faces == painted_mesh.indices.size();
+    obj_stream.close();
+    mtl_stream.close();
+    success = success && !obj_stream.fail() && !mtl_stream.fail();
+    if (!success) {
+        remove_file_if_exists(outputs[0].temporary);
+        remove_file_if_exists(outputs[1].temporary);
         BOOST_LOG_TRIVIAL(error) << "Failed writing painted OBJ/MTL or not all faces were exported";
+        return false;
+    }
+
+    if (!commit_atomic_output_files(outputs, "painted OBJ/MTL")) {
+        BOOST_LOG_TRIVIAL(error) << "Failed committing painted OBJ/MTL output pair";
         return false;
     }
 

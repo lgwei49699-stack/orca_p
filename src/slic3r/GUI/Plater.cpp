@@ -117,7 +117,6 @@
 #include "ModelMall.hpp"
 #include "ConfigWizard.hpp"
 #include "../Utils/ASCIIFolding.hpp"
-#include "../Utils/FixModelByWin10.hpp"
 #include "../Utils/UndoRedo.hpp"
 #include "../Utils/PresetUpdater.hpp"
 #include "../Utils/Process.hpp"
@@ -510,43 +509,53 @@ std::vector<int> get_min_flush_volumes(const DynamicPrintConfig& full_config)
     }
     const ConfigOptionBools* long_retractions_when_cut_opt = full_config.option<ConfigOptionBools>("long_retractions_when_cut");
     bool                     machine_activated             = false;
-    if (long_retractions_when_cut_opt) {
-        machine_activated = long_retractions_when_cut_opt->values[0] == 1;
+    if (long_retractions_when_cut_opt && !long_retractions_when_cut_opt->values.empty()) {
+        machine_activated = long_retractions_when_cut_opt->values.front() == 1;
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__
                                 << boost::format(": get long_retractions_when_cut from config, value=%1%, activated=%2%") %
-                                       long_retractions_when_cut_opt->values[0] % machine_activated;
+                                       long_retractions_when_cut_opt->values.front() % machine_activated;
     }
 
-    size_t              filament_size = full_config.option<ConfigOptionFloats>("filament_diameter")->values.size();
+    size_t filament_size = 0;
+    if (const ConfigOptionFloats* filament_diameter_opt = full_config.option<ConfigOptionFloats>("filament_diameter"))
+        filament_size = filament_diameter_opt->values.size();
+    if (const ConfigOptionStrings* filament_colors_opt = full_config.option<ConfigOptionStrings>("filament_colour"))
+        filament_size = std::max(filament_size, filament_colors_opt->values.size());
+
     std::vector<double> filament_retraction_distance_when_cut(filament_size, 18.0f),
         printer_retraction_distance_when_cut(filament_size, 18.0f);
     std::vector<unsigned char> filament_long_retractions_when_cut(filament_size, 0);
     const ConfigOptionFloats*  filament_retraction_distances_when_cut_opt = full_config.option<ConfigOptionFloats>(
         "filament_retraction_distances_when_cut");
-    if (filament_retraction_distances_when_cut_opt) {
-        filament_retraction_distance_when_cut = filament_retraction_distances_when_cut_opt->values;
+    if (filament_retraction_distances_when_cut_opt && !filament_retraction_distances_when_cut_opt->values.empty()) {
+        for (size_t idx = 0; idx < filament_size; ++idx)
+            filament_retraction_distance_when_cut[idx] = filament_retraction_distances_when_cut_opt->get_at(idx);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__
                                 << boost::format(": get filament_retraction_distance_when_cut from config, size=%1%, values=%2%") %
-                                       filament_retraction_distance_when_cut.size() %
+                                       filament_retraction_distances_when_cut_opt->values.size() %
                                        filament_retraction_distances_when_cut_opt->serialize();
     }
 
     const ConfigOptionFloats* printer_retraction_distance_when_cut_opt = full_config.option<ConfigOptionFloats>(
         "retraction_distances_when_cut");
-    if (printer_retraction_distance_when_cut_opt) {
-        printer_retraction_distance_when_cut = printer_retraction_distance_when_cut_opt->values;
+    if (printer_retraction_distance_when_cut_opt && !printer_retraction_distance_when_cut_opt->values.empty()) {
+        for (size_t idx = 0; idx < filament_size; ++idx)
+            printer_retraction_distance_when_cut[idx] = printer_retraction_distance_when_cut_opt->get_at(idx);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__
                                 << boost::format(": get retraction_distances_when_cut from config, size=%1%, values=%2%") %
-                                       printer_retraction_distance_when_cut.size() % printer_retraction_distance_when_cut_opt->serialize();
+                                       printer_retraction_distance_when_cut_opt->values.size() %
+                                       printer_retraction_distance_when_cut_opt->serialize();
     }
 
     const ConfigOptionBools* filament_long_retractions_when_cut_opt = full_config.option<ConfigOptionBools>(
         "filament_long_retractions_when_cut");
-    if (filament_long_retractions_when_cut_opt) {
-        filament_long_retractions_when_cut = filament_long_retractions_when_cut_opt->values;
+    if (filament_long_retractions_when_cut_opt && !filament_long_retractions_when_cut_opt->values.empty()) {
+        for (size_t idx = 0; idx < filament_size; ++idx)
+            filament_long_retractions_when_cut[idx] = filament_long_retractions_when_cut_opt->get_at(idx);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__
                                 << boost::format(": get filament_long_retractions_when_cut from config, size=%1%, values=%2%") %
-                                       filament_long_retractions_when_cut.size() % filament_long_retractions_when_cut_opt->serialize();
+                                       filament_long_retractions_when_cut_opt->values.size() %
+                                       filament_long_retractions_when_cut_opt->serialize();
     }
 
     for (size_t idx = 0; idx < filament_size; ++idx) {
@@ -3864,7 +3873,7 @@ struct Plater::priv
     bool can_split_to_volumes() const;
     bool can_arrange() const;
     bool can_layers_editing() const;
-    bool can_fix_through_netfabb() const;
+    bool can_fix_through_cgal() const;
     bool can_simplify() const;
     bool can_set_instance_to_object() const;
     bool can_mirror() const;
@@ -12011,8 +12020,8 @@ void Plater::priv::on_object_select(SimpleEvent& evt)
     selection_changed();
 }
 
-// BBS: repair model through netfabb
-void Plater::priv::on_repair_model(wxCommandEvent& event) { wxGetApp().obj_list()->fix_through_netfabb(); }
+// BBS: repair model through CGAL
+void Plater::priv::on_repair_model(wxCommandEvent& event) { wxGetApp().obj_list()->fix_through_cgal(); }
 
 void Plater::priv::on_filament_color_changed(wxCommandEvent& event)
 {
@@ -12810,29 +12819,26 @@ bool Plater::priv::can_add_plate() const { return q->get_partplate_list().get_pl
 
 bool Plater::priv::can_delete_plate() const { return q->get_partplate_list().get_plate_count() > 1; }
 
-bool Plater::priv::can_fix_through_netfabb() const
+bool Plater::priv::can_fix_through_cgal() const
 {
-    std::vector<int> obj_idxs, vol_idxs;
-    sidebar->obj_list()->get_selection_indexes(obj_idxs, vol_idxs);
+    std::vector<std::pair<int, int>> targets;
+    sidebar->obj_list()->get_model_repair_selection_indexes(targets);
 
-#if FIX_THROUGH_NETFABB_ALWAYS
-    // Fixing always.
-    return !obj_idxs.empty() || !vol_idxs.empty();
-#else // FIX_THROUGH_NETFABB_ALWAYS
-    // Fixing only if the model is not manifold.
-    if (vol_idxs.empty()) {
-        for (auto obj_idx : obj_idxs)
-            if (model.objects[obj_idx]->get_repaired_errors_count() > 0)
+    for (const auto& [object_index, volume_index] : targets) {
+        if (object_index < 0 || static_cast<size_t>(object_index) >= model.objects.size() || model.objects[object_index] == nullptr)
+            continue;
+
+        const ModelObject* object = model.objects[object_index];
+        if (volume_index < 0) {
+            if (std::any_of(object->volumes.begin(), object->volumes.end(),
+                            [](const ModelVolume* volume) { return volume != nullptr && volume->is_model_part(); }))
                 return true;
-        return false;
-    }
-
-    int obj_idx = obj_idxs.front();
-    for (auto vol_idx : vol_idxs)
-        if (model.objects[obj_idx]->get_repaired_errors_count(vol_idx) > 0)
+        } else if (static_cast<size_t>(volume_index) < object->volumes.size() && object->volumes[volume_index] != nullptr &&
+                   object->volumes[volume_index]->is_model_part()) {
             return true;
+        }
+    }
     return false;
-#endif // FIX_THROUGH_NETFABB_ALWAYS
 }
 
 bool Plater::priv::can_simplify() const
@@ -16597,6 +16603,17 @@ void Plater::export_stl(bool extended, bool selection_only, bool multi_stls)
         return path;
     };
 
+    auto report_export_failures = [this](const std::vector<std::string>& failed_paths) {
+        if (failed_paths.empty())
+            return;
+        wxString message = _L("file write failed");
+        for (const std::string& failed_path : failed_paths) {
+            message += "\n- ";
+            message += from_u8(failed_path);
+        }
+        show_error(this, message);
+    };
+
     TriangleMesh mesh;
     if (selection_only) {
         if (selection.is_single_full_object()) {
@@ -16620,13 +16637,17 @@ void Plater::export_stl(bool extended, bool selection_only, bool multi_stls)
             }
         } else if (selection.is_multiple_full_object() && multi_stls) {
             const std::set<std::pair<int, int>>& instances_idxs = p->get_selection().get_selected_object_instances();
+            std::vector<std::string>             failed_paths;
             for (const std::pair<int, int>& i : instances_idxs) {
                 ModelObject* object = p->model.objects[i.first];
                 auto         mesh   = mesh_to_export(*object, i.second);
                 mesh.translate(-object->origin_translation.cast<float>());
 
-                Slic3r::store_stl(get_save_file(path_u8, object->name).c_str(), &mesh, true);
+                const std::string output_path = get_save_file(path_u8, object->name);
+                if (!Slic3r::store_stl(output_path.c_str(), &mesh, true))
+                    failed_paths.emplace_back(output_path);
             }
+            report_export_failures(failed_paths);
             return;
         }
     } else if (!multi_stls) {
@@ -16634,15 +16655,20 @@ void Plater::export_stl(bool extended, bool selection_only, bool multi_stls)
             mesh.merge(mesh_to_export(*o, -1));
         }
     } else {
+        std::vector<std::string> failed_paths;
         for (const ModelObject* o : p->model.objects) {
             auto mesh = mesh_to_export(*o, -1);
             mesh.translate(-o->origin_translation.cast<float>());
-            Slic3r::store_stl(get_save_file(path_u8, o->name).c_str(), &mesh, true);
+            const std::string output_path = get_save_file(path_u8, o->name);
+            if (!Slic3r::store_stl(output_path.c_str(), &mesh, true))
+                failed_paths.emplace_back(output_path);
         }
+        report_export_failures(failed_paths);
         return;
     }
 
-    Slic3r::store_stl(path_u8.c_str(), &mesh, true);
+    if (!Slic3r::store_stl(path_u8.c_str(), &mesh, true))
+        report_export_failures({path_u8});
 }
 
 // BBS: remove amf export
@@ -20119,18 +20145,9 @@ void Plater::show_object_info()
     int      non_manifold_edges = 0;
     auto     mesh_errors        = p->sidebar->obj_list()->get_mesh_errors_info(&info_manifold, &non_manifold_edges);
 
-#ifndef __WINDOWS__
-    if (non_manifold_edges > 0) {
-        info_manifold += into_u8(
-            "\n" + _L("Tips:") + "\n" +
-            _L("\"Fix Model\" feature is currently only on Windows. Please repair the model on Orca Slicer(windows) or CAD softwares."));
-    }
-#endif // APPLE & LINUX
-
     info_manifold = "<Error>" + info_manifold + "</Error>";
     info_text += into_u8(info_manifold);
-    notify_manager->bbl_show_objectsinfo_notification(info_text, is_windows10() && (non_manifold_edges > 0),
-                                                      !(p->current_panel == p->view3D));
+    notify_manager->bbl_show_objectsinfo_notification(info_text, non_manifold_edges > 0, !(p->current_panel == p->view3D));
 }
 
 bool Plater::show_publish_dialog(bool show) { return p->show_publish_dlg(show); }
@@ -20253,7 +20270,7 @@ bool Plater::can_delete_plate() const { return p->can_delete_plate(); }
 bool Plater::can_increase_instances() const { return p->can_increase_instances(); }
 bool Plater::can_decrease_instances() const { return p->can_decrease_instances(); }
 bool Plater::can_set_instance_to_object() const { return p->can_set_instance_to_object(); }
-bool Plater::can_fix_through_netfabb() const { return p->can_fix_through_netfabb(); }
+bool Plater::can_fix_through_cgal() const { return p->can_fix_through_cgal(); }
 bool Plater::can_simplify() const { return p->can_simplify(); }
 bool Plater::can_split_to_objects() const { return p->can_split_to_objects(); }
 bool Plater::can_split_to_volumes() const { return p->can_split_to_volumes(); }

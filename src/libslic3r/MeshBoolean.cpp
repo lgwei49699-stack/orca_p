@@ -5,6 +5,11 @@
 #include "libslic3r/format.hpp"
 #undef PI
 
+#include <algorithm>
+#include <cmath>
+#include <iterator>
+#include <optional>
+
 #include <boost/next_prior.hpp>
 #include "boost/log/trivial.hpp"
 // Include igl first. It defines "L" macro which then clashes with our localization
@@ -13,14 +18,24 @@
 
 // CGAL headers
 #include <CGAL/Polygon_mesh_processing/corefinement.h>
+#include <CGAL/Polygon_mesh_processing/connected_components.h>
+#include <CGAL/Polygon_mesh_processing/distance.h>
 #include <CGAL/Exact_integer.h>
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/Cartesian_converter.h>
+#include <CGAL/Polygon_mesh_processing/border.h>
 #include <CGAL/Polygon_mesh_processing/orient_polygon_soup.h>
 #include <CGAL/Polygon_mesh_processing/repair.h>
+#include <CGAL/Polygon_mesh_processing/repair_degeneracies.h>
+#include <CGAL/Polygon_mesh_processing/repair_polygon_soup.h>
+#include <CGAL/Polygon_mesh_processing/repair_self_intersections.h>
 #include <CGAL/Polygon_mesh_processing/remesh.h>
 #include <CGAL/Polygon_mesh_processing/polygon_soup_to_polygon_mesh.h>
 #include <CGAL/Polygon_mesh_processing/orientation.h>
+#include <CGAL/Polygon_mesh_processing/self_intersections.h>
+#include <CGAL/Polygon_mesh_processing/shape_predicates.h>
+#include <CGAL/Polygon_mesh_processing/triangulate_hole.h>
+#include <CGAL/boost/graph/helpers.h>
 // BBS: for segment
 #include <CGAL/mesh_segmentation.h>
 #include <CGAL/property_map.h>
@@ -29,15 +44,15 @@
 // BBS: for boolean using mcut
 #include "mcut/include/mcut/mcut.h"
 
-namespace Slic3r {
-namespace MeshBoolean {
+namespace Slic3r { namespace MeshBoolean {
 
 using MapMatrixXfUnaligned = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor | Eigen::DontAlign>>;
-using MapMatrixXiUnaligned = Eigen::Map<const Eigen::Matrix<int,   Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor | Eigen::DontAlign>>;
+using MapMatrixXiUnaligned = Eigen::Map<const Eigen::Matrix<int, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor | Eigen::DontAlign>>;
 
-TriangleMesh eigen_to_triangle_mesh(const EigenMesh &emesh)
+TriangleMesh eigen_to_triangle_mesh(const EigenMesh& emesh)
 {
-    auto &VC = emesh.first; auto &FC = emesh.second;
+    auto& VC = emesh.first;
+    auto& FC = emesh.second;
 
     indexed_triangle_set its;
     its.vertices.reserve(size_t(VC.rows()));
@@ -49,33 +64,30 @@ TriangleMesh eigen_to_triangle_mesh(const EigenMesh &emesh)
     for (Eigen::Index i = 0; i < FC.rows(); ++i)
         its.indices.emplace_back(FC.row(i));
 
-    return TriangleMesh { std::move(its) };
+    return TriangleMesh{std::move(its)};
 }
 
-EigenMesh triangle_mesh_to_eigen(const TriangleMesh &mesh)
+EigenMesh triangle_mesh_to_eigen(const TriangleMesh& mesh)
 {
     EigenMesh emesh;
-    emesh.first = MapMatrixXfUnaligned(mesh.its.vertices.front().data(),
-                                       Eigen::Index(mesh.its.vertices.size()),
-                                       3).cast<double>();
+    emesh.first = MapMatrixXfUnaligned(mesh.its.vertices.front().data(), Eigen::Index(mesh.its.vertices.size()), 3).cast<double>();
 
-    emesh.second = MapMatrixXiUnaligned(mesh.its.indices.front().data(),
-                                        Eigen::Index(mesh.its.indices.size()),
-                                        3);
+    emesh.second = MapMatrixXiUnaligned(mesh.its.indices.front().data(), Eigen::Index(mesh.its.indices.size()), 3);
     return emesh;
 }
 
-void minus(EigenMesh &A, const EigenMesh &B)
+void minus(EigenMesh& A, const EigenMesh& B)
 {
-    auto &[VA, FA] = A;
-    auto &[VB, FB] = B;
+    auto& [VA, FA] = A;
+    auto& [VB, FB] = B;
 
-    Eigen::MatrixXd VC;
-    Eigen::MatrixXi FC;
+    Eigen::MatrixXd      VC;
+    Eigen::MatrixXi      FC;
     igl::MeshBooleanType boolean_type(igl::MESH_BOOLEAN_TYPE_MINUS);
     igl::copyleft::cgal::mesh_boolean(VA, FA, VB, FB, boolean_type, VC, FC);
 
-    VA = std::move(VC); FA = std::move(FC);
+    VA = std::move(VC);
+    FA = std::move(FC);
 }
 
 void minus(TriangleMesh& A, const TriangleMesh& B)
@@ -85,11 +97,11 @@ void minus(TriangleMesh& A, const TriangleMesh& B)
     A = eigen_to_triangle_mesh(eA);
 }
 
-void self_union(EigenMesh &A)
+void self_union(EigenMesh& A)
 {
     EigenMesh result;
-    auto &[V, F] = A;
-    auto &[VC, FC] = result;
+    auto& [V, F]   = A;
+    auto& [VC, FC] = result;
 
     igl::MeshBooleanType boolean_type(igl::MESH_BOOLEAN_TYPE_UNION);
     igl::copyleft::cgal::mesh_boolean(V, F, Eigen::MatrixXd(), Eigen::MatrixXi(), boolean_type, VC, FC);
@@ -106,21 +118,23 @@ void self_union(TriangleMesh& mesh)
 
 namespace cgal {
 
-namespace CGALProc    = CGAL::Polygon_mesh_processing;
-namespace CGALParams  = CGAL::Polygon_mesh_processing::parameters;
+namespace CGALProc   = CGAL::Polygon_mesh_processing;
+namespace CGALParams = CGAL::Polygon_mesh_processing::parameters;
 
 using EpecKernel = CGAL::Exact_predicates_exact_constructions_kernel;
 using EpicKernel = CGAL::Exact_predicates_inexact_constructions_kernel;
-using _EpicMesh = CGAL::Surface_mesh<EpicKernel::Point_3>;
-using _EpecMesh = CGAL::Surface_mesh<EpecKernel::Point_3>;
+using _EpicMesh  = CGAL::Surface_mesh<EpicKernel::Point_3>;
+using _EpecMesh  = CGAL::Surface_mesh<EpecKernel::Point_3>;
 
-struct CGALMesh {
+struct CGALMesh
+{
     _EpicMesh m;
     CGALMesh() = default;
-    CGALMesh(const _EpicMesh& _m) :m(_m) {}
+    CGALMesh(const _EpicMesh& _m) : m(_m) {}
 };
 
-void save_CGALMesh(const std::string& fname, const CGALMesh& cgal_mesh) {
+void save_CGALMesh(const std::string& fname, const CGALMesh& cgal_mesh)
+{
     std::ofstream os(fname);
     os << cgal_mesh.m;
     os.close();
@@ -133,16 +147,18 @@ template<class _Mesh> void triangle_mesh_to_cgal(const TriangleMesh& M, _Mesh& o
 {
     using Index3 = std::array<size_t, 3>;
 
-    if (M.empty()) return;
+    if (M.empty())
+        return;
 
     std::vector<typename _Mesh::Point> points;
-    std::vector<Index3> indices;
+    std::vector<Index3>                indices;
     points.reserve(M.its.vertices.size());
     indices.reserve(M.its.indices.size());
-    for (auto& v : M.its.vertices) points.emplace_back(v.x(), v.y(), v.z());
+    for (auto& v : M.its.vertices)
+        points.emplace_back(v.x(), v.y(), v.z());
     for (auto& _f : M.its.indices) {
         auto f = _f.cast<size_t>();
-        indices.emplace_back(Index3{ f(0), f(1), f(2) });
+        indices.emplace_back(Index3{f(0), f(1), f(2)});
     }
 
     CGALProc::orient_polygon_soup(points, indices);
@@ -150,7 +166,8 @@ template<class _Mesh> void triangle_mesh_to_cgal(const TriangleMesh& M, _Mesh& o
 
     // Number the faces because 'orient_to_bound_a_volume' needs a face <--> index map
     unsigned index = 0;
-    for (auto face : out.faces()) face = CGAL::SM_Face_index(index++);
+    for (auto face : out.faces())
+        face = CGAL::SM_Face_index(index++);
 
     if (CGAL::is_closed(out))
         CGALProc::orient_to_bound_a_volume(out);
@@ -159,61 +176,59 @@ template<class _Mesh> void triangle_mesh_to_cgal(const TriangleMesh& M, _Mesh& o
 }
 
 template<class _Mesh>
-void triangle_mesh_to_cgal(const std::vector<stl_vertex> &                 V,
-                           const std::vector<stl_triangle_vertex_indices> &F,
-                           _Mesh &out)
+void triangle_mesh_to_cgal(const std::vector<stl_vertex>& V, const std::vector<stl_triangle_vertex_indices>& F, _Mesh& out)
 {
-    if (F.empty()) return;
+    if (F.empty())
+        return;
 
     size_t vertices_count = V.size();
-    size_t edges_count    = (F.size()* 3) / 2;
+    size_t edges_count    = (F.size() * 3) / 2;
     size_t faces_count    = F.size();
     out.reserve(vertices_count, edges_count, faces_count);
 
-    for (auto &v : V)
+    for (auto& v : V)
         out.add_vertex(typename _Mesh::Point{v.x(), v.y(), v.z()});
 
     using VI = typename _Mesh::Vertex_index;
-    for (auto &f : F)
+    for (auto& f : F)
         out.add_face(VI(f(0)), VI(f(1)), VI(f(2)));
 }
 
-inline Vec3f to_vec3f(const _EpicMesh::Point& v)
-{
-    return { float(v.x()), float(v.y()), float(v.z()) };
-}
+inline Vec3f to_vec3f(const _EpicMesh::Point& v) { return {float(v.x()), float(v.y()), float(v.z())}; }
 
 inline Vec3f to_vec3f(const _EpecMesh::Point& v)
 {
     CGAL::Cartesian_converter<EpecKernel, EpicKernel> cvt;
-    auto iv = cvt(v);
-    return { float(iv.x()), float(iv.y()), float(iv.z()) };
+    auto                                              iv = cvt(v);
+    return {float(iv.x()), float(iv.y()), float(iv.z())};
 }
 
-template<class _Mesh>
-indexed_triangle_set cgal_to_indexed_triangle_set(const _Mesh &cgalmesh)
+template<class _Mesh> indexed_triangle_set cgal_to_indexed_triangle_set(const _Mesh& cgalmesh)
 {
     indexed_triangle_set its;
     its.vertices.reserve(cgalmesh.num_vertices());
     its.indices.reserve(cgalmesh.num_faces());
 
-    const auto &faces = cgalmesh.faces();
-    const auto &vertices = cgalmesh.vertices();
-    int vsize = int(vertices.size());
+    const auto& faces    = cgalmesh.faces();
+    const auto& vertices = cgalmesh.vertices();
+    int         vsize    = int(vertices.size());
 
-    for (const auto &vi : vertices) {
-        auto &v = cgalmesh.point(vi); // Don't ask...
+    for (const auto& vi : vertices) {
+        auto& v = cgalmesh.point(vi); // Don't ask...
         its.vertices.emplace_back(to_vec3f(v));
     }
 
-    for (const auto &face : faces) {
+    for (const auto& face : faces) {
         auto vtc = cgalmesh.vertices_around_face(cgalmesh.halfedge(face));
 
-        int i = 0;
+        int     i = 0;
         Vec3i32 facet;
         for (auto v : vtc) {
             int iv = v;
-            if (i > 2 || iv < 0 || iv >= vsize) { i = 0; break; }
+            if (i > 2 || iv < 0 || iv >= vsize) {
+                i = 0;
+                break;
+            }
             facet(i++) = iv;
         }
 
@@ -224,63 +239,54 @@ indexed_triangle_set cgal_to_indexed_triangle_set(const _Mesh &cgalmesh)
     return its;
 }
 
-template<class _Mesh> TriangleMesh cgal_to_triangle_mesh(const _Mesh &cgalmesh)
+template<class _Mesh> TriangleMesh cgal_to_triangle_mesh(const _Mesh& cgalmesh)
 {
     indexed_triangle_set its = cgal_to_indexed_triangle_set(cgalmesh);
     return TriangleMesh(std::move(its));
 }
 
-std::unique_ptr<CGALMesh, CGALMeshDeleter>
-triangle_mesh_to_cgal(const std::vector<stl_vertex> &V,
-                      const std::vector<stl_triangle_vertex_indices> &F)
+std::unique_ptr<CGALMesh, CGALMeshDeleter> triangle_mesh_to_cgal(const std::vector<stl_vertex>&                  V,
+                                                                 const std::vector<stl_triangle_vertex_indices>& F)
 {
     std::unique_ptr<CGALMesh, CGALMeshDeleter> out(new CGALMesh{});
     triangle_mesh_to_cgal(V, F, out->m);
     return out;
 }
 
-TriangleMesh cgal_to_triangle_mesh(const CGALMesh &cgalmesh)
-{
-    return TriangleMesh{cgal_to_indexed_triangle_set(cgalmesh.m)};
-}
+TriangleMesh cgal_to_triangle_mesh(const CGALMesh& cgalmesh) { return TriangleMesh{cgal_to_indexed_triangle_set(cgalmesh.m)}; }
 
-indexed_triangle_set cgal_to_indexed_triangle_set(const CGALMesh &cgalmesh)
-{
-    return cgal_to_indexed_triangle_set(cgalmesh.m);
-}
+indexed_triangle_set cgal_to_indexed_triangle_set(const CGALMesh& cgalmesh) { return cgal_to_indexed_triangle_set(cgalmesh.m); }
 
 // /////////////////////////////////////////////////////////////////////////////
 // Boolean operations for CGAL meshes
 // /////////////////////////////////////////////////////////////////////////////
 
-static bool _cgal_diff(CGALMesh &A, CGALMesh &B, CGALMesh &R)
+static bool _cgal_diff(CGALMesh& A, CGALMesh& B, CGALMesh& R)
 {
-    const auto &p = CGALParams::throw_on_self_intersection(true);
+    const auto& p = CGALParams::throw_on_self_intersection(true);
     return CGALProc::corefine_and_compute_difference(A.m, B.m, R.m, p, p);
 }
 
-static bool _cgal_union(CGALMesh &A, CGALMesh &B, CGALMesh &R)
+static bool _cgal_union(CGALMesh& A, CGALMesh& B, CGALMesh& R)
 {
-    const auto &p = CGALParams::throw_on_self_intersection(true);
+    const auto& p = CGALParams::throw_on_self_intersection(true);
     return CGALProc::corefine_and_compute_union(A.m, B.m, R.m, p, p);
 }
 
-static bool _cgal_intersection(CGALMesh &A, CGALMesh &B, CGALMesh &R)
+static bool _cgal_intersection(CGALMesh& A, CGALMesh& B, CGALMesh& R)
 {
-    const auto &p = CGALParams::throw_on_self_intersection(true);
+    const auto& p = CGALParams::throw_on_self_intersection(true);
     return CGALProc::corefine_and_compute_intersection(A.m, B.m, R.m, p, p);
 }
 
-template<class Op> void _cgal_do(Op &&op, CGALMesh &A, CGALMesh &B)
+template<class Op> void _cgal_do(Op&& op, CGALMesh& A, CGALMesh& B)
 {
     bool success = false;
     bool hw_fail = false;
     try {
         CGALMesh result;
-        try_catch_signal({SIGSEGV, SIGFPE}, [&success, &A, &B, &result, &op] {
-            success = op(A, B, result);
-        }, [&] { hw_fail = true; });
-        A = std::move(result);      // In-place operation does not work
+        try_catch_signal({SIGSEGV, SIGFPE}, [&success, &A, &B, &result, &op] { success = op(A, B, result); }, [&] { hw_fail = true; });
+        A = std::move(result); // In-place operation does not work
     } catch (...) {
         success = false;
     }
@@ -288,22 +294,22 @@ template<class Op> void _cgal_do(Op &&op, CGALMesh &A, CGALMesh &B)
     if (hw_fail)
         throw Slic3r::HardCrash("CGAL mesh boolean operation crashed.");
 
-    if (! success)
+    if (!success)
         throw Slic3r::RuntimeError("CGAL mesh boolean operation failed.");
 }
 
-void minus(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_diff, A, B); }
-void plus(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_union, A, B); }
-void intersect(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_intersection, A, B); }
-bool does_self_intersect(const CGALMesh &mesh) { return CGALProc::does_self_intersect(mesh.m); }
+void minus(CGALMesh& A, CGALMesh& B) { _cgal_do(_cgal_diff, A, B); }
+void plus(CGALMesh& A, CGALMesh& B) { _cgal_do(_cgal_union, A, B); }
+void intersect(CGALMesh& A, CGALMesh& B) { _cgal_do(_cgal_intersection, A, B); }
+bool does_self_intersect(const CGALMesh& mesh) { return CGALProc::does_self_intersect(mesh.m); }
 // BBS
-void segment(CGALMesh& src, std::vector<CGALMesh>& dst, double smoothing_alpha = 0.5, int segment_number=5)
+void segment(CGALMesh& src, std::vector<CGALMesh>& dst, double smoothing_alpha = 0.5, int segment_number = 5)
 {
-    typedef boost::graph_traits<_EpicMesh>::face_descriptor face_descriptor;
+    typedef boost::graph_traits<_EpicMesh>::face_descriptor  face_descriptor;
     typedef _EpicMesh::Property_map<face_descriptor, double> Facet_double_map;
-    typedef CGAL::Face_filtered_graph<_EpicMesh> Filtered_graph;
+    typedef CGAL::Face_filtered_graph<_EpicMesh>             Filtered_graph;
 
-    _EpicMesh mesh = src.m;
+    _EpicMesh        mesh = src.m;
     Facet_double_map sdf_property_map;
 
     sdf_property_map = mesh.add_property_map<face_descriptor, double>("f:sdf").first;
@@ -312,53 +318,45 @@ void segment(CGALMesh& src, std::vector<CGALMesh>& dst, double smoothing_alpha =
 
     // create a property-map for segment-ids
     typedef _EpicMesh::Property_map<face_descriptor, std::size_t> Facet_int_map;
-    Facet_int_map segment_property_map = mesh.add_property_map<face_descriptor, std::size_t>("f:sid").first;;
+    Facet_int_map segment_property_map = mesh.add_property_map<face_descriptor, std::size_t>("f:sid").first;
+    ;
     // segment the mesh using default parameters for number of levels, and smoothing lambda
     // Any other scalar values can be used instead of using SDF values computed using the CGAL function
-    std::size_t number_of_segments = CGAL::segmentation_from_sdf_values(mesh, sdf_property_map, segment_property_map, segment_number, smoothing_alpha);
-    //print area of each segment and then put it in a Mesh and print it in an OFF file
+    std::size_t number_of_segments = CGAL::segmentation_from_sdf_values(mesh, sdf_property_map, segment_property_map, segment_number,
+                                                                        smoothing_alpha);
+    // print area of each segment and then put it in a Mesh and print it in an OFF file
     Filtered_graph segment_mesh(mesh);
-    _EpicMesh mesh_merged;
-    for (std::size_t id = 0; id < number_of_segments; ++id)
-    {
+    _EpicMesh      mesh_merged;
+    for (std::size_t id = 0; id < number_of_segments; ++id) {
         segment_mesh.set_selected_faces(id, segment_property_map);
-        //std::cout << "Segment " << id << "'s area is : " << CGAL::Polygon_mesh_processing::area(segment_mesh) << std::endl;
+        // std::cout << "Segment " << id << "'s area is : " << CGAL::Polygon_mesh_processing::area(segment_mesh) << std::endl;
         _EpicMesh out;
         CGAL::copy_face_graph(segment_mesh, out);
 
         // save_CGALMesh("out.off", out);
 
         // fill holes
-        typedef boost::graph_traits<_EpicMesh>::halfedge_descriptor      halfedge_descriptor;
-        typedef boost::graph_traits<_EpicMesh>::vertex_descriptor        vertex_descriptor;
-        std::vector<halfedge_descriptor> border_cycles;
+        typedef boost::graph_traits<_EpicMesh>::halfedge_descriptor halfedge_descriptor;
+        std::vector<halfedge_descriptor>                            border_cycles;
         CGAL::Polygon_mesh_processing::extract_boundary_cycles(out, std::back_inserter(border_cycles));
-        for (halfedge_descriptor h : border_cycles)
-        {
-            std::vector<face_descriptor>  patch_facets;
-#if 0
-            std::vector<vertex_descriptor> patch_vertices;
-            CGAL::Polygon_mesh_processing::triangulate_and_refine_hole(out, h, std::back_inserter(patch_facets),
-                std::back_inserter(patch_vertices));
-            std::cout << "* Number of facets in constructed patch: " << patch_facets.size() << std::endl;
-            std::cout << "  Number of vertices in constructed patch: " << patch_vertices.size() << std::endl;
-#else
-            CGAL::Polygon_mesh_processing::triangulate_hole(out, h, std::back_inserter(patch_facets));
-#endif
+        for (halfedge_descriptor h : border_cycles) {
+            std::vector<face_descriptor> patch_facets;
+            CGAL::Polygon_mesh_processing::triangulate_hole(out, h,
+                                                            CGAL::parameters::face_output_iterator(std::back_inserter(patch_facets)));
         }
 
-        //if (id > 2) {
-        //    mesh_merged.join(out);
-        //}
-        //else
+        // if (id > 2) {
+        //     mesh_merged.join(out);
+        // }
+        // else
         {
-            dst.emplace_back(std::move(CGALMesh(out)));
+            dst.emplace_back(CGALMesh(out));
         }
     }
-    //if (mesh_merged.is_empty() == false) {
-    //    CGAL::Polygon_mesh_processing::stitch_borders(mesh_merged);
-    //    dst.emplace_back(std::move(CGALMesh(mesh_merged)));
-    //}
+    // if (mesh_merged.is_empty() == false) {
+    //     CGAL::Polygon_mesh_processing::stitch_borders(mesh_merged);
+    //     dst.emplace_back(std::move(CGALMesh(mesh_merged)));
+    // }
 }
 
 std::vector<TriangleMesh> segment(const TriangleMesh& src, double smoothing_alpha, int segment_number)
@@ -369,9 +367,8 @@ std::vector<TriangleMesh> segment(const TriangleMesh& src, double smoothing_alph
     segment(in_cgal_mesh, out_cgal_meshes, smoothing_alpha, segment_number);
 
     std::vector<TriangleMesh> out_meshes;
-    for (auto& outf_cgal_mesh: out_cgal_meshes)
-    {
-        out_meshes.emplace_back(std::move(cgal_to_triangle_mesh(outf_cgal_mesh.m)));
+    for (auto& outf_cgal_mesh : out_cgal_meshes) {
+        out_meshes.emplace_back(cgal_to_triangle_mesh(outf_cgal_mesh.m));
     }
 
     return out_meshes;
@@ -380,8 +377,7 @@ std::vector<TriangleMesh> segment(const TriangleMesh& src, double smoothing_alph
 void merge(std::vector<_EpicMesh>& srcs, _EpicMesh& dst)
 {
     _EpicMesh mesh_merged;
-    for (size_t i = 0; i < srcs.size(); i++)
-    {
+    for (size_t i = 0; i < srcs.size(); i++) {
         mesh_merged.join(srcs[i]);
     }
     if (mesh_merged.is_empty() == false) {
@@ -393,8 +389,7 @@ void merge(std::vector<_EpicMesh>& srcs, _EpicMesh& dst)
 TriangleMesh merge(std::vector<TriangleMesh> meshes)
 {
     std::vector<_EpicMesh> srcs(meshes.size());
-    for (size_t i = 0; i < meshes.size(); i++)
-    {
+    for (size_t i = 0; i < meshes.size(); i++) {
         MeshBoolean::cgal::triangle_mesh_to_cgal(meshes[i], srcs[i]);
     }
     _EpicMesh dst;
@@ -402,7 +397,7 @@ TriangleMesh merge(std::vector<TriangleMesh> meshes)
     return cgal_to_triangle_mesh(dst);
 }
 
-template<class Op> void _mesh_boolean_do(Op &&op, indexed_triangle_set &A, const indexed_triangle_set &B)
+template<class Op> void _mesh_boolean_do(Op&& op, indexed_triangle_set& A, const indexed_triangle_set& B)
 {
     CGALMesh meshA;
     CGALMesh meshB;
@@ -414,7 +409,7 @@ template<class Op> void _mesh_boolean_do(Op &&op, indexed_triangle_set &A, const
     A = cgal_to_indexed_triangle_set(meshA.m);
 }
 
-template<class Op> void _mesh_boolean_do(Op &&op, TriangleMesh &A, const TriangleMesh &B)
+template<class Op> void _mesh_boolean_do(Op&& op, TriangleMesh& A, const TriangleMesh& B)
 {
     CGALMesh meshA;
     CGALMesh meshB;
@@ -426,62 +421,491 @@ template<class Op> void _mesh_boolean_do(Op &&op, TriangleMesh &A, const Triangl
     A = cgal_to_triangle_mesh(meshA);
 }
 
-void minus(TriangleMesh &A, const TriangleMesh &B)
+void minus(TriangleMesh& A, const TriangleMesh& B) { _mesh_boolean_do(_cgal_diff, A, B); }
+
+void plus(TriangleMesh& A, const TriangleMesh& B) { _mesh_boolean_do(_cgal_union, A, B); }
+
+void intersect(TriangleMesh& A, const TriangleMesh& B) { _mesh_boolean_do(_cgal_intersection, A, B); }
+
+void minus(indexed_triangle_set& A, const indexed_triangle_set& B) { _mesh_boolean_do(_cgal_diff, A, B); }
+
+void plus(indexed_triangle_set& A, const indexed_triangle_set& B) { _mesh_boolean_do(_cgal_union, A, B); }
+
+void intersect(indexed_triangle_set& A, const indexed_triangle_set& B) { _mesh_boolean_do(_cgal_intersection, A, B); }
+
+namespace {
+
+struct ConnectedComponentVolumeMeasure
 {
-    _mesh_boolean_do(_cgal_diff, A, B);
+    size_t component_count = 0;
+    double absolute_volume = 0.;
+};
+
+// Measure every face-connected shell independently, then discard only the
+// orientation sign of each shell. A nesting-aware orientation repair changes
+// the sign of an inward cavity without changing its geometry, so comparing the
+// absolute volume of the complete mesh would incorrectly compare outer+inner
+// against outer-inner. Summing per-shell absolute volumes remains sensitive to
+// geometric volume loss while being invariant to whole-shell winding changes.
+ConnectedComponentVolumeMeasure measure_connected_component_volumes(_EpicMesh& surface_mesh, const char* property_name)
+{
+    using face_descriptor = boost::graph_traits<_EpicMesh>::face_descriptor;
+
+    auto component_map = surface_mesh.add_property_map<face_descriptor, size_t>(property_name, 0).first;
+    const size_t component_count = CGALProc::connected_components(surface_mesh, component_map);
+    std::vector<double> signed_volumes(component_count, 0.);
+
+    const EpicKernel::Point_3 origin(0., 0., 0.);
+    const EpicKernel::Compute_volume_3 compute_volume;
+    for (face_descriptor face : surface_mesh.faces()) {
+        const auto halfedge = surface_mesh.halfedge(face);
+        signed_volumes[component_map[face]] +=
+            compute_volume(origin, surface_mesh.point(target(halfedge, surface_mesh)),
+                           surface_mesh.point(target(next(halfedge, surface_mesh), surface_mesh)),
+                           surface_mesh.point(target(prev(halfedge, surface_mesh), surface_mesh)));
+    }
+
+    surface_mesh.remove_property_map(component_map);
+
+    double absolute_volume = 0.;
+    for (double signed_volume : signed_volumes)
+        absolute_volume += std::abs(signed_volume);
+    return {component_count, absolute_volume};
 }
 
-void plus(TriangleMesh &A, const TriangleMesh &B)
-{
-    _mesh_boolean_do(_cgal_union, A, B);
-}
+} // namespace
 
-void intersect(TriangleMesh &A, const TriangleMesh &B)
-{
-    _mesh_boolean_do(_cgal_intersection, A, B);
-}
-
-void minus(indexed_triangle_set &A, const indexed_triangle_set &B)
-{
-    _mesh_boolean_do(_cgal_diff, A, B);
-}
-
-void plus(indexed_triangle_set &A, const indexed_triangle_set &B)
-{
-    _mesh_boolean_do(_cgal_union, A, B);
-}
-
-void intersect(indexed_triangle_set &A, const indexed_triangle_set &B)
-{
-    _mesh_boolean_do(_cgal_intersection, A, B);
-}
-
-bool does_self_intersect(const TriangleMesh &mesh)
+bool does_self_intersect(const TriangleMesh& mesh)
 {
     CGALMesh cgalm;
     triangle_mesh_to_cgal(mesh.its.vertices, mesh.its.indices, cgalm.m);
     return CGALProc::does_self_intersect(cgalm.m);
 }
 
-void CGALMeshDeleter::operator()(CGALMesh *ptr) { delete ptr; }
-
-bool does_bound_a_volume(const CGALMesh &mesh)
+bool requires_repair(const TriangleMesh& mesh)
 {
-    return CGAL::is_closed(mesh.m) && CGALProc::does_bound_a_volume(mesh.m);
+    if (mesh.its.vertices.empty() || mesh.its.indices.empty())
+        return true;
+    for (const stl_vertex& vertex : mesh.its.vertices)
+        if (!vertex.allFinite())
+            return true;
+    for (const stl_triangle_vertex_indices& face : mesh.its.indices)
+        for (size_t i = 0; i < 3; ++i)
+            if (face[i] < 0 || size_t(face[i]) >= mesh.its.vertices.size())
+                return true;
+
+    indexed_triangle_set compacted = mesh.its;
+    if (its_compactify_vertices(compacted, true) > 0)
+        return true;
+
+    CGALMesh cgal_mesh;
+    triangle_mesh_to_cgal(compacted.vertices, compacted.indices, cgal_mesh.m);
+
+    // Surface_mesh::add_face rejects degenerate, duplicated, or locally
+    // inconsistent faces. A count mismatch therefore means the original soup
+    // still needs the cleanup/orientation pipeline even if its undirected edge
+    // count happened to look closed.
+    if (cgal_mesh.m.is_empty() || cgal_mesh.m.num_faces() != compacted.indices.size() || !CGAL::is_valid_polygon_mesh(cgal_mesh.m) ||
+        !CGAL::is_triangle_mesh(cgal_mesh.m) || !CGAL::is_closed(cgal_mesh.m))
+        return true;
+
+    using face_descriptor     = boost::graph_traits<_EpicMesh>::face_descriptor;
+    using halfedge_descriptor = boost::graph_traits<_EpicMesh>::halfedge_descriptor;
+
+    std::vector<face_descriptor> degenerate_faces;
+    CGALProc::degenerate_faces(cgal_mesh.m, std::back_inserter(degenerate_faces));
+    if (!degenerate_faces.empty())
+        return true;
+
+    std::vector<halfedge_descriptor> non_manifold_vertices;
+    CGALProc::non_manifold_vertices(cgal_mesh.m, std::back_inserter(non_manifold_vertices));
+    if (!non_manifold_vertices.empty())
+        return true;
+
+    // All volume-orientation predicates below assume a self-intersection-free
+    // triangle mesh.
+    if (CGALProc::does_self_intersect(cgal_mesh.m))
+        return true;
+
+    CGAL::Constant_property_map<face_descriptor, std::size_t> volume_id_map(0);
+    std::vector<std::size_t>                                  nesting_levels;
+    std::vector<bool>                                         outward_orientations;
+
+    CGALProc::volume_connected_components(cgal_mesh.m, volume_id_map,
+                                          CGALParams::nesting_levels(boost::ref(nesting_levels))
+                                              .is_cc_outward_oriented(boost::ref(outward_orientations))
+                                              .do_orientation_tests(true)
+                                              .i_used_for_volume_orientation(true));
+
+    if (outward_orientations.empty())
+        return true;
+    if (nesting_levels.empty())
+        return outward_orientations.size() != 1 || !outward_orientations.front();
+    if (nesting_levels.size() != outward_orientations.size())
+        return true;
+
+    for (size_t component_index = 0; component_index < nesting_levels.size(); ++component_index) {
+        const bool should_be_outward = nesting_levels[component_index] % 2 == 0;
+        if (outward_orientations[component_index] != should_be_outward)
+            return true;
+    }
+    return false;
 }
 
-bool empty(const CGALMesh &mesh)
+void CGALMeshDeleter::operator()(CGALMesh* ptr) { delete ptr; }
+
+bool does_bound_a_volume(const CGALMesh& mesh) { return CGAL::is_closed(mesh.m) && CGALProc::does_bound_a_volume(mesh.m); }
+
+bool empty(const CGALMesh& mesh) { return mesh.m.is_empty(); }
+
+bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string* error)
 {
-    return mesh.m.is_empty();
+    namespace PMP = CGAL::Polygon_mesh_processing;
+
+    if (error != nullptr)
+        error->clear();
+    if (repaired_errors != nullptr)
+        repaired_errors->clear();
+
+    const auto fail = [error](const std::string& message) {
+        if (error != nullptr)
+            *error = message;
+        return false;
+    };
+
+    if (mesh.its.vertices.empty() || mesh.its.indices.empty())
+        return fail("Repair failed: mesh is empty.");
+
+    for (const stl_vertex& vertex : mesh.its.vertices)
+        if (!vertex.allFinite())
+            return fail("Repair failed: mesh contains non-finite vertices.");
+
+    for (const stl_triangle_vertex_indices& face : mesh.its.indices) {
+        for (size_t i = 0; i < 3; ++i) {
+            const int vertex_index = face[i];
+            if (vertex_index < 0 || size_t(vertex_index) >= mesh.its.vertices.size())
+                return fail("Repair failed: mesh contains an invalid vertex index.");
+        }
+    }
+
+    try {
+        indexed_triangle_set compacted = mesh.its;
+        its_compactify_vertices(compacted, true);
+        if (compacted.vertices.empty() || compacted.indices.empty())
+            return fail("Repair failed: mesh cleanup removed all geometry.");
+
+        const bool               input_had_no_open_edges = its_num_open_edges(compacted) == 0;
+        _EpicMesh                cgal_mesh;
+        std::optional<_EpicMesh> fallback_fidelity_reference;
+        bool                     direct_closed_candidate = false;
+        std::string              direct_candidate_error;
+        try {
+            // A closed triangle soup may have zero-area faces and genuine
+            // self-intersections even when every directed edge is paired. Keep
+            // its topology intact while CGAL repairs those local defects, then
+            // accept the experimental result only under strict topology and
+            // geometry-fidelity gates. The original TriangleMesh remains
+            // untouched until the final conversion below.
+            _EpicMesh closed_candidate;
+            triangle_mesh_to_cgal(compacted.vertices, compacted.indices, closed_candidate);
+            direct_closed_candidate = !closed_candidate.is_empty() && closed_candidate.num_faces() == compacted.indices.size() &&
+                                      CGAL::is_valid_polygon_mesh(closed_candidate) && CGAL::is_triangle_mesh(closed_candidate) &&
+                                      CGAL::is_closed(closed_candidate);
+
+            if (direct_closed_candidate && PMP::remove_degenerate_faces(closed_candidate)) {
+                PMP::remove_isolated_vertices(closed_candidate);
+                closed_candidate.collect_garbage();
+
+                using face_descriptor     = boost::graph_traits<_EpicMesh>::face_descriptor;
+                using halfedge_descriptor = boost::graph_traits<_EpicMesh>::halfedge_descriptor;
+
+                std::vector<face_descriptor> remaining_degenerate_faces;
+                PMP::degenerate_faces(closed_candidate, std::back_inserter(remaining_degenerate_faces));
+
+                if (remaining_degenerate_faces.empty() && CGAL::is_valid_polygon_mesh(closed_candidate) &&
+                    CGAL::is_triangle_mesh(closed_candidate) && CGAL::is_closed(closed_candidate)) {
+                    // Exact zero-area faces and any vertices referenced only by
+                    // them are intentionally excluded from the fidelity
+                    // baseline. They have no printable surface or volume and
+                    // may be arbitrarily far from the real model. All
+                    // self-intersection edits after this canonical cleanup are
+                    // constrained by the gates below.
+                    _EpicMesh          fidelity_reference = closed_candidate;
+                    const CGAL::Bbox_3 reference_bbox     = PMP::bbox(fidelity_reference);
+                    const double       bbox_dx            = reference_bbox.xmax() - reference_bbox.xmin();
+                    const double       bbox_dy            = reference_bbox.ymax() - reference_bbox.ymin();
+                    const double       bbox_dz            = reference_bbox.zmax() - reference_bbox.zmin();
+                    const double       bbox_diagonal      = std::sqrt(bbox_dx * bbox_dx + bbox_dy * bbox_dy + bbox_dz * bbox_dz);
+                    const double       hausdorff_limit    = std::clamp(bbox_diagonal * 1.e-4, 0.005, 0.05);
+
+                    bool self_intersections_repaired = true;
+                    if (PMP::does_self_intersect(closed_candidate)) {
+                        self_intersections_repaired = PMP::experimental::remove_self_intersections(closed_candidate,
+                                                                                                   PMP::parameters::preserve_genus(true)
+                                                                                                       .apply_per_connected_component(true)
+                                                                                                       .number_of_iterations(7)
+                                                                                                       .use_smoothing(false)
+                                                                                                       .polyhedral_envelope_epsilon(
+                                                                                                           hausdorff_limit));
+                    }
+                    closed_candidate.collect_garbage();
+
+                    remaining_degenerate_faces.clear();
+                    PMP::degenerate_faces(closed_candidate, std::back_inserter(remaining_degenerate_faces));
+                    std::vector<halfedge_descriptor> non_manifold_vertices;
+                    PMP::non_manifold_vertices(closed_candidate, std::back_inserter(non_manifold_vertices));
+
+                    bool topology_valid = self_intersections_repaired && remaining_degenerate_faces.empty() &&
+                                          non_manifold_vertices.empty() && CGAL::is_valid_polygon_mesh(closed_candidate) &&
+                                          CGAL::is_triangle_mesh(closed_candidate) && CGAL::is_closed(closed_candidate) &&
+                                          !PMP::does_self_intersect(closed_candidate);
+                    if (topology_valid) {
+                        PMP::orient_to_bound_a_volume(closed_candidate);
+                        topology_valid = PMP::does_bound_a_volume(closed_candidate);
+                    }
+
+                    if (topology_valid) {
+                        const ConnectedComponentVolumeMeasure reference_measure = measure_connected_component_volumes(
+                            fidelity_reference, "f:model_repair_reference_component");
+                        const ConnectedComponentVolumeMeasure repaired_measure = measure_connected_component_volumes(
+                            closed_candidate, "f:model_repair_repaired_component");
+                        const size_t       reference_components = reference_measure.component_count;
+                        const size_t       repaired_components  = repaired_measure.component_count;
+                        const CGAL::Bbox_3 repaired_bbox        = PMP::bbox(closed_candidate);
+                        const double       reference_volume     = reference_measure.absolute_volume;
+                        const double       repaired_volume      = repaired_measure.absolute_volume;
+                        const double       reference_area       = double(PMP::area(fidelity_reference));
+                        const double       repaired_area        = double(PMP::area(closed_candidate));
+                        const double       volume_delta = std::abs(repaired_volume - reference_volume) / std::max(reference_volume, 1.e-9);
+                        const double       area_delta   = std::abs(repaired_area - reference_area) / std::max(reference_area, 1.e-9);
+                        const bool         bbox_preserved = std::abs(repaired_bbox.xmin() - reference_bbox.xmin()) <= hausdorff_limit &&
+                                                    std::abs(repaired_bbox.ymin() - reference_bbox.ymin()) <= hausdorff_limit &&
+                                                    std::abs(repaired_bbox.zmin() - reference_bbox.zmin()) <= hausdorff_limit &&
+                                                    std::abs(repaired_bbox.xmax() - reference_bbox.xmax()) <= hausdorff_limit &&
+                                                    std::abs(repaired_bbox.ymax() - reference_bbox.ymax()) <= hausdorff_limit &&
+                                                    std::abs(repaired_bbox.zmax() - reference_bbox.zmax()) <= hausdorff_limit;
+                        const double hausdorff_error_bound = std::max(1.e-5, hausdorff_limit * 0.01);
+                        const double hausdorff_distance =
+                            PMP::bounded_error_symmetric_Hausdorff_distance<CGAL::Sequential_tag>(fidelity_reference, closed_candidate,
+                                                                                                  hausdorff_error_bound);
+                        const bool fidelity_valid = reference_components == repaired_components && bbox_preserved &&
+                                                    volume_delta <= 1.e-3 && area_delta <= 2.e-3 &&
+                                                    hausdorff_distance + hausdorff_error_bound <= hausdorff_limit;
+
+                        BOOST_LOG_TRIVIAL(debug)
+                            << "CGAL closed-defect repair: accepted=" << fidelity_valid << ", components=" << reference_components << "->"
+                            << repaired_components << ", volume_delta=" << volume_delta << ", area_delta=" << area_delta
+                            << ", hausdorff=" << hausdorff_distance << "/" << hausdorff_limit << ", faces=" << compacted.indices.size()
+                            << "->" << closed_candidate.num_faces();
+                        if (fidelity_valid)
+                            cgal_mesh = std::move(closed_candidate);
+                        else
+                            direct_candidate_error = "closed-mesh repair exceeded the geometry-preservation limits";
+                    }
+                }
+            }
+        } catch (const std::exception& exception) {
+            direct_candidate_error = exception.what();
+            BOOST_LOG_TRIVIAL(debug) << "CGAL closed-defect repair candidate rejected: " << exception.what();
+        } catch (...) {
+            direct_candidate_error = "unknown CGAL error";
+            BOOST_LOG_TRIVIAL(debug) << "CGAL closed-defect repair candidate rejected by an unknown error.";
+        }
+
+        // A closed Surface_mesh candidate is the least destructive repair
+        // path. If its topology or fidelity gates reject the result, do not
+        // bypass those gates by retrying through the more aggressive polygon-
+        // soup cleanup pipeline.
+        if (direct_closed_candidate && cgal_mesh.is_empty()) {
+            std::string message =
+                "Repair failed: closed mesh still self-intersects, failed topology validation, or exceeded geometry-preservation limits.";
+            if (!direct_candidate_error.empty())
+                message += " " + direct_candidate_error;
+            return fail(message);
+        }
+
+        if (cgal_mesh.is_empty()) {
+            indexed_triangle_set cleaned = mesh.its;
+            its_remove_degenerate_faces(cleaned, true);
+            cleaned.indices.erase(std::remove_if(cleaned.indices.begin(), cleaned.indices.end(),
+                                                 [&cleaned](const auto& face) {
+                                                     const Vec3d a = cleaned.vertices[size_t(face[0])].cast<double>();
+                                                     const Vec3d b = cleaned.vertices[size_t(face[1])].cast<double>();
+                                                     const Vec3d c = cleaned.vertices[size_t(face[2])].cast<double>();
+                                                     return (b - a).cross(c - a).squaredNorm() == 0.0;
+                                                 }),
+                                  cleaned.indices.end());
+            its_compactify_vertices(cleaned, true);
+            if (cleaned.vertices.empty() || cleaned.indices.empty())
+                return fail("Repair failed: mesh cleanup removed all geometry.");
+
+            std::vector<_EpicMesh::Point>         points;
+            std::vector<std::vector<std::size_t>> polygons;
+
+            points.reserve(cleaned.vertices.size());
+            polygons.reserve(cleaned.indices.size());
+
+            for (const stl_vertex& vertex : cleaned.vertices)
+                points.emplace_back(vertex.x(), vertex.y(), vertex.z());
+
+            for (const stl_triangle_vertex_indices& face : cleaned.indices)
+                polygons.push_back({size_t(face[0]), size_t(face[1]), size_t(face[2])});
+
+            PMP::repair_polygon_soup(points, polygons);
+            if (points.empty() || polygons.empty())
+                return fail("Repair failed: polygon soup cleanup removed all geometry.");
+
+            // Polygon-soup repair does not establish the consistent orientation
+            // required by polygon_soup_to_polygon_mesh().
+            if (!PMP::orient_polygon_soup(points, polygons))
+                return fail("Repair failed: polygon soup could not be oriented consistently.");
+
+            PMP::polygon_soup_to_polygon_mesh(points, polygons, cgal_mesh);
+            if (input_had_no_open_edges) {
+                // For an input whose quick topology was already closed, soup
+                // cleanup may canonicalize duplicated/inconsistent faces but
+                // must not silently turn that surface into an open mesh and
+                // then replace a large region through hole filling. Save the
+                // canonical surface as a fidelity baseline for the final
+                // candidate.
+                if (cgal_mesh.is_empty() || !CGAL::is_valid_polygon_mesh(cgal_mesh) || !CGAL::is_triangle_mesh(cgal_mesh) ||
+                    !CGAL::is_closed(cgal_mesh))
+                    return fail("Repair failed: closed mesh became open or invalid during polygon-soup cleanup.");
+                fallback_fidelity_reference = cgal_mesh;
+            }
+        }
+
+        if (!PMP::remove_degenerate_faces(cgal_mesh))
+            return fail("Repair failed: mesh still contains degenerate faces after cleanup.");
+        PMP::remove_isolated_vertices(cgal_mesh);
+        const size_t duplicated_non_manifold_vertices = PMP::duplicate_non_manifold_vertices(cgal_mesh);
+        cgal_mesh.collect_garbage();
+        BOOST_LOG_TRIVIAL(debug) << "CGAL repair cleanup: duplicated_non_manifold_vertices=" << duplicated_non_manifold_vertices
+                                 << ", faces=" << cgal_mesh.num_faces() << ", closed=" << CGAL::is_closed(cgal_mesh);
+
+        if (cgal_mesh.is_empty() || cgal_mesh.num_faces() == 0)
+            return fail("Repair failed: mesh cleanup removed all geometry.");
+
+        if (!CGAL::is_closed(cgal_mesh)) {
+            const size_t stitched_borders = PMP::stitch_borders(cgal_mesh);
+            cgal_mesh.collect_garbage();
+            BOOST_LOG_TRIVIAL(debug) << "CGAL repair border stitching: stitched=" << stitched_borders << ", faces=" << cgal_mesh.num_faces()
+                                     << ", closed=" << CGAL::is_closed(cgal_mesh);
+        }
+
+        if (!CGAL::is_closed(cgal_mesh)) {
+            using halfedge_descriptor = boost::graph_traits<_EpicMesh>::halfedge_descriptor;
+
+            std::vector<halfedge_descriptor> borders;
+            PMP::extract_boundary_cycles(cgal_mesh, std::back_inserter(borders));
+
+            for (halfedge_descriptor border : borders)
+                PMP::triangulate_and_refine_hole(cgal_mesh, border);
+        }
+
+        if (cgal_mesh.is_empty() || cgal_mesh.num_faces() == 0)
+            return fail("Repair failed: repaired mesh is empty.");
+        if (!CGAL::is_valid_polygon_mesh(cgal_mesh))
+            return fail("Repair failed: repaired mesh is not a valid polygon mesh.");
+        if (!CGAL::is_triangle_mesh(cgal_mesh))
+            return fail("Repair failed: repaired mesh contains non-triangular faces.");
+        if (!CGAL::is_closed(cgal_mesh))
+            return fail("Repair failed: mesh is still open after hole filling.");
+
+        // Volume orientation assumes a self-intersection-free mesh.
+        if (PMP::does_self_intersect(cgal_mesh))
+            return fail("Repair failed: repaired mesh still self-intersects.");
+
+        // does_bound_a_volume() accepts inward level-0 shells as the boundary
+        // of an unbounded volume. Normalize nesting-aware component orientation
+        // before validating the final result.
+        PMP::orient_to_bound_a_volume(cgal_mesh);
+        if (!PMP::does_bound_a_volume(cgal_mesh))
+            return fail("Repair failed: mesh orientation does not bound a volume.");
+
+        if (fallback_fidelity_reference) {
+            _EpicMesh&         reference       = *fallback_fidelity_reference;
+            const CGAL::Bbox_3 reference_bbox  = PMP::bbox(reference);
+            const CGAL::Bbox_3 repaired_bbox   = PMP::bbox(cgal_mesh);
+            const double       bbox_dx         = reference_bbox.xmax() - reference_bbox.xmin();
+            const double       bbox_dy         = reference_bbox.ymax() - reference_bbox.ymin();
+            const double       bbox_dz         = reference_bbox.zmax() - reference_bbox.zmin();
+            const double       bbox_diagonal   = std::sqrt(bbox_dx * bbox_dx + bbox_dy * bbox_dy + bbox_dz * bbox_dz);
+            const double       hausdorff_limit = std::clamp(bbox_diagonal * 1.e-4, 0.005, 0.05);
+
+            const ConnectedComponentVolumeMeasure reference_measure =
+                measure_connected_component_volumes(reference, "f:model_repair_fallback_reference_component");
+            const ConnectedComponentVolumeMeasure repaired_measure =
+                measure_connected_component_volumes(cgal_mesh, "f:model_repair_fallback_repaired_component");
+            const size_t reference_components = reference_measure.component_count;
+            const size_t repaired_components  = repaired_measure.component_count;
+            const double reference_volume     = reference_measure.absolute_volume;
+            const double repaired_volume      = repaired_measure.absolute_volume;
+            const double reference_area       = double(PMP::area(reference));
+            const double repaired_area        = double(PMP::area(cgal_mesh));
+            const double volume_delta         = std::abs(repaired_volume - reference_volume) / std::max(reference_volume, 1.e-9);
+            const double area_delta           = std::abs(repaired_area - reference_area) / std::max(reference_area, 1.e-9);
+            const bool   bbox_preserved       = std::abs(repaired_bbox.xmin() - reference_bbox.xmin()) <= hausdorff_limit &&
+                                        std::abs(repaired_bbox.ymin() - reference_bbox.ymin()) <= hausdorff_limit &&
+                                        std::abs(repaired_bbox.zmin() - reference_bbox.zmin()) <= hausdorff_limit &&
+                                        std::abs(repaired_bbox.xmax() - reference_bbox.xmax()) <= hausdorff_limit &&
+                                        std::abs(repaired_bbox.ymax() - reference_bbox.ymax()) <= hausdorff_limit &&
+                                        std::abs(repaired_bbox.zmax() - reference_bbox.zmax()) <= hausdorff_limit;
+            const double hausdorff_error_bound = std::max(1.e-5, hausdorff_limit * 0.01);
+            const double hausdorff_distance    = PMP::bounded_error_symmetric_Hausdorff_distance<CGAL::Sequential_tag>(reference, cgal_mesh,
+                                                                                                                       hausdorff_error_bound);
+            const bool   fidelity_valid        = reference_components == repaired_components && bbox_preserved && volume_delta <= 1.e-3 &&
+                                        area_delta <= 2.e-3 && hausdorff_distance + hausdorff_error_bound <= hausdorff_limit;
+
+            BOOST_LOG_TRIVIAL(debug) << "CGAL closed polygon-soup repair: accepted=" << fidelity_valid
+                                     << ", components=" << reference_components << "->" << repaired_components
+                                     << ", volume_delta=" << volume_delta << ", area_delta=" << area_delta
+                                     << ", hausdorff=" << hausdorff_distance << "/" << hausdorff_limit;
+            if (!fidelity_valid)
+                return fail("Repair failed: closed polygon-soup cleanup exceeded the geometry-preservation limits.");
+        }
+
+        // Surface_mesh descriptors may contain gaps after removals. Compact them
+        // before converting because cgal_to_indexed_triangle_set uses descriptor
+        // indices directly.
+        cgal_mesh.collect_garbage();
+
+        if (cgal_mesh.is_empty() || cgal_mesh.num_faces() == 0 || !CGAL::is_valid_polygon_mesh(cgal_mesh) ||
+            !CGAL::is_triangle_mesh(cgal_mesh) || !CGAL::is_closed(cgal_mesh))
+            return fail("Repair failed: compacted mesh is invalid, non-triangular, empty, or open.");
+
+        for (const _EpicMesh::Vertex_index vertex : cgal_mesh.vertices()) {
+            const _EpicMesh::Point& point = cgal_mesh.point(vertex);
+            if (!std::isfinite(double(point.x())) || !std::isfinite(double(point.y())) || !std::isfinite(double(point.z())))
+                return fail("Repair failed: repaired mesh contains non-finite vertices.");
+        }
+
+        indexed_triangle_set repaired = cgal_to_indexed_triangle_set(cgal_mesh);
+        if (repaired.vertices.empty() || repaired.indices.empty())
+            return fail("Repair failed: repaired mesh is empty after conversion.");
+        for (const stl_vertex& vertex : repaired.vertices)
+            if (!vertex.allFinite())
+                return fail("Repair failed: converted mesh contains non-finite vertices.");
+        if (its_num_open_edges(repaired) != 0)
+            return fail("Repair failed: converted mesh is not closed.");
+
+        // CGAL does not expose action counters for this pipeline. Keep the
+        // legacy counters at zero; callers should compare geometry before/after.
+        RepairedMeshErrors repairs;
+        mesh = TriangleMesh(std::move(repaired), repairs);
+        if (repaired_errors != nullptr)
+            *repaired_errors = repairs;
+        return true;
+    } catch (const std::exception& exception) {
+        return fail(exception.what());
+    } catch (...) {
+        return fail("Repair failed with an unknown CGAL error.");
+    }
 }
 
-CGALMeshPtr clone(const CGALMesh &m)
-{
-    return CGALMeshPtr{new CGALMesh{m}};
-}
+CGALMeshPtr clone(const CGALMesh& m) { return CGALMeshPtr{new CGALMesh{m}}; }
 
 } // namespace cgal
-
 
 namespace mcut {
 /* BBS: MusangKing
@@ -494,10 +918,10 @@ struct McutMesh
     std::vector<uint32_t> faceIndicesArray;
     std::vector<double>   vertexCoordsArray;
 };
-void McutMeshDeleter::operator()(McutMesh *ptr) { delete ptr; }
+void McutMeshDeleter::operator()(McutMesh* ptr) { delete ptr; }
 
-bool empty(const McutMesh &mesh) { return mesh.vertexCoordsArray.empty() || mesh.faceIndicesArray.empty(); }
-void triangle_mesh_to_mcut(const TriangleMesh &src_mesh, McutMesh &srcMesh, const Transform3d &src_nm = Transform3d::Identity())
+bool empty(const McutMesh& mesh) { return mesh.vertexCoordsArray.empty() || mesh.faceIndicesArray.empty(); }
+void triangle_mesh_to_mcut(const TriangleMesh& src_mesh, McutMesh& srcMesh, const Transform3d& src_nm = Transform3d::Identity())
 {
     // vertices precision convention and copy
     srcMesh.vertexCoordsArray.reserve(src_mesh.its.vertices.size() * 3);
@@ -512,9 +936,9 @@ void triangle_mesh_to_mcut(const TriangleMesh &src_mesh, McutMesh &srcMesh, cons
     srcMesh.faceIndicesArray.reserve(src_mesh.its.indices.size() * 3);
     srcMesh.faceSizesArray.reserve(src_mesh.its.indices.size());
     for (int i = 0; i < src_mesh.its.indices.size(); ++i) {
-        const int &f0 = src_mesh.its.indices[i][0];
-        const int &f1 = src_mesh.its.indices[i][1];
-        const int &f2 = src_mesh.its.indices[i][2];
+        const int& f0 = src_mesh.its.indices[i][0];
+        const int& f1 = src_mesh.its.indices[i][1];
+        const int& f2 = src_mesh.its.indices[i][2];
         srcMesh.faceIndicesArray.push_back(f0);
         srcMesh.faceIndicesArray.push_back(f1);
         srcMesh.faceIndicesArray.push_back(f2);
@@ -523,7 +947,7 @@ void triangle_mesh_to_mcut(const TriangleMesh &src_mesh, McutMesh &srcMesh, cons
     }
 }
 
-McutMeshPtr triangle_mesh_to_mcut(const indexed_triangle_set &M)
+McutMeshPtr triangle_mesh_to_mcut(const indexed_triangle_set& M)
 {
     std::unique_ptr<McutMesh, McutMeshDeleter> out(new McutMesh{});
     TriangleMesh                               trimesh(M);
@@ -531,12 +955,12 @@ McutMeshPtr triangle_mesh_to_mcut(const indexed_triangle_set &M)
     return out;
 }
 
-TriangleMesh mcut_to_triangle_mesh(const McutMesh &mcutmesh)
+TriangleMesh mcut_to_triangle_mesh(const McutMesh& mcutmesh)
 {
     uint32_t ccVertexCount = mcutmesh.vertexCoordsArray.size() / 3;
-    auto    &ccVertices    = mcutmesh.vertexCoordsArray;
-    auto    &ccFaceIndices = mcutmesh.faceIndicesArray;
-    auto    &faceSizes     = mcutmesh.faceSizesArray;
+    auto&    ccVertices    = mcutmesh.vertexCoordsArray;
+    auto&    ccFaceIndices = mcutmesh.faceIndicesArray;
+    auto&    faceSizes     = mcutmesh.faceSizesArray;
     uint32_t ccFaceCount   = faceSizes.size();
     // rearrange vertices/faces and save into result mesh
     std::vector<Vec3f> vertices(ccVertexCount);
@@ -555,7 +979,9 @@ TriangleMesh mcut_to_triangle_mesh(const McutMesh &mcutmesh)
         int faceSize = faceSizes.at(f);
 
         // for each vertex in face
-        for (int v = 0; v < faceSize; v++) { faces[f][v] = ccFaceIndices[(uint64_t) faceVertexOffsetBase + v]; }
+        for (int v = 0; v < faceSize; v++) {
+            faces[f][v] = ccFaceIndices[(uint64_t) faceVertexOffsetBase + v];
+        }
         faceVertexOffsetBase += faceSize;
     }
 
@@ -563,76 +989,53 @@ TriangleMesh mcut_to_triangle_mesh(const McutMesh &mcutmesh)
     return out;
 }
 
-void merge_mcut_meshes(McutMesh& src, const McutMesh& cut) {
+void merge_mcut_meshes(McutMesh& src, const McutMesh& cut)
+{
     indexed_triangle_set all_its;
-    TriangleMesh tri_src = mcut_to_triangle_mesh(src);
-    TriangleMesh tri_cut = mcut_to_triangle_mesh(cut);
+    TriangleMesh         tri_src = mcut_to_triangle_mesh(src);
+    TriangleMesh         tri_cut = mcut_to_triangle_mesh(cut);
     its_merge(all_its, tri_src.its);
     its_merge(all_its, tri_cut.its);
     src = *triangle_mesh_to_mcut(all_its);
-    }
-
-MCAPI_ATTR void MCAPI_CALL mcDebugOutput(McDebugSource source,
-    McDebugType type,
-    unsigned int id,
-    McDebugSeverity severity,
-    size_t length,
-    const char* message,
-    const void* userParam)
-{
-    BOOST_LOG_TRIVIAL(debug)<<Slic3r::format("mcut mcDebugOutput message ( %d ): %s ", id, message);
-
-    switch (source) {
-        case MC_DEBUG_SOURCE_API:
-            BOOST_LOG_TRIVIAL(debug)<<("Source: API");
-            break;
-        case MC_DEBUG_SOURCE_KERNEL:
-            BOOST_LOG_TRIVIAL(debug)<<("Source: Kernel");
-            break;
-        }
-
-    switch (type) {
-        case MC_DEBUG_TYPE_ERROR:
-            BOOST_LOG_TRIVIAL(debug)<<("Type: Error");
-            break;
-        case MC_DEBUG_TYPE_DEPRECATED_BEHAVIOR:
-            BOOST_LOG_TRIVIAL(debug)<<("Type: Deprecated Behaviour");
-            break;
-        case MC_DEBUG_TYPE_OTHER:
-            BOOST_LOG_TRIVIAL(debug)<<("Type: Other");
-            break;
-        }
-
-    switch (severity) {
-        case MC_DEBUG_SEVERITY_HIGH:
-            BOOST_LOG_TRIVIAL(debug)<<("Severity: high");
-            break;
-        case MC_DEBUG_SEVERITY_MEDIUM:
-            BOOST_LOG_TRIVIAL(debug)<<("Severity: medium");
-            break;
-        case MC_DEBUG_SEVERITY_LOW:
-            BOOST_LOG_TRIVIAL(debug)<<("Severity: low");
-            break;
-        case MC_DEBUG_SEVERITY_NOTIFICATION:
-            BOOST_LOG_TRIVIAL(debug)<<("Severity: notification");
-            break;
-        }
 }
 
+MCAPI_ATTR void MCAPI_CALL mcDebugOutput(McDebugSource   source,
+                                         McDebugType     type,
+                                         unsigned int    id,
+                                         McDebugSeverity severity,
+                                         size_t          length,
+                                         const char*     message,
+                                         const void*     userParam)
+{
+    BOOST_LOG_TRIVIAL(debug) << Slic3r::format("mcut mcDebugOutput message ( %d ): %s ", id, message);
 
-bool do_boolean_single(McutMesh &srcMesh, const McutMesh &cutMesh, const std::string &boolean_opts)
+    switch (source) {
+    case MC_DEBUG_SOURCE_API: BOOST_LOG_TRIVIAL(debug) << ("Source: API"); break;
+    case MC_DEBUG_SOURCE_KERNEL: BOOST_LOG_TRIVIAL(debug) << ("Source: Kernel"); break;
+    }
+
+    switch (type) {
+    case MC_DEBUG_TYPE_ERROR: BOOST_LOG_TRIVIAL(debug) << ("Type: Error"); break;
+    case MC_DEBUG_TYPE_DEPRECATED_BEHAVIOR: BOOST_LOG_TRIVIAL(debug) << ("Type: Deprecated Behaviour"); break;
+    case MC_DEBUG_TYPE_OTHER: BOOST_LOG_TRIVIAL(debug) << ("Type: Other"); break;
+    }
+
+    switch (severity) {
+    case MC_DEBUG_SEVERITY_HIGH: BOOST_LOG_TRIVIAL(debug) << ("Severity: high"); break;
+    case MC_DEBUG_SEVERITY_MEDIUM: BOOST_LOG_TRIVIAL(debug) << ("Severity: medium"); break;
+    case MC_DEBUG_SEVERITY_LOW: BOOST_LOG_TRIVIAL(debug) << ("Severity: low"); break;
+    case MC_DEBUG_SEVERITY_NOTIFICATION: BOOST_LOG_TRIVIAL(debug) << ("Severity: notification"); break;
+    }
+}
+
+bool do_boolean_single(McutMesh& srcMesh, const McutMesh& cutMesh, const std::string& boolean_opts)
 {
     // create context
     McContext context = MC_NULL_HANDLE;
     McResult  err     = mcCreateContext(&context, 0);
     // add debug callback according to https://cutdigital.github.io/mcut.site/tutorials/debugging/
     mcDebugMessageCallback(context, mcDebugOutput, nullptr);
-    mcDebugMessageControl(
-        context,
-        MC_DEBUG_SOURCE_ALL,
-        MC_DEBUG_TYPE_ERROR,
-        MC_DEBUG_SEVERITY_MEDIUM,
-        true);
+    mcDebugMessageControl(context, MC_DEBUG_SOURCE_ALL, MC_DEBUG_TYPE_ERROR, MC_DEBUG_SEVERITY_MEDIUM, true);
     // We can either let MCUT compute all possible meshes (including patches etc.), or we can
     // constrain the library to compute exactly the boolean op mesh we want. This 'constrained' case
     // is done with the following flags.
@@ -659,11 +1062,13 @@ bool do_boolean_single(McutMesh &srcMesh, const McutMesh &cutMesh, const std::st
                          MC_DISPATCH_ENFORCE_GENERAL_POSITION | // perturb if necessary
                          boolOpFlags,                           // filter flags which specify the type of output we want
                      // source mesh
-                     reinterpret_cast<const void *>(srcMesh.vertexCoordsArray.data()), reinterpret_cast<const uint32_t *>(srcMesh.faceIndicesArray.data()),
-                     srcMesh.faceSizesArray.data(), static_cast<uint32_t>(srcMesh.vertexCoordsArray.size() / 3), static_cast<uint32_t>(srcMesh.faceSizesArray.size()),
+                     reinterpret_cast<const void*>(srcMesh.vertexCoordsArray.data()),
+                     reinterpret_cast<const uint32_t*>(srcMesh.faceIndicesArray.data()), srcMesh.faceSizesArray.data(),
+                     static_cast<uint32_t>(srcMesh.vertexCoordsArray.size() / 3), static_cast<uint32_t>(srcMesh.faceSizesArray.size()),
                      // cut mesh
-                     reinterpret_cast<const void *>(cutMesh.vertexCoordsArray.data()), cutMesh.faceIndicesArray.data(), cutMesh.faceSizesArray.data(),
-                     static_cast<uint32_t>(cutMesh.vertexCoordsArray.size() / 3), static_cast<uint32_t>(cutMesh.faceSizesArray.size()));
+                     reinterpret_cast<const void*>(cutMesh.vertexCoordsArray.data()), cutMesh.faceIndicesArray.data(),
+                     cutMesh.faceSizesArray.data(), static_cast<uint32_t>(cutMesh.vertexCoordsArray.size() / 3),
+                     static_cast<uint32_t>(cutMesh.faceSizesArray.size()));
     if (err != MC_NO_ERROR) {
         BOOST_LOG_TRIVIAL(debug) << "MCUT mcDispatch fails! err=" << err;
         mcReleaseContext(context);
@@ -677,7 +1082,7 @@ bool do_boolean_single(McutMesh &srcMesh, const McutMesh &cutMesh, const std::st
     // query the number of available connected component
     uint32_t numConnComps;
     err = mcGetConnectedComponents(context, MC_CONNECTED_COMPONENT_TYPE_FRAGMENT, 0, NULL, &numConnComps);
-    if (err != MC_NO_ERROR || numConnComps==0) {
+    if (err != MC_NO_ERROR || numConnComps == 0) {
         BOOST_LOG_TRIVIAL(debug) << "MCUT mcGetConnectedComponents fails! err=" << err << ", numConnComps" << numConnComps;
         mcReleaseContext(context);
         if (numConnComps == 0 && boolean_opts == "UNION") {
@@ -688,37 +1093,42 @@ bool do_boolean_single(McutMesh &srcMesh, const McutMesh &cutMesh, const std::st
     }
 
     std::vector<McConnectedComponent> connectedComponents(numConnComps, MC_NULL_HANDLE);
-    err = mcGetConnectedComponents(context, MC_CONNECTED_COMPONENT_TYPE_FRAGMENT, (uint32_t) connectedComponents.size(), connectedComponents.data(), NULL);
+    err = mcGetConnectedComponents(context, MC_CONNECTED_COMPONENT_TYPE_FRAGMENT, (uint32_t) connectedComponents.size(),
+                                   connectedComponents.data(), NULL);
 
     McutMesh outMesh;
-    int N_vertices = 0;
+    int      N_vertices = 0;
     // traversal of all connected components
     for (int n = 0; n < numConnComps; ++n) {
         // query the data of each connected component from MCUT
         McConnectedComponent connComp = connectedComponents[n];
 
         // query the vertices
-        McSize numBytes                  = 0;
-        err                               = mcGetConnectedComponentData(context, connComp, MC_CONNECTED_COMPONENT_DATA_VERTEX_DOUBLE, 0, NULL, &numBytes);
+        McSize numBytes = 0;
+        err             = mcGetConnectedComponentData(context, connComp, MC_CONNECTED_COMPONENT_DATA_VERTEX_DOUBLE, 0, NULL, &numBytes);
         uint32_t            ccVertexCount = (uint32_t) (numBytes / (sizeof(double) * 3));
         std::vector<double> ccVertices((uint64_t) ccVertexCount * 3u, 0);
-        err = mcGetConnectedComponentData(context, connComp, MC_CONNECTED_COMPONENT_DATA_VERTEX_DOUBLE, numBytes, (void *) ccVertices.data(), NULL);
+        err = mcGetConnectedComponentData(context, connComp, MC_CONNECTED_COMPONENT_DATA_VERTEX_DOUBLE, numBytes, (void*) ccVertices.data(),
+                                          NULL);
 
         // query the faces
         numBytes = 0;
         err      = mcGetConnectedComponentData(context, connComp, MC_CONNECTED_COMPONENT_DATA_FACE_TRIANGULATION, 0, NULL, &numBytes);
         std::vector<uint32_t> ccFaceIndices(numBytes / sizeof(uint32_t), 0);
-        err = mcGetConnectedComponentData(context, connComp, MC_CONNECTED_COMPONENT_DATA_FACE_TRIANGULATION, numBytes, ccFaceIndices.data(), NULL);
+        err = mcGetConnectedComponentData(context, connComp, MC_CONNECTED_COMPONENT_DATA_FACE_TRIANGULATION, numBytes, ccFaceIndices.data(),
+                                          NULL);
         std::vector<uint32_t> faceSizes(ccFaceIndices.size() / 3, 3);
 
         const uint32_t ccFaceCount = static_cast<uint32_t>(faceSizes.size());
 
         // Here we show, how to know when connected components, pertain particular boolean operations.
         McPatchLocation patchLocation = (McPatchLocation) 0;
-        err                           = mcGetConnectedComponentData(context, connComp, MC_CONNECTED_COMPONENT_DATA_PATCH_LOCATION, sizeof(McPatchLocation), &patchLocation, NULL);
+        err = mcGetConnectedComponentData(context, connComp, MC_CONNECTED_COMPONENT_DATA_PATCH_LOCATION, sizeof(McPatchLocation),
+                                          &patchLocation, NULL);
 
         McFragmentLocation fragmentLocation = (McFragmentLocation) 0;
-        err = mcGetConnectedComponentData(context, connComp, MC_CONNECTED_COMPONENT_DATA_FRAGMENT_LOCATION, sizeof(McFragmentLocation), &fragmentLocation, NULL);
+        err = mcGetConnectedComponentData(context, connComp, MC_CONNECTED_COMPONENT_DATA_FRAGMENT_LOCATION, sizeof(McFragmentLocation),
+                                          &fragmentLocation, NULL);
 
         outMesh.vertexCoordsArray.insert(outMesh.vertexCoordsArray.end(), ccVertices.begin(), ccVertices.end());
 
@@ -737,7 +1147,9 @@ bool do_boolean_single(McutMesh &srcMesh, const McutMesh &cutMesh, const std::st
             if (reverseWindingOrder) {
                 std::vector<uint32_t> faceIndex(faceSize);
                 // for each vertex in face
-                for (int v = faceSize - 1; v >= 0; v--) { faceIndex[v] = ccFaceIndices[(uint64_t) faceVertexOffsetBase + v]; }
+                for (int v = faceSize - 1; v >= 0; v--) {
+                    faceIndex[v] = ccFaceIndices[(uint64_t) faceVertexOffsetBase + v];
+                }
                 std::copy(faceIndex.begin(), faceIndex.end(), ccFaceIndices.begin() + faceVertexOffsetBase);
             }
             faceVertexOffsetBase += faceSize;
@@ -761,17 +1173,18 @@ bool do_boolean_single(McutMesh &srcMesh, const McutMesh &cutMesh, const std::st
 
 void do_boolean(McutMesh& srcMesh, const McutMesh& cutMesh, const std::string& boolean_opts)
 {
-    TriangleMesh tri_src = mcut_to_triangle_mesh(srcMesh);
+    TriangleMesh                      tri_src   = mcut_to_triangle_mesh(srcMesh);
     std::vector<indexed_triangle_set> src_parts = its_split(tri_src.its);
 
-    TriangleMesh tri_cut = mcut_to_triangle_mesh(cutMesh);
+    TriangleMesh                      tri_cut   = mcut_to_triangle_mesh(cutMesh);
     std::vector<indexed_triangle_set> cut_parts = its_split(tri_cut.its);
 
     if (src_parts.empty() && boolean_opts == "UNION") {
         srcMesh = cutMesh;
         return;
     }
-    if(cut_parts.empty()) return;
+    if (cut_parts.empty())
+        return;
 
     // when src mesh has multiple connected components, mcut refuses to work.
     // But we can force it to work by spliting the src mesh into disconnected components,
@@ -787,13 +1200,12 @@ void do_boolean(McutMesh& srcMesh, const McutMesh& cutMesh, const std::string& b
             TriangleMesh tri_part = mcut_to_triangle_mesh(*src_part);
             its_merge(all_its, tri_part.its);
         }
-    }
-    else if (boolean_opts == "INTERSECTION") {
+    } else if (boolean_opts == "INTERSECTION") {
         for (size_t i = 0; i < src_parts.size(); i++) {
             for (size_t j = 0; j < cut_parts.size(); j++) {
                 auto src_part = triangle_mesh_to_mcut(src_parts[i]);
                 auto cut_part = triangle_mesh_to_mcut(cut_parts[j]);
-                bool success = do_boolean_single(*src_part, *cut_part, boolean_opts);
+                bool success  = do_boolean_single(*src_part, *cut_part, boolean_opts);
                 if (success) {
                     TriangleMesh tri_part = mcut_to_triangle_mesh(*src_part);
                     its_merge(all_its, tri_part.its);
@@ -804,12 +1216,15 @@ void do_boolean(McutMesh& srcMesh, const McutMesh& cutMesh, const std::string& b
     srcMesh = *triangle_mesh_to_mcut(all_its);
 }
 
-void make_boolean(const TriangleMesh &src_mesh, const TriangleMesh &cut_mesh, std::vector<TriangleMesh> &dst_mesh, const std::string &boolean_opts)
+void make_boolean(const TriangleMesh&        src_mesh,
+                  const TriangleMesh&        cut_mesh,
+                  std::vector<TriangleMesh>& dst_mesh,
+                  const std::string&         boolean_opts)
 {
     McutMesh srcMesh, cutMesh;
     triangle_mesh_to_mcut(src_mesh, srcMesh);
     triangle_mesh_to_mcut(cut_mesh, cutMesh);
-    //dst_mesh = make_boolean(srcMesh, cutMesh, boolean_opts);
+    // dst_mesh = make_boolean(srcMesh, cutMesh, boolean_opts);
     do_boolean(srcMesh, cutMesh, boolean_opts);
     TriangleMesh tri_src = mcut_to_triangle_mesh(srcMesh);
     if (!tri_src.empty())
@@ -818,6 +1233,4 @@ void make_boolean(const TriangleMesh &src_mesh, const TriangleMesh &cut_mesh, st
 
 } // namespace mcut
 
-
-} // namespace MeshBoolean
-} // namespace Slic3r
+}} // namespace Slic3r::MeshBoolean

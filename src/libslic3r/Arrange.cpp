@@ -78,6 +78,13 @@ using SpatElement = std::pair<Box, unsigned>;
 using SpatIndex = bgi::rtree< SpatElement, bgi::rstar<16, 4> >;
 using ItemGroup = std::vector<std::reference_wrapper<Item>>;
 
+bool arrange_groups_compatible(const std::string& candidate_group, const std::set<std::string>& existing_groups)
+{
+    if (candidate_group.empty() || existing_groups.empty())
+        return true;
+    return existing_groups.size() == 1 && *existing_groups.begin() == candidate_group;
+}
+
 // A coefficient used in separating bigger items and smaller items.
 const double BIG_ITEM_TRESHOLD = 0.02;
 #define VITRIFY_TEMP_DIFF_THRSH 15  // bed temp can be higher than vitrify temp, but not higher than this thresh
@@ -663,12 +670,20 @@ protected:
                 score += height_score / valid_items_cnt;
         }
 
-        std::set<int> extruder_ids;
+        std::set<int>         extruder_ids;
+        std::set<std::string> arrange_groups;
         for (int i = 0; i < m_items.size(); i++) {
             Item& p = m_items[i];
             if (p.is_virt_object) continue;
             extruder_ids.insert(p.extrude_ids.begin(),p.extrude_ids.end());
+            if (!p.arrange_group.empty())
+                arrange_groups.insert(p.arrange_group);
         }
+
+        // A non-empty arrange group is an independent plate-level rejection
+        // constraint. It deliberately does not reuse extruder/material IDs.
+        if (!arrange_groups_compatible(item.arrange_group, arrange_groups))
+            score += LARGE_COST_TO_REJECT * 1.4;
 
         // add a large cost if not multi materials on same plate is not allowed
         if (!params.allow_multi_materials_on_same_plate) {
@@ -1074,6 +1089,7 @@ static void process_arrangeable(const ArrangePolygon &arrpoly,
     item.priority(arrpoly.priority);
     item.itemId(arrpoly.itemid);
     item.extrude_ids = arrpoly.extrude_ids;
+    item.arrange_group = arrpoly.arrange_group;
     item.height = arrpoly.height;
     item.name = arrpoly.name;
     //BBS: add virtual object logic

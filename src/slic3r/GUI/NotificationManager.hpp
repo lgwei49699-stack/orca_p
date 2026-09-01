@@ -42,58 +42,57 @@ enum class InfoItemType;
 
 #define BBL_NOTICE_MAX_INTERVAL         86400 * 10
 
-enum class NotificationType
-{
-	CustomNotification,
-        //	SlicingNotPossible,
-	// Notification on end of export to a removable media, with hyperling to eject the external media.
-	// Obsolete by ExportFinished
-//	ExportToRemovableFinished,
-	// Notification on end of export, with hyperling to see folder and eject if export was to external media.
-	// Own subclass.
-	ExportFinished,
-	// Works on OSX only.
-	//FIXME Do we want to have it on Linux and Windows? Is it possible to get the Disconnect event on Windows?
-	Mouse3dDisconnected,
-//	Mouse3dConnected,
-//	NewPresetsAviable,
-	// Notification on the start of PrusaSlicer, when a new PrusaSlicer version is published.
-	// Contains a hyperlink to open a web browser pointing to the PrusaSlicer download location.
-	NewAppAvailable,
-	// Like NewAppAvailable but with text and link for alpha / bet release
-	NewAlphaAvailable,
-	NewBetaAvailable,
-	// Notification on the start of PrusaSlicer, when updates of system profiles are detected.
-	// Contains a hyperlink to execute installation of the new system profiles.
-	PresetUpdateAvailable,
-	PresetUpdateFinished,
-//	LoadingFailed,
-	// Errors emmited by Print::validate
-	// difference from Slicing error is that they disappear not grey out at update_background_process
-	ValidateError,
-	// Notification emitted by Print::validate
-	ValidateWarning,
-	// Slicing error produced by BackgroundSlicingProcess::validate() or by the BackgroundSlicingProcess background
-	// thread thowing a SlicingError exception.
-	SlicingError,
-	//Gcode conflict generates slicing severe warning
+enum class NotificationType {
+    CustomNotification,
+    //	SlicingNotPossible,
+    // Notification on end of export to a removable media, with hyperling to eject the external media.
+    // Obsolete by ExportFinished
+    //	ExportToRemovableFinished,
+    // Notification on end of export, with hyperling to see folder and eject if export was to external media.
+    // Own subclass.
+    ExportFinished,
+    // Works on OSX only.
+    // FIXME Do we want to have it on Linux and Windows? Is it possible to get the Disconnect event on Windows?
+    Mouse3dDisconnected,
+    //	Mouse3dConnected,
+    //	NewPresetsAviable,
+    // Notification on the start of PrusaSlicer, when a new PrusaSlicer version is published.
+    // Contains a hyperlink to open a web browser pointing to the PrusaSlicer download location.
+    NewAppAvailable,
+    // Like NewAppAvailable but with text and link for alpha / bet release
+    NewAlphaAvailable,
+    NewBetaAvailable,
+    // Notification on the start of PrusaSlicer, when updates of system profiles are detected.
+    // Contains a hyperlink to execute installation of the new system profiles.
+    PresetUpdateAvailable,
+    PresetUpdateFinished,
+    //	LoadingFailed,
+    // Errors emmited by Print::validate
+    // difference from Slicing error is that they disappear not grey out at update_background_process
+    ValidateError,
+    // Notification emitted by Print::validate
+    ValidateWarning,
+    // Slicing error produced by BackgroundSlicingProcess::validate() or by the BackgroundSlicingProcess background
+    // thread thowing a SlicingError exception.
+    SlicingError,
+    // Gcode conflict generates slicing severe warning
     SlicingSeriousWarning,
-	// Slicing warnings, issued by the slicing process.
-	// Slicing warnings are registered for a particular Print milestone or a PrintObject and its milestone.
-	SlicingWarning,
-	// Object partially outside the print volume. Cannot slice.
-	PlaterError,
-	// Object fully outside the print volume, or extrusion outside the print volume. Slicing is not disabled.
-	PlaterWarning,
-	// Progress bar instead of text.
-	ProgressBar,
-	// Progress bar with info from Print Host Upload Queue dialog.
-	PrintHostUpload,
-	// Progress bar with cancel button, cannot be closed
-	// On end of slicing and G-code processing (the full G-code preview is available),
-	// contains a hyperlink to export the G-code to a removable media or hdd.
-	SlicingProgress,
-	// Notification, when Color Change G-code is empty and user try to add color change on DoubleSlider.
+    // Slicing warnings, issued by the slicing process.
+    // Slicing warnings are registered for a particular Print milestone or a PrintObject and its milestone.
+    SlicingWarning,
+    // Object partially outside the print volume. Cannot slice.
+    PlaterError,
+    // Object fully outside the print volume, or extrusion outside the print volume. Slicing is not disabled.
+    PlaterWarning,
+    // Progress bar instead of text.
+    ProgressBar,
+    // Progress bar with info from Print Host Upload Queue dialog.
+    PrintHostUpload,
+    // Progress bar with cancel button, cannot be closed
+    // On end of slicing and G-code processing (the full G-code preview is available),
+    // contains a hyperlink to export the G-code to a removable media or hdd.
+    SlicingProgress,
+    // Notification, when Color Change G-code is empty and user try to add color change on DoubleSlider.
     EmptyColorChangeCode,
     // Notification that custom supports/seams were deleted after mesh repair.
     CustomSupportsAndSeamRemovedAfterRepair,
@@ -110,46 +109,46 @@ enum class NotificationType
     UndoDesktopIntegrationFail,
     // Notification that a printer has more extruders than are supported by MM Gizmo/segmentation.
     MmSegmentationExceededExtrudersLimit,
-	// Did you know Notification appearing on startup with arrows to change hint
-	DidYouKnowHint,
-	// Shows when  ObjectList::update_info_items finds information that should be stressed to the user
-	// Might contain logo taken from gizmos
-	UpdatedItemsInfo,
-	// Progress bar notification with methods to replace ProgressIndicator class.
-	ProgressIndicator,
-	// Give user advice to simplify object with big amount of triangles
-	// Contains ObjectID for closing when object is deleted
-	SimplifySuggestion,
-	// Change of text will change font to similar one on.
-	UnknownFont,
-	// information about netfabb is finished repairing model (blocking proccess)
-	NetfabbFinished,
-	// Short meesage to fill space between start and finish of export
-	ExportOngoing,
+    // Did you know Notification appearing on startup with arrows to change hint
+    DidYouKnowHint,
+    // Shows when  ObjectList::update_info_items finds information that should be stressed to the user
+    // Might contain logo taken from gizmos
+    UpdatedItemsInfo,
+    // Progress bar notification with methods to replace ProgressIndicator class.
+    ProgressIndicator,
+    // Give user advice to simplify object with big amount of triangles
+    // Contains ObjectID for closing when object is deleted
+    SimplifySuggestion,
+    // Change of text will change font to similar one on.
+    UnknownFont,
+    // Information about CGAL finishing a blocking model repair.
+    CgalFinished,
+    // Short meesage to fill space between start and finish of export
+    ExportOngoing,
     // Progressbar of download from prusaslicer://url
     URLDownload,
-	// BBS: Short meesage to fill space between start and finish of arranging
-	ArrangeOngoing,
-	// BBL: Plate Info ,Design For @YangLeDuo
-	BBLPlateInfo,
-	// BBL: 3MF warnings
-	BBL3MFInfo,
-	// BBL: Some Objects Info, Design For @YangLeDuo
-	BBLObjectInfo,
-	// BBL: Objects have empty layer when Slicing
-	BBLSliceEmptyLayer,
-	// BBL: model need support
-	BBLNeedSupportON,
-	// BBL: Gcode overlap
-	BBLGcodeOverlap,
-	//BBL: sequence print info
-	BBLSeqPrintInfo,
-	//BBL: plugin install hint
-	BBLPluginInstallHint,
-	BBLPluginUpdateAvailable,
-	BBLPreviewOnlyMode,
+    // BBS: Short meesage to fill space between start and finish of arranging
+    ArrangeOngoing,
+    // BBL: Plate Info ,Design For @YangLeDuo
+    BBLPlateInfo,
+    // BBL: 3MF warnings
+    BBL3MFInfo,
+    // BBL: Some Objects Info, Design For @YangLeDuo
+    BBLObjectInfo,
+    // BBL: Objects have empty layer when Slicing
+    BBLSliceEmptyLayer,
+    // BBL: model need support
+    BBLNeedSupportON,
+    // BBL: Gcode overlap
+    BBLGcodeOverlap,
+    // BBL: sequence print info
+    BBLSeqPrintInfo,
+    // BBL: plugin install hint
+    BBLPluginInstallHint,
+    BBLPluginUpdateAvailable,
+    BBLPreviewOnlyMode,
     BBLPrinterConfigUpdateAvailable,
-	BBLUserPresetExceedLimit,
+    BBLUserPresetExceedLimit,
 };
 
 class NotificationManager

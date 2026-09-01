@@ -463,11 +463,14 @@ public:
     Transform3d get_matrix_no_scaling_factor() const;
 
     // Orca: Implement prusa's filament shrink compensation approach
-    Transform3d get_matrix_with_applied_shrinkage_compensation(const Vec3d &shrinkage_compensation) const;
-    
-    void set_matrix(const Transform3d& transform) { m_matrix = transform; }
+    Transform3d get_matrix_with_applied_shrinkage_compensation(const Vec3d& shrinkage_compensation) const;
 
-    Transformation operator * (const Transformation& other) const;
+    void set_matrix(const Transform3d& transform) { m_matrix = transform; }
+    // Transform3d stores a fixed-size affine matrix. Swapping coefficients is
+    // allocation-free and is used by post-snapshot transactional commits.
+    void swap(Transformation& other) noexcept { m_matrix.matrix().swap(other.m_matrix.matrix()); }
+
+    Transformation operator*(const Transformation& other) const;
 
     // Find volume transformation, so that the chained (instance_trafo * volume_trafo) will be as close to identity
     // as possible in least squares norm in regard to the 8 corners of bbox.

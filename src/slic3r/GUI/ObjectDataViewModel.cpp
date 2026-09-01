@@ -966,6 +966,7 @@ wxDataViewItem ObjectDataViewModel::Delete(const wxDataViewItem &item)
         auto it = find(m_objects.begin(), m_objects.end(), node);
         if (it != m_objects.end())
         {
+            const int deleted_object_idx = int(std::distance(m_objects.begin(), it));
             // Delete all sub-items
             int i = (*it)->GetChildCount() - 1;
             while (i >= 0) {
@@ -974,6 +975,17 @@ wxDataViewItem ObjectDataViewModel::Delete(const wxDataViewItem &item)
             }
             m_objects.erase(it);
             node_parent->GetChildren().Remove(node);
+
+            // Model object indices after the deleted object shift down by one.
+            // Keep the per-object cut-volume maps aligned with that lifetime.
+            std::map<int, std::map<int, int>> shifted_volume_maps;
+            for (auto& [object_idx, volume_map] : m_ui_and_3d_volume_maps) {
+                if (object_idx < deleted_object_idx)
+                    shifted_volume_maps.emplace(object_idx, std::move(volume_map));
+                else if (object_idx > deleted_object_idx)
+                    shifted_volume_maps.emplace(object_idx - 1, std::move(volume_map));
+            }
+            m_ui_and_3d_volume_maps = std::move(shifted_volume_maps);
         }
 
         ItemDeleted(parent, wxDataViewItem(node));
@@ -1181,6 +1193,7 @@ void ObjectDataViewModel::ResetAll()
     m_plates.clear();
     m_plate_outside = nullptr;
     m_objects.clear();
+    m_ui_and_3d_volume_maps.clear();
 
     AddOutsidePlate();
 }
@@ -1935,6 +1948,15 @@ wxDataViewItem ObjectDataViewModel::ReorganizeObjects(  const int current_id, co
     ItemDeleted(wxDataViewItem(deleted_node->m_parent), wxDataViewItem(deleted_node));
 
     m_objects.emplace(m_objects.begin() + new_id, deleted_node);
+    auto moved_volume_map = std::move(m_ui_and_3d_volume_maps[current_id]);
+    if (current_id < new_id) {
+        for (int object_idx = current_id; object_idx < new_id; ++object_idx)
+            m_ui_and_3d_volume_maps[object_idx] = std::move(m_ui_and_3d_volume_maps[object_idx + 1]);
+    } else {
+        for (int object_idx = current_id; object_idx > new_id; --object_idx)
+            m_ui_and_3d_volume_maps[object_idx] = std::move(m_ui_and_3d_volume_maps[object_idx - 1]);
+    }
+    m_ui_and_3d_volume_maps[new_id] = std::move(moved_volume_map);
     int plate_child_index = plate_node->GetChildIndex(new_node);
     if (current_id < new_id)
         plate_node->Insert(deleted_node, plate_child_index+1);
@@ -2459,5 +2481,3 @@ void ObjectDataViewModel::UpdateCutObjectIcon(const wxDataViewItem &item, bool h
 
 } // namespace GUI
 } // namespace Slic3r
-
-

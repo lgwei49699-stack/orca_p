@@ -16,6 +16,7 @@ add_executable(${_TEST_NAME}_tests
 	test_mutable_priority_queue.cpp
 	test_stl.cpp
 	test_meshboolean.cpp
+	test_model_repair.cpp
 	# test_marchingsquares.cpp
 	test_timeutils.cpp
 	test_voronoi.cpp
@@ -23,6 +24,8 @@ add_executable(${_TEST_NAME}_tests
     # test_png_io.cpp
 	test_indexed_triangle_set.cpp
 	test_model_arrange.cpp
+	test_obj.cpp
+	test_saved_painting.cpp
 	test_texture_painting.cpp
     ../libnest2d/printer_parts.cpp
 	)

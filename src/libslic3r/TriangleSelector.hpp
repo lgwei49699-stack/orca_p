@@ -5,6 +5,9 @@
 
 
 #include <cfloat>
+#include <functional>
+#include <memory>
+#include <optional>
 #include "Point.hpp"
 #include "TriangleMesh.hpp"
 
@@ -303,12 +306,26 @@ public:
     [[nodiscard]] int select_unsplit_triangle(const Vec3f &hit, int facet_idx, const Vec3i32 &neighbors) const;
 
     // Select all triangles fully inside the circle, subdivide where needed.
-    void select_patch(int                       facet_start,                   // facet of the original mesh (unsplit) that the hit point belongs to
-                      std::unique_ptr<Cursor> &&cursor,                        // Cursor containing information about the point where to start, camera position (mesh coords), matrix to get from mesh to world, and its shape and type.
-                      EnforcerBlockerType       new_state,                     // enforcer or blocker?
-                      const Transform3d        &trafo_no_translate,            // matrix to get from mesh to world without translation
-                      bool                      triangle_splitting,            // If triangles will be split base on the cursor or not
-                      float                     highlight_by_angle_deg = 0.f); // The maximal angle of overhang. If it is set to a non-zero value, it is possible to paint only the triangles of overhang defined by this angle in degrees.
+    void select_patch(int                       facet_start, // facet of the original mesh (unsplit) that the hit point belongs to
+                      std::unique_ptr<Cursor>&& cursor, // Cursor containing information about the point where to start, camera position
+                                                        // (mesh coords), matrix to get from mesh to world, and its shape and type.
+                      EnforcerBlockerType new_state,    // enforcer or blocker?
+                      const Transform3d&  trafo_no_translate, // matrix to get from mesh to world without translation
+                      bool                triangle_splitting, // If triangles will be split base on the cursor or not
+                      float highlight_by_angle_deg = 0.f); // The maximal angle of overhang. If it is set to a non-zero value, it is possible
+                                                           // to paint only the triangles of overhang defined by this angle in degrees.
+
+    // Extended form used by topology remapping. Keep the six-argument overload
+    // above as a real symbol for source and binary compatibility with existing
+    // callers; select_partially accepts an intersecting facet that is already
+    // too small to subdivide further.
+    void select_patch(int                       facet_start,
+                      std::unique_ptr<Cursor>&& cursor,
+                      EnforcerBlockerType       new_state,
+                      const Transform3d&        trafo_no_translate,
+                      bool                      triangle_splitting,
+                      float                     highlight_by_angle_deg,
+                      bool                      select_partially);
 
     void seed_fill_select_triangles(const Vec3f        &hit,                          // point where to start
                                     int                 facet_start,                  // facet of the original mesh (unsplit) that the hit point belongs to
@@ -369,6 +386,25 @@ public:
     // For all triangles selected by seed fill, set new EnforcerBlockerType and remove flag indicating that triangle was selected by seed fill.
     // The operation may merge split triangles if they are being assigned the same color.
     void seed_fill_apply_on_triangles(EnforcerBlockerType new_state);
+
+    // Painting data saved before a mesh topology change and remapped afterwards.
+    struct SavedPainting
+    {
+        std::shared_ptr<const TriangleMesh> mesh;
+        TriangleSplittingData               supported;
+        TriangleSplittingData               seam;
+        TriangleSplittingData               mmu;
+        TriangleSplittingData               fuzzy;
+    };
+
+    // Remap painting from source topology to target topology. target_transform maps
+    // target coordinates into the source coordinate space. Existing target painting
+    // may be supplied to merge both sets of annotations.
+    static TriangleSplittingData remap_painting(const indexed_triangle_set&  source_its,
+                                                const TriangleSplittingData& source_painting,
+                                                const indexed_triangle_set&  target_its,
+                                                const Transform3d&           target_transform,
+                                                const std::optional<std::reference_wrapper<const TriangleSplittingData>>& existing_painting);
 
 protected:
     // Triangle and info about how it's split.
@@ -475,8 +511,9 @@ protected:
 
     // Private functions:
 private:
-    bool select_triangle(int facet_idx, EnforcerBlockerType type, bool triangle_splitting);
-    bool select_triangle_recursive(int facet_idx, const Vec3i32 &neighbors, EnforcerBlockerType type, bool triangle_splitting);
+    bool select_triangle(int facet_idx, EnforcerBlockerType type, bool triangle_splitting, bool select_partially);
+    bool select_triangle_recursive(
+        int facet_idx, const Vec3i32& neighbors, EnforcerBlockerType type, bool triangle_splitting, bool select_partially);
     void undivide_triangle(int facet_idx);
     void split_triangle(int facet_idx, const Vec3i32 &neighbors);
     void remove_useless_children(int facet_idx); // No hidden meaning. Triangles are meant.
@@ -519,6 +556,8 @@ private:
 
     int m_free_triangles_head { -1 };
     int m_free_vertices_head { -1 };
+
+    friend class TriangleCursor;
 };
 
 

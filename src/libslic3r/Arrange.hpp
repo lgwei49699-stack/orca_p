@@ -5,6 +5,9 @@
 #include "PrintConfig.hpp"
 #include "Print.hpp"
 
+#include <set>
+#include <string>
+
 #define BED_SHRINK_SEQ_PRINT 5
 
 namespace Slic3r {
@@ -63,6 +66,7 @@ struct ArrangePolygon {
     int       row{0};
     int       col{0};
     std::vector<int> extrude_ids{};      /// extruder_id for least extruder switch
+    std::string      arrange_group;      /// runtime-only hard grouping key for multi-plate arrange
     int filament_temp_type{ -1 };
     int       bed_temp{0};         ///bed temperature for different material judge
     int       print_temp{0};      ///print temperature for different material judge
@@ -103,6 +107,8 @@ struct ArrangePolygon {
         return ret;
     }
 };
+
+bool arrange_groups_compatible(const std::string& candidate_group, const std::set<std::string>& existing_groups);
 
 using ArrangePolygons = std::vector<ArrangePolygon>;
 

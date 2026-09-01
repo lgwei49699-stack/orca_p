@@ -23,3 +23,21 @@ TEST_CASE("CGAL and TriangleMesh conversions", "[MeshBoolean]") {
     
     REQUIRE(! MeshBoolean::cgal::does_self_intersect(M));
 }
+
+TEST_CASE("CGAL repair closes a missing cube side", "[MeshBoolean][ModelRepair]")
+{
+    TriangleMesh mesh = make_cube(10., 10., 10.);
+    mesh.its.indices.erase(mesh.its.indices.begin(), mesh.its.indices.begin() + 2);
+    const size_t open_edges_before = its_num_open_edges(mesh.its);
+    REQUIRE(open_edges_before > 0);
+
+    std::string error;
+    const bool  repaired = MeshBoolean::cgal::repair(mesh, nullptr, &error);
+    INFO(error);
+    REQUIRE(repaired);
+
+    CHECK(error.empty());
+    CHECK_FALSE(mesh.empty());
+    CHECK(its_num_open_edges(mesh.its) == 0);
+    CHECK(mesh.volume() > 0.);
+}

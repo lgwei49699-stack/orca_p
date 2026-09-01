@@ -7815,17 +7815,31 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     ConfigOptionDef* def;
 
     // Actions:
-    /*def = this->add("export_obj", coBool);
+    def          = this->add("export_obj", coBool);
     def->label = L("Export OBJ");
-    def->tooltip = L("Export the model(s) as OBJ.");
-    def->set_default_value(new ConfigOptionBool(false));*/
-
-/*
-    def = this->add("export_svg", coBool);
-    def->label = L("Export SVG");
-    def->tooltip = L("Slice the model and export solid slices as SVG.");
+    def->tooltip = L("Export the model(s) as a geometry-only OBJ without materials or textures.");
     def->set_default_value(new ConfigOptionBool(false));
-*/
+
+    def             = this->add("export_multicolor_obj", coString);
+    def->label      = L("Export Multicolor OBJ");
+    def->tooltip    = L("Export current Orca filament and MMU face assignments as OBJ and MTL.");
+    def->cli        = "export-multicolor-obj";
+    def->cli_params = "filename.obj";
+    def->set_default_value(new ConfigOptionString("multicolor.obj"));
+
+    def             = this->add("repair_model", coString);
+    def->label      = L("Repair model");
+    def->tooltip    = L("Repair imported model meshes before transforms and export.");
+    def->cli        = "repair-model";
+    def->cli_params = "cgal";
+    def->set_default_value(new ConfigOptionString());
+
+    /*
+        def = this->add("export_svg", coBool);
+        def->label = L("Export SVG");
+        def->tooltip = L("Slice the model and export solid slices as SVG.");
+        def->set_default_value(new ConfigOptionBool(false));
+    */
 
     /*def = this->add("export_sla", coBool);
     def->label = L("Export SLA");
@@ -8077,6 +8091,12 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli = "split-by-color";
     def->set_default_value(new ConfigOptionBool(false));
 
+    def          = this->add("arrange_by_color", coBool);
+    def->label   = L("Arrange by Color");
+    def->tooltip = L("Keep models with different primary OBJ/MTL colors on separate plates without splitting model geometry.");
+    def->cli     = "arrange-by-color";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("repetitions", coInt);
     def->label = L("Repetition count");
     def->tooltip = L("Repetition count of the whole model.");
@@ -8157,6 +8177,13 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->tooltip = L("Semicolon-separated filament configuration paths for the current --model block, matching OBJ usemtl first-use order.");
     def->cli = "model-filaments";
     def->cli_params = "filament1.json;filament2.json;...";
+    def->set_default_value(new ConfigOptionStrings());
+
+    def             = this->add("model_arrange_group", coStrings);
+    def->label      = L("Model Arrange Group");
+    def->tooltip    = L("Explicit runtime arrange group for the current --model block. Overrides automatic color grouping.");
+    def->cli        = "model-arrange-group";
+    def->cli_params = "group";
     def->set_default_value(new ConfigOptionStrings());
 
     def = this->add("model_position", coStrings);

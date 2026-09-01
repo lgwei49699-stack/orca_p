@@ -64,12 +64,22 @@ void intersect(CGALMesh &A, CGALMesh &B);
 bool does_self_intersect(const TriangleMesh &mesh);
 bool does_self_intersect(const CGALMesh &mesh);
 
+// Returns true when an input cannot be proven to contain finite coordinates and
+// form a consistently oriented, self-intersection-free bounded volume. The
+// diagnostic intentionally fails open so callers can pass questionable meshes
+// through repair().
+bool requires_repair(const TriangleMesh& mesh);
+
 //BBS
 std::vector<TriangleMesh> segment(const TriangleMesh& src, double smoothing_alpha = 0.5, int segment_number = 5);
 TriangleMesh merge(std::vector<TriangleMesh> meshes);
 
 bool does_bound_a_volume(const CGALMesh &mesh);
 bool empty(const CGALMesh &mesh);
+
+// Repair a mesh using CGAL. Returns true on success. Optionally returns the
+// low-level repair counters and a human-readable error.
+bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors = nullptr, std::string* error = nullptr);
 }
 
 namespace mcut {

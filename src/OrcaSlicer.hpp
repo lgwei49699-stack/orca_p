@@ -100,6 +100,7 @@ typedef struct _plate_obj_size_info {
 struct ModelCliSpec {
     std::string                model_token;
     std::optional<std::string> filament_group;
+    std::optional<std::string> arrange_group;
     std::optional<std::string> position;
     std::optional<std::string> scale;
     std::optional<std::string> rotation;

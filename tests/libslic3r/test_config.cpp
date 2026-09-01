@@ -1,5 +1,7 @@
 #include <catch2/catch.hpp>
 
+#include <algorithm>
+
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/LocalesUtils.hpp"
 
@@ -267,6 +269,25 @@ SCENARIO("CLI model auto-repair may be explicitly enabled or disabled.", "[Confi
             }
         }
     }
+}
+
+SCENARIO("CLI CGAL repair and generic OBJ export options parse without consuming the input file.", "[Config][CLI]")
+{
+    const char* argv[] = {"OrcaSlicer", "--repair-model", "cgal", "--export-obj", "--export-multicolor-obj", "painted.obj", "model.obj"};
+    DynamicPrintAndCLIConfig config;
+    t_config_option_keys     input_files;
+    t_config_option_keys     keys;
+
+    const bool parsed = config.read_cli(7, argv, &input_files, &keys);
+
+    REQUIRE(parsed);
+    REQUIRE(config.opt_string("repair_model") == "cgal");
+    REQUIRE(config.opt_bool("export_obj"));
+    REQUIRE(config.opt_string("export_multicolor_obj") == "painted.obj");
+    REQUIRE(input_files == t_config_option_keys{"model.obj"});
+    REQUIRE(std::find(keys.begin(), keys.end(), "repair_model") != keys.end());
+    REQUIRE(std::find(keys.begin(), keys.end(), "export_obj") != keys.end());
+    REQUIRE(std::find(keys.begin(), keys.end(), "export_multicolor_obj") != keys.end());
 }
 
 SCENARIO("Config ini load/save interface", "[Config]") {

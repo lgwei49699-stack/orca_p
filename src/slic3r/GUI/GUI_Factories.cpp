@@ -21,7 +21,6 @@
 
 #include <boost/algorithm/string.hpp>
 #include "slic3r/GUI/Tab.hpp"
-#include "slic3r/Utils/FixModelByWin10.hpp"
 #include "ParamsPanel.hpp"
 #include "MsgDialog.hpp"
 #include "wx/utils.h"
@@ -822,14 +821,11 @@ void MenuFactory::append_menu_item_rename(wxMenu* menu)
     menu->AppendSeparator();
 }
 
-wxMenuItem* MenuFactory::append_menu_item_fix_through_netfabb(wxMenu* menu)
+wxMenuItem* MenuFactory::append_menu_item_fix_through_cgal(wxMenu* menu)
 {
-    if (!is_windows10())
-        return nullptr;
-
-    wxMenuItem* menu_item = append_menu_item(menu, wxID_ANY, _L("Fix model"), "",
-        [](wxCommandEvent&) { obj_list()->fix_through_netfabb(); }, "", menu,
-        []() {return plater()->can_fix_through_netfabb(); }, plater());
+    wxMenuItem* menu_item = append_menu_item(
+        menu, wxID_ANY, _L("Fix model"), "", [](wxCommandEvent&) { obj_list()->fix_through_cgal(); }, "", menu,
+        []() { return plater()->can_fix_through_cgal(); }, plater());
 
     return menu_item;
 }
@@ -1272,7 +1268,7 @@ void MenuFactory::create_common_object_menu(wxMenu* menu)
     // "Scale to print volume" makes a sense just for whole object
     append_menu_item_scale_selection_to_fit_print_volume(menu);
 
-    append_menu_item_fix_through_netfabb(menu);
+    append_menu_item_fix_through_cgal(menu);
     append_menu_items_mirror(menu);
 }
 
@@ -1306,7 +1302,7 @@ void MenuFactory::create_extra_object_menu()
     // Object Clone
     append_menu_item_clone(&m_object_menu);
     // Object Repair
-    append_menu_item_fix_through_netfabb(&m_object_menu);
+    append_menu_item_fix_through_cgal(&m_object_menu);
     // Object Simplify
     append_menu_item_simplify(&m_object_menu);
     // merge to single part
@@ -1355,7 +1351,7 @@ void MenuFactory::create_bbl_assemble_object_menu()
     // Delete
     append_menu_item_delete(&m_assemble_object_menu);
     // Object Repair
-    append_menu_item_fix_through_netfabb(&m_assemble_object_menu);
+    append_menu_item_fix_through_cgal(&m_assemble_object_menu);
     // Object Simplify
     append_menu_item_simplify(&m_assemble_object_menu);
     m_assemble_object_menu.AppendSeparator();
@@ -1382,7 +1378,7 @@ void MenuFactory::create_part_menu()
     append_menu_item_delete(menu);
     append_menu_item_reload_from_disk(menu);
     append_menu_item_export_stl(menu);
-    append_menu_item_fix_through_netfabb(menu);
+    append_menu_item_fix_through_cgal(menu);
     append_menu_items_mirror(menu);
     append_menu_item_merge_parts_to_single_part(menu);
 
@@ -1406,7 +1402,7 @@ void MenuFactory::create_text_part_menu()
 
     append_menu_item_edit_text(menu);
     append_menu_item_delete(menu);
-    append_menu_item_fix_through_netfabb(menu);
+    append_menu_item_fix_through_cgal(menu);
     append_menu_item_simplify(menu);
     append_menu_items_mirror(menu);
     menu->AppendSeparator();
@@ -1420,7 +1416,7 @@ void MenuFactory::create_svg_part_menu()
 
     append_menu_item_edit_svg(menu);
     append_menu_item_delete(menu);
-    append_menu_item_fix_through_netfabb(menu);
+    append_menu_item_fix_through_cgal(menu);
     append_menu_item_simplify(menu);
     append_menu_items_mirror(menu);
     menu->AppendSeparator();
@@ -1434,7 +1430,7 @@ void MenuFactory::create_bbl_part_menu()
 
     append_menu_item_delete(menu);
     append_menu_item_edit_text(menu);
-    append_menu_item_fix_through_netfabb(menu);
+    append_menu_item_fix_through_cgal(menu);
     append_menu_item_simplify(menu);
     append_menu_item_center(menu);
     append_menu_item_drop(menu);
@@ -1684,7 +1680,7 @@ wxMenu* MenuFactory::multi_selection_menu()
         }
         append_menu_item_center(menu);
         append_menu_item_drop(menu);
-        append_menu_item_fix_through_netfabb(menu);
+        append_menu_item_fix_through_cgal(menu);
         //append_menu_item_simplify(menu);
         append_menu_item_delete(menu);
         menu->AppendSeparator();
@@ -1701,7 +1697,7 @@ wxMenu* MenuFactory::multi_selection_menu()
     else {
         append_menu_item_center(menu);
         append_menu_item_drop(menu);
-        append_menu_item_fix_through_netfabb(menu);
+        append_menu_item_fix_through_cgal(menu);
         //append_menu_item_simplify(menu);
         append_menu_item_delete(menu);
         append_menu_items_convert_unit(menu);
@@ -1736,8 +1732,8 @@ wxMenu* MenuFactory::assemble_multi_selection_menu()
 
     wxMenu* menu = new MenuWithSeparators();
     append_menu_item_set_visible(menu);
-    //append_menu_item_fix_through_netfabb(menu);
-    //append_menu_item_simplify(menu);
+    // append_menu_item_fix_through_cgal(menu);
+    // append_menu_item_simplify(menu);
     append_menu_item_delete(menu);
     menu->AppendSeparator();
     append_menu_item_change_extruder(menu);
@@ -1761,9 +1757,9 @@ wxMenu* MenuFactory::assemble_object_menu()
     // Delete
     append_menu_item_delete(menu);
     //// Object Repair
-    //append_menu_item_fix_through_netfabb(menu);
+    // append_menu_item_fix_through_cgal(menu);
     //// Object Simplify
-    //append_menu_item_simplify(menu);
+    // append_menu_item_simplify(menu);
     menu->AppendSeparator();
 
     // Set filament

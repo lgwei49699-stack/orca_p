@@ -340,29 +340,37 @@ class ObjectDataViewModel :public wxDataViewModel
     wxDataViewCtrl*                             m_ctrl { nullptr };
     std::vector<std::tuple<ObjectDataViewModelNode*, wxString, wxString>> assembly_name_list;
     std::vector<std::tuple<ObjectDataViewModelNode*, wxString, wxString>> search_found_list;
-    std::map<int, int>                          m_ui_and_3d_volume_map;
+    // A cut connector is present in ModelObject::volumes, but hidden from the
+    // object list. Keep a separate UI -> model volume index map for every
+    // object; a single global map makes the last rebuilt cut object affect all
+    // other objects.
+    std::map<int, std::map<int, int>>           m_ui_and_3d_volume_maps;
 
 public:
     ObjectDataViewModel();
     ~ObjectDataViewModel();
 
     void Init();
-    std::map<int, int> &get_ui_and_3d_volume_map() { return m_ui_and_3d_volume_map; }
-    int                 get_real_volume_index_in_3d(int ui_value)
+    std::map<int, std::map<int, int>>& get_ui_and_3d_volume_map() { return m_ui_and_3d_volume_maps; }
+    int get_real_volume_index_in_3d(int object_idx, int ui_volume_idx) const
     {
-        if (m_ui_and_3d_volume_map.find(ui_value) != m_ui_and_3d_volume_map.end()) { 
-            return m_ui_and_3d_volume_map[ui_value];
+        const auto object_it = m_ui_and_3d_volume_maps.find(object_idx);
+        if (object_it != m_ui_and_3d_volume_maps.end()) {
+            const auto volume_it = object_it->second.find(ui_volume_idx);
+            if (volume_it != object_it->second.end())
+                return volume_it->second;
         }
-        return ui_value;
+        return ui_volume_idx;
     }
-    int get_real_volume_index_in_ui(int _3d_value)
+    int get_real_volume_index_in_ui(int object_idx, int model_volume_idx) const
     {
-        for (auto item: m_ui_and_3d_volume_map) {
-            if (item.second == _3d_value) {
-                return item.first;
-            }
+        const auto object_it = m_ui_and_3d_volume_maps.find(object_idx);
+        if (object_it != m_ui_and_3d_volume_maps.end()) {
+            for (const auto& [ui_volume_idx, mapped_model_volume_idx] : object_it->second)
+                if (mapped_model_volume_idx == model_volume_idx)
+                    return ui_volume_idx;
         }
-        return _3d_value;
+        return model_volume_idx;
     }
     wxDataViewItem AddPlate(PartPlate* part_plate, wxString name = wxEmptyString, bool refresh = true);
     wxDataViewItem AddObject(ModelObject* model_object, std::string warning_bitmap, bool has_lock = false, bool refresh = true);

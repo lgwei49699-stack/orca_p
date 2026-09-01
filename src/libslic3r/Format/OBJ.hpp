@@ -1,6 +1,10 @@
 #ifndef slic3r_Format_OBJ_hpp_
 #define slic3r_Format_OBJ_hpp_
 #include "libslic3r/Color.hpp"
+#include "libslic3r/Point.hpp"
+
+#include <functional>
+#include <map>
 #include <unordered_map>
 namespace Slic3r {
 
@@ -40,6 +44,9 @@ extern bool load_obj(const char *path, Model *model, ObjInfo &vertex_colors, std
 // Read the distinct usemtl names which are actually assigned to faces, preserving
 // their first face-use order. This intentionally does not require the MTL file.
 extern bool load_obj_material_names(const char *path, std::vector<std::string> &material_names, std::string &message);
+// Resolve every mtllib referenced by an OBJ using the same path rules as the
+// importer. Missing libraries are included so exporters cannot create over them.
+extern bool load_obj_material_libraries(const char* path, std::vector<std::string>& library_paths, std::string& message);
 
 extern bool store_obj(const char *path, TriangleMesh *mesh);
 extern bool store_obj(const char *path, ModelObject *model);
@@ -58,6 +65,7 @@ extern void match_face_filament_ids(const std::vector<RGBA>&     face_colors,
 extern std::map<unsigned char, std::string> get_extruder_color_map(const std::vector<RGBA>&          face_colors,
                                                                    const std::vector<unsigned char>& face_filament_ids);
 extern std::string                          rgba_to_html(const RGBA& rgba);
+extern std::string                          primary_obj_color_group(const ObjInfo& obj_info);
 
 //extern void match_vertex_filament_ids(const std::vector<RGBA>&     vertex_colors,
 //                                      const GeneralExtruderConfig& config,

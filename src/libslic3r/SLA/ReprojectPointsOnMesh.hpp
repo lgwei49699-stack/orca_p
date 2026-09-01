@@ -27,12 +27,18 @@ void reproject_support_points(const IndexedMesh &mesh, std::vector<PointType> &p
 
 inline void reproject_points_and_holes(ModelObject *object)
 {
+    if (!object)
+        return;
+
     bool has_sppoints = !object->sla_support_points.empty();
     bool has_holes    = !object->sla_drain_holes.empty();
 
-    if (!object || (!has_holes && !has_sppoints)) return;
+    if (!has_holes && !has_sppoints)
+        return;
 
     TriangleMesh rmsh = object->raw_mesh();
+    if (rmsh.empty())
+        return;
     IndexedMesh emesh{rmsh};
 
     if (has_sppoints)

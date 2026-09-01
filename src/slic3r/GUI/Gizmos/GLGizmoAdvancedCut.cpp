@@ -12,6 +12,7 @@
 #include <algorithm>
 
 #include "slic3r/GUI/GUI_App.hpp"
+#include "slic3r/GUI/NotificationManager.hpp"
 #include "slic3r/GUI/Plater.hpp"
 #include "libslic3r/AppConfig.hpp"
 #include "../GUI/MsgDialog.hpp"
@@ -19,6 +20,7 @@
 #include <imgui/imgui_internal.h>
 
 #include "slic3r/GUI/CameraUtils.hpp"
+#include "slic3r/Utils/FixModelByCgal.hpp"
 
 namespace Slic3r {
 namespace GUI {
@@ -655,52 +657,91 @@ void GLGizmoAdvancedCut::perform_cut(const Selection& selection)
 
         Cut cut(cut_mo, instance_idx, get_cut_matrix(selection), attributes);
         cut.set_offset_for_two_part        = true;
-        const ModelObjectPtrs &new_objects = cut_by_contour  ? cut.perform_by_contour(m_part_selection->get_cut_parts(), dowels_count) :
+        const ModelObjectPtrs& new_objects = cut_by_contour  ? cut.perform_by_contour(m_part_selection->get_cut_parts(), dowels_count) :
                                              cut_with_groove ? cut.perform_with_groove(m_groove, m_rotate_matrix) :
                                                                cut.perform_with_plane();
         // fix_non_manifold_edges
-#ifdef HAS_WIN10SDK
-        if (is_windows10()) {
-            bool is_showed_dialog = false;
-            bool user_fix_model   = false;
-            for (size_t i = 0; i < new_objects.size(); i++) {
-                for (size_t j = 0; j < new_objects[i]->volumes.size(); j++) {
-                    if (its_num_open_edges(new_objects[i]->volumes[j]->mesh().its) > 0) {
-                        if (!is_showed_dialog) {
-                            is_showed_dialog = true;
-                            MessageDialog dlg(nullptr, _L("non-manifold edges be caused by cut tool, do you want to fix it now?"), "", wxYES | wxCANCEL);
-                            int           ret = dlg.ShowModal();
-                            if (ret == wxID_YES) {
-                                user_fix_model = true;
-                            }
-                        }
-                        if (!user_fix_model) {
-                            break;
-                        }
-                        // model_name
-                        std::vector<std::string> succes_models;
-                        // model_name     failing reason
-                        std::vector<std::pair<std::string, std::string>> failed_models;
-                        auto                                             plater = wxGetApp().plater();
-                        auto fix_and_update_progress = [this, plater](ModelObject *model_object, const int vol_idx, const string &model_name, ProgressDialog &progress_dlg,
-                                                                      std::vector<std::string> &succes_models, std::vector<std::pair<std::string, std::string>> &failed_models) {
-                            wxString msg = _L("Repairing model object");
-                            msg += ": " + from_u8(model_name) + "\n";
-                            std::string res;
-                            if (!fix_model_by_win10_sdk_gui(*model_object, vol_idx, progress_dlg, msg, res)) return false;
-                            return true;
-                        };
-                        ProgressDialog progress_dlg(_L("Repairing model object"), "", 100, find_toplevel_parent(plater), wxPD_AUTO_HIDE | wxPD_APP_MODAL | wxPD_CAN_ABORT, true);
+        {
+            bool                                             is_showed_dialog = false;
+            bool                                             user_fix_model   = false;
+            bool                                             repair_canceled  = false;
+            std::vector<std::pair<std::string, std::string>> failed_models;
+            std::vector<std::string>                         painting_cleared;
+            auto*                                            plater        = wxGetApp().plater();
+            const bool                                       keep_painting = wxGetApp().app_config->get_bool("keep_painting");
 
-                        auto model_name = new_objects[i]->name;
-                        if (!fix_and_update_progress(new_objects[i], j, model_name, progress_dlg, succes_models, failed_models)) {
-                            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "run fix_and_update_progress error";
-                        };
-                    };
+            for (size_t i = 0; i < new_objects.size() && !repair_canceled; i++) {
+                std::vector<int> repair_volume_indices;
+                for (size_t volume_index = 0; volume_index < new_objects[i]->volumes.size(); ++volume_index) {
+                    const ModelVolume* volume = new_objects[i]->volumes[volume_index];
+                    if (volume != nullptr && volume->is_model_part() && its_num_open_edges(volume->mesh().its) > 0)
+                        repair_volume_indices.emplace_back(static_cast<int>(volume_index));
+                }
+                if (repair_volume_indices.empty())
+                    continue;
+
+                if (!is_showed_dialog) {
+                    is_showed_dialog = true;
+                    MessageDialog dlg(nullptr, _L("non-manifold edges be caused by cut tool, do you want to fix it now?"), "",
+                                      wxYES | wxCANCEL);
+                    int           ret = dlg.ShowModal();
+                    if (ret == wxID_YES) {
+                        user_fix_model = true;
+                    }
+                }
+                if (!user_fix_model)
+                    break;
+
+                const std::string model_name = new_objects[i]->name;
+                // Process in descending order so a repaired volume may split
+                // or disappear without changing the remaining target indices.
+                for (auto volume_it = repair_volume_indices.rbegin(); volume_it != repair_volume_indices.rend() && !repair_canceled;
+                     ++volume_it) {
+                    const int volume_index = *volume_it;
+                    if (volume_index < 0 || static_cast<size_t>(volume_index) >= new_objects[i]->volumes.size())
+                        continue;
+
+                    const std::string volume_name = new_objects[i]->volumes[volume_index]->name;
+                    const std::string target_name = volume_name.empty() ? model_name : model_name + " / " + volume_name;
+                    wxString          message     = _L("Repairing model object") + ": " + from_u8(target_name) + "\n";
+                    ProgressDialog    progress_dlg(_L("Repairing model object"), "", 100, find_toplevel_parent(plater),
+                                                   wxPD_AUTO_HIDE | wxPD_APP_MODAL | wxPD_CAN_ABORT, true);
+                    std::string       repair_result;
+                    ModelRepairReport repair_report;
+                    repair_canceled = !fix_model_with_cgal_gui(*new_objects[i], volume_index, progress_dlg, message, repair_result,
+                                                               keep_painting, &repair_report);
+                    if (!repair_canceled && !repair_result.empty()) {
+                        failed_models.emplace_back(target_name, std::move(repair_result));
+                    } else if (!repair_canceled) {
+                        for (const ModelRepairVolumeReport& volume_report : repair_report.volume_reports)
+                            if (volume_report.result == ModelRepairVolumeStatus::Repaired && volume_report.annotations_cleared)
+                                painting_cleared.emplace_back(target_name);
+                    }
                 }
             }
+
+            if (repair_canceled) {
+                plater->get_notification_manager()->push_notification(NotificationType::CgalFinished,
+                                                                      NotificationManager::NotificationLevel::PrintInfoShortNotificationLevel,
+                                                                      into_u8(_L("Repairing was canceled")));
+            }
+            if (!failed_models.empty()) {
+                wxString message = _L("Failed to repair following model object") + ":";
+                for (const auto& [model_name, error] : failed_models)
+                    message += "\n   - " + from_u8(model_name) + ": " + from_u8(error);
+                plater->get_notification_manager()
+                    ->push_notification(NotificationType::CgalFinished,
+                                        NotificationManager::NotificationLevel::PrintInfoShortNotificationLevel, into_u8(message));
+            }
+            if (!painting_cleared.empty()) {
+                wxString message = _L("Painted facet annotations were cleared during repair for:");
+                for (const std::string& name : painting_cleared)
+                    message += "\n   - " + from_u8(name);
+                plater->get_notification_manager()
+                    ->push_notification(NotificationType::CgalFinished,
+                                        NotificationManager::NotificationLevel::PrintInfoShortNotificationLevel, into_u8(message));
+            }
         }
- #endif
         // set offset for new_objects
 
         // save cut_id to post update synchronization
@@ -708,8 +749,6 @@ void GLGizmoAdvancedCut::perform_cut(const Selection& selection)
 
         // update cut results on plater and in the model
         plater->apply_cut_object_to_model(object_idx, new_objects);
-
-        }
     }
 }
 
@@ -719,8 +758,8 @@ bool GLGizmoAdvancedCut::can_perform_cut() const
         return false;
 
     return true;
-    //const auto clipper = m_c->object_clipper();
-    //return clipper && clipper->has_valid_contour();
+    // const auto clipper = m_c->object_clipper();
+    // return clipper && clipper->has_valid_contour();
 }
 
 void GLGizmoAdvancedCut::apply_connectors_in_model(ModelObject *mo, bool &create_dowels_as_separate_object)
