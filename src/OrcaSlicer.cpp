@@ -2328,6 +2328,7 @@ int CLI::run(int argc, char **argv)
                 if (found_model) {
                     // 为每个模型实例应用变换 - 按正确顺序：先缩放→再旋转→最后移动
                     for (ModelObject* obj : model.objects) {
+                        bool geometry_transform_applied = false;
                         for (ModelInstance* instance : obj->instances) {
                             // 1. 先应用缩放
                             if (model_idx < model_scales.size() && !model_scales[model_idx].empty()) {
@@ -2335,6 +2336,7 @@ int CLI::run(int argc, char **argv)
                                 Vec3d current_scale = instance->get_scaling_factor();
                                 Vec3d new_scale = current_scale * scale_factor;
                                 instance->set_scaling_factor(new_scale);
+                                geometry_transform_applied = true;
                                 BOOST_LOG_TRIVIAL(info) << "Applied scale factor: " << new_scale.transpose();
                             }
                             
@@ -2357,6 +2359,7 @@ int CLI::run(int argc, char **argv)
                                             std::stod(rot_parts[2]) * M_PI / 180.0   // Z轴旋转
                                         );
                                         instance->set_rotation(new_rotation);
+                                        geometry_transform_applied = true;
                                         BOOST_LOG_TRIVIAL(info) << "Applied rotation: " << new_rotation.transpose();
                                     }
                                 }
@@ -2410,6 +2413,12 @@ int CLI::run(int argc, char **argv)
                                 }
                             }
                         }
+                        // CLI model transforms are applied after the model's initial bed alignment.
+                        // A scale or X/Y rotation may therefore move the model below Z=0. Honor
+                        // --ensure-on-bed before plate rebuilding checks its printable state.
+                        if (geometry_transform_applied && m_config.opt_bool("ensure_on_bed"))
+                            obj->ensure_on_bed(false);
+
                         // 5. 应用 per-model process JSON（全量覆盖 per-object 参数，在 instance 循环外执行一次）
                         if (model_idx < model_processes.size() && !model_processes[model_idx].empty()) {
                             std::string proc_file = model_processes[model_idx];
