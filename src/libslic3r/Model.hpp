@@ -360,6 +360,9 @@ public:
     //BBS: add module name for assemble
     std::string             module_name;
     std::string             input_file;    // XXX: consider fs::path
+    // Runtime-only grouping key used by CLI multi-plate arranging. It is
+    // intentionally excluded from cereal/3MF serialization.
+    std::string arrange_group;
     // Instances of this ModelObject. Each instance defines a shift on the print bed, rotation around the Z axis and a uniform scaling.
     // Instances are owned by this ModelObject.
     ModelInstancePtrs       instances;
@@ -1639,19 +1642,23 @@ public:
     //BBS: add part plate related logic
     // BBS: backup
     //BBS: is_xxx is used for is_bbs_3mf when loading 3mf, is used for is_inches when loading amf
-    static Model read_from_file(
-        const std::string& input_file,
-        DynamicPrintConfig* config = nullptr, ConfigSubstitutionContext* config_substitutions = nullptr,
-        LoadStrategy options = LoadStrategy::AddDefaultInstances, PlateDataPtrs* plate_data = nullptr,
-        std::vector<Preset*>* project_presets = nullptr, bool* is_xxx = nullptr, Semver* file_version = nullptr, Import3mfProgressFn proFn = nullptr,
-                                ImportstlProgressFn        stlFn                = nullptr,
-                                BBLProject *               project              = nullptr,
-                                int                        plate_id             = 0,
-                                ObjImportColorFn           objFn                = nullptr,
-                                bool                       repair_stl           = true,
-                                MeshRepairReport*          repair_report        = nullptr,
-                                const std::vector<unsigned int>* obj_material_extruder_ids = nullptr
-                                );
+    static Model read_from_file(const std::string&               input_file,
+                                DynamicPrintConfig*              config                    = nullptr,
+                                ConfigSubstitutionContext*       config_substitutions      = nullptr,
+                                LoadStrategy                     options                   = LoadStrategy::AddDefaultInstances,
+                                PlateDataPtrs*                   plate_data                = nullptr,
+                                std::vector<Preset*>*            project_presets           = nullptr,
+                                bool*                            is_xxx                    = nullptr,
+                                Semver*                          file_version              = nullptr,
+                                Import3mfProgressFn              proFn                     = nullptr,
+                                ImportstlProgressFn              stlFn                     = nullptr,
+                                BBLProject*                      project                   = nullptr,
+                                int                              plate_id                  = 0,
+                                ObjImportColorFn                 objFn                     = nullptr,
+                                bool                             repair_stl                = true,
+                                MeshRepairReport*                repair_report             = nullptr,
+                                const std::vector<unsigned int>* obj_material_extruder_ids = nullptr,
+                                std::string*                     obj_primary_color_group   = nullptr);
     // BBS
     static bool    obj_import_vertex_color_deal(const std::vector<unsigned char> &vertex_filament_ids, const unsigned char &first_extruder_id, Model *model);
     static bool    obj_import_face_color_deal(const std::vector<unsigned char> &face_filament_ids, const unsigned char &first_extruder_id, Model *model);

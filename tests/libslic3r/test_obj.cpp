@@ -257,6 +257,50 @@ TEST_CASE("OBJ material library discovery preserves arbitrary mtllib sidecars", 
     CHECK_FALSE(error_code);
 }
 
+TEST_CASE("OBJ primary arrange color follows first material used by a face", "[OBJ][CLI][ColorGroup]")
+{
+    const boost::filesystem::path directory = boost::filesystem::temp_directory_path() /
+                                              boost::filesystem::unique_path("orcaslicer-obj-primary-color-%%%%-%%%%");
+    REQUIRE(boost::filesystem::create_directory(directory));
+    const boost::filesystem::path obj_path = directory / "model.obj";
+    const boost::filesystem::path mtl_path = directory / "palette.mtl";
+    {
+        boost::nowide::ofstream stream(obj_path.string());
+        REQUIRE(stream.is_open());
+        stream << "mtllib palette.mtl\n"
+                  "v 0 0 0\n"
+                  "v 1 0 0\n"
+                  "v 0 1 0\n"
+                  "v 2 0 0\n"
+                  "v 3 0 0\n"
+                  "v 2 1 0\n"
+                  "usemtl red\n"
+                  "f 1 2 3\n"
+                  "usemtl blue\n"
+                  "f 4 5 6\n";
+    }
+    {
+        boost::nowide::ofstream stream(mtl_path.string());
+        REQUIRE(stream.is_open());
+        // MTL declaration order is intentionally the opposite of face-use order.
+        stream << "newmtl blue\nKd 0 0 1\n"
+                  "newmtl red\nKd 1 0 0\n";
+    }
+
+    Model       model;
+    ObjInfo     obj_info;
+    std::string message;
+    REQUIRE(load_obj(obj_path.string().c_str(), &model, obj_info, message));
+    CHECK(primary_obj_color_group(obj_info) == "#FF0000");
+
+    ObjInfo no_color;
+    CHECK(primary_obj_color_group(no_color).empty());
+
+    boost::system::error_code error_code;
+    boost::filesystem::remove_all(directory, error_code);
+    CHECK_FALSE(error_code);
+}
+
 TEST_CASE("Painted OBJ export rejects non-regular OBJ and MTL targets", "[OBJ][CLI]")
 {
     PaintedMesh painted_mesh;

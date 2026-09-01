@@ -1468,6 +1468,8 @@ int CLI::run(int argc, char **argv)
     const bool has_model_filament_mapping = std::any_of(
         m_model_cli_specs.begin(), m_model_cli_specs.end(),
         [](const ModelCliSpec &spec) { return spec.filament_group.has_value(); });
+    const bool has_explicit_arrange_group = std::any_of(m_model_cli_specs.begin(), m_model_cli_specs.end(),
+                                                        [](const ModelCliSpec& spec) { return spec.arrange_group.has_value(); });
 
     if (!m_model_cli_specs.empty()) {
         if (m_model_cli_specs.size() != m_input_files.size()) {
@@ -1856,10 +1858,16 @@ int CLI::run(int argc, char **argv)
 
     const bool split_by_color =
         std::find(m_transforms.begin(), m_transforms.end(), "split_by_color") != m_transforms.end() && m_config.opt_bool("split_by_color");
+    const bool arrange_by_color = std::find(m_transforms.begin(), m_transforms.end(), "arrange_by_color") != m_transforms.end() &&
+                                  m_config.opt_bool("arrange_by_color");
+    const bool arrange_grouping_enabled  = arrange_by_color || has_explicit_arrange_group;
     bool allow_multicolor_oneplate = resolve_arrange_allow_multicolor_oneplate(
         m_config.option<ConfigOptionBool>("allow_multicolor_oneplate", true)->value, split_by_color);
     if (split_by_color)
         BOOST_LOG_TRIVIAL(info) << "split_by_color: keep different extruders on separate plates during arrange";
+    if (arrange_grouping_enabled)
+        BOOST_LOG_TRIVIAL(info) << "arrange grouping enabled: auto_color=" << arrange_by_color
+                                << ", explicit_groups=" << has_explicit_arrange_group;
     const std::vector<int>  loaded_filament_ids  = m_config.option<ConfigOptionInts>("load_filament_ids", true)->values;
     const std::vector<int>  clone_objects  = m_config.option<ConfigOptionInts>("clone_objects", true)->values;
     //when load objects from stl/obj, the total used filaments set
@@ -1962,10 +1970,23 @@ int CLI::run(int argc, char **argv)
                 //if (load_aux) strategy = strategy | LoadStrategy::LoadAuxiliary;
                 const std::vector<unsigned int> *explicit_material_slots =
                     has_model_filament_mapping ? &model_material_slots[input_index] : nullptr;
+                std::string detected_obj_color_group;
                 model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets,
                                               &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice, nullptr,
                                               auto_repair_model, collect_repair_report ? &model_repair_info.report : nullptr,
-                                              explicit_material_slots);
+                                              explicit_material_slots, arrange_by_color ? &detected_obj_color_group : nullptr);
+                if (arrange_grouping_enabled) {
+                    const std::string explicit_group = input_index < m_model_cli_specs.size() &&
+                                                               m_model_cli_specs[input_index].arrange_group.has_value() ?
+                                                           *m_model_cli_specs[input_index].arrange_group :
+                                                           std::string();
+                    const std::string resolved_group = resolve_model_arrange_group(explicit_group, arrange_by_color,
+                                                                                   arrange_grouping_enabled, detected_obj_color_group);
+                    for (ModelObject* object : model.objects)
+                        object->arrange_group = resolved_group;
+                    BOOST_LOG_TRIVIAL(info) << boost::format("model arrange group: input=%1%, explicit=%2%, detected=%3%, resolved=%4%") %
+                                                   file % explicit_group % detected_obj_color_group % resolved_group;
+                }
                 if (collect_repair_report) {
                     sliced_info.model_repairs.push_back(model_repair_info);
                     repair_report_recorded = true;
@@ -4871,14 +4892,18 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "ignore_wipe_tower = " << m_config.opt_bool("ignore_wipe_tower");
         } else if (opt_key == "split_by_color") {
             BOOST_LOG_TRIVIAL(info) << "split_by_color = " << m_config.opt_bool("split_by_color") << ", will split multi-extruder objects before arrange";
+        } else if (opt_key == "arrange_by_color") {
+            BOOST_LOG_TRIVIAL(info) << "arrange_by_color = " << m_config.opt_bool("arrange_by_color")
+                                    << ", will keep different runtime color groups on separate plates";
         } else if (opt_key == "force_machine") {
             BOOST_LOG_TRIVIAL(info) << "force_machine = " << m_config.opt_bool("force_machine");
         } else if (opt_key == "cli_nozzle_temperature") {
             BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature = " << m_config.opt_float("cli_nozzle_temperature");
         } else if (opt_key == "cli_nozzle_temperature_initial_layer") {
             BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature_initial_layer = " << m_config.opt_float("cli_nozzle_temperature_initial_layer");
-        } else if (opt_key == "model" || opt_key == "model_filaments" || opt_key == "model_position" || opt_key == "model_scale" ||
-                   opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "model_process" || opt_key == "thumbnail_image") {
+        } else if (opt_key == "model" || opt_key == "model_filaments" || opt_key == "model_arrange_group" || opt_key == "model_position" ||
+                   opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "model_process" ||
+                   opt_key == "thumbnail_image") {
             BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
             boost::nowide::cerr << "error: option not implemented yet: " << opt_key << std::endl;
@@ -4913,6 +4938,7 @@ int CLI::run(int argc, char **argv)
                 for (auto& [ext_id, vols] : vols_by_ext) {
                     ModelObject* new_obj = model.add_object();
                     new_obj->name = obj->name + "_ext" + std::to_string(ext_id);
+                    new_obj->arrange_group = obj->arrange_group;
                     new_obj->config.set_key_value("extruder", new ConfigOptionInt(ext_id));
                     for (ModelVolume* vol : vols)
                         new_obj->add_volume(*vol);
@@ -6509,6 +6535,8 @@ int CLI::run(int argc, char **argv)
             //already applied after process settings were loaded
         } else if (opt_key == "split_by_color") {
             //will be processed after model loading, before orient/arrange
+        } else if (opt_key == "arrange_by_color" || opt_key == "model_arrange_group") {
+            // runtime arrange groups were resolved while loading each model
         } else if (opt_key == "cli_nozzle_temperature") {
             //already applied after filament config loading
         } else if (opt_key == "cli_nozzle_temperature_initial_layer") {
@@ -8061,9 +8089,8 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
     m_model_cli_specs.clear();
     ModelCliSpec *current = nullptr;
 
-    const std::set<std::string> model_keys = {
-        "model", "model-filaments", "model-position", "model-scale", "model-rotate", "model-support", "model-process"
-    };
+    const std::set<std::string> model_keys = {"model",       "model-filaments", "model-arrange-group", "model-position",
+                                              "model-scale", "model-rotate",    "model-support",       "model-process"};
 
     for (int i = 1; i < argc; ++i) {
         std::string token = argv[i];
@@ -8102,6 +8129,8 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
 
         std::optional<std::string> *target = nullptr;
         if (token == "model-filaments") target = &current->filament_group;
+        else if (token == "model-arrange-group")
+            target = &current->arrange_group;
         else if (token == "model-position") target = &current->position;
         else if (token == "model-scale") target = &current->scale;
         else if (token == "model-rotate") target = &current->rotation;

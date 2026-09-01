@@ -328,24 +328,28 @@ static void add_textured_mesh_to_model(Model& model, const TexturedMesh& texture
 // BBS: add part plate related logic
 // BBS: backup & restore
 // Loading model from a file, it may be a simple geometry file as STL or OBJ, however it may be a project file as well.
-Model Model::read_from_file(const std::string&                                  input_file,
-                            DynamicPrintConfig*                                 config,
-                            ConfigSubstitutionContext*                          config_substitutions,
-                            LoadStrategy                                        options,
-                            PlateDataPtrs*                                      plate_data,
-                            std::vector<Preset*>*                               project_presets,
-                            bool                                                *is_xxx,
-                            Semver*                                             file_version,
-                            Import3mfProgressFn                                 proFn,
-                            ImportstlProgressFn                                 stlFn,
-                            BBLProject *                                        project,
-                            int                                                 plate_id,
-                            ObjImportColorFn                                    objFn,
-                            bool                                                repair_stl,
-                            MeshRepairReport*                                   repair_report,
-                            const std::vector<unsigned int>*                    obj_material_extruder_ids)
+Model Model::read_from_file(const std::string&               input_file,
+                            DynamicPrintConfig*              config,
+                            ConfigSubstitutionContext*       config_substitutions,
+                            LoadStrategy                     options,
+                            PlateDataPtrs*                   plate_data,
+                            std::vector<Preset*>*            project_presets,
+                            bool*                            is_xxx,
+                            Semver*                          file_version,
+                            Import3mfProgressFn              proFn,
+                            ImportstlProgressFn              stlFn,
+                            BBLProject*                      project,
+                            int                              plate_id,
+                            ObjImportColorFn                 objFn,
+                            bool                             repair_stl,
+                            MeshRepairReport*                repair_report,
+                            const std::vector<unsigned int>* obj_material_extruder_ids,
+                            std::string*                     obj_primary_color_group)
 {
     Model model;
+
+    if (obj_primary_color_group != nullptr)
+        obj_primary_color_group->clear();
 
     DynamicPrintConfig temp_config;
     ConfigSubstitutionContext temp_config_substitutions_context(ForwardCompatibilitySubstitutionRule::EnableSilent);
@@ -375,6 +379,8 @@ Model Model::read_from_file(const std::string&                                  
         ObjInfo                 obj_info;
         result = load_obj(input_file.c_str(), &model, obj_info, message);
         if (result){
+            if (obj_primary_color_group != nullptr)
+                *obj_primary_color_group = primary_obj_color_group(obj_info);
             unsigned char first_extruder_id;
             bool              has_color_mapping = false;
             if (obj_material_extruder_ids != nullptr) {
@@ -1425,6 +1431,7 @@ ModelObject& ModelObject::assign_copy(const ModelObject &rhs)
     //BBS: add module name
     this->module_name                 = rhs.module_name;
     this->input_file                  = rhs.input_file;
+    this->arrange_group               = rhs.arrange_group;
     // Copies the config's ID
     this->config                      = rhs.config;
     assert(this->config.id() == rhs.config.id());
@@ -1465,6 +1472,7 @@ ModelObject& ModelObject::assign_copy(ModelObject &&rhs)
     //BBS: add module name
     this->module_name                 = std::move(rhs.module_name);
     this->input_file                  = std::move(rhs.input_file);
+    this->arrange_group               = std::move(rhs.arrange_group);
     // Moves the config's ID
     this->config                      = std::move(rhs.config);
     assert(this->config.id() == rhs.config.id());
@@ -3703,6 +3711,7 @@ void ModelInstance::get_arrange_polygon(void *ap, const Slic3r::DynamicPrintConf
     ret.poly.contour = std::move(p);
     ret.translation  = Vec2crd{scaled(get_offset(X)), scaled(get_offset(Y))};
     ret.rotation     = get_rotation(Z);
+    ret.arrange_group                = object->arrange_group;
 
     //BBS: add materials related information
     ModelVolume *volume = NULL;

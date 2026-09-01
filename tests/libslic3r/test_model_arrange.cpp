@@ -415,6 +415,24 @@ TEST_CASE("CLI split-by-color keeps color groups on separate plates", "[Arrange]
     REQUIRE_FALSE(resolve_arrange_allow_multicolor_oneplate(false, true));
 }
 
+TEST_CASE("CLI color arrange groups are independent from filament assignments", "[Arrange][CLI][ColorGroup]")
+{
+    CHECK(resolve_model_arrange_group("manual", true, true, "#FF0000") == "manual");
+    CHECK(resolve_model_arrange_group("", true, true, "#FF0000") == "#FF0000");
+    CHECK(resolve_model_arrange_group("", true, true, "") == "__DEFAULT_COLOR__");
+    CHECK(resolve_model_arrange_group("", false, true, "") == "__DEFAULT_COLOR__");
+    CHECK(resolve_model_arrange_group("", false, false, "").empty());
+
+    const std::set<std::string> no_groups;
+    const std::set<std::string> red_group{"#FF0000"};
+    const std::set<std::string> mixed_groups{"#00FF00", "#FF0000"};
+    CHECK(arrangement::arrange_groups_compatible("#FF0000", no_groups));
+    CHECK(arrangement::arrange_groups_compatible("", red_group));
+    CHECK(arrangement::arrange_groups_compatible("#FF0000", red_group));
+    CHECK_FALSE(arrangement::arrange_groups_compatible("#00FF00", red_group));
+    CHECK_FALSE(arrangement::arrange_groups_compatible("#FF0000", mixed_groups));
+}
+
 TEST_CASE("Arrange reserves a wipe tower only when it is actually needed", "[Arrange][WipeTower]")
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
@@ -602,6 +620,7 @@ TEST_CASE("Model merge preserves per-model process overrides for arrange", "[Arr
     Model second_source = make_model(make_cube(20.0, 20.0, 20.0));
 
     ModelObject *first_object = first_source.objects.front();
+    first_object->arrange_group = "#FF0000";
     first_object->config.set("layer_height", 0.12);
     first_object->config.set("enable_support", false);
 
@@ -616,6 +635,8 @@ TEST_CASE("Model merge preserves per-model process overrides for arrange", "[Arr
     ModelObject *merged_second = merged.add_object(*second_object);
 
     REQUIRE(merged_first->config.opt_float("layer_height") == Approx(0.12));
+    REQUIRE(merged_first->arrange_group == "#FF0000");
+    REQUIRE(get_instance_arrange_poly(merged_first->instances.front(), DynamicPrintConfig::full_print_config()).arrange_group == "#FF0000");
     REQUIRE(merged_second->config.opt_float("layer_height") == Approx(0.28));
     const DynamicPrintConfig global_config = DynamicPrintConfig::full_print_config();
     REQUIRE(estimate_arrange_support_margin(*merged_first->instances.front(), global_config) == Approx(1.0));

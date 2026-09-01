@@ -207,6 +207,18 @@ bool resolve_arrange_allow_multicolor_oneplate(bool configured_value, bool split
     return configured_value && !split_by_color;
 }
 
+std::string resolve_model_arrange_group(const std::string& explicit_group,
+                                        bool               auto_color_enabled,
+                                        bool               grouping_enabled,
+                                        const std::string& detected_color_group)
+{
+    if (!explicit_group.empty())
+        return explicit_group;
+    if (auto_color_enabled && !detected_color_group.empty())
+        return detected_color_group;
+    return grouping_enabled ? "__DEFAULT_COLOR__" : std::string();
+}
+
 bool arrange_wipe_tower_needed(const DynamicPrintConfig &config,
                                const ArrangePolygons &selected,
                                const ArrangeParams &params,
@@ -348,6 +360,7 @@ arrangement::ArrangePolygons get_arrange_polys(const Model &model, ModelInstance
     for (ModelObject *mo : model.objects)
         for (ModelInstance *minst : mo->instances) {
             minst->get_arrange_polygon(&ap);
+            ap.arrange_group = mo->arrange_group;
             input.emplace_back(ap);
             instances.emplace_back(minst);
         }
@@ -488,6 +501,7 @@ ArrangePolygon get_instance_arrange_poly(ModelInstance* instance, const Slic3r::
     // get brim width
     auto obj = instance->get_object();
 
+    ap.arrange_group = obj->arrange_group;
     ap.brim_width = estimate_arrange_support_margin(*instance, config);
     if (cura_v1_raft_margins(*obj, config).enabled)
         ap.minimum_inflation = ap.brim_width;

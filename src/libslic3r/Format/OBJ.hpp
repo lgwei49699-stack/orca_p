@@ -65,6 +65,7 @@ extern void match_face_filament_ids(const std::vector<RGBA>&     face_colors,
 extern std::map<unsigned char, std::string> get_extruder_color_map(const std::vector<RGBA>&          face_colors,
                                                                    const std::vector<unsigned char>& face_filament_ids);
 extern std::string                          rgba_to_html(const RGBA& rgba);
+extern std::string                          primary_obj_color_group(const ObjInfo& obj_info);
 
 //extern void match_vertex_filament_ids(const std::vector<RGBA>&     vertex_colors,
 //                                      const GeneralExtruderConfig& config,

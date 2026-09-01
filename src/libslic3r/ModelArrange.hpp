@@ -107,6 +107,10 @@ int resolve_arrange_auto_plate_value(bool option_was_specified, int configured_v
 // --split-by-color is a stronger constraint than the general CLI preference:
 // its color groups must stay on separate plates during the subsequent arrange.
 bool resolve_arrange_allow_multicolor_oneplate(bool configured_value, bool split_by_color);
+std::string resolve_model_arrange_group(const std::string& explicit_group,
+                                        bool               auto_color_enabled,
+                                        bool               grouping_enabled,
+                                        const std::string& detected_color_group);
 
 // Keep GUI and CLI consistent when deciding whether a wipe tower must reserve
 // space during arranging. Merely enabling the option is not sufficient: a

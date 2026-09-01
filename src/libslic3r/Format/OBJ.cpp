@@ -268,6 +268,11 @@ std::string rgba_to_html(const RGBA& rgba)
     return std::string(buf);
 }
 
+std::string primary_obj_color_group(const ObjInfo& obj_info)
+{
+    return obj_info.face_colors.empty() ? std::string() : rgba_to_html(obj_info.face_colors.front());
+}
+
 std::map<unsigned char, std::string> get_extruder_color_map(const std::vector<RGBA>&          face_colors,
                                                                    const std::vector<unsigned char>& face_filament_ids)
 {

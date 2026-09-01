@@ -8091,6 +8091,12 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli = "split-by-color";
     def->set_default_value(new ConfigOptionBool(false));
 
+    def          = this->add("arrange_by_color", coBool);
+    def->label   = L("Arrange by Color");
+    def->tooltip = L("Keep models with different primary OBJ/MTL colors on separate plates without splitting model geometry.");
+    def->cli     = "arrange-by-color";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("repetitions", coInt);
     def->label = L("Repetition count");
     def->tooltip = L("Repetition count of the whole model.");
@@ -8171,6 +8177,13 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->tooltip = L("Semicolon-separated filament configuration paths for the current --model block, matching OBJ usemtl first-use order.");
     def->cli = "model-filaments";
     def->cli_params = "filament1.json;filament2.json;...";
+    def->set_default_value(new ConfigOptionStrings());
+
+    def             = this->add("model_arrange_group", coStrings);
+    def->label      = L("Model Arrange Group");
+    def->tooltip    = L("Explicit runtime arrange group for the current --model block. Overrides automatic color grouping.");
+    def->cli        = "model-arrange-group";
+    def->cli_params = "group";
     def->set_default_value(new ConfigOptionStrings());
 
     def = this->add("model_position", coStrings);
