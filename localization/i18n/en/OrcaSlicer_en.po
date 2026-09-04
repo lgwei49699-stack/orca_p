@@ -2773,48 +2773,62 @@ msgstr ""
 msgid "Install failed"
 msgstr ""
 
-msgid "Portions copyright"
-msgstr "License Info"
-
 msgid "Copyright"
 msgstr ""
 
 msgid "License"
 msgstr ""
 
-msgid "Orca Slicer is licensed under "
+msgid "Open-source licenses"
+msgstr ""
+
+msgid "WiseBeginner Slicer"
+msgstr ""
+
+msgid "WiseBeginner Slicer is distributed under "
 msgstr ""
 
 msgid "GNU Affero General Public License, version 3"
 msgstr ""
 
-msgid "Orca Slicer is based on PrusaSlicer and BambuStudio"
+msgid "WiseBeginner Slicer is based on OrcaSlicer and related open-source projects"
 msgstr ""
 
-msgid "Libraries"
+msgid "Open-source components"
 msgstr ""
 
-msgid ""
-"This software uses open source components whose copyright and other "
-"proprietary rights belong to their respective owners"
+msgid "Copyright and other rights for open-source components belong to their respective owners"
 msgstr ""
 
 #, c-format, boost-format
 msgid "About %s"
 msgstr ""
 
-msgid "OrcaSlicer is based on BambuStudio, PrusaSlicer, and SuperSlicer."
+msgid "Smart slicing for everyday 3D printing"
 msgstr ""
 
-msgid "BambuStudio is originally based on PrusaSlicer by PrusaResearch."
+msgid "Build"
 msgstr ""
 
-msgid "PrusaSlicer is originally based on Slic3r by Alessandro Ranellucci."
+msgid "WiseBeginner Slicer is designed for everyday 3D printing, including model slicing, print configuration, and sending print jobs."
 msgstr ""
 
-msgid ""
-"Slic3r was created by Alessandro Ranellucci with the help of many other "
-"contributors."
+msgid "After signing in, you can read and locally cache cloud filament and slicing presets, and send jobs to printers linked to your account."
+msgstr ""
+
+msgid "WiseBeginner Slicer is based on OrcaSlicer. OrcaSlicer is based on Bambu Studio, PrusaSlicer, and SuperSlicer; Bambu Studio is based on PrusaSlicer by Prusa Research, and PrusaSlicer originates from Slic3r by Alessandro Ranellucci."
+msgstr ""
+
+msgid "We thank these open-source projects and all their contributors."
+msgstr ""
+
+msgid "WiseBeginner modifications © 2026 WiseBeginner3D."
+msgstr ""
+
+msgid "Open-source components retain their original copyrights and licenses."
+msgstr ""
+
+msgid "OrcaSlicer upstream open-source project"
 msgstr ""
 
 msgid "Version"

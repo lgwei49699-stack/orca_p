@@ -1,4 +1,4 @@
-name: Build Linux AppImage for x86_64
+name: Build 智小白切片软件 Linux AppImage for x86_64
 
 on:
   push:
@@ -100,7 +100,7 @@ jobs:
         echo "Building dependencies with $(nproc) parallel jobs..."
         ./build_linux.sh -d
     
-    - name: Build OrcaSlicer
+    - name: Build 智小白切片软件
       shell: bash -e {0}
       run: |
         # 在主程序编译时使用 ccache
@@ -108,7 +108,7 @@ jobs:
         export CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)
         export CCACHE_DIR="${HOME}/.ccache"
         
-        echo "Building OrcaSlicer with $(nproc) parallel jobs and ccache..."
+        echo "Building ZhiXiaoBaiSlicer with $(nproc) parallel jobs and ccache..."
         time ./build_linux.sh -s
     
     - name: Build AppImage
@@ -131,7 +131,7 @@ jobs:
         fi
         
         # 查找 AppImage 文件
-        APPIMAGE_PATH=$(find build -maxdepth 1 -name "OrcaSlicer*.AppImage" -type f | head -n1)
+        APPIMAGE_PATH=$(find build -maxdepth 1 -name "ZhiXiaoBaiSlicer*.AppImage" -type f | head -n1)
         if [ -z "$APPIMAGE_PATH" ]; then
           echo "Error: No AppImage found in build directory"
           ls -la build/ || true
@@ -180,8 +180,8 @@ jobs:
     - name: Upload AppImage as artifact
       uses: actions/upload-artifact@v4
       with:
-        name: OrcaSlicer-Ubuntu24.04-x86_64-${{ steps.version.outputs.version }}
-        path: build/OrcaSlicer*.AppImage
+        name: ZhiXiaoBaiSlicer-Ubuntu24.04-x86_64-${{ steps.version.outputs.version }}
+        path: build/ZhiXiaoBaiSlicer*.AppImage
         if-no-files-found: error
         retention-days: 30
         compression-level: 0  # AppImage 已经压缩，跳过额外压缩以节省时间

@@ -198,6 +198,7 @@ public:
 
 	// Orca printer settings
     typedef std::map<std::string, nlohmann::json> MachineSettingMap;
+    const MachineSettingMap& get_printer_settings() const { return m_printer_settings; }
     bool has_printer_settings(std::string printer) const {
         return m_printer_settings.find(printer) != m_printer_settings.end();
     }

@@ -133,20 +133,11 @@ void wxMediaCtrl2::Load(wxURI url)
             wxPostEvent(this, event);
             return;
         }
-        if (path != dll_path) {
-            static bool notified = false;
-            if (!notified) CallAfter([dll_path] {
-                int res = wxMessageBox(_L("Using a BambuSource from a different install, video play may not work correctly! Press Yes to fix it."), _L("Warning"), wxYES_NO | wxICON_WARNING);
-                if (res == wxYES) {
-                    auto path = dll_path.wstring();
-                    if (path.find(L' ') != std::wstring::npos)
-                        path = L"\"" + path + L"\"";
-                    SHELLEXECUTEINFO info{sizeof(info), 0, NULL, L"open", L"regsvr32", path.c_str(), SW_HIDE};
-                    ::ShellExecuteEx(&info);
-                }
-            });
-            notified = true;
-        }
+        // BambuSource exposes a fixed third-party CLSID and protocol. It is therefore a
+        // machine-wide compatibility component shared by all compatible slicer installs.
+        // Keep a valid existing registration instead of making co-installed applications
+        // repeatedly replace it with their own copy. If the registered copy later becomes
+        // unavailable, the recovery branch above offers to register this install's copy.
         wxRegKey keyWmp(wxRegKey::HKCU, "SOFTWARE\\Microsoft\\MediaPlayer\\Player\\Extensions\\.");
         keyWmp.Create();
         long permissions = 0;

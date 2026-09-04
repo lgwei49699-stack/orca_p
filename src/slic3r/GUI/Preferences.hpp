@@ -95,10 +95,6 @@ public:
     ::CheckBox * m_dark_mode_ckeckbox        = {nullptr};
     ::TextInput *m_backup_interval_textinput = {nullptr};
     ::CheckBox * m_legacy_networking_ckeckbox     = {nullptr};
-    ::ComboBox * m_gfd_environment_combobox      = {nullptr};
-    wxStaticText *m_gfd_account_status            = {nullptr};
-    ::Button *    m_gfd_login_button              = {nullptr};
-    ::Button *    m_gfd_logout_button             = {nullptr};
 
     wxString m_developer_mode_def;
     wxString m_internal_developer_mode_def;
@@ -113,9 +109,6 @@ public:
     wxBoxSizer *create_item_combobox(wxString title, wxWindow *parent, wxString tooltip, std::string param, std::vector<wxString> vlist);
     wxBoxSizer *create_item_combobox(wxString title, wxWindow *parent, wxString tooltip, std::string param, std::vector<wxString> vlist, std::vector<std::string> config_name_index);
     wxBoxSizer *create_item_region_combobox(wxString title, wxWindow *parent, wxString tooltip, std::vector<wxString> vlist);
-    wxBoxSizer *create_gfd_environment_combobox(wxWindow *parent);
-    wxBoxSizer *create_gfd_account_controls(wxWindow *parent);
-    void        update_gfd_account_controls();
     wxBoxSizer *create_item_language_combobox(wxString title, wxWindow *parent, wxString tooltip, int padding_left, std::string param, std::vector<const wxLanguageInfo *> vlist);
     wxBoxSizer *create_item_loglevel_combobox(wxString title, wxWindow *parent, wxString tooltip, std::vector<wxString> vlist);
     wxBoxSizer *create_item_checkbox(wxString title, wxWindow *parent, wxString tooltip, int padding_left, std::string param);

@@ -16,7 +16,9 @@
 #include "slic3r/Utils/Http.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <exception>
+#include <initializer_list>
 #include <set>
 
 #include <nlohmann/json.hpp>
@@ -38,7 +40,7 @@ namespace {
 using json = nlohmann::json;
 
 constexpr const char* ALL_VALUE                            = "All";
-constexpr const char* BIZ_VALUE                            = "ZXBMan";
+constexpr const char* BIZ_VALUE                            = "ZXB";
 constexpr long        DEVICE_QUERY_CONNECT_TIMEOUT_SECONDS = 10;
 constexpr long        DEVICE_QUERY_TIMEOUT_SECONDS         = 20;
 
@@ -57,6 +59,25 @@ std::string lower_copy(std::string value)
     return value;
 }
 
+std::string compact_device_type(std::string value)
+{
+    value = lower_copy(std::move(value));
+    value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char ch) { return std::isalnum(ch) == 0; }), value.end());
+    return value;
+}
+
+bool device_type_matches(const std::string& actual, const std::string& configured)
+{
+    const std::string actual_key     = compact_device_type(actual);
+    const std::string configured_key = compact_device_type(configured);
+    if (actual_key.empty() || configured_key.empty())
+        return false;
+    if (actual_key == configured_key)
+        return true;
+    return configured_key.size() >= 4 && actual_key.size() > configured_key.size() &&
+           actual_key.compare(actual_key.size() - configured_key.size(), configured_key.size(), configured_key) == 0;
+}
+
 std::string json_string(const json& object, const char* key)
 {
     if (!object.contains(key) || object[key].is_null())
@@ -70,6 +91,38 @@ std::string json_string(const json& object, const char* key)
     if (object[key].is_number_float())
         return std::to_string(object[key].get<double>());
     return {};
+}
+
+std::string first_json_string(const json& object, std::initializer_list<const char*> keys)
+{
+    for (const char* key : keys) {
+        const std::string value = json_string(object, key);
+        if (!value.empty())
+            return value;
+    }
+    return {};
+}
+
+const json* find_device_array(const json& response)
+{
+    const json* current = &response;
+    for (int depth = 0; current != nullptr && depth < 5; ++depth) {
+        if (current->is_array())
+            return current;
+        if (!current->is_object())
+            return nullptr;
+
+        const json* next = nullptr;
+        for (const char* key : {"devices", "list", "records", "items", "data", "result"}) {
+            const auto it = current->find(key);
+            if (it != current->end() && (it->is_array() || it->is_object())) {
+                next = &*it;
+                break;
+            }
+        }
+        current = next;
+    }
+    return nullptr;
 }
 
 std::string combo_client_data(wxChoice* choice)
@@ -117,7 +170,14 @@ wxString device_status_text(const GFDDeviceInfo& device)
     return from_u8(device.status_title.empty() ? device.device_status : device.status_title);
 }
 
-std::string device_key(const GFDDeviceInfo& device) { return !device.device_id.empty() ? device.device_id : device.mac; }
+std::string device_key(const GFDDeviceInfo& device)
+{
+    if (!device.device_sn.empty())
+        return device.device_sn;
+    if (!device.device_id.empty())
+        return device.device_id;
+    return device.mac;
+}
 
 void apply_flat_filter_button_style(Button* button, bool primary)
 {
@@ -189,7 +249,7 @@ GFDHttpResult request_gfd_devices(const std::string& query_url, const std::strin
 {
     GFDHttpResult result;
     bool          cancellation_requested = false;
-    Http::get(query_url)
+    Http::post(query_url)
         .header("Authorization", token)
         .header("Biz", BIZ_VALUE)
         .timeout_connect(DEVICE_QUERY_CONNECT_TIMEOUT_SECONDS)
@@ -292,8 +352,8 @@ void GFDDeviceSelectionDialog::build()
 
     m_operator_input = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(160), control_h));
     apply_flat_filter_input_style(m_operator_input);
-    m_operator_input->SetHint(_L("请输入使用人"));
-    add_labeled(_L("使用人:"), m_operator_input);
+    m_operator_input->SetHint(_L("请输入设备名称"));
+    add_labeled(_L("设备名称:"), m_operator_input);
 
     m_type_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(180), control_h));
     apply_flat_filter_choice_style(m_type_choice);
@@ -333,7 +393,7 @@ void GFDDeviceSelectionDialog::build()
     m_device_list->EnableCheckBoxes(true);
     m_device_list->AppendColumn(wxEmptyString, wxLIST_FORMAT_CENTER, FromDIP(42));
     m_device_list->AppendColumn(_L("设备mac"), wxLIST_FORMAT_CENTER, FromDIP(210));
-    m_device_list->AppendColumn(_L("使用人"), wxLIST_FORMAT_CENTER, FromDIP(180));
+    m_device_list->AppendColumn(_L("设备名称"), wxLIST_FORMAT_CENTER, FromDIP(180));
     m_device_list->AppendColumn(_L("打印机型号"), wxLIST_FORMAT_CENTER, FromDIP(180));
     m_device_list->AppendColumn(_L("设备状态"), wxLIST_FORMAT_CENTER, FromDIP(150));
     m_device_list->AppendColumn(_L("固件版本号"), wxLIST_FORMAT_CENTER, FromDIP(180));
@@ -684,6 +744,13 @@ void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
         return;
     }
 
+    const auto missing_sn_device =
+        std::find_if(m_selected_devices.begin(), m_selected_devices.end(), [](const GFDDeviceInfo& device) { return device.device_sn.empty(); });
+    if (missing_sn_device != m_selected_devices.end()) {
+        show_error(this, _L("所选设备缺少序列号，无法下发打印"));
+        return;
+    }
+
     if (use_3mf_file) {
         if (m_selected_devices.size() != 1) {
             BOOST_LOG_TRIVIAL(warning) << "GFD 3MF device selection confirm rejected"
@@ -981,27 +1048,48 @@ bool GFDDeviceSelectionDialog::parse_devices(const std::string& body, std::vecto
     devices.clear();
     try {
         const json        response = json::parse(body);
-        const std::string msg      = json_string(response, "msg");
-        if (!msg.empty() && msg != "success") {
+        const std::string msg      = first_json_string(response, {"msg", "message"});
+        const int         code     = response.value("code", -1);
+        if (code != 0) {
             error_message = msg;
             return false;
         }
 
-        if (!response.contains("data") || !response["data"].is_array())
+        const json* device_array = find_device_array(response);
+        if (device_array == nullptr || !device_array->is_array())
             return true;
 
-        for (const json& item : response["data"]) {
+        for (const json& item : *device_array) {
             if (!item.is_object())
                 continue;
             GFDDeviceInfo device;
-            device.mac           = json_string(item, "mac");
-            device.operator_name = json_string(item, "operator");
-            device.device_type   = json_string(item, "deviceType");
-            device.device_status = json_string(item, "deviceStatus");
-            device.status_title  = json_string(item, "deviceStatusTitle");
-            device.last_version  = json_string(item, "lastVersionFormat");
-            device.device_sn     = json_string(item, "sn");
-            device.device_id     = json_string(item, "deviceId");
+            device.mac = first_json_string(item, {"mac", "macAddress", "deviceMac"});
+            // The consumer endpoint is already scoped to the authenticated
+            // user's devices. Its `name` is the device nickname, not an owner.
+            device.operator_name = first_json_string(item, {"name"});
+            device.device_type = first_json_string(item, {"deviceType", "printerModelSn", "model", "modelName"});
+            device.device_status = first_json_string(item, {"deviceStatus", "status", "onlineStatus", "state"});
+            if (device.device_status.empty()) {
+                const auto online = item.find("online");
+                if (online != item.end() && online->is_boolean())
+                    device.device_status = online->get<bool>() ? "online" : "offline";
+            }
+            device.status_title = first_json_string(item, {"deviceStatusTitle", "statusTitle", "statusText"});
+            device.last_version = first_json_string(item, {"lastVersionFormat", "firmwareVersion", "version"});
+            device.device_sn = first_json_string(item, {"sn"});
+            device.device_id = device.device_sn;
+            if (const auto leveling = item.find("levelingBeforePrint"); leveling != item.end()) {
+                if (leveling->is_boolean())
+                    device.leveling_before_print = leveling->get<bool>();
+                else if (leveling->is_number_integer())
+                    device.leveling_before_print = leveling->get<int>() != 0;
+            }
+            for (const std::string& allowed_type : m_allowed_device_types) {
+                if (device_type_matches(device.device_type, allowed_type)) {
+                    device.device_type = allowed_type;
+                    break;
+                }
+            }
             devices.push_back(std::move(device));
         }
         return true;

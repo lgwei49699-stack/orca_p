@@ -15,17 +15,20 @@ sed -i -e 's#/usr#././#g' bin/@SLIC3R_APP_CMD@
 mv @SLIC3R_APP_CMD@ AppRun
 chmod +x AppRun
 
-cp resources/images/@SLIC3R_APP_KEY@_192px.png @SLIC3R_APP_KEY@.png
+cp resources/images/OrcaSlicer_192px.png @SLIC3R_APP_KEY@.png
 mkdir -p usr/share/icons/hicolor/192x192/apps
-cp resources/images/@SLIC3R_APP_KEY@_192px.png usr/share/icons/hicolor/192x192/apps/@SLIC3R_APP_KEY@.png
+cp resources/images/OrcaSlicer_192px.png usr/share/icons/hicolor/192x192/apps/@SLIC3R_APP_KEY@.png
 cat <<EOF > @SLIC3R_APP_KEY@.desktop
 [Desktop Entry]
-Name=@SLIC3R_APP_KEY@
-Exec=AppRun %F
+Name=@SLIC3R_APP_NAME@
+Exec=AppRun %U
 Icon=@SLIC3R_APP_KEY@
 Type=Application
-Categories=Utility;
-MimeType=model/stl;application/vnd.ms-3mfdocument;application/prs.wavefront-obj;application/x-amf;
+Terminal=false
+Categories=Graphics;3DGraphics;Engineering;
+MimeType=model/stl;model/3mf;application/vnd.ms-3mfdocument;application/prs.wavefront-obj;application/x-amf;x-scheme-handler/@SLIC3R_URL_SCHEME@;
+StartupNotify=false
+StartupWMClass=@SLIC3R_APP_KEY@
 EOF
 
 

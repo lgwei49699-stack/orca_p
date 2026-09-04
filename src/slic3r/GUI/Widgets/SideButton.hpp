@@ -51,6 +51,8 @@ public:
 
     void Rescale();
 
+    void SetIconBitmap(const wxBitmap& bitmap);
+
     void SetExtraSize(const wxSize& size);
 
     void SetIconOffset(const int offset);
@@ -71,6 +73,7 @@ private:
     wxColour        bottom_color;
 
     bool pressedDown = false;
+    bool has_custom_icon = false;
     int  layout_style = 0;
 
     EHorizontalOrientation text_orientation;

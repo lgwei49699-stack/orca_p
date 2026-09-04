@@ -37,6 +37,9 @@ src/OrcaSlicer-doc/
 /deps/DL_CACHE
 **/.flatpak-builder/
 resources/profiles/user/default
+# Guard against an accidental self-referential resources symlink, which makes
+# file watchers recurse until the process exhausts its file descriptors.
+resources/resources
 *.code-workspace
 deps_src/build/
 docs

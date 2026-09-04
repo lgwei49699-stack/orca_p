@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -155,6 +156,111 @@ std::optional<bool> json_bool(const json& value, const char* key)
             return true;
         if (text == "false" || text == "0")
             return false;
+    }
+    return std::nullopt;
+}
+
+std::string first_json_string(const json& value, std::initializer_list<const char*> keys)
+{
+    for (const char* key : keys) {
+        const std::string result = json_string(value, key);
+        if (!result.empty())
+            return result;
+    }
+    return {};
+}
+
+std::optional<int> first_json_int(const json& value, std::initializer_list<const char*> keys)
+{
+    for (const char* key : keys) {
+        const auto it = value.find(key);
+        if (it == value.end() || it->is_null())
+            continue;
+        try {
+            long long number = 0;
+            if (it->is_number_integer())
+                number = it->get<long long>();
+            else if (it->is_string())
+                number = std::stoll(it->get<std::string>());
+            else
+                continue;
+            if (number >= std::numeric_limits<int>::min() && number <= std::numeric_limits<int>::max())
+                return static_cast<int>(number);
+        } catch (...) {}
+    }
+    return std::nullopt;
+}
+
+std::optional<bool> first_json_bool(const json& value, std::initializer_list<const char*> keys)
+{
+    for (const char* key : keys) {
+        if (const auto result = json_bool(value, key); result.has_value())
+            return result;
+    }
+    return std::nullopt;
+}
+
+const json* find_filament_slot_array(const json& value, int depth = 0)
+{
+    if (!value.is_object() || depth > 4)
+        return nullptr;
+
+    for (const char* key : {"filamentSlots", "filamentInfos", "filamentInfoList", "filamentColorInfoList", "filaments",
+                            "filamentList", "ftInfos", "ftInfoList", "ftList", "mulColorInfos", "mulColorFtInfos",
+                            "mulColorFtInfoList", "materials", "colors", "slots", "slotInfos", "list"}) {
+        const auto it = value.find(key);
+        if (it != value.end() && it->is_array() && std::any_of(it->begin(), it->end(), [](const json& item) {
+                return item.is_object() &&
+                       first_json_int(item, {"slotIndex", "slotNo", "slot", "slotId", "channel", "extruderIndex", "position"})
+                           .has_value();
+            }))
+            return &*it;
+    }
+
+    for (const char* key : {"devicePrintInfo", "matlStationInfo", "materialStationInfo", "data", "result"}) {
+        const auto it = value.find(key);
+        if (it != value.end() && it->is_object()) {
+            if (const json* result = find_filament_slot_array(*it, depth + 1); result != nullptr)
+                return result;
+        }
+    }
+    return nullptr;
+}
+
+const json* find_filament_slot_object(const json& value, int depth = 0)
+{
+    if (!value.is_object() || depth > 4)
+        return nullptr;
+    for (const char* key : {"ftInfo", "filamentInfo"}) {
+        const auto it = value.find(key);
+        if (it != value.end() && it->is_object() &&
+            first_json_int(*it, {"slotIndex", "slotNo", "slot", "slotId", "channel", "extruderIndex", "position"}).has_value())
+            return &*it;
+    }
+    for (const char* key : {"devicePrintInfo", "matlStationInfo", "materialStationInfo", "data", "result"}) {
+        const auto it = value.find(key);
+        if (it != value.end() && it->is_object()) {
+            if (const json* result = find_filament_slot_object(*it, depth + 1); result != nullptr)
+                return result;
+        }
+    }
+    return nullptr;
+}
+
+std::optional<bool> find_multi_color_flag(const json& value, int depth = 0)
+{
+    if (!value.is_object() || depth > 4)
+        return std::nullopt;
+    if (const auto result = first_json_bool(
+            value, {"mulColorFlag", "multiColorFlag", "multiColourFlag", "isMultiColor", "multiColor"});
+        result.has_value())
+        return result;
+    for (const char* key : {"devicePrintInfo", "matlStationInfo", "materialStationInfo", "data", "result"}) {
+        const auto it = value.find(key);
+        if (it != value.end() && it->is_object()) {
+            if (const auto result = find_multi_color_flag(*it, depth + 1); result.has_value())
+                return result;
+        }
     }
     return std::nullopt;
 }
@@ -543,40 +649,47 @@ bool parse_gfd_device_filament_info(const std::string&      response_body,
             error_message = response.value("msg", std::string("获取打印机耗材信息失败"));
             return false;
         }
-        if (!response.contains("data") || !response["data"].is_object()) {
+        if (!response.contains("data") || (!response["data"].is_object() && !response["data"].is_array())) {
             error_message = "耗材信息响应缺少 data";
             return false;
         }
 
-        const json& data           = response["data"];
-        const auto  mul_color_flag = json_bool(data, "mulColorFlag");
-        if (!mul_color_flag.has_value()) {
-            error_message = "耗材信息响应缺少或无法识别 mulColorFlag";
-            return false;
-        }
-        filament_info.mul_color_flag = *mul_color_flag;
-        if (data.contains("slots") && data["slots"].is_array()) {
-            for (const json& item : data["slots"]) {
-                if (!item.is_object())
-                    continue;
-                if (!item.contains("slotNo") || !item["slotNo"].is_number_integer())
-                    continue;
+        const json& data = response["data"];
+        const auto  mul_color_flag = data.is_object() ? find_multi_color_flag(data) : std::optional<bool>();
+        const json* slots = data.is_array() ? &data : find_filament_slot_array(data);
+        auto append_slot = [&filament_info](const json& item) {
+            if (!item.is_object())
+                return;
 
-                const long long slot_no = item["slotNo"].get<long long>();
-                if (slot_no < std::numeric_limits<int>::min() || slot_no > std::numeric_limits<int>::max())
-                    continue;
+            const auto slot_no =
+                first_json_int(item, {"slotIndex", "slotNo", "slot", "slotId", "channel", "extruderIndex", "position"});
+            if (!slot_no.has_value())
+                return;
+            if (const auto has_filament = first_json_bool(item, {"hasFilament", "loaded", "occupied"});
+                has_filament.has_value() && !*has_filament)
+                return;
 
-                GFDDeviceFilamentSlot slot;
-                slot.slot_no             = static_cast<int>(slot_no);
-                slot.filament_sn          = json_string(item, "ftSn");
-                slot.color                = json_string(item, "color");
-                slot.color_title          = json_string(item, "colorTitle");
-                slot.material_name        = json_string(item, "materialName");
-                slot.category_first_name  = json_string(item, "categoryFirstName");
-                slot.category_second_name = json_string(item, "categorySecondName");
-                filament_info.slots.push_back(std::move(slot));
-            }
+            GFDDeviceFilamentSlot slot;
+            slot.slot_no = *slot_no;
+            slot.filament_sn = first_json_string(item, {"sn", "ftSn", "filamentSn", "materialSn", "id"});
+            slot.color = first_json_string(item, {"colorHex", "color", "ftColor", "filamentColor", "materialColor", "hex"});
+            slot.color_title =
+                first_json_string(item, {"colorTitle", "colourTitle", "colorName", "ftColorTitle", "filamentColorName"});
+            slot.material_name =
+                first_json_string(item, {"materialName", "filamentName", "ftName", "name", "materialType", "categoryName"});
+            slot.category_first_name = first_json_string(item, {"categoryFirstName", "categoryName", "materialCategory"});
+            slot.category_second_name =
+                first_json_string(item, {"categorySecondName", "subCategoryName", "materialSubcategory"});
+            filament_info.slots.push_back(std::move(slot));
+        };
+        if (slots != nullptr) {
+            for (const json& item : *slots)
+                append_slot(item);
+        } else if (const json* slot = find_filament_slot_object(data); slot != nullptr) {
+            append_slot(*slot);
         }
+
+        filament_info.mul_color_flag = mul_color_flag.value_or(filament_info.slots.size() > 1);
 
         std::stable_sort(filament_info.slots.begin(), filament_info.slots.end(), [](const auto& lhs, const auto& rhs) {
             return lhs.slot_no < rhs.slot_no;

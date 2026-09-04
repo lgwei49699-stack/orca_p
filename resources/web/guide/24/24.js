@@ -46,6 +46,11 @@ function ShowPrinterThumb(pItem, strImg)
 	$(pItem).attr('onerror',null);
 }
 
+function GetDisplayVendor(model)
+{
+	return model.hasOwnProperty('display_vendor') ? model['display_vendor'] : model['vendor'];
+}
+
 function HandleModelList( pVal )
 {
 	if( !pVal.hasOwnProperty("model") )
@@ -60,11 +65,12 @@ function HandleModelList( pVal )
 		let OneModel=pModel[n];
 		
 		let strVendor=OneModel['vendor'];
+		let strDisplayVendor=GetDisplayVendor(OneModel);
 		
 		//Add Vendor Html Node
-		if($(".OneVendorBlock[vendor='"+strVendor+"']").length==0)
+		if($(".OneVendorBlock[vendor='"+strDisplayVendor+"']").length==0)
 		{
-			let sVV=strVendor;
+			let sVV=strDisplayVendor;
 			if( sVV=="BBL" )
 				sVV="Bambu Lab";			
 			if( sVV=="Custom")
@@ -72,11 +78,11 @@ function HandleModelList( pVal )
 			if( sVV=="Other")
 				sVV="Orca colosseum";
 
-			let HtmlNewVendor='<div class="OneVendorBlock" Vendor="'+strVendor+'">'+
+			let HtmlNewVendor='<div class="OneVendorBlock" Vendor="'+strDisplayVendor+'">'+
 '<div class="BlockBanner">'+
 '	<div class="BannerBtns">'+
-'		<div class="SmallBtn_Green trans" tid="t11" onClick="SelectPrinterAll('+"\'"+strVendor+"\'"+')">all</div>'+
-'		<div class="SmallBtn trans" tid="t12" onClick="SelectPrinterNone('+"\'"+strVendor+"\'"+')">none</div>'+
+'		<div class="SmallBtn_Green trans" tid="t11" onClick="SelectPrinterAll('+"\'"+strDisplayVendor+"\'"+')">all</div>'+
+'		<div class="SmallBtn trans" tid="t12" onClick="SelectPrinterNone('+"\'"+strDisplayVendor+"\'"+')">none</div>'+
 '	</div>'+
 '	<a>'+sVV+'</a>'+
 '</div>'+
@@ -90,8 +96,8 @@ function HandleModelList( pVal )
 		let ModelName=OneModel['model'];
 		
 		//Collect Html Node Nozzel Html
-		if( !ModelHtml.hasOwnProperty(strVendor))
-			ModelHtml[strVendor]='';
+		if( !ModelHtml.hasOwnProperty(strDisplayVendor))
+			ModelHtml[strDisplayVendor]='';
 			
 		let NozzleArray=OneModel['nozzle_diameter'].split(';');
 		let HtmlNozzel='';
@@ -99,11 +105,11 @@ function HandleModelList( pVal )
 		{
 			let nNozzel=NozzleArray[m];
 			/* ORCA use label tag to allow checkbox to toggle when user ckicked to text */
-			HtmlNozzel += '<label class="pNozzel TextS2"><input type="checkbox" model="' + OneModel['model'] + '" nozzel="' + nNozzel + '" vendor="' + strVendor +'" onclick="CheckBoxOnclick(this)" /><span>'+nNozzel+'</span><span class="trans" tid="t13">mm nozzle</span></label>';
+			HtmlNozzel += '<label class="pNozzel TextS2"><input type="checkbox" model="' + OneModel['model'] + '" nozzel="' + nNozzel + '" vendor="' + strVendor +'" group_vendor="' + strDisplayVendor + '" onclick="CheckBoxOnclick(this)" /><span>'+nNozzel+'</span><span class="trans" tid="t13">mm nozzle</span></label>';
 		}
 		
 		let CoverImage=OneModel['cover'];
-		ModelHtml[strVendor]+='<div class="PrinterBlock">'+
+		ModelHtml[strDisplayVendor]+='<div class="PrinterBlock">'+
 '	<div class="PImg"><img src="'+CoverImage+'"  /></div>'+
 '    <div class="PName">'+OneModel['name']+'</div>'+ HtmlNozzel +'</div>';
 	}
@@ -224,14 +230,15 @@ function FilterModelList(keyword) {
 		let OneModel = pModel[n];
 
 		let strVendor = OneModel['vendor'];
-		let search = (OneModel['name'] + '\0' + strVendor).toLowerCase();
+		let strDisplayVendor = GetDisplayVendor(OneModel);
+		let search = (OneModel['name'] + '\0' + strVendor + '\0' + strDisplayVendor).toLowerCase();
 
 		if (!kwSplit.every(s => search.includes(s)))
 			continue;
 
 		//Add Vendor Html Node
-		if ($(".OneVendorBlock[vendor='" + strVendor + "']").length == 0) {
-			let sVV = strVendor;
+		if ($(".OneVendorBlock[vendor='" + strDisplayVendor + "']").length == 0) {
+			let sVV = strDisplayVendor;
 			if (sVV == "BBL")
 				sVV = "Bambu Lab";
 			if (sVV == "Custom")
@@ -239,11 +246,11 @@ function FilterModelList(keyword) {
 			if (sVV == "Other")
 				sVV = "Orca colosseum";
 
-			let HtmlNewVendor = '<div class="OneVendorBlock" Vendor="' + strVendor + '">' +
+			let HtmlNewVendor = '<div class="OneVendorBlock" Vendor="' + strDisplayVendor + '">' +
 				'<div class="BlockBanner">' +
 				'	<div class="BannerBtns">' +
-				'		<div class="SmallBtn_Green trans" tid="t11" onClick="SelectPrinterAll(' + "\'" + strVendor + "\'" + ')">all</div>' +
-				'		<div class="SmallBtn trans" tid="t12" onClick="SelectPrinterNone(' + "\'" + strVendor + "\'" + ')">none</div>' +
+				'		<div class="SmallBtn_Green trans" tid="t11" onClick="SelectPrinterAll(' + "\'" + strDisplayVendor + "\'" + ')">all</div>' +
+				'		<div class="SmallBtn trans" tid="t12" onClick="SelectPrinterNone(' + "\'" + strDisplayVendor + "\'" + ')">none</div>' +
 				'	</div>' +
 				'	<a>' + sVV + '</a>' +
 				'</div>' +
@@ -255,19 +262,19 @@ function FilterModelList(keyword) {
 		}
 
 		//Collect Html Node Nozzel Html
-		if (!ModelHtml.hasOwnProperty(strVendor))
-			ModelHtml[strVendor] = '';
+		if (!ModelHtml.hasOwnProperty(strDisplayVendor))
+			ModelHtml[strDisplayVendor] = '';
 
 		let NozzleArray = OneModel['nozzle_diameter'].split(';');
 		let HtmlNozzel = '';
 		for (let m = 0; m < NozzleArray.length; m++) {
 			let nNozzel = NozzleArray[m];
 			/* ORCA use label tag to allow checkbox to toggle when user ckicked to text */
-			HtmlNozzel += '<label class="pNozzel TextS2"><input type="checkbox" model="' + OneModel['model'] + '" nozzel="' + nNozzel + '" vendor="' + strVendor + '" onclick="CheckBoxOnclick(this)" /><span>' + nNozzel + '</span><span class="trans" tid="t13">mm nozzle</span></label>';
+			HtmlNozzel += '<label class="pNozzel TextS2"><input type="checkbox" model="' + OneModel['model'] + '" nozzel="' + nNozzel + '" vendor="' + strVendor + '" group_vendor="' + strDisplayVendor + '" onclick="CheckBoxOnclick(this)" /><span>' + nNozzel + '</span><span class="trans" tid="t13">mm nozzle</span></label>';
 		}
 
 		let CoverImage = OneModel['cover'];
-		ModelHtml[strVendor] += '<div class="PrinterBlock">' +
+		ModelHtml[strDisplayVendor] += '<div class="PrinterBlock">' +
 			'	<div class="PImg"><img src="' + CoverImage + '"  /></div>' +
 			'    <div class="PName">' + OneModel['name'] + '</div>' + HtmlNozzel + '</div>';
 	}
@@ -306,8 +313,8 @@ function FilterModelList(keyword) {
 
 function SelectPrinterAll( sVendor )
 {
-	$("input[vendor='"+sVendor+"']").prop("checked", true);
-	$("input[vendor='"+sVendor+"']").each(function() {
+	$("input[group_vendor='"+sVendor+"']").prop("checked", true);
+	$("input[group_vendor='"+sVendor+"']").each(function() {
 		CheckBoxOnclick(this);
 	});
 }
@@ -315,8 +322,8 @@ function SelectPrinterAll( sVendor )
 
 function SelectPrinterNone( sVendor )
 {
-	$("input[vendor='"+sVendor+"']").prop("checked", false);
-	$("input[vendor='"+sVendor+"']").each(function() {
+	$("input[group_vendor='"+sVendor+"']").prop("checked", false);
+	$("input[group_vendor='"+sVendor+"']").each(function() {
 		CheckBoxOnclick(this);
 	});
 }
@@ -450,7 +457,6 @@ function ConfirmSelect()
 		SendWXMessage( JSON.stringify(tSend) );			
 	}
 }
-
 
 
 

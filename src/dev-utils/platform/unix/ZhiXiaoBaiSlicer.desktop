@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=智小白切片软件
+GenericName=3D Printing Software
+Icon=ZhiXiaoBaiSlicer
+Exec=ZhiXiaoBaiSlicer %U
+Terminal=false
+Type=Application
+MimeType=model/stl;model/3mf;application/vnd.ms-3mfdocument;application/prs.wavefront-obj;application/x-amf;x-scheme-handler/zhixiaobaislicer;
+Categories=Graphics;3DGraphics;Engineering;
+Keywords=3D;Printing;Slicer;slice;printer;convert;gcode;stl;obj;amf;SLA;
+StartupNotify=false
+StartupWMClass=ZhiXiaoBaiSlicer

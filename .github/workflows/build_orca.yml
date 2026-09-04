@@ -16,7 +16,7 @@ on:
 
 jobs:
   build_orca:
-    name: Build OrcaSlicer
+    name: Build 智小白切片软件
     runs-on: ${{ inputs.os }}
     env:
       date:
@@ -119,19 +119,19 @@ jobs:
           security import $CERTIFICATE_PATH -P $P12_PASSWORD -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k $P12_PASSWORD $KEYCHAIN_PATH
-          codesign --deep --force --verbose --options runtime --timestamp --entitlements ${{ github.workspace }}/scripts/disable_validation.entitlements --sign "$CERTIFICATE_ID" ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer.app
+          codesign --deep --force --verbose --options runtime --timestamp --entitlements ${{ github.workspace }}/scripts/disable_validation.entitlements --sign "$CERTIFICATE_ID" ${{ github.workspace }}/build/universal/OrcaSlicer/ZhiXiaoBaiSlicer.app
           # Sign OrcaSlicer_profile_validator.app if it exists
           if [ -f "${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer_profile_validator.app/Contents/MacOS/OrcaSlicer_profile_validator" ]; then
             codesign --deep --force --verbose --options runtime --timestamp --entitlements ${{ github.workspace }}/scripts/disable_validation.entitlements --sign "$CERTIFICATE_ID" ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer_profile_validator.app
           fi
           
-          # Create main OrcaSlicer DMG without the profile validator helper
+          # Create main ZhiXiaoBaiSlicer DMG without the profile validator helper
           mkdir -p ${{ github.workspace }}/build/universal/OrcaSlicer_dmg
           rm -rf ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/*
-          cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer.app ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/
+          cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/ZhiXiaoBaiSlicer.app ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/
           ln -sfn /Applications ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/Applications
-          hdiutil create -volname "OrcaSlicer" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_dmg -ov -format UDZO OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
-          codesign --deep --force --verbose --options runtime --timestamp --entitlements ${{ github.workspace }}/scripts/disable_validation.entitlements --sign "$CERTIFICATE_ID" OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
+          hdiutil create -volname "智小白切片软件" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_dmg -ov -format UDZO ZhiXiaoBaiSlicer_Mac_universal_${{ env.ver }}.dmg
+          codesign --deep --force --verbose --options runtime --timestamp --entitlements ${{ github.workspace }}/scripts/disable_validation.entitlements --sign "$CERTIFICATE_ID" ZhiXiaoBaiSlicer_Mac_universal_${{ env.ver }}.dmg
           
           # Create separate OrcaSlicer_profile_validator DMG if the app exists
           if [ -f "${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer_profile_validator.app/Contents/MacOS/OrcaSlicer_profile_validator" ]; then
@@ -145,8 +145,8 @@ jobs:
           
           # Notarize main DMG
           xcrun notarytool store-credentials "notarytool-profile" --apple-id "${{ secrets.APPLE_DEV_ACCOUNT }}" --team-id "${{ secrets.TEAM_ID }}" --password "${{ secrets.APP_PWD }}"
-          xcrun notarytool submit "OrcaSlicer_Mac_universal_${{ env.ver }}.dmg" --keychain-profile "notarytool-profile" --wait
-          xcrun stapler staple OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
+          xcrun notarytool submit "ZhiXiaoBaiSlicer_Mac_universal_${{ env.ver }}.dmg" --keychain-profile "notarytool-profile" --wait
+          xcrun stapler staple ZhiXiaoBaiSlicer_Mac_universal_${{ env.ver }}.dmg
           
           # Notarize profile validator DMG if it exists
           if [ -f "OrcaSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg" ]; then
@@ -160,9 +160,9 @@ jobs:
         run: |
           mkdir -p ${{ github.workspace }}/build/universal/OrcaSlicer_dmg
           rm -rf ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/*
-          cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer.app ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/
+          cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/ZhiXiaoBaiSlicer.app ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/
           ln -sfn /Applications ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/Applications
-          hdiutil create -volname "OrcaSlicer" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_dmg -ov -format UDZO OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
+          hdiutil create -volname "智小白切片软件" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_dmg -ov -format UDZO ZhiXiaoBaiSlicer_Mac_universal_${{ env.ver }}.dmg
           
           # Create separate OrcaSlicer_profile_validator DMG if the app exists
           if [ -f "${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer_profile_validator.app/Contents/MacOS/OrcaSlicer_profile_validator" ]; then
@@ -177,8 +177,8 @@ jobs:
         if: inputs.os == 'macos-14'
         uses: actions/upload-artifact@v4
         with:
-          name: OrcaSlicer_Mac_universal_${{ env.ver }}
-          path: ${{ github.workspace }}/OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
+          name: ZhiXiaoBaiSlicer_Mac_universal_${{ env.ver }}
+          path: ${{ github.workspace }}/ZhiXiaoBaiSlicer_Mac_universal_${{ env.ver }}.dmg
 
       - name: Upload OrcaSlicer_profile_validator DMG mac
         if: inputs.os == 'macos-14'
@@ -189,22 +189,22 @@ jobs:
           if-no-files-found: ignore
 
       - name: Deploy Mac release
-        if: github.ref == 'refs/heads/main' && inputs.os == 'macos-14'
+        if: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL != '' && vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID != '' && github.ref == 'refs/heads/main' && inputs.os == 'macos-14' }}
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/SoftFever/OrcaSlicer/releases/137995723/assets{?name,label}
-          release_id: 137995723
-          asset_path: ${{ github.workspace }}/OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
-          asset_name: OrcaSlicer_Mac_universal_nightly.dmg
+          upload_url: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL }}
+          release_id: ${{ vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID }}
+          asset_path: ${{ github.workspace }}/ZhiXiaoBaiSlicer_Mac_universal_${{ env.ver }}.dmg
+          asset_name: ZhiXiaoBaiSlicer_Mac_universal_nightly.dmg
           asset_content_type: application/octet-stream
           max_releases: 1 # optional, if there are more releases than this matching the asset_name, the oldest ones are going to be deleted
 
       - name: Deploy Mac OrcaSlicer_profile_validator DMG release
-        if: github.ref == 'refs/heads/main' && inputs.os == 'macos-14'
+        if: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL != '' && vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID != '' && github.ref == 'refs/heads/main' && inputs.os == 'macos-14' }}
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/SoftFever/OrcaSlicer/releases/137995723/assets{?name,label}
-          release_id: 137995723
+          upload_url: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL }}
+          release_id: ${{ vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID }}
           asset_path: ${{ github.workspace }}/OrcaSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg
           asset_name: OrcaSlicer_profile_validator_Mac_universal_nightly.dmg
           asset_content_type: application/octet-stream
@@ -242,7 +242,7 @@ jobs:
         if: startsWith(inputs.os, 'windows-')
         working-directory: ${{ github.workspace }}/build
         shell: cmd
-        run: '"C:/Program Files/7-Zip/7z.exe" a -tzip OrcaSlicer_Windows_${{ env.ver }}_portable.zip ${{ github.workspace }}/build/OrcaSlicer'
+        run: '"C:/Program Files/7-Zip/7z.exe" a -tzip ZhiXiaoBaiSlicer_Windows_${{ env.ver }}_portable.zip ${{ github.workspace }}/build/OrcaSlicer'
 
       - name: Pack PDB
         if: startsWith(inputs.os, 'windows-')
@@ -254,15 +254,15 @@ jobs:
         if: startsWith(inputs.os, 'windows-')
         uses: actions/upload-artifact@v4
         with:
-          name: OrcaSlicer_Windows_${{ env.ver }}_portable
+          name: ZhiXiaoBaiSlicer_Windows_${{ env.ver }}_portable
           path: ${{ github.workspace }}/build/OrcaSlicer
 
       - name: Upload artifacts Win installer
         if: startsWith(inputs.os, 'windows-')
         uses: actions/upload-artifact@v4
         with:
-          name: OrcaSlicer_Windows_${{ env.ver }}
-          path: ${{ github.workspace }}/build/OrcaSlicer*.exe
+          name: ZhiXiaoBaiSlicer_Windows_${{ env.ver }}
+          path: ${{ github.workspace }}/build/ZhiXiaoBaiSlicer_Windows_Installer*.exe
 
       - name: Upload artifacts Win PDB
         if: startsWith(inputs.os, 'windows-')
@@ -279,33 +279,33 @@ jobs:
           path: ${{ github.workspace }}/build/src/Release/OrcaSlicer_profile_validator.exe
 
       - name: Deploy Windows release portable
-        if: github.ref == 'refs/heads/main' && startsWith(inputs.os, 'windows-')
+        if: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL != '' && vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID != '' && github.ref == 'refs/heads/main' && startsWith(inputs.os, 'windows-') }}
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/SoftFever/OrcaSlicer/releases/137995723/assets{?name,label}
-          release_id: 137995723
-          asset_path: ${{ github.workspace }}/build/OrcaSlicer_Windows_${{ env.ver }}_portable.zip
-          asset_name: OrcaSlicer_Windows_nightly_portable.zip
+          upload_url: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL }}
+          release_id: ${{ vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID }}
+          asset_path: ${{ github.workspace }}/build/ZhiXiaoBaiSlicer_Windows_${{ env.ver }}_portable.zip
+          asset_name: ZhiXiaoBaiSlicer_Windows_nightly_portable.zip
           asset_content_type: application/x-zip-compressed
           max_releases: 1
 
       - name: Deploy Windows release installer
-        if: github.ref == 'refs/heads/main' && startsWith(inputs.os, 'windows-')
+        if: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL != '' && vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID != '' && github.ref == 'refs/heads/main' && startsWith(inputs.os, 'windows-') }}
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/SoftFever/OrcaSlicer/releases/137995723/assets{?name,label}
-          release_id: 137995723
-          asset_path: ${{ github.workspace }}/build/OrcaSlicer_Windows_Installer_${{ env.ver }}.exe
-          asset_name: OrcaSlicer_Windows_Installer_nightly.exe
+          upload_url: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL }}
+          release_id: ${{ vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID }}
+          asset_path: ${{ github.workspace }}/build/ZhiXiaoBaiSlicer_Windows_Installer_${{ env.ver }}.exe
+          asset_name: ZhiXiaoBaiSlicer_Windows_Installer_nightly.exe
           asset_content_type: application/x-msdownload
           max_releases: 1
 
       - name: Deploy Windows OrcaSlicer_profile_validator release
-        if: github.ref == 'refs/heads/main' && startsWith(inputs.os, 'windows-')
+        if: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL != '' && vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID != '' && github.ref == 'refs/heads/main' && startsWith(inputs.os, 'windows-') }}
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/SoftFever/OrcaSlicer/releases/137995723/assets{?name,label}
-          release_id: 137995723
+          upload_url: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL }}
+          release_id: ${{ vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID }}
           asset_path: ${{ github.workspace }}/build/src/Release/OrcaSlicer_profile_validator.exe
           asset_name: OrcaSlicer_profile_validator_Windows_nightly.exe
           asset_content_type: application/x-msdownload
@@ -343,8 +343,8 @@ jobs:
           ubuntu-ver-str: ${{ (inputs.os == 'ubuntu-24.04' && '_Ubuntu2404') || '' }}
         run: |
           ./build_linux.sh -isr
-          mv -n ./build/OrcaSlicer_Linux_V${{ env.ver_pure }}.AppImage ./build/OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage
-          chmod +x ./build/OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage
+          mv -n ./build/ZhiXiaoBaiSlicer_Linux_V${{ env.ver_pure }}.AppImage ./build/ZhiXiaoBaiSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage
+          chmod +x ./build/ZhiXiaoBaiSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage
 
       - name: Build orca_custom_preset_tests
         if: github.ref == 'refs/heads/main' && inputs.os == 'ubuntu-24.04'
@@ -362,8 +362,8 @@ jobs:
           ubuntu-ver-str: ${{ (inputs.os == 'ubuntu-24.04' && '_Ubuntu2404') || '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: OrcaSlicer_Linux_ubuntu_${{ env.ubuntu-ver }}_${{ env.ver }}
-          path: './build/OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage'
+          name: ZhiXiaoBaiSlicer_Linux_ubuntu_${{ env.ubuntu-ver }}_${{ env.ver }}
+          path: './build/ZhiXiaoBaiSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage'
 
       - name: Upload OrcaSlicer_profile_validator Ubuntu
         if: ${{ ! env.ACT && inputs.os == 'ubuntu-20.04' || inputs.os == 'ubuntu-24.04' }}
@@ -375,15 +375,15 @@ jobs:
           path: './build/src/Release/OrcaSlicer_profile_validator'
 
       - name: Deploy Ubuntu release
-        if: ${{ ! env.ACT && github.ref == 'refs/heads/main' && (inputs.os == 'ubuntu-20.04' || inputs.os == 'ubuntu-24.04') }}
+        if: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL != '' && vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID != '' && ! env.ACT && github.ref == 'refs/heads/main' && (inputs.os == 'ubuntu-20.04' || inputs.os == 'ubuntu-24.04') }}
         env:
           ubuntu-ver-str: ${{ (inputs.os == 'ubuntu-24.04' && '_Ubuntu2404') || '' }}
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/SoftFever/OrcaSlicer/releases/137995723/assets{?name,label}
-          release_id: 137995723
-          asset_path: ./build/OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage
-          asset_name: OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_nightly.AppImage
+          upload_url: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL }}
+          release_id: ${{ vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID }}
+          asset_path: ./build/ZhiXiaoBaiSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage
+          asset_name: ZhiXiaoBaiSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_nightly.AppImage
           asset_content_type: application/octet-stream
           max_releases: 1 # optional, if there are more releases than this matching the asset_name, the oldest ones are going to be deleted
       - name: Deploy Ubuntu release
@@ -396,24 +396,24 @@ jobs:
           message: "nightly-builds"
 
       - name: Deploy Ubuntu OrcaSlicer_profile_validator release
-        if: ${{ ! env.ACT && github.ref == 'refs/heads/main' && (inputs.os == 'ubuntu-20.04' || inputs.os == 'ubuntu-24.04') }}
+        if: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL != '' && vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID != '' && ! env.ACT && github.ref == 'refs/heads/main' && (inputs.os == 'ubuntu-20.04' || inputs.os == 'ubuntu-24.04') }}
         env:
           ubuntu-ver-str: ${{ (inputs.os == 'ubuntu-24.04' && '_Ubuntu2404') || '' }}
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/SoftFever/OrcaSlicer/releases/137995723/assets{?name,label}
-          release_id: 137995723
+          upload_url: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL }}
+          release_id: ${{ vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID }}
           asset_path: ./build/src/Release/OrcaSlicer_profile_validator
           asset_name: OrcaSlicer_profile_validator_Linux${{ env.ubuntu-ver-str }}_nightly
           asset_content_type: application/octet-stream
           max_releases: 1
 
       - name: Deploy orca_custom_preset_tests
-        if: ${{ ! env.ACT && github.ref == 'refs/heads/main' && inputs.os == 'ubuntu-24.04' }}
+        if: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL != '' && vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID != '' && ! env.ACT && github.ref == 'refs/heads/main' && inputs.os == 'ubuntu-24.04' }}
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/SoftFever/OrcaSlicer/releases/137995723/assets{?name,label}
-          release_id: 137995723
+          upload_url: ${{ vars.ZHIXIAOBAI_NIGHTLY_UPLOAD_URL }}
+          release_id: ${{ vars.ZHIXIAOBAI_NIGHTLY_RELEASE_ID }}
           asset_path: ${{ github.workspace }}/resources/profiles/orca_custom_preset_tests.zip
           asset_name: orca_custom_preset_tests.zip
           asset_content_type: application/octet-stream

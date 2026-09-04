@@ -44,6 +44,8 @@ class wxProgressDialog;
 
 namespace Slic3r {
 
+class Http;
+
 namespace GUI
 {
 
@@ -328,6 +330,7 @@ public:
     void        bind_gfd_config_buttons();
     void        update_gfd_print_button();
     void        update_gfd_config_buttons();
+    void        update_gfd_account_button();
 
     bool can_save() const;
     bool can_save_as() const;
@@ -399,6 +402,12 @@ public:
     SideButton* m_print_btn{ nullptr };
     SideButton* m_print_option_btn{ nullptr };
     SideButton* m_gfd_print_btn{ nullptr };
+    SideButton* m_gfd_account_btn{ nullptr };
+    std::string m_gfd_account_avatar_url;
+    std::string m_gfd_account_avatar_data;
+    std::size_t m_gfd_account_avatar_request_id{0};
+    bool        m_gfd_account_avatar_loading{false};
+    std::shared_ptr<Http> m_gfd_account_avatar_request;
     bool        m_gfd_config_operation_in_progress{false};
     std::shared_ptr<std::atomic_bool> m_gfd_config_callback_alive{std::make_shared<std::atomic_bool>(true)};
     mutable bool          m_slice_enable{ true };

@@ -157,9 +157,17 @@ bool SideButton::Enable(bool enable)
 
 void SideButton::Rescale()
 {
-    if (this->icon.bmp().IsOk())
+    if (this->icon.bmp().IsOk() && !has_custom_icon)
         this->icon.msw_rescale();
     messureSize();
+}
+
+void SideButton::SetIconBitmap(const wxBitmap& bitmap)
+{
+    this->icon.bmp() = bitmap;
+    has_custom_icon  = true;
+    messureSize();
+    Refresh();
 }
 
 void SideButton::SetExtraSize(const wxSize& size)
@@ -213,9 +221,11 @@ void SideButton::dorender(wxDC& dc, wxDC& text_dc)
     if (icon.bmp().IsOk()) {
         if (radius > 1e-5) {
             dc.DrawRoundedRectangle(0, 0, size.x, size.y, radius);
-            dc.DrawRectangle(radius, 0, size.x - radius, size.y);
-            dc.SetPen(wxNullPen);
-            dc.DrawRectangle(radius - pen_width, pen_width, radius, size.y - 2 * pen_width);
+            if (layout_style != 1) {
+                dc.DrawRectangle(radius, 0, size.x - radius, size.y);
+                dc.SetPen(wxNullPen);
+                dc.DrawRectangle(radius - pen_width, pen_width, radius, size.y - 2 * pen_width);
+            }
         }
         else {
             dc.DrawRectangle(0, 0, size.x, size.y);

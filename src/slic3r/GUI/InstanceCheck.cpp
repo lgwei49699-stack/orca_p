@@ -94,25 +94,24 @@ namespace instance_check_internal
 		//search is done by classname(wxWindowNR is wxwidgets thing, so probably not unique) and name in window upper panel
 		//other option would be do a mutex and check for its existence
 		//BOOST_LOG_TRIVIAL(error) << "ewp: version: " << l_version_wstring;
-		TCHAR 		 wndText[1000];
 		TCHAR 		 className[1000];
 		int          err;
 		err = GetClassName(hwnd, className, 1000);
 		if (err == 0)
 			return true;
-		err = GetWindowText(hwnd, wndText, 1000);
-		if (err == 0)
-			return true;
 		std::wstring classNameString(className);
-		std::wstring wndTextString(wndText);
-		if (wndTextString.find(L"OrcaSlicer") != std::wstring::npos && classNameString == L"wxWindowNR") {
+		if (classNameString == L"wxWindowNR") {
 			//check if other instances has same instance hash
 			//if not it is not same version(binary) as this version 
-			HANDLE   handle = GetProp(hwnd, L"Instance_Hash_Minor");
+			HANDLE   handle_minor = GetProp(hwnd, L"Instance_Hash_Minor");
+			HANDLE   handle_major = GetProp(hwnd, L"Instance_Hash_Major");
+			if (handle_minor == nullptr && handle_major == nullptr)
+				return true;
+			HANDLE   handle = handle_minor;
 			uint64_t other_instance_hash = PtrToUint(handle);
 			uint64_t other_instance_hash_major;
 			uint64_t my_instance_hash = GUI::wxGetApp().get_instance_hash_int();
-			handle = GetProp(hwnd, L"Instance_Hash_Major");
+			handle = handle_major;
 			other_instance_hash_major = PtrToUint(handle);
 			other_instance_hash_major = other_instance_hash_major << 32;
 			other_instance_hash += other_instance_hash_major;
@@ -237,10 +236,10 @@ namespace instance_check_internal
 			dbus_uint32_t 	serial = 0;
 			const char* sigval = message_text.c_str();
 			//std::string		interface_name = "com.prusa3d.prusaslicer.InstanceCheck";
-			std::string		interface_name = "com.softfever3d.orca-slicer.InstanceCheck.Object" + version;
+			std::string		interface_name = "com.wisebeginner3d.ZhiXiaoBaiSlicer.InstanceCheck.Object" + version;
 			std::string   	method_name = "AnotherInstance";
 			//std::string		object_name = "/com/prusa3d/prusaslicer/InstanceCheck";
-			std::string		object_name = "/com/softfever3d/OrcaSlicer/InstanceCheck/Object" + version;
+			std::string		object_name = "/com/wisebeginner3d/ZhiXiaoBaiSlicer/InstanceCheck/Object" + version;
 
 
 			// initialise the error value
@@ -501,7 +500,7 @@ void OtherInstanceMessageHandler::handle_message(const std::string& message)
 
 	std::vector<boost::filesystem::path> paths;
 	std::vector<std::string> downloads;
-	boost::regex re(R"(^(orcaslicer|prusaslicer|cura|bambustudio):\/\/open[\/]?\?file=)", boost::regbase::icase);
+	boost::regex re(R"(^(zhixiaobaislicer|orcaslicer|prusaslicer|cura|bambustudio):\/\/open[\/]?\?file=)", boost::regbase::icase);
 	boost::regex re2(R"(^(bambustudioopen):\/\/)", boost::regex::icase);
 	boost::smatch results;
 
@@ -551,7 +550,7 @@ namespace MessageHandlerDBusInternal
 	        "       <arg name=\"data\" direction=\"out\" type=\"s\" />"
 	        "     </method>"
 	        "   </interface>"
-	        "   <interface name=\"com.softfever3d.orca-slicer.InstanceCheck\">"
+	        "   <interface name=\"com.wisebeginner3d.ZhiXiaoBaiSlicer.InstanceCheck\">"
 	        "     <method name=\"AnotherInstance\">"
 	        "       <arg name=\"data\" direction=\"in\" type=\"s\" />"
 	        "     </method>"
@@ -589,7 +588,7 @@ namespace MessageHandlerDBusInternal
 	{
 		const char* interface_name = dbus_message_get_interface(message);
 	    const char* member_name    = dbus_message_get_member(message);
-	    std::string our_interface  = "com.softfever3d.orca-slicer.InstanceCheck.Object" + wxGetApp().get_instance_hash_string();
+	    std::string our_interface  = "com.wisebeginner3d.ZhiXiaoBaiSlicer.InstanceCheck.Object" + wxGetApp().get_instance_hash_string();
 	    BOOST_LOG_TRIVIAL(trace) << "DBus message received: interface: " << interface_name << ", member: " << member_name;
 	    if (0 == strcmp("org.freedesktop.DBus.Introspectable", interface_name) && 0 == strcmp("Introspect", member_name)) {		
 	        respond_to_introspect(connection, message);
@@ -609,8 +608,8 @@ void OtherInstanceMessageHandler::listen()
     int 				 name_req_val;
     DBusObjectPathVTable vtable;
     std::string 		 instance_hash  = wxGetApp().get_instance_hash_string();
-	std::string			 interface_name = "com.softfever3d.orca-slicer.InstanceCheck.Object" + instance_hash;
-    std::string			 object_name 	= "/com/softfever3d/OrcaSlicer/InstanceCheck/Object" + instance_hash;
+	std::string			 interface_name = "com.wisebeginner3d.ZhiXiaoBaiSlicer.InstanceCheck.Object" + instance_hash;
+    std::string			 object_name 	= "/com/wisebeginner3d/ZhiXiaoBaiSlicer/InstanceCheck/Object" + instance_hash;
 
     //BOOST_LOG_TRIVIAL(debug) << "init dbus listen " << interface_name << " " << object_name;
     dbus_error_init(&err);

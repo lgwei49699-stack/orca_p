@@ -328,47 +328,6 @@ std::string gfd_local_sync_deserialize_value(const DynamicPrintConfig& config, c
     return result;
 }
 
-DynamicPrintConfig gfd_local_sync_resolve_config(const PresetCollection& presets, const Preset& preset)
-{
-    const Preset* parent = presets.get_preset_parent(preset);
-    if (parent == nullptr)
-        return preset.config;
-
-    DynamicPrintConfig resolved = gfd_local_sync_resolve_config(presets, *parent);
-    for (const std::string& key : preset.config.diff(parent->config)) {
-        const ConfigOption* source = preset.config.option(key);
-        if (source == nullptr)
-            continue;
-        ConfigOption* destination = resolved.option(key, true);
-        destination->set(source);
-    }
-    return resolved;
-}
-
-json gfd_local_sync_config_to_json(const DynamicPrintConfig& config, const std::string& preset_name)
-{
-    json payload = json::object();
-    payload["type"]          = "filament";
-    payload["name"]          = preset_name;
-    payload["from"]          = "system";
-    payload["instantiation"] = "true";
-
-    for (const std::string& key : config.keys()) {
-        const ConfigOption* option = config.option(key);
-        if (option == nullptr)
-            continue;
-        if (option->is_scalar()) {
-            if (option->type() == coString && key != "bed_custom_texture" && key != "bed_custom_model")
-                payload[key] = static_cast<const ConfigOptionString*>(option)->value;
-            else
-                payload[key] = option->serialize();
-        } else {
-            payload[key] = static_cast<const ConfigOptionVectorBase*>(option)->vserialize();
-        }
-    }
-    return payload;
-}
-
 wxWindow* gfd_local_sync_top_level_parent(wxWindow* parent)
 {
     wxWindow* top_level_parent = wxGetTopLevelParent(parent);
@@ -381,11 +340,10 @@ public:
     GFDLocalFilamentSyncTargetDialog(wxWindow*          parent,
                                      Plater*            plater,
                                      const std::string& local_preset_name,
-                                     const std::string& device_type,
-                                     bool               upload_to_cloud)
+                                     const std::string& device_type)
         : wxDialog(gfd_local_sync_top_level_parent(parent),
                    wxID_ANY,
-                   upload_to_cloud ? _L("本地耗材同步到云端") : _L("云端耗材同步到本地"),
+                   _L("云端耗材同步到本地"),
                    wxDefaultPosition,
                    wxDefaultSize,
                    wxCAPTION | wxCLOSE_BOX)
@@ -440,7 +398,7 @@ public:
         cancel_button->SetMinSize(action_button_size);
         cancel_button->SetSize(action_button_size);
 
-        m_confirm_button = new Button(this, upload_to_cloud ? _L("同步到云端") : _L("同步到本地"));
+        m_confirm_button = new Button(this, _L("同步到本地"));
         update_confirm_button_state(false);
 
         button_row->Add(cancel_button, 0, wxRIGHT, FromDIP(12));
@@ -936,12 +894,7 @@ void Tab::create_preset_tab()
         m_btn_gfd_cloud_to_local = new Button(m_top_panel, _L("云端→本地"));
         m_btn_gfd_cloud_to_local->SetStyle(ButtonStyle::Regular, ButtonType::Compact);
         m_btn_gfd_cloud_to_local->SetMinSize(wxSize(FromDIP(88), FromDIP(28)));
-        m_btn_gfd_cloud_to_local->SetToolTip(_L("从 GFD 云端同步到当前本地耗材编辑状态"));
-
-        m_btn_gfd_local_to_cloud = new Button(m_top_panel, _L("本地→云端"));
-        m_btn_gfd_local_to_cloud->SetStyle(ButtonStyle::Regular, ButtonType::Compact);
-        m_btn_gfd_local_to_cloud->SetMinSize(wxSize(FromDIP(88), FromDIP(28)));
-        m_btn_gfd_local_to_cloud->SetToolTip(_L("把当前本地耗材编辑值同步到 GFD 云端"));
+        m_btn_gfd_cloud_to_local->SetToolTip(_L("只读获取 GFD 云端参数并加载到当前本地耗材编辑状态"));
     }
 
     //add_scaled_button(panel, &m_btn_compare_preset, "compare");
@@ -1020,7 +973,6 @@ void Tab::create_preset_tab()
         if (!m_detached_from_app_state && m_btn_save_preset) m_btn_save_preset->Show();
         if (!m_detached_from_app_state && m_btn_delete_preset) m_btn_delete_preset->Show(); // ORCA: fixes delete preset button visible while search box focused
         if (m_btn_gfd_cloud_to_local) m_btn_gfd_cloud_to_local->Show();
-        if (m_btn_gfd_local_to_cloud) m_btn_gfd_local_to_cloud->Show();
         if (m_undo_btn) m_undo_btn->Show();          // ORCA: fixes revert preset button visible while search box focused
         if (m_btn_search) m_btn_search->Show();
         if (m_search_item) m_search_item->Hide();
@@ -1055,8 +1007,6 @@ void Tab::create_preset_tab()
              m_btn_delete_preset->Hide(); // ORCA: fixes delete preset button visible while search box focused
          if (m_btn_gfd_cloud_to_local)
              m_btn_gfd_cloud_to_local->Hide();
-         if (m_btn_gfd_local_to_cloud)
-             m_btn_gfd_local_to_cloud->Hide();
          if (m_undo_btn)
              m_undo_btn->Hide();          // ORCA: fixes revert preset button visible while search box focused
          if (m_btn_search)
@@ -1102,8 +1052,6 @@ void Tab::create_preset_tab()
 #endif
     if (m_btn_gfd_cloud_to_local != nullptr)
         m_top_sizer->Add(m_btn_gfd_cloud_to_local, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::IconSpacing()));
-    if (m_btn_gfd_local_to_cloud != nullptr)
-        m_top_sizer->Add(m_btn_gfd_local_to_cloud, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::IconSpacing()));
     m_top_sizer->Add(m_btn_save_preset, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::IconSpacing()));
     m_top_sizer->Add(m_btn_delete_preset, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::IconSpacing()));
     m_top_sizer->Add(m_btn_search, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::IconSpacing()));
@@ -1248,9 +1196,7 @@ void Tab::create_preset_tab()
     m_btn_save_preset->Bind(wxEVT_BUTTON, ([this](wxCommandEvent e) { save_preset(); }));
     m_btn_delete_preset->Bind(wxEVT_BUTTON, ([this](wxCommandEvent e) { delete_preset(); }));
     if (m_btn_gfd_cloud_to_local != nullptr)
-        m_btn_gfd_cloud_to_local->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { sync_gfd_filament(false); });
-    if (m_btn_gfd_local_to_cloud != nullptr)
-        m_btn_gfd_local_to_cloud->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { sync_gfd_filament(true); });
+        m_btn_gfd_cloud_to_local->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { sync_gfd_filament(); });
     /*m_btn_hide_incompatible_presets->Bind(wxEVT_BUTTON, ([this](wxCommandEvent e) {
         toggle_show_hide_incompatible();
     }));
@@ -1275,7 +1221,7 @@ void Tab::create_preset_tab()
     m_completed = true;
 }
 
-void Tab::sync_gfd_filament(bool upload_to_cloud)
+void Tab::sync_gfd_filament()
 {
     if (m_type != Preset::TYPE_FILAMENT || m_detached_from_app_state || m_presets == nullptr || m_config == nullptr)
         return;
@@ -1295,7 +1241,7 @@ void Tab::sync_gfd_filament(bool upload_to_cloud)
 
     const Preset& edited_preset = m_presets->get_edited_preset();
     const std::string local_preset_name = edited_preset.name.empty() ? m_presets->get_selected_preset_name() : edited_preset.name;
-    GFDLocalFilamentSyncTargetDialog target_dialog(this, plater, local_preset_name, device_type, upload_to_cloud);
+    GFDLocalFilamentSyncTargetDialog target_dialog(this, plater, local_preset_name, device_type);
     if (target_dialog.ShowModal() != wxID_OK)
         return;
 
@@ -1332,78 +1278,6 @@ void Tab::sync_gfd_filament(bool upload_to_cloud)
     json remote_values;
     if (!gfd_local_sync_extract_cloud_params(detail_result.body, device_type, remote_values, error_message)) {
         gfd_local_sync_show_error(this, error_message.empty() ? "解析云端耗材参数失败" : error_message);
-        return;
-    }
-
-    if (upload_to_cloud) {
-        DynamicPrintConfig resolved_config = gfd_local_sync_resolve_config(*m_presets, edited_preset);
-        json local_values = gfd_local_sync_config_to_json(resolved_config, local_preset_name);
-        if (!edited_preset.setting_id.empty())
-            local_values["setting_id"] = edited_preset.setting_id;
-        if (!edited_preset.filament_id.empty())
-            local_values["filament_id"] = edited_preset.filament_id;
-        json upload_values = remote_values.is_object() ? remote_values : json::object();
-        for (auto it = local_values.begin(); it != local_values.end(); ++it)
-            upload_values[it.key()] = it.value();
-
-        wxString confirmation = wxString::Format(
-            _L("将把本地耗材“%s”的当前页面参数同步到云端耗材：\n\n耗材 SN：%s\n机型：%s\n\n"),
-            from_u8(local_preset_name),
-            from_u8(filament_sn),
-            from_u8(device_type));
-        confirmation += remote_values.empty() ?
-                            _L("云端当前没有该机型参数，本次将创建参数。") :
-                            _L("云端已存在该机型参数，本次将覆盖已知字段。");
-        if (current_preset_is_dirty())
-            confirmation +=
-                _L("\n\n当前本地耗材存在未保存修改；"
-                   "本次会上传页面中的当前值，但不会自动保存到本地。");
-        if (gfd_local_sync_show_message(
-                this, confirmation, _L("确认同步到云端"), wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION) != wxID_YES)
-            return;
-
-        GFDAsyncRequestResult update_result;
-        bool                  update_canceled = false;
-        const std::string     slice_param     = upload_values.dump();
-        GFDLocalSyncRequestDialog update_dialog(
-            this,
-            plater,
-            _L("正在同步耗材参数到云端..."),
-            "同步到云端失败",
-            false,
-            [plater, filament_sn, device_type, slice_param](GFDDynamicRequestFinishedFn finished) {
-                return plater->update_dynamic_filament_slice_param_async(
-                    filament_sn, device_type, slice_param, std::move(finished));
-            });
-        if (!update_dialog.run(update_result, update_canceled)) {
-            if (!update_canceled)
-                gfd_local_sync_show_error(
-                    this, update_result.error_message.empty() ? "同步到云端失败" : update_result.error_message);
-            return;
-        }
-        if (!update_result.ok) {
-            gfd_local_sync_show_error(
-                this, update_result.error_message.empty() ? "同步到云端失败" : update_result.error_message);
-            return;
-        }
-
-        try {
-            const json response = json::parse(update_result.body);
-            if (!gfd_local_sync_response_ok(response, error_message)) {
-                gfd_local_sync_show_error(this, error_message.empty() ? "同步到云端失败" : error_message);
-                return;
-            }
-        } catch (...) {
-            // HTTP 层已经判定请求成功时，兼容没有 JSON 响应体的接口实现。
-        }
-
-        gfd_local_sync_show_message(
-            this,
-            wxString::Format(_L("本地耗材参数已同步到云端。\n\n耗材 SN：%s\n机型：%s"),
-                             from_u8(filament_sn),
-                             from_u8(device_type)),
-            _L("同步成功"),
-            wxOK | wxICON_INFORMATION);
         return;
     }
 

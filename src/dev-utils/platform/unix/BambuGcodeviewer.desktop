@@ -1,9 +1,10 @@
 [Desktop Entry]
-Name=Bambu GCode viewer
-Exec=orca-slicer --gcodeviewer %F
-Icon=OrcaSlicer-gcodeviewer
+Name=智小白切片软件 G-code 查看器
+Exec=ZhiXiaoBaiSlicer --gcodeviewer %F
+Icon=ZhiXiaoBaiSlicer
 Terminal=false
 Type=Application
 MimeType=text/x.gcode;
 Categories=Graphics;3DGraphics;
 Keywords=3D;Printing;Slicer;
+StartupWMClass=ZhiXiaoBaiSlicer

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-24 19:45+0800\n"
+"POT-Creation-Date: 2026-09-03 14:55+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,6 +17,205 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\n"
+
+msgid "The operation was canceled."
+msgstr ""
+
+msgid "Failed to load the slider CAPTCHA."
+msgstr ""
+
+msgid "The slider CAPTCHA data is empty."
+msgstr ""
+
+msgid "The slider CAPTCHA data is incomplete."
+msgstr ""
+
+msgid "The slider CAPTCHA service returned an invalid response. Please try again later."
+msgstr ""
+
+msgid "Failed to send the verification code."
+msgstr ""
+
+msgid "The verification code service returned an invalid response. Please try again later."
+msgstr ""
+
+msgid "Login failed."
+msgstr ""
+
+msgid "The login service did not return valid credentials."
+msgstr ""
+
+msgid "The login service returned an invalid response. Please try again later."
+msgstr ""
+
+msgid "Security Verification"
+msgstr ""
+
+msgid "Drag the slider to complete verification"
+msgstr ""
+
+msgid "Drag the slider below to align the puzzle piece with the gap."
+msgstr ""
+
+msgid "The slider CAPTCHA image is invalid. Please request a new one."
+msgstr ""
+
+msgid "Complete Verification"
+msgstr ""
+
+msgid "WiseBeginner Slicer"
+msgstr ""
+
+msgid "Checking login status"
+msgstr ""
+
+msgid "Verifying your WiseBeginner account. Please wait..."
+msgstr ""
+
+msgid "Login verification failed"
+msgstr ""
+
+msgid "Unable to verify your login status. Check your network connection and try again."
+msgstr ""
+
+msgid "User Login"
+msgstr ""
+
+msgid "Network Environment"
+msgstr ""
+
+msgid "Production Environment"
+msgstr ""
+
+msgid "Test Environment"
+msgstr ""
+
+msgid "Switched to the production environment."
+msgstr ""
+
+msgid "Switched to the test environment."
+msgstr ""
+
+msgid "Sign in to your WiseBeginner account"
+msgstr ""
+
+msgid "Sign in to sync read-only parameters and send print jobs to your printers."
+msgstr ""
+
+msgid "Sign in with an SMS verification code"
+msgstr ""
+
+msgid "Phone Number"
+msgstr ""
+
+msgid "Enter your phone number"
+msgstr ""
+
+msgid "SMS Verification Code"
+msgstr ""
+
+msgid "Enter the verification code"
+msgstr ""
+
+msgid "Get Verification Code"
+msgstr ""
+
+msgid "I have read and agree to the User Agreement and Privacy Policy."
+msgstr ""
+
+msgid "Log In"
+msgstr ""
+
+msgid "Enter a valid mainland China phone number."
+msgstr ""
+
+msgid "Enter a valid SMS verification code."
+msgstr ""
+
+msgid "Please read and agree to the User Agreement and Privacy Policy first."
+msgstr ""
+
+msgid "Canceling login..."
+msgstr ""
+
+#, c-format, boost-format
+msgid "Try again in %d seconds"
+msgstr ""
+
+msgid "Loading slider CAPTCHA..."
+msgstr ""
+
+msgid "An error occurred while loading the slider CAPTCHA."
+msgstr ""
+
+msgid "Complete the slider CAPTCHA first."
+msgstr ""
+
+msgid "Unable to start the slider CAPTCHA request. Please try again later."
+msgstr ""
+
+msgid "Sending verification code..."
+msgstr ""
+
+msgid "An error occurred while sending the verification code."
+msgstr ""
+
+msgid "The verification code has been sent. Please check your messages."
+msgstr ""
+
+msgid "Unable to send the verification code. Please try again later."
+msgstr ""
+
+msgid "Logging in..."
+msgstr ""
+
+msgid "An error occurred while logging in."
+msgstr ""
+
+msgid "Unable to start the login request. Please try again later."
+msgstr ""
+
+msgid "WiseBeginner Account"
+msgstr ""
+
+msgid "View your current WiseBeginner account status, or sign out and sign in again."
+msgstr ""
+
+msgid "Sign In"
+msgstr ""
+
+msgid "This will sign you out of your current WiseBeginner account and reopen the SMS verification code sign-in window. Continue?"
+msgstr ""
+
+msgid "Sign In Again"
+msgstr ""
+
+msgid "Sign Out"
+msgstr ""
+
+msgid "Are you sure you want to sign out of your WiseBeginner account?"
+msgstr ""
+
+msgid "Signed In"
+msgstr ""
+
+msgid "Signed in as: "
+msgstr ""
+
+msgid "Not Signed In"
+msgstr ""
+
+msgid "There is no active WiseBeginner account session."
+msgstr ""
+
+msgid "Signed-in User"
+msgstr ""
+
+msgid "Sign In with SMS Verification Code"
+msgstr ""
+
+msgid "Signed out successfully."
+msgstr ""
 
 msgid "Current AMS humidity"
 msgstr ""
@@ -2763,48 +2962,59 @@ msgstr ""
 msgid "Install failed"
 msgstr ""
 
-msgid "Portions copyright"
-msgstr ""
-
 msgid "Copyright"
 msgstr ""
 
 msgid "License"
 msgstr ""
 
-msgid "Orca Slicer is licensed under "
+msgid "Open-source licenses"
+msgstr ""
+
+msgid "WiseBeginner Slicer is distributed under "
 msgstr ""
 
 msgid "GNU Affero General Public License, version 3"
 msgstr ""
 
-msgid "Orca Slicer is based on PrusaSlicer and BambuStudio"
+msgid "WiseBeginner Slicer is based on OrcaSlicer and related open-source projects"
 msgstr ""
 
-msgid "Libraries"
+msgid "Open-source components"
 msgstr ""
 
-msgid ""
-"This software uses open source components whose copyright and other "
-"proprietary rights belong to their respective owners"
+msgid "Copyright and other rights for open-source components belong to their respective owners"
 msgstr ""
 
 #, possible-c-format, possible-boost-format
 msgid "About %s"
 msgstr ""
 
-msgid "OrcaSlicer is based on BambuStudio, PrusaSlicer, and SuperSlicer."
+msgid "Smart slicing for everyday 3D printing"
 msgstr ""
 
-msgid "BambuStudio is originally based on PrusaSlicer by PrusaResearch."
+msgid "Build"
 msgstr ""
 
-msgid "PrusaSlicer is originally based on Slic3r by Alessandro Ranellucci."
+msgid "WiseBeginner Slicer is designed for everyday 3D printing, including model slicing, print configuration, and sending print jobs."
 msgstr ""
 
-msgid ""
-"Slic3r was created by Alessandro Ranellucci with the help of many other "
-"contributors."
+msgid "After signing in, you can read and locally cache cloud filament and slicing presets, and send jobs to printers linked to your account."
+msgstr ""
+
+msgid "WiseBeginner Slicer is based on OrcaSlicer. OrcaSlicer is based on Bambu Studio, PrusaSlicer, and SuperSlicer; Bambu Studio is based on PrusaSlicer by Prusa Research, and PrusaSlicer originates from Slic3r by Alessandro Ranellucci."
+msgstr ""
+
+msgid "We thank these open-source projects and all their contributors."
+msgstr ""
+
+msgid "WiseBeginner modifications © 2026 WiseBeginner3D."
+msgstr ""
+
+msgid "Open-source components retain their original copyrights and licenses."
+msgstr ""
+
+msgid "OrcaSlicer upstream open-source project"
 msgstr ""
 
 msgid "Version"

@@ -9,6 +9,7 @@
 #include "libslic3r_version.h"
 
 #include <algorithm>
+#include <cctype>
 #include <set>
 #include <fstream>
 #include <unordered_set>
@@ -51,11 +52,249 @@ const char *PresetBundle::ORCA_DEFAULT_PRINTER_VARIANT = "0.4";
 const char *PresetBundle::ORCA_DEFAULT_FILAMENT = "Generic PLA @System";
 const char *PresetBundle::ORCA_FILAMENT_LIBRARY = "OrcaFilamentLibrary";
 
+static const std::array<const char*, 12>& gfd_ep7_default_filaments()
+{
+    static const std::array<const char*, 12> defaults = {
+        "Generic ABS @EP7 0.2 nozzle",  "Generic ABS @EP7 0.4 nozzle",  "Generic ABS @EP7 0.6 nozzle",
+        "Generic ABS @EP7 0.8 nozzle",  "Generic PETG @EP7 0.2 nozzle", "Generic PETG @EP7 0.4 nozzle",
+        "Generic PETG @EP7 0.6 nozzle", "Generic PETG @EP7 0.8 nozzle", "Generic PLA @EP7 0.2 nozzle",
+        "Generic PLA @EP7 0.4 nozzle",  "Generic PLA @EP7 0.6 nozzle",  "Generic PLA @EP7 0.8 nozzle",
+    };
+    return defaults;
+}
+
+static const std::unordered_set<std::string>& gfd_legacy_ep7_default_filaments()
+{
+    static const std::unordered_set<std::string> defaults = [] {
+        const std::vector<std::pair<std::string, std::vector<std::string>>> families = {
+            {"Bambu PLA", {"0.2", "0.4", "0.6", "0.8"}},
+            {"Generic PLA", {"0.2", "0.4", "0.6", "0.8"}},
+            {"Generic PLA Silk", {"0.4", "0.6"}},
+            {"Generic PLA+", {"0.2", "0.4", "0.6", "0.8"}},
+            {"HATCHBOX PLA", {"0.2", "0.4", "0.6", "0.8"}},
+            {"Overture PLA", {"0.2", "0.4", "0.6", "0.8"}},
+            {"PolyLite PLA", {"0.2", "0.4", "0.6", "0.8"}},
+            {"Polymaker PLA-HT", {"0.2", "0.4", "0.6", "0.8"}},
+            {"QIDI PLA Basic", {"0.2", "0.4", "0.6", "0.8"}},
+            {"QIDI PLA Matte Basic", {"0.2", "0.4", "0.6", "0.8"}},
+            {"QIDI PLA Rapido", {"0.2", "0.4", "0.6", "0.8"}},
+            {"QIDI PLA Rapido Matte", {"0.2", "0.4", "0.6", "0.8"}},
+            {"QIDI PLA Rapido Metal", {"0.2", "0.4", "0.6", "0.8"}},
+            {"QIDI PLA Rapido Silk", {"0.4", "0.6"}},
+            {"QIDI PLA-CF", {"0.4", "0.6", "0.8"}},
+        };
+
+        std::unordered_set<std::string> result;
+        for (const auto& [family, nozzles] : families)
+            for (const std::string& nozzle : nozzles)
+                result.emplace(family + " @EP7 " + nozzle + " nozzle");
+        return result;
+    }();
+    return defaults;
+}
+
+static const std::map<std::string, std::string>& gfd_ep7_selected_profile_replacements()
+{
+    static const std::map<std::string, std::string> replacements = {
+        {"QIDI PLA Rapido @EP7 0.2 nozzle", "Generic PLA @EP7 0.2 nozzle"},
+        {"QIDI PLA Rapido @EP7 0.4 nozzle", "Generic PLA @EP7 0.4 nozzle"},
+        {"QIDI PLA Rapido @EP7 0.6 nozzle", "Generic PLA @EP7 0.6 nozzle"},
+        {"QIDI PLA Rapido @EP7 0.8 nozzle", "Generic PLA @EP7 0.8 nozzle"},
+    };
+    return replacements;
+}
+
+static std::string gfd_normalize_preset_name(const std::string& name)
+{
+    std::string normalized = name;
+    if (boost::iends_with(normalized, ".ini"))
+        normalized.erase(normalized.end() - 4, normalized.end());
+    return normalized;
+}
+
+static bool gfd_is_filament_selection_key(const std::string& key)
+{
+    if (key == PRESET_FILAMENT_NAME)
+        return true;
+    if (!boost::starts_with(key, "filament_") || key.size() == 9)
+        return false;
+    return std::all_of(key.begin() + 9, key.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; });
+}
+
+static void gfd_migrate_ep7_default_filaments(AppConfig& config, PresetCollection& filaments)
+{
+    static constexpr const char* MIGRATION_KEY = "ep7_default_filaments_v2";
+    if (config.get(MIGRATION_KEY) == "true")
+        return;
+
+    static const std::array<const char*, 4> known_ep7_printers = {
+        "EP7 0.2 nozzle", "EP7 0.4 nozzle", "EP7 0.6 nozzle", "EP7 0.8 nozzle"
+    };
+
+    const auto& legacy_defaults = gfd_legacy_ep7_default_filaments();
+    const auto& replacements    = gfd_ep7_selected_profile_replacements();
+    std::set<std::string> ep7_printer_settings;
+    std::set<std::string> explicitly_selected_legacy;
+    bool                  has_legacy_default_set   = false;
+
+    for (const char* printer_name : known_ep7_printers) {
+        if (config.has_printer_settings(printer_name))
+            ep7_printer_settings.insert(printer_name);
+    }
+    for (const auto& [printer_name, settings] : config.get_printer_settings()) {
+        if (!settings.is_object())
+            continue;
+        for (auto setting = settings.begin(); setting != settings.end(); ++setting) {
+            if (!gfd_is_filament_selection_key(setting.key()) || !setting.value().is_string())
+                continue;
+            if (boost::contains(gfd_normalize_preset_name(setting.value().get<std::string>()), " @EP7 ")) {
+                ep7_printer_settings.insert(printer_name);
+                break;
+            }
+        }
+    }
+    const bool has_ep7_printer_settings = !ep7_printer_settings.empty();
+
+    const auto inspect_selection = [&](const std::string& value) {
+        const std::string normalized = gfd_normalize_preset_name(value);
+        if (legacy_defaults.find(normalized) != legacy_defaults.end() && replacements.find(normalized) == replacements.end())
+            explicitly_selected_legacy.insert(normalized);
+    };
+
+    for (const std::string& printer_name : ep7_printer_settings) {
+        if (config.has_printer_setting(printer_name, PRESET_FILAMENT_NAME))
+            inspect_selection(config.get_printer_setting(printer_name, PRESET_FILAMENT_NAME));
+        for (unsigned int i = 1; i < 1000; ++i) {
+            char key[64];
+            sprintf(key, "filament_%02u", i);
+            if (!config.has_printer_setting(printer_name, key))
+                break;
+            inspect_selection(config.get_printer_setting(printer_name, key));
+        }
+    }
+
+    if (config.has_section("presets")) {
+        for (const auto& [key, value] : config.get_section("presets"))
+            if (gfd_is_filament_selection_key(key))
+                inspect_selection(value);
+    }
+    for (const std::string& value : config.get_filament_presets())
+        inspect_selection(value);
+
+    if (config.has_section(AppConfig::SECTION_FILAMENTS)) {
+        const auto& installed = config.get_section(AppConfig::SECTION_FILAMENTS);
+        has_legacy_default_set = std::all_of(legacy_defaults.begin(), legacy_defaults.end(), [&installed](const std::string& name) {
+            return installed.find(name) != installed.end();
+        });
+    }
+
+    const bool replace_legacy_defaults = has_legacy_default_set;
+    const bool needs_ep7_defaults      = replace_legacy_defaults || has_ep7_printer_settings || !explicitly_selected_legacy.empty();
+    if (needs_ep7_defaults) {
+        for (const char* name : gfd_ep7_default_filaments()) {
+            if (filaments.find_preset(name, false, true) == nullptr) {
+                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": EP7 default filament profile is unavailable: " << name;
+                return;
+            }
+        }
+    }
+
+    if (replace_legacy_defaults) {
+        for (const std::string& name : legacy_defaults) {
+            if (explicitly_selected_legacy.find(name) == explicitly_selected_legacy.end())
+                config.erase(AppConfig::SECTION_FILAMENTS, name);
+        }
+    }
+    if (needs_ep7_defaults) {
+        for (const char* name : gfd_ep7_default_filaments())
+            config.set(AppConfig::SECTION_FILAMENTS, name, "true");
+        for (const std::string& name : explicitly_selected_legacy)
+            config.set(AppConfig::SECTION_FILAMENTS, name, "true");
+    }
+
+    bool selection_changed = false;
+    for (const std::string& printer_name : ep7_printer_settings) {
+        const auto migrate_printer_setting = [&](const std::string& key) {
+            const std::string current = gfd_normalize_preset_name(config.get_printer_setting(printer_name, key));
+            if (const auto replacement = replacements.find(current); replacement != replacements.end()) {
+                config.set_printer_setting(printer_name, key, replacement->second);
+                selection_changed = true;
+            }
+        };
+
+        if (config.has_printer_setting(printer_name, PRESET_FILAMENT_NAME))
+            migrate_printer_setting(PRESET_FILAMENT_NAME);
+        for (unsigned int i = 1; i < 1000; ++i) {
+            char key[64];
+            sprintf(key, "filament_%02u", i);
+            if (!config.has_printer_setting(printer_name, key))
+                break;
+            migrate_printer_setting(key);
+        }
+    }
+
+    if (config.has_section("presets")) {
+        auto selected_presets         = config.get_section("presets");
+        bool legacy_selection_changed = false;
+        for (auto& [key, value] : selected_presets) {
+            if (!gfd_is_filament_selection_key(key))
+                continue;
+            const std::string current = gfd_normalize_preset_name(value);
+            if (const auto replacement = replacements.find(current); replacement != replacements.end()) {
+                value                    = replacement->second;
+                legacy_selection_changed = true;
+            }
+        }
+        if (legacy_selection_changed) {
+            config.set_section("presets", selected_presets);
+            config.set_dirty();
+            selection_changed = true;
+        }
+    }
+
+    auto app_filament_presets         = config.get_filament_presets();
+    bool app_filament_presets_changed = false;
+    for (std::string& value : app_filament_presets) {
+        const std::string current = gfd_normalize_preset_name(value);
+        if (const auto replacement = replacements.find(current); replacement != replacements.end()) {
+            value                         = replacement->second;
+            app_filament_presets_changed = true;
+        }
+    }
+    if (app_filament_presets_changed) {
+        config.set_filament_presets(app_filament_presets);
+        selection_changed = true;
+    }
+
+    if (replace_legacy_defaults || selection_changed)
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": aligned EP7 defaults with the three-material printer profile";
+    config.set(MIGRATION_KEY, "true");
+}
+
 static bool gfd_use_printer_default_filament(const Preset& printer_preset)
 {
     const std::string printer_model = printer_preset.config.opt_string("printer_model");
     return printer_model == "EP3" || printer_model == "EP3 Pro" || printer_model == "EP3Plus" || printer_model == "EP3 Plus" ||
            printer_model == "EPONE" || printer_model == "EPONE Pro" || printer_model == "EPONEPro" || printer_model == "EP7";
+}
+
+static bool gfd_saved_filament_is_usable(PresetCollection& filaments, const Preset& printer_preset,
+                                         const std::string& saved_filament_profile)
+{
+    Preset* filament = filaments.find_preset(gfd_normalize_preset_name(saved_filament_profile), false, true);
+    return filament != nullptr && filament->is_visible &&
+           is_compatible_with_printer(PresetWithVendorProfile(*filament, filament->vendor),
+                                      PresetWithVendorProfile(printer_preset, printer_preset.vendor));
+}
+
+static bool gfd_should_use_printer_default_filament(PresetCollection& filaments, const Preset& printer_preset,
+                                                    const std::string& saved_filament_profile)
+{
+    if (!gfd_use_printer_default_filament(printer_preset))
+        return false;
+    if (printer_preset.config.opt_string("printer_model") != "EP7")
+        return true;
+    return !gfd_saved_filament_is_usable(filaments, printer_preset, saved_filament_profile);
 }
 
 static std::string gfd_first_default_filament_profile(const Preset& printer_preset)
@@ -1770,6 +2009,8 @@ void PresetBundle::save_changes_for_preset(const std::string& new_name, Preset::
 
 void PresetBundle::load_installed_filaments(AppConfig &config)
 {
+    gfd_migrate_ep7_default_filaments(config, filaments);
+
     //if (! config.has_section(AppConfig::SECTION_FILAMENTS)
     //    || config.get_section(AppConfig::SECTION_FILAMENTS).empty()) {
         // Compatibility with the PrusaSlicer 2.1.1 and older, where the filament profiles were not installable yet.
@@ -1879,7 +2120,9 @@ void PresetBundle::update_selections(AppConfig &config)
     filaments.select_preset_by_name_strict(initial_filament_profile_name);
     const Preset& current_printer = printers.get_selected_preset();
     const std::string default_filament_profile = gfd_first_default_filament_profile(current_printer);
-    const bool use_printer_default_filament = ensure_printer_default_filaments_visible(config, current_printer);
+    const bool defaults_visible = ensure_printer_default_filaments_visible(config, current_printer);
+    const bool use_printer_default_filament = defaults_visible &&
+        gfd_should_use_printer_default_filament(filaments, current_printer, initial_filament_profile_name);
     if (use_printer_default_filament)
         filaments.select_preset_by_name_strict(default_filament_profile);
 
@@ -1992,7 +2235,11 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     }
     const Preset& current_printer = printers.get_selected_preset();
     const std::string default_filament_profile = gfd_first_default_filament_profile(current_printer);
-    const bool use_printer_default_filament = ensure_printer_default_filaments_visible(config, current_printer);
+    const bool defaults_visible = ensure_printer_default_filaments_visible(config, current_printer);
+    const std::string saved_filament_for_current_printer = current_printer.name == initial_printer_profile_name ?
+        initial_filament_profile_name : std::string();
+    const bool use_printer_default_filament = defaults_visible &&
+        gfd_should_use_printer_default_filament(filaments, current_printer, saved_filament_for_current_printer);
     if (use_printer_default_filament)
         initial_filament_profile_name = default_filament_profile;
 

@@ -1,10 +1,10 @@
-app-id: io.github.softfever.OrcaSlicer
+app-id: com.wisebeginner3d.ZhiXiaoBaiSlicer
 runtime: org.gnome.Platform
 runtime-version: "47"
 sdk: org.gnome.Sdk
 command: entrypoint
 separate-locales: true
-rename-icon: OrcaSlicer 
+rename-icon: ZhiXiaoBaiSlicer
 finish-args:
   - --share=ipc
   - --socket=x11
@@ -15,8 +15,8 @@ finish-args:
   - --filesystem=/run/media
   - --filesystem=/media
   - --filesystem=/run/spnav.sock:ro
-  # Allow OrcaSlicer to talk to other instances
-  - --talk-name=io.github.softfever.OrcaSlicer.InstanceCheck.*
+  # Allow 智小白切片软件 to talk to its own instances only
+  - --talk-name=com.wisebeginner3d.ZhiXiaoBaiSlicer.InstanceCheck.*
   - --system-talk-name=org.freedesktop.UDisks2
   - --env=SPNAV_SOCKET=/run/spnav.sock
 
@@ -56,7 +56,7 @@ modules:
         url: https://github.com/KDE/extra-cmake-modules
         tag: v5.249.0
     cleanup:
-      - / 
+      - /
 
   - name: libspnav
     sources:
@@ -132,12 +132,12 @@ modules:
           -DCMAKE_INSTALL_PREFIX=/app
         cmake --build . --parallel
         rm -rf /run/build/orca_deps/external-packages
-    
+
     cleanup:
       - /app/include
       - "*.a"
       - "*.la"
-    
+
     sources:
       # -
       # Section bellow fetches all OrcaSlicer dependencies before the build process and stores them in external-packages/*/* .
@@ -145,9 +145,9 @@ modules:
       #
       # NOTE: The url, dest folder name and sha256 must match from OrcaSlicer's cmake scripts and folder names in OrcaSlicer/deps/
       # -
-      
-      # OrcaSlicer Source Archive
-      - type: dir 
+
+      # Application source tree
+      - type: dir
         path: ../../
 
       # Blosc
@@ -239,7 +239,7 @@ modules:
         url: https://github.com/oneapi-src/oneTBB/archive/refs/tags/v2021.5.0.zip
         dest: external-packages/TBB
         sha256: 83ea786c964a384dd72534f9854b419716f412f9d43c0be88d41874763e7bb47
-      
+
       # Boost
       - type: file
         url: https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.gz
@@ -257,7 +257,7 @@ modules:
         dest: external-packages/libnoise
         sha256: 96ffd6cc47898dd8147aab53d7d1b1911b507d9dbaecd5613ca2649468afd8b6
 
-  - name: OrcaSlicer 
+  - name: ZhiXiaoBaiSlicer
     buildsystem: simple
     build-commands:
       - |
@@ -284,9 +284,9 @@ modules:
     post-install:
 
       - | # Desktop Integration files
-        install -Dm644 -t /app/share/icons/hicolor/scalable/apps/ resources/images/OrcaSlicer.svg
+        install -Dm644 resources/images/OrcaSlicer.svg /app/share/icons/hicolor/scalable/apps/ZhiXiaoBaiSlicer.svg
         install -Dm644 ${FLATPAK_ID}.metainfo.xml /app/share/metainfo/${FLATPAK_ID}.metainfo.xml
-        mv /app/share/applications/OrcaSlicer.desktop /app/share/applications/${FLATPAK_ID}.desktop
+        mv /app/share/applications/ZhiXiaoBaiSlicer.desktop /app/share/applications/${FLATPAK_ID}.desktop
         desktop-file-edit --set-key=Exec --set-value="entrypoint %U" /app/share/applications/${FLATPAK_ID}.desktop
         install -Dm755 entrypoint /app/bin
         install -Dm755 umount /app/bin
@@ -299,13 +299,13 @@ modules:
       # NOTE: The url, dest folder name and sha256 must match from OrcaSlicer's cmake scripts and folder names in OrcaSlicer/deps/
       # -
 
-      # OrcaSlicer Source Archive
-      - type: dir 
+      # Application source tree
+      - type: dir
         path: ../../
 
       # AppData metainfo for Gnome Software & Co.
       - type: file
-        path: io.github.softfever.OrcaSlicer.metainfo.xml
+        path: com.wisebeginner3d.ZhiXiaoBaiSlicer.metainfo.xml
 
       # start-up script
       - type: file

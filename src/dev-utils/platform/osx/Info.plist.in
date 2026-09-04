@@ -7,13 +7,15 @@
   <key>CFBundleGetInfoString</key>
   <string>@SLIC3R_APP_NAME@ Copyright(C) 2021-2023 Lunkuo All Rights Reserved</string>
   <key>CFBundleIconFile</key>
-  <string>images/OrcaSlicer.icns</string>
+  <string>images/WiseBeginnerSlicer.icns</string>
   <key>CFBundleName</key>
   <string>@SLIC3R_APP_KEY@</string>
+  <key>CFBundleDisplayName</key>
+  <string>@SLIC3R_APP_NAME@</string>
   <key>CFBundleShortVersionString</key>
   <string>@SLIC3R_APP_NAME@ @SLIC3R_BUILD_ID@</string>
   <key>CFBundleIdentifier</key>
-  <string>com.softfever3d.orca-slic3r/</string>
+  <string>@SLIC3R_BUNDLE_IDENTIFIER@</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>
@@ -22,17 +24,16 @@
   <string>????</string>
   <key>CFBundleVersion</key>
   <string>@SLIC3R_BUILD_ID@</string>
-  <key>CFBundleURLTypes</key>
   <key>ATSApplicationFontsPath</key>
   <string>fonts/</string>
+  <key>CFBundleURLTypes</key>
   <array>
     <dict>
       <key>CFBundleURLName</key>
-      <string>orcasliceropen url</string>
+      <string>@SLIC3R_APP_NAME@ Downloads</string>
       <key>CFBundleURLSchemes</key>
       <array>
-        <string>orcasliceropen</string>
-        <string>orcaslicer</string>
+        <string>@SLIC3R_URL_SCHEME@</string>
       </array>
     </dict>
   </array>
@@ -62,7 +63,7 @@
         <string>OBJ</string>
       </array>
       <key>CFBundleTypeIconFile</key>
-      <string>images/OrcaSlicer.icns</string>
+      <string>images/WiseBeginnerSlicer.icns</string>
       <key>CFBundleTypeName</key>
       <string>STL</string>
       <key>CFBundleTypeRole</key>
@@ -79,7 +80,7 @@
         <string>AMF</string>
       </array>
       <key>CFBundleTypeIconFile</key>
-      <string>images/OrcaSlicer.icns</string>
+      <string>images/WiseBeginnerSlicer.icns</string>
       <key>CFBundleTypeName</key>
       <string>AMF</string>
       <key>CFBundleTypeRole</key>
@@ -96,7 +97,7 @@
         <string>3MF</string>
       </array>
       <key>CFBundleTypeIconFile</key>
-      <string>images/OrcaSlicer.icns</string>
+      <string>images/WiseBeginnerSlicer.icns</string>
       <key>CFBundleTypeName</key>
       <string>3MF</string>
       <key>CFBundleTypeRole</key>

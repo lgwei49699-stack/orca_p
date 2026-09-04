@@ -3,8 +3,8 @@
     "default":  {
                     "cloud_import":  true,
                     "dynamic_params":  true,
-                    "upload_config":  true,
-                    "save_config":  true,
+                    "upload_config":  false,
+                    "save_config":  false,
                     "print":  true,
                     "print_3mf":  false,
                     "print_device_types":  [
@@ -15,8 +15,8 @@
                     "EP7":  {
                                 "cloud_import":  true,
                                 "dynamic_params":  true,
-                                "upload_config":  true,
-                                "save_config":  true,
+                                "upload_config":  false,
+                                "save_config":  false,
                                 "print":  true,
                                 "print_3mf":  true,
                                 "print_device_types":  [
@@ -26,8 +26,8 @@
                     "EP3":  {
                                 "cloud_import":  true,
                                 "dynamic_params":  true,
-                                "upload_config":  true,
-                                "save_config":  true,
+                                "upload_config":  false,
+                                "save_config":  false,
                                 "print":  true,
                                 "print_3mf":  false,
                                 "print_device_types":  [
@@ -37,8 +37,8 @@
                     "EP3Pro":  {
                                    "cloud_import":  true,
                                    "dynamic_params":  true,
-                                   "upload_config":  true,
-                                   "save_config":  true,
+                                   "upload_config":  false,
+                                   "save_config":  false,
                                    "print":  true,
                                    "print_3mf":  false,
                                    "print_device_types":  [
@@ -48,8 +48,8 @@
                     "EP3Plus":  {
                                     "cloud_import":  true,
                                     "dynamic_params":  true,
-                                    "upload_config":  true,
-                                    "save_config":  true,
+                                    "upload_config":  false,
+                                    "save_config":  false,
                                     "print":  true,
                                     "print_3mf":  false,
                                     "print_device_types":  [
@@ -59,8 +59,8 @@
                     "EPONE":  {
                                   "cloud_import":  true,
                                   "dynamic_params":  true,
-                                  "upload_config":  true,
-                                  "save_config":  true,
+                                  "upload_config":  false,
+                                  "save_config":  false,
                                   "print":  true,
                                   "print_3mf":  false,
                                   "print_device_types":  [
@@ -70,13 +70,35 @@
                     "EPONEPro":  {
                                      "cloud_import":  true,
                                      "dynamic_params":  true,
-                                     "upload_config":  true,
-                                     "save_config":  true,
+                                     "upload_config":  false,
+                                     "save_config":  false,
                                      "print":  true,
                                      "print_3mf":  false,
                                      "print_device_types":  [
                                                                 "EPONEPro"
                                                             ]
-                                 }
+                                 },
+                    "AD5X":  {
+                                  "cloud_import":  true,
+                                  "dynamic_params":  true,
+                                  "upload_config":  false,
+                                  "save_config":  false,
+                                  "print":  true,
+                                  "print_3mf":  false,
+                                  "print_device_types":  [
+                                                             "AD5X"
+                                                         ]
+                              },
+                    "AD5M":  {
+                                  "cloud_import":  true,
+                                  "dynamic_params":  true,
+                                  "upload_config":  false,
+                                  "save_config":  false,
+                                  "print":  true,
+                                  "print_3mf":  false,
+                                  "print_device_types":  [
+                                                             "AD5M"
+                                                         ]
+                              }
                 }
 }

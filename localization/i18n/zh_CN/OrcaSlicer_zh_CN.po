@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Slic3rPE\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-24 19:45+0800\n"
+"POT-Creation-Date: 2026-09-03 14:55+0800\n"
 "PO-Revision-Date: 2024-07-28 07:12+0000\n"
 "Last-Translator: Handle <mail@bysb.net>\n"
 "Language-Team: \n"
@@ -16,6 +16,205 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 "X-Generator: Poedit 3.2.2\n"
+
+msgid "The operation was canceled."
+msgstr "操作已取消。"
+
+msgid "Failed to load the slider CAPTCHA."
+msgstr "滑块验证码加载失败。"
+
+msgid "The slider CAPTCHA data is empty."
+msgstr "滑块验证码数据为空。"
+
+msgid "The slider CAPTCHA data is incomplete."
+msgstr "滑块验证码数据不完整。"
+
+msgid "The slider CAPTCHA service returned an invalid response. Please try again later."
+msgstr "滑块验证码服务返回异常，请稍后重试。"
+
+msgid "Failed to send the verification code."
+msgstr "验证码发送失败。"
+
+msgid "The verification code service returned an invalid response. Please try again later."
+msgstr "验证码服务返回异常，请稍后重试。"
+
+msgid "Login failed."
+msgstr "登录失败。"
+
+msgid "The login service did not return valid credentials."
+msgstr "登录服务未返回有效凭据。"
+
+msgid "The login service returned an invalid response. Please try again later."
+msgstr "登录服务返回异常，请稍后重试。"
+
+msgid "Security Verification"
+msgstr "安全验证"
+
+msgid "Drag the slider to complete verification"
+msgstr "请拖动滑块完成验证"
+
+msgid "Drag the slider below to align the puzzle piece with the gap."
+msgstr "拖动下方滑块，使拼图与缺口对齐。"
+
+msgid "The slider CAPTCHA image is invalid. Please request a new one."
+msgstr "滑块验证码图片无效，请重新获取。"
+
+msgid "Complete Verification"
+msgstr "完成验证"
+
+msgid "WiseBeginner Slicer"
+msgstr "智小白切片软件"
+
+msgid "Checking login status"
+msgstr "正在检查登录状态"
+
+msgid "Verifying your WiseBeginner account. Please wait..."
+msgstr "正在验证您的智小白账号，请稍候..."
+
+msgid "Login verification failed"
+msgstr "登录校验失败"
+
+msgid "Unable to verify your login status. Check your network connection and try again."
+msgstr "无法验证登录状态，请检查网络连接后重试。"
+
+msgid "User Login"
+msgstr "用户登录"
+
+msgid "Network Environment"
+msgstr "网络环境"
+
+msgid "Production Environment"
+msgstr "正式环境"
+
+msgid "Test Environment"
+msgstr "测试环境"
+
+msgid "Switched to the production environment."
+msgstr "已切换至正式环境。"
+
+msgid "Switched to the test environment."
+msgstr "已切换至测试环境。"
+
+msgid "Sign in to your WiseBeginner account"
+msgstr "登录智小白账号"
+
+msgid "Sign in to sync read-only parameters and send print jobs to your printers."
+msgstr "登录后可同步只读参数，并向您的打印机下发任务。"
+
+msgid "Sign in with an SMS verification code"
+msgstr "使用短信验证码登录"
+
+msgid "Phone Number"
+msgstr "手机号"
+
+msgid "Enter your phone number"
+msgstr "请输入手机号"
+
+msgid "SMS Verification Code"
+msgstr "短信验证码"
+
+msgid "Enter the verification code"
+msgstr "请输入验证码"
+
+msgid "Get Verification Code"
+msgstr "获取验证码"
+
+msgid "I have read and agree to the User Agreement and Privacy Policy."
+msgstr "我已阅读并同意《用户协议》和《隐私政策》。"
+
+msgid "Log In"
+msgstr "登录"
+
+msgid "Enter a valid mainland China phone number."
+msgstr "请输入正确的中国大陆手机号。"
+
+msgid "Enter a valid SMS verification code."
+msgstr "请输入正确的短信验证码。"
+
+msgid "Please read and agree to the User Agreement and Privacy Policy first."
+msgstr "请先阅读并同意用户协议和隐私政策。"
+
+msgid "Canceling login..."
+msgstr "正在取消登录..."
+
+#, c-format, boost-format
+msgid "Try again in %d seconds"
+msgstr "%d 秒后重试"
+
+msgid "Loading slider CAPTCHA..."
+msgstr "正在加载滑块验证..."
+
+msgid "An error occurred while loading the slider CAPTCHA."
+msgstr "滑块验证码加载任务发生异常。"
+
+msgid "Complete the slider CAPTCHA first."
+msgstr "请先完成滑块验证。"
+
+msgid "Unable to start the slider CAPTCHA request. Please try again later."
+msgstr "无法启动滑块验证码任务，请稍后重试。"
+
+msgid "Sending verification code..."
+msgstr "正在发送验证码..."
+
+msgid "An error occurred while sending the verification code."
+msgstr "验证码发送任务发生异常。"
+
+msgid "The verification code has been sent. Please check your messages."
+msgstr "验证码已发送，请注意查收。"
+
+msgid "Unable to send the verification code. Please try again later."
+msgstr "无法发送验证码，请稍后重试。"
+
+msgid "Logging in..."
+msgstr "正在登录，请稍候..."
+
+msgid "An error occurred while logging in."
+msgstr "登录任务发生异常。"
+
+msgid "Unable to start the login request. Please try again later."
+msgstr "无法启动登录任务，请稍后重试。"
+
+msgid "WiseBeginner Account"
+msgstr "智小白账号"
+
+msgid "View your current WiseBeginner account status, or sign out and sign in again."
+msgstr "查看当前智小白账号登录状态，或退出后重新登录。"
+
+msgid "Sign In"
+msgstr "登录"
+
+msgid "This will sign you out of your current WiseBeginner account and reopen the SMS verification code sign-in window. Continue?"
+msgstr "将退出当前智小白账号并重新打开短信验证码登录窗口。是否继续？"
+
+msgid "Sign In Again"
+msgstr "重新登录"
+
+msgid "Sign Out"
+msgstr "退出登录"
+
+msgid "Are you sure you want to sign out of your WiseBeginner account?"
+msgstr "确定要退出当前智小白账号吗？"
+
+msgid "Signed In"
+msgstr "已登录"
+
+msgid "Signed in as: "
+msgstr "已登录："
+
+msgid "Not Signed In"
+msgstr "未登录"
+
+msgid "There is no active WiseBeginner account session."
+msgstr "当前没有有效的智小白账号登录会话。"
+
+msgid "Signed-in User"
+msgstr "已登录用户"
+
+msgid "Sign In with SMS Verification Code"
+msgstr "手机验证码登录"
+
+msgid "Signed out successfully."
+msgstr "已成功退出登录。"
 
 msgid "Current AMS humidity"
 msgstr "当前AMS湿度"
@@ -2801,49 +3000,60 @@ msgstr "安装中"
 msgid "Install failed"
 msgstr "安装失败"
 
-msgid "Portions copyright"
-msgstr "部分版权"
-
 msgid "Copyright"
 msgstr "版权"
 
 msgid "License"
 msgstr "许可证"
 
-msgid "Orca Slicer is licensed under "
-msgstr "逆戟鲸是在"
+msgid "Open-source licenses"
+msgstr "开源许可"
+
+msgid "WiseBeginner Slicer is distributed under "
+msgstr "智小白切片软件依据以下许可证发布："
 
 msgid "GNU Affero General Public License, version 3"
-msgstr "GNU Affero 通用公共许可证，版本 3下授权的"
+msgstr "GNU Affero 通用公共许可证第 3 版"
 
-msgid "Orca Slicer is based on PrusaSlicer and BambuStudio"
-msgstr "Orca Slicer 基于 PrusaSlicer 以及 BambuStudio 开发"
+msgid "WiseBeginner Slicer is based on OrcaSlicer and related open-source projects"
+msgstr "智小白切片软件基于 OrcaSlicer 及相关开源项目开发"
 
-msgid "Libraries"
-msgstr "库"
+msgid "Open-source components"
+msgstr "开源组件"
 
-msgid ""
-"This software uses open source components whose copyright and other "
-"proprietary rights belong to their respective owners"
-msgstr "本软件使用开源组件，其版权和其他所有权属于各自的所有者"
+msgid "Copyright and other rights for open-source components belong to their respective owners"
+msgstr "开源组件的版权及其他权利归各自权利人所有"
 
 #, c-format, boost-format
 msgid "About %s"
 msgstr "关于 %s"
 
-msgid "OrcaSlicer is based on BambuStudio, PrusaSlicer, and SuperSlicer."
-msgstr "OrcaSlicer基于BambuStudio、PrusaSlicer 以及SuperSlicer开发。"
+msgid "Smart slicing for everyday 3D printing"
+msgstr "让日常 3D 打印更简单"
 
-msgid "BambuStudio is originally based on PrusaSlicer by PrusaResearch."
-msgstr "BambuStudio基于PrusaResearch的PrusaSlicer开发而来。"
+msgid "Build"
+msgstr "构建"
 
-msgid "PrusaSlicer is originally based on Slic3r by Alessandro Ranellucci."
-msgstr "PrusaSlicer最初是基于Alessandro Ranellucci的Slic3r。"
+msgid "WiseBeginner Slicer is designed for everyday 3D printing, including model slicing, print configuration, and sending print jobs."
+msgstr "智小白切片软件是一款面向个人用户的 3D 打印切片工具，支持模型切片、参数配置与打印任务下发。"
 
-msgid ""
-"Slic3r was created by Alessandro Ranellucci with the help of many other "
-"contributors."
-msgstr "Slic3r由Alessandro Ranellucci在其他众多贡献者的帮助下创建。"
+msgid "After signing in, you can read and locally cache cloud filament and slicing presets, and send jobs to printers linked to your account."
+msgstr "登录后可读取并缓存云端耗材和切片参数，并将任务发送至当前账号绑定的设备。"
+
+msgid "WiseBeginner Slicer is based on OrcaSlicer. OrcaSlicer is based on Bambu Studio, PrusaSlicer, and SuperSlicer; Bambu Studio is based on PrusaSlicer by Prusa Research, and PrusaSlicer originates from Slic3r by Alessandro Ranellucci."
+msgstr "智小白切片软件基于 OrcaSlicer 开发。OrcaSlicer 基于 Bambu Studio、PrusaSlicer 和 SuperSlicer；Bambu Studio 基于 Prusa Research 的 PrusaSlicer，PrusaSlicer 源自 Alessandro Ranellucci 创建的 Slic3r。"
+
+msgid "We thank these open-source projects and all their contributors."
+msgstr "感谢以上开源项目及所有贡献者。"
+
+msgid "WiseBeginner modifications © 2026 WiseBeginner3D."
+msgstr "智小白新增及修改部分 © 2026 WiseBeginner3D。"
+
+msgid "Open-source components retain their original copyrights and licenses."
+msgstr "开源组件保留其原有版权并遵循各自的许可证。"
+
+msgid "OrcaSlicer upstream open-source project"
+msgstr "OrcaSlicer 上游开源项目"
 
 msgid "Version"
 msgstr "版本"

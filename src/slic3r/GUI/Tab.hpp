@@ -153,7 +153,6 @@ protected:
 	ScalableButton*		m_btn_save_preset;
 	ScalableButton*		m_btn_delete_preset;
 	Button*                 m_btn_gfd_cloud_to_local {nullptr};
-	Button*                 m_btn_gfd_local_to_cloud {nullptr};
 	//ScalableButton*		m_btn_edit_ph_printer {nullptr};
 	//ScalableButton*		m_btn_hide_incompatible_presets;
 	//wxBoxSizer*			m_hsizer;
@@ -325,7 +324,7 @@ public:
     void        set_detached_from_app_state(bool detached) { m_detached_from_app_state = detached; }
 
 	void		create_preset_tab();
-    void        sync_gfd_filament(bool upload_to_cloud);
+    void        sync_gfd_filament();
     void        add_scaled_button(wxWindow* parent, ScalableButton** btn, const std::string& icon_name,
                                   const wxString& label = wxEmptyString,
                                   long style = wxBU_EXACTFIT | wxNO_BORDER);

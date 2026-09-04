@@ -18,7 +18,7 @@ const float MIN_PA_K_VALUE = 0.0;
 const float MAX_PA_K_VALUE = 1.0;
 
 std::unique_ptr<Worker> CalibUtils::print_worker;
-wxString wxstr_temp_dir = fs::path(fs::temp_directory_path() / "calib").wstring();
+wxString wxstr_temp_dir = fs::path(fs::temp_directory_path() / SLIC3R_APP_KEY / "calib").wstring();
 static const std::string temp_dir = wxstr_temp_dir.utf8_string();
 static const std::string temp_gcode_path = temp_dir + "/temp.gcode";
 static const std::string path            = temp_dir + "/test.3mf";
@@ -966,6 +966,13 @@ bool CalibUtils::get_pa_k_n_value_by_cali_idx(const MachineObject *obj, int cali
 
 bool CalibUtils::process_and_store_3mf(Model *model, const DynamicPrintConfig &full_config, const Calib_Params &params, wxString &error_message)
 {
+    boost::system::error_code temp_dir_error;
+    fs::create_directories(temp_dir, temp_dir_error);
+    if (temp_dir_error) {
+        error_message = _L("Unable to create the calibration temporary directory");
+        return false;
+    }
+
     Pointfs bedfs         = make_counter_clockwise(full_config.opt<ConfigOptionPoints>("printable_area")->values);
     double  print_height  = full_config.opt_float("printable_height");
     double  current_width = bedfs[2].x() - bedfs[0].x();
@@ -1249,4 +1256,3 @@ void CalibUtils::send_to_print(const CalibInfo &calib_info, wxString &error_mess
 
 }
 }
-

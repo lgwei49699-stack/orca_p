@@ -55,8 +55,17 @@ bool has_device_alias_boundary(const std::string& value, size_t prefix_length)
     if (value.size() <= prefix_length)
         return true;
 
-    const unsigned char suffix_char = static_cast<unsigned char>(value[prefix_length]);
-    return !std::isalpha(suffix_char);
+    // Machine preset names may append a nozzle size (for example
+    // "Flashforge Adventurer 5M 0.4 Nozzle"), but another alphabetic token
+    // denotes a different model (for example "... 5M Pro").
+    size_t suffix_pos = prefix_length;
+    while (suffix_pos < value.size() && !std::isalnum(static_cast<unsigned char>(value[suffix_pos])))
+        ++suffix_pos;
+
+    if (suffix_pos == value.size())
+        return true;
+
+    return !std::isalpha(static_cast<unsigned char>(value[suffix_pos]));
 }
 
 EnvironmentConfig resolve_environment(const std::string& env)
@@ -109,10 +118,11 @@ std::string resolve_device_type_from_vendor_model(const std::string& printer_mod
         return {};
 
     for (const auto& vendor_it : GUI::wxGetApp().preset_bundle->vendors) {
-        const VendorProfile& vendor = vendor_it.second;
-        const auto model_it = std::find_if(vendor.models.begin(), vendor.models.end(),
-                                           [&printer_model](const VendorProfile::PrinterModel& model) {
-                                               return model.id == printer_model || model.name == printer_model || model.model_id == printer_model;
+        const VendorProfile& vendor   = vendor_it.second;
+        const auto           model_it = std::find_if(vendor.models.begin(), vendor.models.end(),
+                                                     [&printer_model](const VendorProfile::PrinterModel& model) {
+                                               return model.id == printer_model || model.name == printer_model ||
+                                                      model.model_id == printer_model;
                                            });
         if (model_it != vendor.models.end() && !model_it->gfd_device_type.empty())
             return model_it->gfd_device_type;
@@ -136,7 +146,7 @@ std::map<std::string, std::string> load_local_machine_device_types()
 
         try {
             boost::nowide::ifstream ifs(vendor_file.string());
-            json vendor_json;
+            json                    vendor_json;
             ifs >> vendor_json;
 
             const auto machine_models_it = vendor_json.find("machine_model_list");
@@ -158,7 +168,7 @@ std::map<std::string, std::string> load_local_machine_device_types()
                     continue;
 
                 boost::nowide::ifstream model_ifs(machine_model_file.string());
-                json model_json;
+                json                    model_json;
                 model_ifs >> model_json;
 
                 const std::string gfd_device_type = model_json.value("gfd_device_type", std::string());
@@ -178,8 +188,7 @@ std::map<std::string, std::string> load_local_machine_device_types()
             }
         } catch (const std::exception& ex) {
             BOOST_LOG_TRIVIAL(warning) << "GFD load local machine model config failed"
-                                       << ", file=" << vendor_file.string()
-                                       << ", error=" << ex.what();
+                                       << ", file=" << vendor_file.string() << ", error=" << ex.what();
         }
     }
 
@@ -191,7 +200,7 @@ std::string resolve_device_type_from_local_config(const std::string& printer_mod
     if (printer_model.empty())
         return {};
 
-    static std::string cached_resources_dir;
+    static std::string                        cached_resources_dir;
     static std::map<std::string, std::string> cached_device_types;
 
     if (cached_resources_dir != resources_dir() || cached_device_types.empty()) {
@@ -206,7 +215,7 @@ std::string resolve_device_type_from_local_config(const std::string& printer_mod
 
 const std::map<std::string, std::string>& cached_local_machine_device_types()
 {
-    static std::string cached_resources_dir;
+    static std::string                        cached_resources_dir;
     static std::map<std::string, std::string> cached_device_types;
 
     if (cached_resources_dir != resources_dir() || cached_device_types.empty()) {
@@ -227,8 +236,8 @@ std::string resolve_device_type_from_local_alias(const std::string& identifier)
     if (const auto it = device_types.find(candidate); it != device_types.end())
         return it->second;
 
-    const auto lowered_candidate = lower_copy(candidate);
-    size_t      best_match_len   = 0;
+    const auto  lowered_candidate = lower_copy(candidate);
+    size_t      best_match_len    = 0;
     std::string resolved_type;
     for (const auto& entry : device_types) {
         const std::string alias = trim_copy(entry.first);
@@ -277,7 +286,7 @@ std::string resolve_device_type_from_preset(const Preset* preset)
     if (GUI::wxGetApp().preset_bundle == nullptr)
         return {};
 
-    auto& printers = GUI::wxGetApp().preset_bundle->printers;
+    auto&         printers    = GUI::wxGetApp().preset_bundle->printers;
     const Preset* base_preset = printers.get_preset_base(*preset);
     return base_preset != nullptr ? PresetUtils::system_printer_gfd_device_type(*base_preset) : std::string();
 }
@@ -301,39 +310,63 @@ std::string Config::login_url(const AppConfig* config) { return current_environm
 
 std::string Config::verify_url(const AppConfig* config) { return current_environment(config).auth_base_url + PATH_VERIFY; }
 
-std::string Config::obs_token_url(const AppConfig* config) { return current_environment(config).api_base_url + PATH_OBS_TOKEN; }
+std::string Config::obs_token_url(const AppConfig* config) { return user_api_base_url(config) + PATH_OBS_TOKEN; }
 
 std::string Config::config_add_url(const AppConfig* config) { return current_environment(config).api_base_url + PATH_CONFIG_ADD; }
 
 std::string Config::config_update_url(const AppConfig* config) { return current_environment(config).api_base_url + PATH_CONFIG_UPDATE; }
 
-std::string Config::device_query_url(const AppConfig* config)
+std::string Config::user_api_base_url(const AppConfig* config)
 {
-    const auto environment = current_environment(config);
-    if (environment.name == ENV_PRODUCTION)
-        return PRODUCTION_DEVICE_QUERY_URL;
-
-    return environment.api_base_url + PATH_DEVICE_QUERY;
+    const std::string configured = get_value(config, KEY_USER_API_BASE_URL);
+    if (!configured.empty())
+        return configured;
+    return current_environment_name(config) == ENV_QA ? QA_USER_API_BASE_URL : PRODUCTION_API_BASE_URL;
 }
 
-std::string Config::device_filament_info_url(const AppConfig* config)
+std::string Config::captcha_generate_url(const AppConfig* config) { return user_api_base_url(config) + PATH_CAPTCHA_GENERATE; }
+
+std::string Config::sms_send_url(const AppConfig* config)
 {
-    return current_environment(config).api_base_url + PATH_DEVICE_FILAMENT_INFO;
+    return get_value(config, KEY_SMS_SEND_URL, user_api_base_url(config) + PATH_SMS_SEND);
 }
 
-std::string Config::device_slice_type_url(const AppConfig* config)
+std::string Config::sms_login_url(const AppConfig* config)
 {
-    return current_environment(config).api_base_url + PATH_DEVICE_SLICE_TYPE;
+    return get_value(config, KEY_SMS_LOGIN_URL, user_api_base_url(config) + PATH_SMS_LOGIN);
 }
+
+std::string Config::user_info_url(const AppConfig* config)
+{
+    return get_value(config, KEY_USER_INFO_URL, user_api_base_url(config) + PATH_USER_INFO);
+}
+
+std::string Config::token_refresh_url(const AppConfig* config)
+{
+    return get_value(config, KEY_TOKEN_REFRESH_URL, user_api_base_url(config) + PATH_TOKEN_REFRESH);
+}
+
+std::string Config::parameter_sync_api_base_url(const AppConfig* config)
+{
+    return get_value(config, KEY_PARAMETER_SYNC_API_BASE_URL, current_environment(config).api_base_url);
+}
+
+std::string Config::parameter_sync_biz(const AppConfig* config) { return get_value(config, KEY_PARAMETER_SYNC_BIZ, "ZXBMan"); }
+
+std::string Config::device_query_url(const AppConfig* config) { return user_api_base_url(config) + PATH_USER_DEVICE_QUERY; }
+
+std::string Config::device_filament_info_url(const AppConfig* config) { return user_api_base_url(config) + PATH_DEVICE_FILAMENT_INFO; }
+
+std::string Config::device_slice_type_url(const AppConfig* config) { return parameter_sync_api_base_url(config) + PATH_DEVICE_SLICE_TYPE; }
 
 std::string Config::filament_temperature_list_url(const AppConfig* config)
 {
-    return current_environment(config).api_base_url + PATH_FILAMENT_TEMPERATURE_LIST;
+    return parameter_sync_api_base_url(config) + PATH_FILAMENT_TEMPERATURE_LIST;
 }
 
 std::string Config::filament_temperature_detail_url(const AppConfig* config)
 {
-    return current_environment(config).api_base_url + PATH_FILAMENT_TEMPERATURE_DETAIL;
+    return parameter_sync_api_base_url(config) + PATH_FILAMENT_TEMPERATURE_DETAIL;
 }
 
 std::string Config::filament_temperature_update_slice_param_url(const AppConfig* config)
@@ -341,10 +374,7 @@ std::string Config::filament_temperature_update_slice_param_url(const AppConfig*
     return current_environment(config).api_base_url + PATH_FILAMENT_TEMPERATURE_UPDATE_SLICE_PARAM;
 }
 
-std::string Config::device_print_cmd_url(const AppConfig* config)
-{
-    return current_environment(config).api_base_url + PATH_DEVICE_PRINT_CMD;
-}
+std::string Config::device_print_cmd_url(const AppConfig* config) { return user_api_base_url(config) + PATH_DEVICE_PRINT_CMD; }
 
 std::string Config::explicit_device_type(const DynamicPrintConfig& printer_config)
 {
@@ -355,15 +385,13 @@ std::string Config::explicit_device_type(const DynamicPrintConfig& printer_confi
 
     if (!gfd_device_type.empty()) {
         BOOST_LOG_TRIVIAL(info) << "GFD current_device_type from printer config"
-                                << ", printer_model=" << printer_model
-                                << ", printer_settings_id=" << printer_settings_id
+                                << ", printer_model=" << printer_model << ", printer_settings_id=" << printer_settings_id
                                 << ", gfd_device_type=" << gfd_device_type;
         return gfd_device_type;
     }
     if (!raw_gfd_device_type.empty()) {
         BOOST_LOG_TRIVIAL(info) << "GFD current_device_type from printer config"
-                                << ", printer_model=" << printer_model
-                                << ", printer_settings_id=" << printer_settings_id
+                                << ", printer_model=" << printer_model << ", printer_settings_id=" << printer_settings_id
                                 << ", gfd_device_type=" << raw_gfd_device_type;
         return raw_gfd_device_type;
     }
@@ -371,8 +399,7 @@ std::string Config::explicit_device_type(const DynamicPrintConfig& printer_confi
     gfd_device_type = resolve_device_type_from_vendor_model(printer_model);
     if (!gfd_device_type.empty()) {
         BOOST_LOG_TRIVIAL(info) << "GFD current_device_type resolved from vendor model"
-                                << ", printer_model=" << printer_model
-                                << ", printer_settings_id=" << printer_settings_id
+                                << ", printer_model=" << printer_model << ", printer_settings_id=" << printer_settings_id
                                 << ", gfd_device_type=" << gfd_device_type;
         return gfd_device_type;
     }
@@ -380,8 +407,7 @@ std::string Config::explicit_device_type(const DynamicPrintConfig& printer_confi
     gfd_device_type = resolve_device_type_from_local_alias(printer_model);
     if (!gfd_device_type.empty()) {
         BOOST_LOG_TRIVIAL(info) << "GFD current_device_type resolved from local machine config"
-                                << ", printer_model=" << printer_model
-                                << ", printer_settings_id=" << printer_settings_id
+                                << ", printer_model=" << printer_model << ", printer_settings_id=" << printer_settings_id
                                 << ", gfd_device_type=" << gfd_device_type;
         return gfd_device_type;
     }
@@ -389,15 +415,13 @@ std::string Config::explicit_device_type(const DynamicPrintConfig& printer_confi
     gfd_device_type = resolve_device_type_from_local_alias(printer_settings_id);
     if (!gfd_device_type.empty()) {
         BOOST_LOG_TRIVIAL(info) << "GFD current_device_type resolved from printer settings id"
-                                << ", printer_model=" << printer_model
-                                << ", printer_settings_id=" << printer_settings_id
+                                << ", printer_model=" << printer_model << ", printer_settings_id=" << printer_settings_id
                                 << ", gfd_device_type=" << gfd_device_type;
         return gfd_device_type;
     }
 
     BOOST_LOG_TRIVIAL(info) << "GFD explicit_device_type unresolved"
-                            << ", printer_model=" << printer_model
-                            << ", printer_settings_id=" << printer_settings_id
+                            << ", printer_model=" << printer_model << ", printer_settings_id=" << printer_settings_id
                             << ", gfd_device_type=<empty>";
     return {};
 }
@@ -414,7 +438,7 @@ std::string Config::current_device_type(const DynamicPrintConfig& printer_config
         auto& printers = GUI::wxGetApp().preset_bundle->printers;
 
         const Preset& selected_preset = printers.get_selected_preset();
-        gfd_device_type = resolve_device_type_from_preset(&selected_preset);
+        gfd_device_type               = resolve_device_type_from_preset(&selected_preset);
         if (!gfd_device_type.empty()) {
             BOOST_LOG_TRIVIAL(info) << "GFD current_device_type resolved from selected preset"
                                     << ", selected_preset=" << selected_preset.name
@@ -424,7 +448,7 @@ std::string Config::current_device_type(const DynamicPrintConfig& printer_config
         }
 
         const Preset& edited_preset = printers.get_edited_preset();
-        gfd_device_type = resolve_device_type_from_preset(&edited_preset);
+        gfd_device_type             = resolve_device_type_from_preset(&edited_preset);
         if (!gfd_device_type.empty()) {
             BOOST_LOG_TRIVIAL(info) << "GFD current_device_type resolved from edited preset"
                                     << ", edited_preset=" << edited_preset.name
@@ -435,8 +459,7 @@ std::string Config::current_device_type(const DynamicPrintConfig& printer_config
     }
 
     BOOST_LOG_TRIVIAL(info) << "GFD current_device_type unresolved"
-                            << ", printer_model=" << printer_model
-                            << ", printer_settings_id=" << printer_settings_id
+                            << ", printer_model=" << printer_model << ", printer_settings_id=" << printer_settings_id
                             << ", gfd_device_type=<empty>";
     return {};
 }
@@ -457,7 +480,7 @@ void parse_button_visibility(const json& node, ButtonVisibility& visibility)
             out = value.get<long long>() != 0;
         else if (value.is_string()) {
             const std::string v = value.get<std::string>();
-            out = !(v == "0" || lower_copy(trim_copy(v)) == "false");
+            out                 = !(v == "0" || lower_copy(trim_copy(v)) == "false");
         }
     };
 
@@ -479,8 +502,7 @@ void parse_button_visibility(const json& node, ButtonVisibility& visibility)
                 if (!entry.empty())
                     visibility.print_device_types.push_back(entry);
             }
-        }
-        else if (types.is_string()) {
+        } else if (types.is_string()) {
             visibility.print_device_types.clear();
             const std::string entry = trim_copy(types.get<std::string>());
             if (!entry.empty())
@@ -491,20 +513,19 @@ void parse_button_visibility(const json& node, ButtonVisibility& visibility)
 
 struct ButtonConfigData
 {
-    ButtonVisibility                     default_visibility;
+    ButtonVisibility                        default_visibility;
     std::map<std::string, ButtonVisibility> by_device; // key = lowercased device type
 };
 
 const ButtonConfigData& cached_button_config()
 {
     static const ButtonConfigData data = []() {
-        ButtonConfigData result;
-        const boost::filesystem::path path =
-            (boost::filesystem::path(resources_dir()) / "gfd_button_config.json").make_preferred();
+        ButtonConfigData              result;
+        const boost::filesystem::path path = (boost::filesystem::path(resources_dir()) / "gfd_button_config.json").make_preferred();
         try {
             if (boost::filesystem::exists(path)) {
                 boost::nowide::ifstream ifs(path.string());
-                json root;
+                json                    root;
                 ifs >> root;
                 if (root.contains("default") && root["default"].is_object())
                     parse_button_visibility(root["default"], result.default_visibility);
@@ -518,17 +539,14 @@ const ButtonConfigData& cached_button_config()
                     }
                 }
                 BOOST_LOG_TRIVIAL(info) << "GFD button config loaded"
-                                        << ", path=" << path.string()
-                                        << ", device_entries=" << result.by_device.size();
-            }
-            else {
+                                        << ", path=" << path.string() << ", device_entries=" << result.by_device.size();
+            } else {
                 BOOST_LOG_TRIVIAL(info) << "GFD button config not found, using defaults"
                                         << ", path=" << path.string();
             }
         } catch (const std::exception& ex) {
             BOOST_LOG_TRIVIAL(error) << "GFD button config parse failed"
-                                     << ", path=" << path.string()
-                                     << ", error=" << ex.what();
+                                     << ", path=" << path.string() << ", error=" << ex.what();
         }
         return result;
     }();
@@ -539,14 +557,19 @@ const ButtonConfigData& cached_button_config()
 
 ButtonVisibility Config::button_visibility(const std::string& device_type)
 {
-    const ButtonConfigData& data = cached_button_config();
-    const std::string key = lower_copy(trim_copy(device_type));
+    const ButtonConfigData& data       = cached_button_config();
+    const std::string       key        = lower_copy(trim_copy(device_type));
+    ButtonVisibility        visibility = data.default_visibility;
     if (!key.empty()) {
         const auto it = data.by_device.find(key);
         if (it != data.by_device.end())
-            return it->second;
+            visibility = it->second;
     }
-    return data.default_visibility;
+    if (PARAMETER_SYNC_READ_ONLY) {
+        visibility.upload_config = false;
+        visibility.save_config   = false;
+    }
+    return visibility;
 }
 
 std::vector<std::string> Config::print_device_types(const std::string& device_type)
@@ -556,7 +579,7 @@ std::vector<std::string> Config::print_device_types(const std::string& device_ty
 
 std::vector<std::string> Config::all_print_device_types()
 {
-    const ButtonConfigData& data = cached_button_config();
+    const ButtonConfigData&  data = cached_button_config();
     std::vector<std::string> result;
     for (const auto& entry : data.by_device) {
         for (const std::string& type : entry.second.print_device_types) {
@@ -597,7 +620,7 @@ bool Config::remember_login(const AppConfig* config)
 std::string Config::cached_username(const AppConfig* config)
 {
     const auto credentials = saved_login_credentials(config);
-    return credentials.empty() ? std::string() : credentials.front().username;
+    return credentials.empty() ? trim_copy(get_value(config, KEY_LOGIN_USERNAME)) : credentials.front().username;
 }
 
 std::string Config::cached_password(const AppConfig* config)
@@ -608,6 +631,8 @@ std::string Config::cached_password(const AppConfig* config)
 
 std::string Config::auth_token(const AppConfig* config) { return get_value(config, KEY_AUTH_TOKEN); }
 
+std::string Config::auth_mode(const AppConfig* config) { return get_value(config, KEY_AUTH_MODE); }
+
 std::string Config::verify_token(const AppConfig* config) { return get_value(config, KEY_VERIFY_TOKEN); }
 
 std::string Config::verify_expire_ts(const AppConfig* config) { return get_value(config, KEY_VERIFY_EXPIRE_TS); }
@@ -616,11 +641,23 @@ std::string Config::user_email(const AppConfig* config) { return get_value(confi
 
 std::string Config::user_uuid(const AppConfig* config) { return get_value(config, KEY_USER_UUID); }
 
+std::string Config::user_phone(const AppConfig* config) { return get_value(config, KEY_USER_PHONE); }
+
+std::string Config::user_nickname(const AppConfig* config) { return get_value(config, KEY_USER_NICKNAME); }
+
+std::string Config::user_avatar(const AppConfig* config) { return get_value(config, KEY_USER_AVATAR); }
+
+std::string Config::token_refresh_attempt_ts(const AppConfig* config) { return get_value(config, KEY_TOKEN_REFRESH_ATTEMPT_TS); }
+
+std::string Config::token_refresh_success_ts(const AppConfig* config) { return get_value(config, KEY_TOKEN_REFRESH_SUCCESS_TS); }
+
+std::string Config::parameter_sync_token(const AppConfig* config) { return get_value(config, KEY_PARAMETER_SYNC_TOKEN); }
+
 std::vector<SavedLoginCredential> Config::saved_login_credentials(const AppConfig* config, const std::string& environment)
 {
     std::vector<SavedLoginCredential> result;
-    const std::string                 env = credential_environment(config, environment);
-    const json                        store = load_login_credential_store(config);
+    const std::string                 env    = credential_environment(config, environment);
+    const json                        store  = load_login_credential_store(config);
     const auto                        env_it = store.find(env);
     if (env_it != store.end() && env_it->is_array()) {
         for (const auto& item : *env_it) {
@@ -630,9 +667,8 @@ std::vector<SavedLoginCredential> Config::saved_login_credentials(const AppConfi
             const std::string password = item.value("password", std::string());
             if (username.empty())
                 continue;
-            if (std::none_of(result.begin(), result.end(), [&username](const SavedLoginCredential& credential) {
-                    return credential.username == username;
-                }))
+            if (std::none_of(result.begin(), result.end(),
+                             [&username](const SavedLoginCredential& credential) { return credential.username == username; }))
                 result.push_back({username, password});
         }
     }
@@ -661,9 +697,9 @@ void Config::set_environment(AppConfig* config, const std::string& environment)
 
     // Before changing environments, attach the legacy single-account cache to
     // the environment it originally belonged to.
-    const std::string current_env = credential_environment(config, {});
-    json              store       = load_login_credential_store(config);
-    const bool has_current_store = store.contains(current_env) && store[current_env].is_array() && !store[current_env].empty();
+    const std::string current_env       = credential_environment(config, {});
+    json              store             = load_login_credential_store(config);
+    const bool        has_current_store = store.contains(current_env) && store[current_env].is_array() && !store[current_env].empty();
     if (!has_current_store && get_value(config, KEY_LOGIN_REMEMBER, "true") == "true") {
         const std::string username = trim_copy(get_value(config, KEY_LOGIN_USERNAME));
         const std::string password = get_value(config, KEY_LOGIN_PASSWORD);
@@ -679,6 +715,8 @@ void Config::set_environment(AppConfig* config, const std::string& environment)
 
 void Config::set_auth_token(AppConfig* config, const std::string& token) { set_value(config, KEY_AUTH_TOKEN, token); }
 
+void Config::set_auth_mode(AppConfig* config, const std::string& mode) { set_value(config, KEY_AUTH_MODE, mode); }
+
 void Config::set_verify_token(AppConfig* config, const std::string& token) { set_value(config, KEY_VERIFY_TOKEN, token); }
 
 void Config::set_verify_expire_ts(AppConfig* config, const std::string& expire_ts) { set_value(config, KEY_VERIFY_EXPIRE_TS, expire_ts); }
@@ -687,7 +725,25 @@ void Config::set_user_email(AppConfig* config, const std::string& email) { set_v
 
 void Config::set_user_uuid(AppConfig* config, const std::string& uuid) { set_value(config, KEY_USER_UUID, uuid); }
 
-void Config::save_login_credential(AppConfig* config,
+void Config::set_user_phone(AppConfig* config, const std::string& phone) { set_value(config, KEY_USER_PHONE, phone); }
+
+void Config::set_user_nickname(AppConfig* config, const std::string& nickname) { set_value(config, KEY_USER_NICKNAME, nickname); }
+
+void Config::set_user_avatar(AppConfig* config, const std::string& avatar) { set_value(config, KEY_USER_AVATAR, avatar); }
+
+void Config::set_token_refresh_attempt_ts(AppConfig* config, const std::string& refresh_ts)
+{
+    set_value(config, KEY_TOKEN_REFRESH_ATTEMPT_TS, refresh_ts);
+}
+
+void Config::set_token_refresh_success_ts(AppConfig* config, const std::string& refresh_ts)
+{
+    set_value(config, KEY_TOKEN_REFRESH_SUCCESS_TS, refresh_ts);
+}
+
+void Config::set_parameter_sync_token(AppConfig* config, const std::string& token) { set_value(config, KEY_PARAMETER_SYNC_TOKEN, token); }
+
+void Config::save_login_credential(AppConfig*         config,
                                    const std::string& username,
                                    const std::string& password,
                                    const std::string& environment)
@@ -699,11 +755,12 @@ void Config::save_login_credential(AppConfig* config,
     if (normalized_username.empty())
         return;
 
-    const std::string env = credential_environment(config, environment);
+    const std::string env         = credential_environment(config, environment);
     auto              credentials = saved_login_credentials(config, env);
-    credentials.erase(std::remove_if(credentials.begin(), credentials.end(), [&normalized_username](const SavedLoginCredential& item) {
-                          return item.username == normalized_username;
-                      }),
+    credentials.erase(std::remove_if(credentials.begin(), credentials.end(),
+                                     [&normalized_username](const SavedLoginCredential& item) {
+                                         return item.username == normalized_username;
+                                     }),
                       credentials.end());
     credentials.insert(credentials.begin(), {normalized_username, password});
     if (credentials.size() > 10)
@@ -730,9 +787,10 @@ void Config::remove_login_credential(AppConfig* config, const std::string& usern
     const std::string normalized_username = trim_copy(username);
     const std::string env                 = credential_environment(config, environment);
     auto              credentials         = saved_login_credentials(config, env);
-    credentials.erase(std::remove_if(credentials.begin(), credentials.end(), [&normalized_username](const SavedLoginCredential& item) {
-                          return item.username == normalized_username;
-                      }),
+    credentials.erase(std::remove_if(credentials.begin(), credentials.end(),
+                                     [&normalized_username](const SavedLoginCredential& item) {
+                                         return item.username == normalized_username;
+                                     }),
                       credentials.end());
 
     json store = load_login_credential_store(config);
@@ -757,8 +815,14 @@ void Config::clear_verify_cache(AppConfig* config)
 void Config::clear_login_identity(AppConfig* config)
 {
     set_value(config, KEY_AUTH_TOKEN, "");
+    set_value(config, KEY_AUTH_MODE, "");
     set_value(config, KEY_USER_EMAIL, "");
     set_value(config, KEY_USER_UUID, "");
+    set_value(config, KEY_USER_PHONE, "");
+    set_value(config, KEY_USER_NICKNAME, "");
+    set_value(config, KEY_USER_AVATAR, "");
+    set_value(config, KEY_TOKEN_REFRESH_ATTEMPT_TS, "");
+    set_value(config, KEY_TOKEN_REFRESH_SUCCESS_TS, "");
 }
 
 void Config::clear_cached_credentials(AppConfig* config)

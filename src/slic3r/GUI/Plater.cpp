@@ -2345,10 +2345,32 @@ constexpr long GFD_OBS_UPLOAD_TIMEOUT_SECONDS         = 300;
 
 using GFDRequestCancelFn = std::function<bool()>;
 
+std::string gfd_parameter_read_token()
+{
+    const std::string dedicated_token = GFD::Config::parameter_sync_token(wxGetApp().app_config);
+    return dedicated_token.empty() ? GFDAuthManager::current_auth_token(wxGetApp().app_config) : dedicated_token;
+}
+
+bool gfd_resolve_parameter_read_token(wxWindow* parent, std::string& token, std::string& error_message)
+{
+    token = gfd_parameter_read_token();
+    if (!token.empty())
+        return true;
+
+    if (GFD::Config::parameter_sync_token(wxGetApp().app_config).empty() &&
+        GFDAuthManager::ensure_logged_in(parent, &error_message))
+        token = gfd_parameter_read_token();
+
+    if (!token.empty())
+        return true;
+    if (error_message.empty())
+        error_message = "未配置可用的只读参数同步凭据";
+    return false;
+}
+
 struct GFDPrintDeviceRequest
 {
     GFDDeviceInfo device;
-    std::string   request_id;
 };
 
 struct GFDOwnedTemporaryPrintFile
@@ -3024,7 +3046,7 @@ GFDHttpResult gfd_download_cloud_config_with_token(const std::string& url,
                             << ", output_path=" << output_path.string();
     Http::get(url)
         .header("Authorization", token)
-        .header("Biz", "ZXBMan")
+        .header("Biz", GFD::Config::parameter_sync_biz(wxGetApp().app_config))
         .timeout_connect(GFD_API_CONNECT_TIMEOUT_SECONDS)
         .timeout_max(GFD_CLOUD_DOWNLOAD_TIMEOUT_SECONDS)
         .on_progress([&](Http::Progress, bool& cancel) {
@@ -3084,7 +3106,7 @@ GFDHttpResult gfd_fetch_dynamic_filament_list_once(const std::string&        req
                             << ", url=" << request_url;
     Http::get(request_url)
         .header("Authorization", token)
-        .header("Biz", "ZXBMan")
+        .header("Biz", GFD::Config::parameter_sync_biz(wxGetApp().app_config))
         .timeout_connect(GFD_API_CONNECT_TIMEOUT_SECONDS)
         .timeout_max(GFD_API_REQUEST_TIMEOUT_SECONDS)
         .on_progress([&](Http::Progress, bool& cancel) {
@@ -3127,7 +3149,7 @@ GFDHttpResult gfd_fetch_dynamic_filament_detail_once(const std::string&        r
                             << ", sn=" << filament_sn;
     Http::get(request_url)
         .header("Authorization", token)
-        .header("Biz", "ZXBMan")
+        .header("Biz", GFD::Config::parameter_sync_biz(wxGetApp().app_config))
         .timeout_connect(GFD_API_CONNECT_TIMEOUT_SECONDS)
         .timeout_max(GFD_API_REQUEST_TIMEOUT_SECONDS)
         .on_progress([&](Http::Progress, bool& cancel) {
@@ -3933,7 +3955,6 @@ struct Plater::priv
     uint64_t                           gfd_print_export_submission_id{0};
     std::shared_ptr<GFDOwnedTemporaryPrintFile> gfd_print_owned_temporary_file;
     std::vector<GFDDeviceInfo>         gfd_selected_devices;
-    std::map<std::string, std::string> gfd_print_request_ids;
     GFDDeviceSelectionDialog*          gfd_active_device_dialog{nullptr};
     uint64_t                           gfd_print_submission_id{0};
     PlaterWorker<BoostThreadWorker>    m_gfd_print_worker;
@@ -9564,7 +9585,7 @@ bool Plater::priv::gfd_fetch_cloud_configs(const std::string&               devi
         bool          cancellation_requested = false;
         Http::get(request_url)
             .header("Authorization", auth_token)
-            .header("Biz", "ZXBMan")
+            .header("Biz", GFD::Config::parameter_sync_biz(wxGetApp().app_config))
             .timeout_connect(GFD_API_CONNECT_TIMEOUT_SECONDS)
             .timeout_max(20)
             .on_progress([&](Http::Progress, bool& cancel) {
@@ -9594,20 +9615,23 @@ bool Plater::priv::gfd_fetch_cloud_configs(const std::string&               devi
         return result;
     };
 
-    if (token.empty()) {
-        if (!GFDAuthManager::perform_authenticated_request(request_once, body, error_message, auth_parent))
-            return false;
-    } else {
-        GFDHttpResult result = request_once(token);
-        body                 = std::move(result.body);
-        error_message        = std::move(result.error_message);
-        if (http_status != nullptr)
-            *http_status = result.status;
-        if (response_body != nullptr)
-            *response_body = body;
-        if (!result.ok)
-            return false;
+    std::string effective_token = token;
+    if (effective_token.empty() && !gfd_resolve_parameter_read_token(auth_parent, effective_token, error_message))
+        return false;
+
+    GFDHttpResult result = request_once(effective_token);
+    body                 = std::move(result.body);
+    error_message        = std::move(result.error_message);
+    if (http_status != nullptr)
+        *http_status = result.status;
+    if (response_body != nullptr)
+        *response_body = body;
+    if (GFDAuthManager::is_retryable_auth_failure_response(result.status, body, error_message)) {
+        error_message = "只读参数同步授权不可用";
+        return false;
     }
+    if (!result.ok)
+        return false;
 
     auto json_string = [](const nlohmann::json& object, const char* key) -> std::string {
         if (!object.is_object())
@@ -9755,14 +9779,17 @@ bool Plater::priv::gfd_download_file_to_temp(const std::string& url,
                                              fs::path& output_path,
                                              std::string& error_message) const
 {
-    std::string response_body;
-    return GFDAuthManager::perform_authenticated_request(
-        [&](const std::string& token) {
-            return gfd_download_cloud_config_with_token(url, filename_hint, token, output_path);
-        },
-        response_body,
-        error_message,
-        q);
+    std::string token;
+    if (!gfd_resolve_parameter_read_token(q, token, error_message))
+        return false;
+
+    GFDHttpResult result = gfd_download_cloud_config_with_token(url, filename_hint, token, output_path);
+    if (GFDAuthManager::is_retryable_auth_failure_response(result.status, result.body, result.error_message)) {
+        error_message = "只读参数同步授权不可用";
+        return false;
+    }
+    error_message = std::move(result.error_message);
+    return result.ok;
 }
 
 bool Plater::priv::gfd_parse_project_settings_text(const std::string& text,
@@ -10317,11 +10344,6 @@ bool Plater::priv::gfd_import_cloud_config(const GFDCloudConfigInfo& config)
                             << ", file_name=" << config.config_file_name
                             << ", default_process_conf_length=" << config.default_process_conf.size();
 
-    if (!ensure_gfd_login()) {
-        show_error(q, _L("登录状态无效，请重新登录。"));
-        return false;
-    }
-
     std::string error_message;
     bool        applied = false;
     fs::path    downloaded_path;
@@ -10779,7 +10801,8 @@ static GFDHttpResult gfd_request_obs_token_once(const std::string&        url,
     bool          cancellation_requested = false;
     Http::get(url)
         .header("Authorization", token)
-        .header("Biz", "ZXBMan")
+        .header("mango", "1")
+        .header("Biz", "ZXB")
         .timeout_connect(GFD_API_CONNECT_TIMEOUT_SECONDS)
         .timeout_max(GFD_API_REQUEST_TIMEOUT_SECONDS)
         .on_progress([&](Http::Progress, bool& cancel) {
@@ -10817,7 +10840,7 @@ bool Plater::priv::gfd_request_obs_token(const std::string& suffix,
                                          wxWindow*          auth_parent) const
 {
     const std::string requested_suffix = suffix.empty() ? "3mf" : suffix;
-    const std::string url = GFD::Config::obs_token_url(wxGetApp().app_config) + "?ruleCode=print3dPermanently&suffix=" + requested_suffix;
+    const std::string url = GFD::Config::obs_token_url(wxGetApp().app_config) + "?ruleCode=print3dTemp&suffix=" + requested_suffix;
     BOOST_LOG_TRIVIAL(info) << "GFD request OBS token"
                             << ", url=" << url
                             << ", suffix=" << requested_suffix;
@@ -10885,6 +10908,7 @@ static bool gfd_upload_file_with_token_once(const std::string&              file
     int         last_progress          = -1;
     std::string response_body;
     Http::post(obs_url)
+        .header("upload-key", "upload-value")
         .form_add("key", object_key)
         .form_add("policy", token_data.value("policy", std::string()))
         .form_add("signature", token_data.value("signature", std::string()))
@@ -10955,17 +10979,27 @@ bool Plater::priv::gfd_upload_file_with_token(const std::string&              fi
 static nlohmann::json gfd_build_print_command_request(const GFDDeviceInfo&  device,
                                                       const std::string&    file_url,
                                                       const std::string&    file_type,
-                                                      const std::string&    request_id,
                                                       const std::vector<int>& consumable)
 {
     nlohmann::json request_json;
-    request_json["url"]       = file_url;
-    request_json["deviceId"]  = device.device_id;
-    request_json["printSn"]   = request_id;
-    request_json["requestId"] = request_id;
-    request_json["fileType"]  = file_type;
-    if (!consumable.empty())
-        request_json["consumable"] = consumable;
+    request_json["deviceSn"] = device.device_sn;
+    // Local desktop exports do not have cloud model/slice record identifiers.
+    // Omit those nullable fields instead of fabricating IDs. This matches the
+    // consumer client's default JSON serialization for absent cloud records.
+    request_json[file_type == "3mf" ? "gcode3mfUrl" : "gcodeUrl"] = file_url;
+    request_json["printFrom"] = "um";
+
+    nlohmann::json mappings = nlohmann::json::array();
+    for (size_t tool_index = 0; tool_index < consumable.size(); ++tool_index) {
+        if (consumable[tool_index] < 0)
+            continue;
+        mappings.push_back({{"slot", consumable[tool_index]},
+                            {"mt", ""},
+                            {"tNum", static_cast<int>(tool_index)},
+                            {"sRgb", ""},
+                            {"tRgb", ""}});
+    }
+    request_json["printParam"] = {{"ms", std::move(mappings)}, {"levelingBeforePrint", device.leveling_before_print}};
     return request_json;
 }
 
@@ -10974,11 +11008,10 @@ static GFDHttpResult gfd_send_print_command_once(const std::string&        print
                                                  const GFDDeviceInfo&      device,
                                                  const std::string&        file_url,
                                                  const std::string&        file_type,
-                                                 const std::string&        request_id,
                                                  const std::vector<int>&   consumable,
                                                  const GFDRequestCancelFn& cancel_callback = {})
 {
-    const nlohmann::json request_json = gfd_build_print_command_request(device, file_url, file_type, request_id, consumable);
+    const nlohmann::json request_json = gfd_build_print_command_request(device, file_url, file_type, consumable);
     const std::string    request_body = request_json.dump();
     BOOST_LOG_TRIVIAL(info) << "GFD send print command request"
                             << ", url=" << print_cmd_url
@@ -10993,7 +11026,7 @@ static GFDHttpResult gfd_send_print_command_once(const std::string&        print
     bool          cancellation_requested = false;
     Http::post(print_cmd_url)
         .header("Authorization", token)
-        .header("Biz", "ZXBMan")
+        .header("Biz", "ZXB")
         .header("Content-Type", "application/json")
         .set_post_body(request_body)
         .timeout_connect(GFD_API_CONNECT_TIMEOUT_SECONDS)
@@ -11032,8 +11065,8 @@ static GFDFilamentQueryResult gfd_fetch_device_filament_info_once(const std::str
                                                                   const GFDRequestCancelFn& cancel_callback = {})
 {
     GFDFilamentQueryResult result;
-    if (device.mac.empty()) {
-        result.error_message = "打印机 MAC 为空，无法查询耗材槽位";
+    if (device.device_sn.empty()) {
+        result.error_message = "打印机序列号为空，无法查询耗材槽位";
         return result;
     }
 
@@ -11043,7 +11076,7 @@ static GFDFilamentQueryResult gfd_fetch_device_filament_info_once(const std::str
     bool cancellation_requested = false;
     Http::get(request_url)
         .header("Authorization", token)
-        .header("Biz", "ZXBMan")
+        .header("Biz", "ZXB")
         .timeout_connect(GFD_API_CONNECT_TIMEOUT_SECONDS)
         .timeout_max(GFD_API_REQUEST_TIMEOUT_SECONDS)
         .on_progress([&](Http::Progress, bool& cancel) {
@@ -11192,7 +11225,7 @@ bool Plater::priv::gfd_prepare_multicolor_consumable(const GFDDeviceInfo&       
     std::vector<GFDDeviceFilamentSlot> available_slots;
     std::set<int>                      seen_slots;
     for (const GFDDeviceFilamentSlot& slot : filament_info.slots) {
-        if (slot.slot_no < 0 || slot.slot_no > 15 || slot.filament_sn.empty() || !seen_slots.insert(slot.slot_no).second)
+        if (slot.slot_no < 0 || slot.slot_no > 15 || !seen_slots.insert(slot.slot_no).second)
             continue;
         available_slots.push_back(slot);
     }
@@ -11234,11 +11267,18 @@ bool Plater::priv::gfd_prepare_multicolor_consumable(const GFDDeviceInfo&       
 bool Plater::priv::gfd_fetch_dynamic_filament_list(std::string& body, std::string& error_message) const
 {
     const std::string request_url = GFD::Config::filament_temperature_list_url(wxGetApp().app_config);
-    return GFDAuthManager::perform_authenticated_request(
-        [&](const std::string& token) { return gfd_fetch_dynamic_filament_list_once(request_url, token); },
-        body,
-        error_message,
-        q);
+    std::string       token;
+    if (!gfd_resolve_parameter_read_token(q, token, error_message))
+        return false;
+
+    GFDHttpResult result = gfd_fetch_dynamic_filament_list_once(request_url, token);
+    body                 = std::move(result.body);
+    if (GFDAuthManager::is_retryable_auth_failure_response(result.status, body, result.error_message)) {
+        error_message = "只读参数同步授权不可用";
+        return false;
+    }
+    error_message = std::move(result.error_message);
+    return result.ok;
 }
 
 bool Plater::priv::gfd_fetch_dynamic_filament_detail(const std::string& filament_sn, std::string& body, std::string& error_message) const
@@ -11250,11 +11290,18 @@ bool Plater::priv::gfd_fetch_dynamic_filament_detail(const std::string& filament
 
     const std::string request_url = GFD::Config::filament_temperature_detail_url(wxGetApp().app_config) + "?sn=" +
                                     Http::url_encode(filament_sn);
-    return GFDAuthManager::perform_authenticated_request(
-        [&](const std::string& token) { return gfd_fetch_dynamic_filament_detail_once(request_url, token, filament_sn); },
-        body,
-        error_message,
-        q);
+    std::string token;
+    if (!gfd_resolve_parameter_read_token(q, token, error_message))
+        return false;
+
+    GFDHttpResult result = gfd_fetch_dynamic_filament_detail_once(request_url, token, filament_sn);
+    body                 = std::move(result.body);
+    if (GFDAuthManager::is_retryable_auth_failure_response(result.status, body, result.error_message)) {
+        error_message = "只读参数同步授权不可用";
+        return false;
+    }
+    error_message = std::move(result.error_message);
+    return result.ok;
 }
 
 bool Plater::priv::gfd_update_dynamic_filament_slice_param(const std::string& filament_sn,
@@ -11361,12 +11408,13 @@ bool Plater::priv::gfd_start_print_submission(const std::vector<GFDDeviceInfo>& 
         return gfd_queue_print_upload(devices, print_file_path, {}, auth_token, dialog, dialog_alive, submission_id, owned_temporary_file);
 
     const GFDDeviceInfo device = devices.front();
-    if (device.mac.empty()) {
-        show_error(dialog, _L("打印机 MAC 为空，无法查询耗材槽位。"));
+    if (device.device_sn.empty()) {
+        show_error(dialog, _L("打印机序列号为空，无法查询耗材槽位。"));
         return false;
     }
 
-    const std::string request_url   = GFD::Config::device_filament_info_url(wxGetApp().app_config) + "?mac=" + Http::url_encode(device.mac);
+    const std::string request_url   = GFD::Config::device_filament_info_url(wxGetApp().app_config) +
+                                      "?deviceSn=" + Http::url_encode(device.device_sn);
     auto              query_result  = std::make_shared<GFDFilamentQueryResult>();
     auto              request_token = std::make_shared<std::string>(auth_token);
     dialog->update_print_progress(_L("正在查询打印机耗材槽位，请稍候..."), 5);
@@ -11462,19 +11510,13 @@ bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&     
     const std::string file_suffix   = use_3mf_file ? "gcode.3mf" : "gcode";
     const std::string file_type     = use_3mf_file ? "3mf" : "gcode";
     const std::string obs_token_url = GFD::Config::obs_token_url(wxGetApp().app_config) +
-                                      "?ruleCode=print3dPermanently&suffix=" + file_suffix;
+                                      "?ruleCode=print3dTemp&suffix=" + file_suffix;
     const std::string print_cmd_url = GFD::Config::device_print_cmd_url(wxGetApp().app_config);
 
     std::vector<GFDPrintDeviceRequest> device_requests;
     device_requests.reserve(devices.size());
-    for (const GFDDeviceInfo& device : devices) {
-        const std::string request_key = !device.device_id.empty() ? "id:" + device.device_id :
-                                        !device.mac.empty()       ? "mac:" + device.mac :
-                                                                    "sn:" + device.device_sn;
-        const auto request_it = gfd_print_request_ids.try_emplace(request_key, boost::uuids::to_string(boost::uuids::random_generator()()))
-                                    .first;
-        device_requests.push_back({device, request_it->second});
-    }
+    for (const GFDDeviceInfo& device : devices)
+        device_requests.push_back({device});
 
     auto task_result                  = std::make_shared<GFDPrintTaskResult>();
     task_result->owned_temporary_file = std::move(owned_temporary_file);
@@ -11539,7 +11581,7 @@ bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&     
                 task_result->error_message = std::string("OBS 响应格式无效: ") + ex.what();
                 return;
             }
-            if (obs_response.value("msg", std::string()) != "success" || !obs_response.contains("data") ||
+            if (obs_response.value("code", -1) != 0 || !obs_response.contains("data") ||
                 !obs_response["data"].is_object()) {
                 BOOST_LOG_TRIVIAL(error) << "GFD OBS token response invalid"
                                          << ", body=" << obs_result.body;
@@ -11578,7 +11620,7 @@ bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&     
                 const int                    progress = 85 + static_cast<int>((14 * index) / std::max<size_t>(device_requests.size(), 1));
                 post_progress(progress, 2, index + 1, device_requests.size());
                 GFDHttpResult     print_result = gfd_send_print_command_once(print_cmd_url, active_auth_token, request.device,
-                                                                             task_result->file_url, file_type, request.request_id, consumable,
+                                                                             task_result->file_url, file_type, consumable,
                                                                              [&ctl]() { return ctl.was_canceled(); });
                 if (!print_result.ok && ctl.was_canceled())
                     task_result->unknown_outcome = true;
@@ -11591,7 +11633,7 @@ bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&     
                     if (gfd_refresh_auth_token_for_worker(ctl, q, failed_token, active_auth_token, login_error)) {
                         task_result->request_auth_token = active_auth_token;
                         print_result = gfd_send_print_command_once(print_cmd_url, active_auth_token, request.device, task_result->file_url,
-                                                                   file_type, request.request_id, consumable,
+                                                                   file_type, consumable,
                                                                    [&ctl]() { return ctl.was_canceled(); });
                         if (!print_result.ok && ctl.was_canceled())
                             task_result->unknown_outcome = true;
@@ -11623,8 +11665,9 @@ bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&     
 
                 try {
                     const nlohmann::json response = nlohmann::json::parse(print_result.body);
-                    if (response.value("msg", std::string()) != "success") {
-                        const std::string service_message = response.value("msg", std::string("下发打印失败"));
+                    if (response.value("code", -1) != 0) {
+                        const std::string service_message = response.value(
+                            "msg", response.value("message", std::string("下发打印失败")));
                         failed_message += (boost::format("%1%: %2%\n") % device_label % service_message).str();
                         BOOST_LOG_TRIVIAL(error) << "GFD print command business failure"
                                                  << ", device_mac=" << request.device.mac << ", device_sn=" << request.device.device_sn
@@ -11752,7 +11795,6 @@ void Plater::priv::show_gfd_device_selection_dialog()
     gfd_print_export_submission_id = 0;
     gfd_selected_devices.clear();
     gfd_print_gcode_path.clear();
-    gfd_print_request_ids.clear();
     std::vector<std::string> allowed_device_types = GFD::Config::all_print_device_types();
     auto print_handler = [this](GFDDeviceSelectionDialog* dialog,
                                 const std::vector<GFDDeviceInfo>& devices,
@@ -12390,7 +12432,7 @@ void Plater::priv::set_project_name(const wxString& project_name)
     m_project_name = project_name;
     // update topbar title
 #ifdef __WINDOWS__
-    wxGetApp().mainframe->SetTitle(m_project_name + " - OrcaSlicer");
+    wxGetApp().mainframe->SetTitle(m_project_name + " - " + SLIC3R_APP_NAME);
     wxGetApp().mainframe->topbar()->SetTitle(m_project_name);
 #else
     wxGetApp().mainframe->SetTitle(m_project_name);
@@ -17838,14 +17880,14 @@ int Plater::export_config_3mf(int plate_idx, Export3mfProgressFn proFn, bool san
 
 bool Plater::upload_current_config_to_cloud(const std::string& config_name, const std::string& remarks)
 {
-    if (p == nullptr)
+    if (p == nullptr || GFD::Config::PARAMETER_SYNC_READ_ONLY)
         return false;
     return p->gfd_upload_current_config(config_name, remarks);
 }
 
 bool Plater::save_active_imported_cloud_config()
 {
-    if (p == nullptr)
+    if (p == nullptr || GFD::Config::PARAMETER_SYNC_READ_ONLY)
         return false;
     return p->gfd_save_active_imported_cloud_config();
 }
@@ -17866,6 +17908,11 @@ bool Plater::start_gfd_config_upload_async(const std::string&       config_name,
             finished(std::move(result), false);
         });
     };
+
+    if (GFD::Config::PARAMETER_SYNC_READ_ONLY) {
+        report_later("用户版仅支持从云端读取参数，不能回写云端。");
+        return true;
+    }
 
     if (!p->m_gfd_config_upload_worker.is_idle())
         return false;
@@ -18249,6 +18296,11 @@ bool Plater::save_active_imported_cloud_config_async(GFDConfigUploadFinishedFn f
         });
     };
 
+    if (GFD::Config::PARAMETER_SYNC_READ_ONLY) {
+        report_later("用户版仅支持从云端读取参数，不能回写云端。");
+        return true;
+    }
+
     if (!p->m_gfd_config_upload_worker.is_idle())
         return false;
 
@@ -18529,6 +18581,10 @@ bool Plater::update_dynamic_filament_slice_param(const std::string& filament_sn,
 {
     if (p == nullptr)
         return false;
+    if (GFD::Config::PARAMETER_SYNC_READ_ONLY) {
+        error_message = "用户版仅支持从云端读取耗材参数，不能回写云端。";
+        return false;
+    }
     return p->gfd_update_dynamic_filament_slice_param(filament_sn, device_type, slice_param, body, error_message);
 }
 
@@ -18547,6 +18603,16 @@ bool Plater::update_dynamic_filament_slice_param_async(const std::string&       
                                                        const std::string&          slice_param,
                                                        GFDDynamicRequestFinishedFn finished)
 {
+    if (GFD::Config::PARAMETER_SYNC_READ_ONLY) {
+        if (!finished)
+            return false;
+        CallAfter([finished = std::move(finished)]() mutable {
+            GFDAsyncRequestResult result;
+            result.error_message = "用户版仅支持从云端读取耗材参数，不能回写云端。";
+            finished(std::move(result), false);
+        });
+        return true;
+    }
     // Retry this write only after an explicit authentication rejection. Unknown outcomes are never replayed.
     return start_dynamic_filament_request(
         GFDDynamicRequestType::UpdateSliceParam, filament_sn, device_type, slice_param, true, 0, std::move(finished));
@@ -18594,7 +18660,8 @@ bool Plater::start_dynamic_filament_request(GFDDynamicRequestType       request_
         return true;
     }
 
-    if (!GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
+    const bool has_dedicated_read_token = is_read_request && !GFD::Config::parameter_sync_token(wxGetApp().app_config).empty();
+    if (!has_dedicated_read_token && !GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
         const bool login_started = GFDAuthManager::ensure_logged_in_async(
             this,
             [this, request_type, filament_sn, device_type, slice_param, allow_auth_retry, read_generation,
@@ -18626,13 +18693,18 @@ bool Plater::start_dynamic_filament_request(GFDDynamicRequestType       request_
         return true;
     }
 
-    const std::string auth_token = GFDAuthManager::current_auth_token(wxGetApp().app_config);
+    const std::string auth_token = is_read_request ? gfd_parameter_read_token() :
+                                                    GFDAuthManager::current_auth_token(wxGetApp().app_config);
     if (auth_token.empty()) {
         GFDAsyncRequestResult result;
-        result.error_message = "登录状态无效，请重新登录";
+        result.error_message = is_read_request ? "未配置可用的只读参数同步凭据" : "登录状态无效，请重新登录";
         finish_later(std::move(result));
         return true;
     }
+    // A manage-endpoint authorization failure must never invalidate the
+    // consumer login token. Parameter reads may optimistically use that token,
+    // but their authorization lifecycle remains independent.
+    const bool uses_user_session = !is_read_request;
 
     const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
     std::string       request_url;
@@ -18676,7 +18748,7 @@ bool Plater::start_dynamic_filament_request(GFDDynamicRequestType       request_
     };
 
     auto finalize_request = [this, http_result, request_type, filament_sn, device_type, slice_param, auth_token, request_environment,
-                             allow_auth_retry, read_generation, is_read_request, finished](bool canceled,
+                             allow_auth_retry, read_generation, is_read_request, uses_user_session, finished](bool canceled,
                                                                                            std::exception_ptr& eptr) mutable {
         GFDAsyncRequestResult result;
         if (const std::string exception_message = gfd_take_worker_exception(eptr); !exception_message.empty()) {
@@ -18712,7 +18784,7 @@ bool Plater::start_dynamic_filament_request(GFDDynamicRequestType       request_
 
         result.auth_failed =
             GFDAuthManager::is_retryable_auth_failure_response(result.status, result.body, result.error_message);
-        if (result.auth_failed && allow_auth_retry) {
+        if (result.auth_failed && allow_auth_retry && uses_user_session) {
             if (GFDAuthManager::current_auth_token(wxGetApp().app_config) == auth_token)
                 GFDAuthManager::clear_session(wxGetApp().app_config);
             if (!start_dynamic_filament_request(
@@ -18725,10 +18797,11 @@ bool Plater::start_dynamic_filament_request(GFDDynamicRequestType       request_
         }
 
         if (result.auth_failed) {
-            if (GFDAuthManager::current_auth_token(wxGetApp().app_config) == auth_token)
+            if (uses_user_session && GFDAuthManager::current_auth_token(wxGetApp().app_config) == auth_token)
                 GFDAuthManager::clear_session(wxGetApp().app_config);
             result.ok            = false;
-            result.error_message = "登录状态已失效，请重新登录后重试";
+            result.error_message = uses_user_session ? "登录状态已失效，请重新登录后重试" :
+                                                       "只读参数同步授权已失效";
         }
         finished(std::move(result), false);
     };

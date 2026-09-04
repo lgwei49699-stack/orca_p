@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# OrcaSlicer Flatpak Build Script
-# This script builds and packages OrcaSlicer as a Flatpak package locally
+# 智小白切片软件 Flatpak Build Script
+# This script builds and packages 智小白切片软件 as a Flatpak package locally
 # Based on the GitHub Actions workflow in .github/workflows/build_all.yml
 
 set -e
@@ -22,12 +22,16 @@ JOBS=$(nproc)
 FORCE_CLEAN=false
 ENABLE_CCACHE=false
 CACHE_DIR=".flatpak-builder"
+APP_NAME="智小白切片软件"
+APP_KEY="ZhiXiaoBaiSlicer"
+APP_ID="com.wisebeginner3d.ZhiXiaoBaiSlicer"
+MANIFEST="scripts/flatpak/${APP_ID}.yml"
 
 # Help function
 show_help() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
-    echo "Build OrcaSlicer as a Flatpak package"
+    echo "Build $APP_NAME as a Flatpak package"
     echo ""
     echo "Options:"
     echo "  -a, --arch ARCH        Target architecture (x86_64, aarch64) [default: $ARCH]"
@@ -107,7 +111,7 @@ if ! [[ "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
     exit 1
 fi
 
-echo -e "${BLUE}OrcaSlicer Flatpak Build Script${NC}"
+echo -e "${BLUE}${APP_NAME} Flatpak Build Script${NC}"
 echo -e "${BLUE}================================${NC}"
 echo -e "Architecture: ${GREEN}$ARCH${NC}"
 echo -e "Build directory: ${GREEN}$BUILD_DIR${NC}"
@@ -242,8 +246,8 @@ mkdir -p "$BUILD_DIR"
 rm -rf "$BUILD_DIR/build-dir"
 
 # Check if flatpak manifest exists
-if [[ ! -f "./scripts/flatpak/io.github.softfever.OrcaSlicer.yml" ]]; then
-    echo -e "${RED}Error: Flatpak manifest not found at scripts/flatpak/io.github.softfever.OrcaSlicer.yml${NC}"
+if [[ ! -f "$MANIFEST" ]]; then
+    echo -e "${RED}Error: Flatpak manifest not found at $MANIFEST${NC}"
     exit 1
 fi
 
@@ -252,7 +256,7 @@ echo -e "${YELLOW}Building Flatpak package...${NC}"
 echo -e "This may take a while (30+ minutes depending on your system)..."
 echo ""
 
-BUNDLE_NAME="OrcaSlicer-Linux-flatpak_${VER}_${ARCH}.flatpak"
+BUNDLE_NAME="${APP_KEY}-Linux-flatpak_${VER}_${ARCH}.flatpak"
 
 # Remove any existing bundle
 rm -f "$BUNDLE_NAME"
@@ -298,7 +302,7 @@ fi
 if ! flatpak-builder \
     "${BUILDER_ARGS[@]}" \
     "$BUILD_DIR/build-dir" \
-    scripts/flatpak/io.github.softfever.OrcaSlicer.yml; then
+    "$MANIFEST"; then
     echo -e "${RED}Error: flatpak-builder failed${NC}"
     echo -e "${YELLOW}Check the build log above for details${NC}"
     exit 1
@@ -309,7 +313,7 @@ echo -e "${YELLOW}Creating Flatpak bundle...${NC}"
 if ! flatpak build-bundle \
     "$BUILD_DIR/repo" \
     "$BUNDLE_NAME" \
-    io.github.softfever.OrcaSlicer \
+    "$APP_ID" \
     --arch="$ARCH"; then
     echo -e "${RED}Error: Failed to create Flatpak bundle${NC}"
     exit 1
@@ -327,11 +331,11 @@ echo ""
 echo -e "${BLUE}To install the Flatpak:${NC}"
 echo -e "flatpak install --user $BUNDLE_NAME"
 echo ""
-echo -e "${BLUE}To run OrcaSlicer:${NC}"
-echo -e "flatpak run io.github.softfever.OrcaSlicer"
+echo -e "${BLUE}To run ${APP_NAME}:${NC}"
+echo -e "flatpak run $APP_ID"
 echo ""
 echo -e "${BLUE}To uninstall:${NC}"
-echo -e "flatpak uninstall --user io.github.softfever.OrcaSlicer"
+echo -e "flatpak uninstall --user $APP_ID"
 echo ""
 if [[ "$FORCE_CLEAN" != true ]]; then
     echo -e "${BLUE}Cache Management:${NC}"

@@ -9,9 +9,9 @@ Usage:
 Options:
   -a, --arch <arch>           构建架构，默认使用当前机器架构。常用：arm64、x86_64、universal
   -o, --output-dir <dir>      DMG 输出目录，默认：./dist
-      --app <path>            指定 OrcaSlicer.app 路径；不指定时使用 ./build/<arch>/OrcaSlicer/OrcaSlicer.app
-      --name <name>           应用名/DMG 文件名前缀，默认：OrcaSlicer
-      --volume <name>         DMG 挂载后的卷名，默认：OrcaSlicer
+      --app <path>            指定 ZhiXiaoBaiSlicer.app 路径；不指定时使用 ./build/<arch>/OrcaSlicer/ZhiXiaoBaiSlicer.app
+      --name <name>           应用名/DMG 文件名前缀，默认：智小白切片软件
+      --volume <name>         DMG 挂载后的卷名，默认：智小白切片软件
       --include-validator     同时打入 OrcaSlicer_profile_validator.app
       --sign <identity>       对 DMG 内的 app 副本做 codesign。公开分发还需要 notarize
   -h, --help                  显示帮助
@@ -31,10 +31,11 @@ fail() {
 }
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_BUNDLE_KEY="ZhiXiaoBaiSlicer"
 ARCH="$(uname -m)"
 OUTPUT_DIR="$PROJECT_DIR/dist"
-APP_NAME="OrcaSlicer"
-VOLUME_NAME="OrcaSlicer"
+APP_NAME="智小白切片软件"
+VOLUME_NAME="智小白切片软件"
 APP_PATH=""
 INCLUDE_VALIDATOR=0
 SIGN_IDENTITY=""
@@ -89,7 +90,7 @@ command -v hdiutil >/dev/null 2>&1 || fail "hdiutil not found. This script must 
 command -v ditto >/dev/null 2>&1 || fail "ditto not found. This script must run on macOS."
 
 if [[ -z "$APP_PATH" ]]; then
-    APP_PATH="$PROJECT_DIR/build/$ARCH/OrcaSlicer/OrcaSlicer.app"
+    APP_PATH="$PROJECT_DIR/build/$ARCH/OrcaSlicer/$APP_BUNDLE_KEY.app"
 fi
 
 [[ -d "$APP_PATH" ]] || fail "app bundle not found: $APP_PATH"
@@ -111,7 +112,7 @@ mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 DMG_PATH="$OUTPUT_DIR/${APP_NAME}-mac-${ARCH_SAFE}-${VERSION_SAFE}.dmg"
 
-STAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/${APP_NAME}-dmg.XXXXXX")"
+STAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/${APP_BUNDLE_KEY}-dmg.XXXXXX")"
 cleanup() {
     rm -rf "$STAGE_ROOT"
 }

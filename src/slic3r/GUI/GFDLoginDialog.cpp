@@ -1,46 +1,52 @@
 #include "GFDLoginDialog.hpp"
 
-#include "I18N.hpp"
-#include "GUI_App.hpp"
+#include "GFDAuthManager.hpp"
 #include "GUI.hpp"
-#include "MainFrame.hpp"
+#include "GUI_App.hpp"
+#include "GUI_Utils.hpp"
+#include "I18N.hpp"
 #include "Jobs/BoostThreadWorker.hpp"
 #include "Jobs/PlaterWorker.hpp"
 #include "Jobs/Worker.hpp"
+#include "MainFrame.hpp"
 #include "Widgets/Button.hpp"
-#include "Widgets/CheckBox.hpp"
-#include "Widgets/ComboBox.hpp"
-#include "Widgets/RadioBox.hpp"
+#include "Widgets/Label.hpp"
 #include "Widgets/TextInput.hpp"
 #include "libslic3r/AppConfig.hpp"
 #include "slic3r/Utils/GFDConfig.hpp"
-#include "GFDAuthManager.hpp"
 #include "slic3r/Utils/Http.hpp"
 
-#include <boost/beast/core/detail/base64.hpp>
-#include <nlohmann/json.hpp>
-#include <openssl/pem.h>
-#include <openssl/rsa.h>
-#include <openssl/err.h>
-
 #include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <ctime>
 #include <functional>
+#include <initializer_list>
+#include <memory>
 #include <regex>
+#include <utility>
+
+#include <boost/beast/core/detail/base64.hpp>
+#include <boost/log/trivial.hpp>
+#include <nlohmann/json.hpp>
+#include <wx/choice.h>
+#include <wx/dcbuffer.h>
+#include <wx/dcgraph.h>
+#include <wx/image.h>
+#include <wx/mstream.h>
+#include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
-#include <wx/weakref.h>
-
-#include <ctime>
 
 namespace Slic3r { namespace GUI {
 
-using json = nlohmann::json;
-
 namespace {
 
-constexpr long VERIFY_VALID_SECONDS          = 24 * 60 * 60;
+using json = nlohmann::json;
+
 constexpr long LOGIN_CONNECT_TIMEOUT_SECONDS = 10;
 constexpr long LOGIN_REQUEST_TIMEOUT_SECONDS = 20;
+constexpr int  SMS_COUNTDOWN_SECONDS         = 60;
 
 std::string trim_copy(const std::string& value)
 {
@@ -51,140 +57,93 @@ std::string trim_copy(const std::string& value)
     return value.substr(begin, end - begin + 1);
 }
 
-long long now_ts() { return static_cast<long long>(std::time(nullptr)); }
-
-std::string sanitize_response_body(const std::string& body)
+std::string normalize_phone(std::string phone)
 {
-    std::string sanitized = trim_copy(body);
-    if (sanitized.size() >= 3 && static_cast<unsigned char>(sanitized[0]) == 0xEF && static_cast<unsigned char>(sanitized[1]) == 0xBB &&
-        static_cast<unsigned char>(sanitized[2]) == 0xBF) {
-        sanitized.erase(0, 3);
-    }
-    return sanitized;
+    phone.erase(std::remove_if(phone.begin(), phone.end(), [](unsigned char ch) { return std::isspace(ch) != 0 || ch == '-'; }),
+                phone.end());
+    if (phone.rfind("+86", 0) == 0)
+        phone.erase(0, 3);
+    else if (phone.rfind("0086", 0) == 0)
+        phone.erase(0, 4);
+    else if (phone.size() == 13 && phone.rfind("86", 0) == 0)
+        phone.erase(0, 2);
+    return phone;
 }
 
-std::string preview_response_body(const std::string& body, std::size_t max_length = 240)
+std::string json_string(const json& object, const char* key)
 {
-    std::string preview = sanitize_response_body(body);
-    if (preview.size() > max_length) {
-        preview.resize(max_length);
-        preview += "...";
-    }
-    return preview;
-}
-
-bool try_parse_response_json(const std::string& body, json& response, std::string& parse_error)
-{
-    const std::string sanitized = sanitize_response_body(body);
-    if (sanitized.empty()) {
-        parse_error = "empty response body";
-        return false;
-    }
-
-    try {
-        response = json::parse(sanitized);
-        return true;
-    } catch (const std::exception& ex) {
-        parse_error = ex.what();
-        return false;
-    } catch (...) {
-        parse_error = "unknown parse error";
-        return false;
-    }
-}
-
-std::string json_string_or_empty(const json& object, const char* key)
-{
-    if (!object.is_object() || key == nullptr || !object.contains(key) || object[key].is_null())
+    if (!object.is_object() || key == nullptr)
         return {};
-    if (object[key].is_string())
-        return object[key].get<std::string>();
+    const auto it = object.find(key);
+    if (it == object.end() || it->is_null())
+        return {};
+    if (it->is_string())
+        return it->get<std::string>();
+    if (it->is_number_integer())
+        return std::to_string(it->get<long long>());
+    if (it->is_number_unsigned())
+        return std::to_string(it->get<unsigned long long>());
+    if (it->is_number_float())
+        return std::to_string(it->get<double>());
     return {};
 }
 
-bool has_valid_verify_cache()
+std::string first_string(const json& object, std::initializer_list<const char*> keys)
 {
-    const auto*       cfg           = wxGetApp().app_config;
-    const std::string token         = GFD::Config::verify_token(cfg);
-    const std::string expire_ts_str = GFD::Config::verify_expire_ts(cfg);
-    if (token.empty() || expire_ts_str.empty())
-        return false;
-
-    try {
-        return now_ts() <= std::stoll(expire_ts_str);
-    } catch (...) {
-        return false;
+    for (const char* key : keys) {
+        const std::string value = json_string(object, key);
+        if (!value.empty())
+            return value;
     }
+    return {};
 }
 
-void clear_verify_cache_if_user_changed(const std::string& email)
+const json* child_object(const json& object, std::initializer_list<const char*> keys)
 {
-    auto* config = wxGetApp().app_config;
-    if (config == nullptr)
-        return;
-
-    const std::string cached_email = trim_copy(GFD::Config::user_email(config));
-    if (!cached_email.empty() && cached_email != trim_copy(email)) {
-        GFD::Config::clear_verify_cache(config);
-        GFD::Config::set_auth_token(config, "");
+    if (!object.is_object())
+        return nullptr;
+    for (const char* key : keys) {
+        const auto it = object.find(key);
+        if (it != object.end() && it->is_object())
+            return &*it;
     }
+    return nullptr;
 }
 
-bool persist_login_state(const std::string& email,
-                         const std::string& password,
-                         const std::string& uuid,
-                         const std::string& auth_token,
-                         const std::string& verify_token,
-                         bool               persist_credentials,
-                         bool               remember_credentials)
+std::string nested_string(const json& response, std::initializer_list<const char*> keys)
 {
-    if (wxGetApp().app_config == nullptr)
+    const json* current = &response;
+    for (int depth = 0; current != nullptr && depth < 5; ++depth) {
+        const std::string value = first_string(*current, keys);
+        if (!value.empty())
+            return value;
+        current = child_object(*current, {"data", "result", "user", "member", "profile"});
+    }
+    return {};
+}
+
+std::string response_message(const json& response, const std::string& fallback)
+{
+    const std::string message = nested_string(response, {"msg", "message", "error", "errorMessage"});
+    return message.empty() ? fallback : message;
+}
+
+bool response_succeeded(const json& response)
+{
+    if (!response.is_object() || !response.contains("code"))
         return false;
 
-    if (persist_credentials && remember_credentials) {
-        GFD::Config::save_login_credential(wxGetApp().app_config, email, password);
-    } else if (persist_credentials) {
-        GFD::Config::save_login_credential(wxGetApp().app_config, email, "");
-    }
-
-    GFD::Config::set_verify_token(wxGetApp().app_config, verify_token);
-    if (!verify_token.empty())
-        GFD::Config::set_verify_expire_ts(wxGetApp().app_config, std::to_string(now_ts() + VERIFY_VALID_SECONDS));
-    else
-        GFD::Config::set_verify_expire_ts(wxGetApp().app_config, "");
-    GFD::Config::set_user_email(wxGetApp().app_config, email);
-    GFD::Config::set_user_uuid(wxGetApp().app_config, uuid);
-    GFD::Config::set_auth_token(wxGetApp().app_config, auth_token);
-    wxGetApp().app_config->save();
-    return true;
+    const json& code = response["code"];
+    return (code.is_number_integer() && code.get<long long>() == 0) || (code.is_string() && code.get<std::string>() == "0");
 }
 
-struct LoginAttemptResult
-{
-    bool        ok{false};
-    std::string uuid;
-    std::string auth_token;
-    std::string error_message;
-};
-
-struct VerifyAttemptResult
-{
-    bool        ok{false};
-    std::string verify_token;
-    std::string error_message;
-};
-
-bool get_json_request(const std::string& url,
-                      Job::Ctl&          ctl,
-                      std::string&       body,
-                      unsigned&          status,
-                      std::string&       error_message)
+bool get_json_request(const std::string& url, Job::Ctl& ctl, std::string& body, unsigned& status, std::string& error_message)
 {
     bool ok                     = false;
     bool cancellation_requested = false;
-
     Http::get(url)
-        .header("Content-Type", "application/json")
+        .header("mango", "1")
+        .header("Biz", "ZXB")
         .timeout_connect(LOGIN_CONNECT_TIMEOUT_SECONDS)
         .timeout_max(LOGIN_REQUEST_TIMEOUT_SECONDS)
         .on_progress([&](Http::Progress, bool& cancel) {
@@ -199,18 +158,18 @@ bool get_json_request(const std::string& url,
         .on_error([&](std::string response_body, std::string error, unsigned http_status) {
             body          = std::move(response_body);
             status        = http_status;
-            error_message = std::move(error);
+            error_message = error.empty() ? body : std::move(error);
             ok            = false;
         })
         .perform_sync();
-
     if (cancellation_requested && !ok)
-        error_message = "操作已取消";
+        error_message = L("The operation was canceled.");
     return ok;
 }
 
 bool post_json_request(const std::string& url,
                        const std::string& request_body,
+                       bool               include_mango,
                        Job::Ctl&          ctl,
                        std::string&       body,
                        unsigned&          status,
@@ -218,10 +177,11 @@ bool post_json_request(const std::string& url,
 {
     bool ok                     = false;
     bool cancellation_requested = false;
-
-    Http::post(url)
-        .header("Content-Type", "application/json")
-        .set_post_body(request_body)
+    Http request                = Http::post(url);
+    request.header("Content-Type", "application/json").header("Biz", "ZXB");
+    if (include_mango)
+        request.header("mango", "1");
+    request.set_post_body(request_body)
         .timeout_connect(LOGIN_CONNECT_TIMEOUT_SECONDS)
         .timeout_max(LOGIN_REQUEST_TIMEOUT_SECONDS)
         .on_progress([&](Http::Progress, bool& cancel) {
@@ -236,182 +196,114 @@ bool post_json_request(const std::string& url,
         .on_error([&](std::string response_body, std::string error, unsigned http_status) {
             body          = std::move(response_body);
             status        = http_status;
-            error_message = std::move(error);
+            error_message = error.empty() ? body : std::move(error);
             ok            = false;
         })
         .perform_sync();
-
     if (cancellation_requested && !ok)
-        error_message = "操作已取消";
+        error_message = L("The operation was canceled.");
     return ok;
 }
 
-std::string extract_response_message(const std::string& body, const std::string& fallback = {})
+struct CaptchaRequestResult
 {
-    if (body.empty())
-        return fallback;
+    bool        ok{false};
+    std::string captcha_id;
+    std::string background_image;
+    std::string slide_image;
+    int         slide_y{0};
+    std::string error_message;
+};
 
+struct SmsRequestResult
+{
+    bool        ok{false};
+    std::string error_message;
+};
+
+struct LoginRequestResult
+{
+    bool        ok{false};
+    std::string token;
+    std::string uuid;
+    std::string nickname;
+    std::string avatar;
+    std::string error_message;
+};
+
+bool parse_captcha_response(const std::string& body, CaptchaRequestResult& result)
+{
     try {
         const json response = json::parse(body);
-        if (response.contains("msg") && response["msg"].is_string())
-            return response["msg"].get<std::string>();
-        if (response.contains("message") && response["message"].is_string())
-            return response["message"].get<std::string>();
-    } catch (...) {}
-
-    return fallback.empty() ? body : fallback;
-}
-
-bool parse_public_key_response(const std::string& body,
-                               const std::string& environment,
-                               std::string&       public_key,
-                               std::string&       error_message)
-{
-    json        response;
-    std::string parse_error;
-    if (!try_parse_response_json(body, response, parse_error)) {
-        BOOST_LOG_TRIVIAL(error) << "GFD public key response parse failed"
-                                 << ", env=" << environment
-                                 << ", error=" << parse_error
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "登录服务返回异常，请稍后重试";
+        if (!response_succeeded(response)) {
+            result.error_message = response_message(response, L("Failed to load the slider CAPTCHA."));
+            return false;
+        }
+        const json* data = child_object(response, {"data", "result"});
+        if (data == nullptr) {
+            result.error_message = L("The slider CAPTCHA data is empty.");
+            return false;
+        }
+        result.captcha_id         = first_string(*data, {"captchaId"});
+        result.background_image   = first_string(*data, {"backgroundImage"});
+        result.slide_image        = first_string(*data, {"slideImage"});
+        const std::string slide_y = first_string(*data, {"slideY"});
+        try {
+            result.slide_y = slide_y.empty() ? 0 : std::stoi(slide_y);
+        } catch (...) {
+            result.slide_y = 0;
+        }
+        result.ok = !result.captcha_id.empty() && !result.background_image.empty() && !result.slide_image.empty();
+        if (!result.ok)
+            result.error_message = L("The slider CAPTCHA data is incomplete.");
+        return result.ok;
+    } catch (const std::exception&) {
+        result.error_message = L("The slider CAPTCHA service returned an invalid response. Please try again later.");
         return false;
     }
-
-    try {
-        if (response.contains("msg") && response["msg"].is_string() && response["msg"].get<std::string>() == "success") {
-            public_key = response.value("data", std::string());
-            return !public_key.empty();
-        }
-        error_message = extract_response_message(body, "获取公钥失败");
-    } catch (const std::exception& ex) {
-        BOOST_LOG_TRIVIAL(error) << "GFD public key response handling failed"
-                                 << ", env=" << environment
-                                 << ", error=" << ex.what()
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "登录服务返回异常，请稍后重试";
-    } catch (...) {
-        BOOST_LOG_TRIVIAL(error) << "GFD public key response handling failed"
-                                 << ", env=" << environment
-                                 << ", error=unknown"
-                                 << ", body_preview=" << preview_response_body(body);
-        error_message = "登录服务返回异常，请稍后重试";
-    }
-    return false;
 }
 
-bool parse_login_response(const std::string& body, const std::string& environment, LoginAttemptResult& result)
+bool parse_sms_response(const std::string& body, SmsRequestResult& result)
 {
-    json        response;
-    std::string parse_error;
-    if (!try_parse_response_json(body, response, parse_error)) {
-        BOOST_LOG_TRIVIAL(error) << "GFD login response parse failed"
-                                 << ", env=" << environment
-                                 << ", error=" << parse_error
-                                 << ", body_preview=" << preview_response_body(body);
-        result.error_message = "登录服务返回异常，请稍后重试";
+    try {
+        const json response = json::parse(body);
+        if (!response_succeeded(response)) {
+            result.error_message = response_message(response, L("Failed to send the verification code."));
+            return false;
+        }
+        result.ok = true;
+        return true;
+    } catch (const std::exception&) {
+        result.error_message = L("The verification code service returned an invalid response. Please try again later.");
         return false;
     }
-
-    try {
-        BOOST_LOG_TRIVIAL(info) << "GFD login response parsed"
-                                << ", env=" << environment
-                                << ", has_data=" << (response.contains("data") && response["data"].is_object())
-                                << ", data_has_uuid="
-                                << (response.contains("data") && response["data"].is_object() && response["data"].contains("uuid"))
-                                << ", data_has_token="
-                                << (response.contains("data") && response["data"].is_object() && response["data"].contains("token"))
-                                << ", data_has_access_token="
-                                << (response.contains("data") && response["data"].is_object() && response["data"].contains("accessToken"));
-        if (response.contains("msg") && response["msg"].is_string() && response["msg"].get<std::string>() == "success") {
-            if (response.contains("data") && response["data"].is_object()) {
-                const json& data = response["data"];
-                result.uuid      = json_string_or_empty(data, "uuid");
-                result.auth_token = json_string_or_empty(data, "token");
-                if (result.auth_token.empty())
-                    result.auth_token = json_string_or_empty(data, "accessToken");
-            }
-            result.ok = !result.uuid.empty() || !result.auth_token.empty();
-            if (!result.ok)
-                result.error_message = "登录服务未返回有效身份信息";
-            return result.ok;
-        }
-        BOOST_LOG_TRIVIAL(warning) << "GFD login rejected"
-                                   << ", env=" << environment
-                                   << ", body=" << body;
-        result.error_message = extract_response_message(body, "登录失败");
-    } catch (const std::exception& ex) {
-        BOOST_LOG_TRIVIAL(error) << "GFD login response handling failed"
-                                 << ", env=" << environment
-                                 << ", error=" << ex.what()
-                                 << ", body_preview=" << preview_response_body(body);
-        result.error_message = "登录服务返回异常，请稍后重试";
-    } catch (...) {
-        BOOST_LOG_TRIVIAL(error) << "GFD login response handling failed"
-                                 << ", env=" << environment
-                                 << ", error=unknown"
-                                 << ", body_preview=" << preview_response_body(body);
-        result.error_message = "登录服务返回异常，请稍后重试";
-    }
-    return false;
 }
 
-bool parse_verify_response(const std::string& body, const std::string& environment, VerifyAttemptResult& result)
+bool parse_login_response(const std::string& body, LoginRequestResult& result)
 {
-    json        response;
-    std::string parse_error;
-    if (!try_parse_response_json(body, response, parse_error)) {
-        BOOST_LOG_TRIVIAL(error) << "GFD verify response parse failed"
-                                 << ", env=" << environment
-                                 << ", error=" << parse_error
-                                 << ", body_preview=" << preview_response_body(body);
-        result.error_message = "验证码服务返回异常，请稍后重试";
+    try {
+        const json response = json::parse(body);
+        if (!response_succeeded(response)) {
+            result.error_message = response_message(response, L("Login failed."));
+            return false;
+        }
+        result.token = nested_string(response, {"accessToken", "access_token", "token", "loginToken", "jwt"});
+        if (result.token.empty()) {
+            result.error_message = L("The login service did not return valid credentials.");
+            return false;
+        }
+        result.uuid     = nested_string(response, {"uuid", "userUuid", "userId", "uid", "id"});
+        result.nickname = nested_string(response, {"nickname", "nickName", "userName", "name"});
+        result.avatar   = nested_string(response, {"avatar", "avatarUrl", "headImg", "headImage"});
+        result.ok       = true;
+        return true;
+    } catch (const std::exception&) {
+        result.error_message = L("The login service returned an invalid response. Please try again later.");
         return false;
     }
-
-    try {
-        BOOST_LOG_TRIVIAL(info) << "GFD verify response parsed"
-                                << ", env=" << environment
-                                << ", has_data=" << (response.contains("data") && response["data"].is_object());
-        if (response.contains("msg") && response["msg"].is_string() && response["msg"].get<std::string>() == "success") {
-            if (response.contains("data") && response["data"].is_object()) {
-                const json& data   = response["data"];
-                result.verify_token = json_string_or_empty(data, "token");
-                if (result.verify_token.empty())
-                    result.verify_token = json_string_or_empty(data, "accessToken");
-            }
-            result.ok = !result.verify_token.empty();
-            if (!result.ok)
-                result.error_message = "验证码服务未返回有效凭据";
-            return result.ok;
-        }
-        BOOST_LOG_TRIVIAL(warning) << "GFD verify rejected"
-                                   << ", env=" << environment
-                                   << ", body=" << body;
-        result.error_message = extract_response_message(body, "验证码校验失败");
-    } catch (const std::exception& ex) {
-        BOOST_LOG_TRIVIAL(error) << "GFD verify response handling failed"
-                                 << ", env=" << environment
-                                 << ", error=" << ex.what()
-                                 << ", body_preview=" << preview_response_body(body);
-        result.error_message = "验证码服务返回异常，请稍后重试";
-    } catch (...) {
-        BOOST_LOG_TRIVIAL(error) << "GFD verify response handling failed"
-                                 << ", env=" << environment
-                                 << ", error=unknown"
-                                 << ", body_preview=" << preview_response_body(body);
-        result.error_message = "验证码服务返回异常，请稍后重试";
-    }
-    return false;
 }
 
-void apply_window_button_style(Button* button, ButtonStyle style)
-{
-    if (button != nullptr)
-        button->SetStyle(style, ButtonType::Choice);
-}
-
-wxWindow* login_parent_window(wxWindow* preferred_parent = nullptr)
+wxWindow* login_parent_window(wxWindow* preferred_parent)
 {
     if (preferred_parent != nullptr && preferred_parent->IsShownOnScreen())
         return preferred_parent;
@@ -420,444 +312,615 @@ wxWindow* login_parent_window(wxWindow* preferred_parent = nullptr)
     return wxTheApp != nullptr ? wxTheApp->GetTopWindow() : nullptr;
 }
 
-wxWindow* resolve_verify_parent(wxWindow* preferred_parent)
+void apply_window_button_style(Button* button, ButtonStyle style)
 {
-    if (preferred_parent != nullptr && preferred_parent->IsShownOnScreen())
-        return preferred_parent;
-
-    if (wxGetApp().mainframe != nullptr && wxGetApp().mainframe->IsShownOnScreen())
-        return static_cast<wxWindow*>(wxGetApp().mainframe);
-
-    wxWindow* fallback_parent = wxTheApp != nullptr ? wxTheApp->GetTopWindow() : nullptr;
-    if (fallback_parent != nullptr && fallback_parent != preferred_parent && fallback_parent->IsShownOnScreen())
-        return fallback_parent;
-
-    // During cold startup the automatic-login dialog is intentionally hidden and may be the only
-    // top-level window. A parentless modal verification dialog remains visible on both macOS and Windows.
-    return nullptr;
+    if (button != nullptr)
+        button->SetStyle(style, ButtonType::Choice);
 }
 
-wxBoxSizer* create_environment_item(wxWindow* parent,
-                                    RadioBox*& radio,
-                                    const wxString& label,
-                                    int dip_spacing,
-                                    const std::function<void()>& on_select)
+wxImage decode_base64_png(std::string encoded)
 {
-    auto* item_sizer = new wxBoxSizer(wxHORIZONTAL);
-    radio            = new RadioBox(parent);
-    item_sizer->Add(radio, 0, wxALIGN_CENTER_VERTICAL);
-    item_sizer->AddSpacer(dip_spacing);
+    const auto comma = encoded.find(',');
+    if (comma != std::string::npos && encoded.substr(0, comma).find("base64") != std::string::npos)
+        encoded.erase(0, comma + 1);
+    encoded.erase(std::remove_if(encoded.begin(), encoded.end(), [](unsigned char ch) { return std::isspace(ch) != 0; }), encoded.end());
 
-    auto* text = new wxStaticText(parent, wxID_ANY, label, wxDefaultPosition, wxDefaultSize, 0);
-    text->SetFont(::Label::Body_12);
-    item_sizer->Add(text, 0, wxALIGN_CENTER_VERTICAL);
+    std::string decoded(boost::beast::detail::base64::decoded_size(encoded.size()), '\0');
+    const auto  decoded_result = boost::beast::detail::base64::decode(decoded.data(), encoded.data(), encoded.size());
+    decoded.resize(decoded_result.first);
+    if (decoded.empty())
+        return {};
 
-    radio->Bind(wxEVT_LEFT_DOWN, [on_select](wxMouseEvent& event) {
-        on_select();
-        event.Skip(false);
-    });
-    text->Bind(wxEVT_LEFT_DOWN, [on_select](wxMouseEvent&) { on_select(); });
-    return item_sizer;
+    wxMemoryInputStream stream(decoded.data(), decoded.size());
+    return wxImage(stream, wxBITMAP_TYPE_PNG);
 }
+
+class GFDCaptchaCanvas final : public wxPanel
+{
+public:
+    GFDCaptchaCanvas(wxWindow* parent, const wxImage& background, const wxImage& slide, int slide_y)
+        : wxPanel(parent, wxID_ANY, wxDefaultPosition, background.GetSize()), m_background(background), m_slide(slide), m_slide_y(slide_y)
+    {
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        SetMinSize(background.GetSize());
+        Bind(wxEVT_PAINT, [this](wxPaintEvent&) {
+            wxAutoBufferedPaintDC dc(this);
+            dc.SetBackground(*wxWHITE_BRUSH);
+            dc.Clear();
+            if (m_background.IsOk())
+                dc.DrawBitmap(m_background, 0, 0, false);
+            if (m_slide.IsOk())
+                dc.DrawBitmap(m_slide, m_position, std::max(0, m_slide_y), true);
+        });
+    }
+
+    void set_position(int position)
+    {
+        m_position = std::clamp(position, 0, max_position());
+        Refresh();
+    }
+
+    int max_position() const
+    {
+        return m_background.IsOk() && m_slide.IsOk() ? std::max(0, m_background.GetWidth() - m_slide.GetWidth()) : 0;
+    }
+
+private:
+    wxBitmap m_background;
+    wxBitmap m_slide;
+    int      m_slide_y{0};
+    int      m_position{0};
+};
+
+class GFDCaptchaSlider final : public wxPanel
+{
+public:
+    using PositionCallback = std::function<void(int)>;
+
+    GFDCaptchaSlider(wxWindow* parent, int max_position, PositionCallback on_position, PositionCallback on_release)
+        : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE)
+        , m_max_position(std::max(1, max_position))
+        , m_on_position(std::move(on_position))
+        , m_on_release(std::move(on_release))
+    {
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        SetBackgroundColour(*wxWHITE);
+        SetMinSize(FromDIP(wxSize(310, 46)));
+        SetCursor(wxCursor(wxCURSOR_HAND));
+
+        Bind(wxEVT_PAINT, &GFDCaptchaSlider::on_paint, this);
+        Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent& event) {
+            if (!IsEnabled())
+                return;
+            m_dragging = true;
+            if (!HasCapture())
+                CaptureMouse();
+            update_from_mouse(event.GetX());
+            Refresh();
+        });
+        Bind(wxEVT_MOTION, [this](wxMouseEvent& event) {
+            if (m_dragging && event.LeftIsDown())
+                update_from_mouse(event.GetX());
+        });
+        Bind(wxEVT_LEFT_UP, [this](wxMouseEvent& event) {
+            if (!m_dragging)
+                return;
+            update_from_mouse(event.GetX());
+            m_dragging = false;
+            if (HasCapture())
+                ReleaseMouse();
+            Refresh();
+            if (m_value > 0 && m_on_release)
+                m_on_release(m_value);
+        });
+        Bind(wxEVT_MOUSE_CAPTURE_LOST, [this](wxMouseCaptureLostEvent&) {
+            m_dragging = false;
+            Refresh();
+        });
+    }
+
+    bool Enable(bool enable = true) override
+    {
+        const bool changed = wxPanel::Enable(enable);
+        SetCursor(wxCursor(enable ? wxCURSOR_HAND : wxCURSOR_ARROW));
+        Refresh();
+        return changed;
+    }
+
+    void reset()
+    {
+        m_value = 0;
+        if (m_on_position)
+            m_on_position(m_value);
+        Refresh();
+    }
+
+private:
+    void update_from_mouse(int mouse_x)
+    {
+        const int width          = GetClientSize().x;
+        const int thumb_size     = FromDIP(32);
+        const int edge_padding   = FromDIP(3);
+        const int track_left     = thumb_size / 2 + edge_padding;
+        const int available      = std::max(1, width - thumb_size - 2 * edge_padding);
+        const double normalized  = std::clamp(static_cast<double>(mouse_x - track_left) / available, 0.0, 1.0);
+        const int updated_value  = static_cast<int>(std::lround(normalized * m_max_position));
+        if (updated_value == m_value)
+            return;
+        m_value = updated_value;
+        if (m_on_position)
+            m_on_position(m_value);
+        Refresh();
+    }
+
+    void on_paint(wxPaintEvent&)
+    {
+        wxAutoBufferedPaintDC dc(this);
+        dc.SetBackground(wxBrush(GetBackgroundColour()));
+        dc.Clear();
+
+        wxGCDC    graphics(dc);
+        const int width      = GetClientSize().x;
+        const int height     = GetClientSize().y;
+        const int thumb_size = FromDIP(32);
+        const int track_h    = FromDIP(8);
+        const int edge_padding = FromDIP(3);
+        const int track_left = thumb_size / 2 + edge_padding;
+        const int track_w    = std::max(1, width - thumb_size - 2 * edge_padding);
+        const int center_y   = height / 2;
+        const int center_x   = track_left + static_cast<int>(std::lround(static_cast<double>(track_w) * m_value / m_max_position));
+
+        graphics.SetPen(*wxTRANSPARENT_PEN);
+        graphics.SetBrush(wxBrush(wxColour(203, 213, 225)));
+        graphics.DrawRoundedRectangle(track_left, center_y - track_h / 2, track_w, track_h, track_h / 2.0);
+
+        if (center_x > track_left) {
+            graphics.SetBrush(wxBrush(IsEnabled() ? wxColour(0, 150, 136) : wxColour(148, 163, 184)));
+            graphics.DrawRoundedRectangle(track_left, center_y - track_h / 2, center_x - track_left, track_h, track_h / 2.0);
+        }
+
+        graphics.SetBrush(wxBrush(wxColour(148, 163, 184)));
+        graphics.DrawEllipse(center_x - thumb_size / 2 + FromDIP(1), center_y - thumb_size / 2 + FromDIP(2), thumb_size, thumb_size);
+
+        const wxColour accent = IsEnabled() ? (m_dragging ? wxColour(0, 121, 107) : wxColour(0, 150, 136)) : wxColour(148, 163, 184);
+        graphics.SetPen(wxPen(accent, FromDIP(2)));
+        graphics.SetBrush(*wxWHITE_BRUSH);
+        graphics.DrawEllipse(center_x - thumb_size / 2, center_y - thumb_size / 2, thumb_size, thumb_size);
+
+        const int arrow_offset = FromDIP(4);
+        const int arrow_half_h = FromDIP(4);
+        graphics.SetPen(wxPen(accent, FromDIP(2), wxPENSTYLE_SOLID));
+        for (int offset : {-arrow_offset, arrow_offset}) {
+            const int x = center_x + offset;
+            graphics.DrawLine(x - FromDIP(2), center_y - arrow_half_h, x + FromDIP(2), center_y);
+            graphics.DrawLine(x + FromDIP(2), center_y, x - FromDIP(2), center_y + arrow_half_h);
+        }
+    }
+
+private:
+    int              m_max_position{1};
+    int              m_value{0};
+    bool             m_dragging{false};
+    PositionCallback m_on_position;
+    PositionCallback m_on_release;
+};
+
+class GFDSliderCaptchaDialog final : public wxDialog
+{
+public:
+    GFDSliderCaptchaDialog(wxWindow* parent, const CaptchaRequestResult& challenge, std::string phone)
+        : wxDialog(parent, wxID_ANY, _L("Security Verification"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX)
+        , m_phone(std::move(phone))
+        , m_captcha_id(challenge.captcha_id)
+    {
+        auto worker = std::make_unique<PlaterWorker<BoostThreadWorker>>(this, std::shared_ptr<ProgressIndicator>{},
+                                                                        "gfd_slider_captcha_worker");
+        worker->set_busy_cursor_enabled(false);
+        m_worker = std::move(worker);
+
+        SetBackgroundColour(*wxWHITE);
+        SetMinSize(FromDIP(wxSize(390, 300)));
+
+        auto* sizer = new wxBoxSizer(wxVERTICAL);
+        auto* title = new wxStaticText(this, wxID_ANY, _L("Drag the slider to complete verification"));
+        title->SetFont(Label::Body_14);
+        sizer->Add(title, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(20));
+
+        m_tip = new wxStaticText(this, wxID_ANY, _L("Drag the slider below to align the puzzle piece with the gap."));
+        m_tip->SetFont(Label::Body_12);
+        m_tip->SetForegroundColour(wxColour(107, 114, 128));
+        sizer->Add(m_tip, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, FromDIP(8));
+
+        wxImage background = decode_base64_png(challenge.background_image);
+        wxImage slide      = decode_base64_png(challenge.slide_image);
+        if (!background.IsOk() || !slide.IsOk()) {
+            m_valid = false;
+            m_tip->SetLabel(_L("The slider CAPTCHA image is invalid. Please request a new one."));
+            m_tip->SetForegroundColour(wxColour(220, 38, 38));
+            // wxBitmap requires a valid source image. Keep a harmless placeholder
+            // so a malformed server image produces an error state, not an assert.
+            background.Create(310, 155);
+            background.SetRGB(wxRect(0, 0, 310, 155), 245, 247, 250);
+            slide.Create(50, 50);
+            slide.SetRGB(wxRect(0, 0, 50, 50), 229, 231, 235);
+        }
+
+        m_canvas = new GFDCaptchaCanvas(this, background, slide, challenge.slide_y);
+        sizer->Add(m_canvas, 0, wxALIGN_CENTER_HORIZONTAL | wxLEFT | wxRIGHT, FromDIP(24));
+
+        m_slider = new GFDCaptchaSlider(
+            this,
+            m_canvas->max_position(),
+            [this](int position) {
+                m_position = position;
+                m_canvas->set_position(position);
+            },
+            [this](int position) { start_verification(position); });
+        m_slider->Enable(m_valid);
+        sizer->Add(m_slider, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(12));
+        sizer->AddSpacer(FromDIP(16));
+        SetSizerAndFit(sizer);
+        CentreOnParent();
+
+        Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent&) {
+            if (!m_request_active) {
+                EndModal(wxID_CANCEL);
+                return;
+            }
+            m_close_when_idle = true;
+            set_tip(_L("Canceling login..."), false);
+            if (m_worker != nullptr)
+                m_worker->cancel_all();
+        });
+    }
+
+    ~GFDSliderCaptchaDialog() override
+    {
+        m_destroying = true;
+        if (m_worker != nullptr) {
+            m_worker->cancel_all();
+            m_worker->wait_for_idle();
+        }
+    }
+
+    bool run()
+    {
+        return m_valid && ShowModal() == wxID_OK && m_verified;
+    }
+
+private:
+    void set_tip(const wxString& text, bool is_error)
+    {
+        m_tip->SetLabel(text);
+        m_tip->SetForegroundColour(is_error ? wxColour(220, 38, 38) : wxColour(0, 150, 136));
+        m_tip->Wrap(FromDIP(310));
+        Layout();
+    }
+
+    void reset_after_failure(const wxString& error)
+    {
+        set_tip(error, true);
+        m_position = 0;
+        m_slider->reset();
+        m_slider->Enable(m_valid);
+    }
+
+    void start_verification(int position)
+    {
+        if (!m_valid || m_request_active || position <= 0 || m_worker == nullptr || wxGetApp().app_config == nullptr)
+            return;
+
+        auto result = std::make_shared<SmsRequestResult>();
+        json request;
+        request["captchaId"]     = m_captcha_id;
+        request["slidePosition"] = std::to_string(position) + ".0";
+        request["phone"]         = m_phone;
+        const std::string url     = GFD::Config::sms_send_url(wxGetApp().app_config);
+        const std::string body    = request.dump();
+
+        m_request_active = true;
+        m_slider->Enable(false);
+        set_tip(_L("Sending verification code..."), false);
+
+        const bool queued = queue_job(
+            *m_worker,
+            [result, url, body](Job::Ctl& ctl) {
+                std::string response_body;
+                unsigned    status = 0;
+                if (!post_json_request(url, body, false, ctl, response_body, status, result->error_message)) {
+                    if (result->error_message.empty())
+                        result->error_message = L("Failed to send the verification code.");
+                    return;
+                }
+                if (!ctl.was_canceled())
+                    parse_sms_response(response_body, *result);
+            },
+            [this, result](bool canceled, std::exception_ptr& eptr) {
+                if (m_destroying) {
+                    eptr = nullptr;
+                    return;
+                }
+                if (eptr != nullptr) {
+                    try {
+                        std::rethrow_exception(eptr);
+                    } catch (const std::exception& ex) {
+                        result->error_message = ex.what();
+                    } catch (...) {
+                        result->error_message = L("An error occurred while sending the verification code.");
+                    }
+                    eptr = nullptr;
+                }
+
+                m_request_active = false;
+                if (canceled || m_close_when_idle) {
+                    if (IsModal())
+                        EndModal(wxID_CANCEL);
+                    return;
+                }
+                if (!result->ok) {
+                    reset_after_failure(_L(result->error_message.empty() ? L("Verification failed.") : result->error_message));
+                    return;
+                }
+
+                m_verified = true;
+                if (IsModal())
+                    EndModal(wxID_OK);
+            });
+
+        if (!queued) {
+            m_request_active = false;
+            reset_after_failure(_L("Unable to send the verification code. Please try again later."));
+        }
+    }
+
+private:
+    GFDCaptchaCanvas*       m_canvas{nullptr};
+    GFDCaptchaSlider*       m_slider{nullptr};
+    wxStaticText*           m_tip{nullptr};
+    std::unique_ptr<Worker> m_worker;
+    std::string             m_phone;
+    std::string             m_captcha_id;
+    int                     m_position{0};
+    bool                    m_valid{true};
+    bool                    m_verified{false};
+    bool                    m_request_active{false};
+    bool                    m_close_when_idle{false};
+    bool                    m_destroying{false};
+};
 
 } // namespace
 
 GFDLoginDialog::GFDLoginDialog(wxWindow* parent, bool use_fallback_parent)
     : wxDialog(use_fallback_parent ? login_parent_window(parent) : parent,
                wxID_ANY,
-               _L("功夫豆Orca - 登录"),
+               _L("WiseBeginner Slicer") + " - " + _L("User Login"),
                wxDefaultPosition,
                wxDefaultSize,
                wxCAPTION | wxCLOSE_BOX)
+    , m_countdown_timer(this)
 {
-    auto worker = std::make_unique<PlaterWorker<BoostThreadWorker>>(this, std::shared_ptr<ProgressIndicator>{}, "gfd_login_worker");
+    auto worker = std::make_unique<PlaterWorker<BoostThreadWorker>>(this, std::shared_ptr<ProgressIndicator>{}, "gfd_user_login_worker");
     worker->set_busy_cursor_enabled(false);
     m_worker = std::move(worker);
 
     build();
     bind_events();
-    load_cached_credentials();
+    load_cached_phone();
     wxGetApp().UpdateDlgDarkUI(this);
 }
 
 GFDLoginDialog::~GFDLoginDialog()
 {
-    m_destroying     = true;
-    m_login_finished = {};
+    m_destroying = true;
+    m_countdown_timer.Stop();
     if (m_worker != nullptr) {
         m_worker->cancel_all();
         m_worker->wait_for_idle();
     }
 }
 
-bool GFDLoginDialog::run() { return ShowModal() == wxID_OK; }
-
-GFDLoginDialog::LoginResult GFDLoginDialog::login_with_credentials(wxWindow*          parent,
-                                                                   const std::string& username,
-                                                                   const std::string& password,
-                                                                   std::string&       error_message,
-                                                                   bool               persist_credentials,
-                                                                   bool               remember_credentials)
+bool GFDLoginDialog::run()
 {
-    GFDLoginDialog dialog(parent);
-    return dialog.login_with_credentials_local(username, password, error_message, persist_credentials, remember_credentials);
-}
-
-GFDLoginDialog::LoginResult GFDLoginDialog::login_with_credentials(const std::string& username,
-                                                                   const std::string& password,
-                                                                   std::string&       error_message,
-                                                                   bool               persist_credentials,
-                                                                   bool               remember_credentials)
-{
-    return login_with_credentials(nullptr, username, password, error_message, persist_credentials, remember_credentials);
-}
-
-bool GFDLoginDialog::login_with_credentials_async(
-    const std::string& username, const std::string& password, LoginFinishedFn finished, bool persist_credentials, bool remember_credentials)
-{
-    if (!finished)
-        return false;
-
-    auto* dialog             = new GFDLoginDialog(nullptr, false);
-    dialog->m_login_finished = std::move(finished);
-    if (!dialog->prepare_login_attempt(username, password, persist_credentials, remember_credentials))
-        dialog->finish_async_login();
-    return true;
-}
-
-GFDLoginDialog::LoginResult GFDLoginDialog::login_with_credentials_local(const std::string& username,
-                                                                         const std::string& password,
-                                                                         std::string&       error_message,
-                                                                         bool               persist_credentials,
-                                                                         bool               remember_credentials)
-{
-    if (!prepare_login_attempt(username, password, persist_credentials, remember_credentials)) {
-        error_message = m_last_error;
-        return m_login_result;
-    }
-
-    ShowModal();
-    error_message = m_last_error;
-    return m_login_result;
-}
-
-bool GFDLoginDialog::prepare_login_attempt(const std::string& username,
-                                           const std::string& password,
-                                           bool               persist_credentials,
-                                           bool               remember_credentials)
-{
-    const std::string email = trim_copy(username);
-    if (email.empty()) {
-        m_login_result = LoginResult::Failed;
-        m_last_error   = "请输入账户";
-        return false;
-    }
-
-    static const std::regex email_regex(R"(^[^@\s]+@[^@\s]+\.[^@\s]+$)");
-    if (!std::regex_match(email, email_regex)) {
-        m_login_result = LoginResult::Failed;
-        m_last_error   = "邮箱格式错误";
-        return false;
-    }
-
-    if (password.empty()) {
-        m_login_result = LoginResult::Failed;
-        m_last_error   = "请输入密码";
-        return false;
-    }
-
-    m_username_input->SetValue(from_u8(email));
-    m_password_input->GetTextCtrl()->SetValue(from_u8(password));
-    m_remember_checkbox->SetValue(remember_credentials);
-    m_login_result = LoginResult::Cancelled;
-    m_last_error.clear();
-
-    if (!apply_selected_environment()) {
-        m_login_result = LoginResult::Failed;
-        m_last_error   = "环境配置初始化失败";
-        return false;
-    }
-    if (!start_login_attempt(email, password, persist_credentials, remember_credentials)) {
-        if (m_last_error.empty())
-            m_last_error = "无法启动登录任务，请稍后重试";
-        return false;
-    }
-    return true;
-}
-
-void GFDLoginDialog::finish_async_login()
-{
-    if (m_destroying || !m_login_finished)
-        return;
-
-    LoginFinishedFn           finished = std::move(m_login_finished);
-    const LoginResult         result   = m_login_result;
-    std::string               error    = m_last_error;
-    wxWeakRef<GFDLoginDialog> weak_this(this);
-    wxGetApp().CallAfter([weak_this, finished = std::move(finished), result, error = std::move(error)]() mutable {
-        if (weak_this)
-            weak_this->Destroy();
-        finished(result, std::move(error));
-    });
+    dialogStack.push_front(this);
+    const int  result = ShowModal();
+    const auto iter   = std::find(dialogStack.begin(), dialogStack.end(), this);
+    if (iter != dialogStack.end())
+        dialogStack.erase(iter);
+    return result == wxID_OK;
 }
 
 void GFDLoginDialog::build()
 {
-    SetBackgroundColour(*wxWHITE);
-    SetMinSize(wxSize(FromDIP(410), FromDIP(320)));
+    SetBackgroundColour(wxColour(245, 247, 250));
+    SetMinSize(FromDIP(wxSize(520, 500)));
 
     auto* main_sizer = new wxBoxSizer(wxVERTICAL);
-    main_sizer->AddSpacer(FromDIP(34));
+    auto* title      = new wxStaticText(this, wxID_ANY, _L("Sign in to your WiseBeginner account"));
+    title->SetFont(Label::Head_20);
+    main_sizer->Add(title, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(34));
 
-    auto* username_row   = new wxBoxSizer(wxHORIZONTAL);
-    auto* username_label = new wxStaticText(this, wxID_ANY, _L("账户"), wxDefaultPosition, wxDefaultSize, 0);
-    username_label->SetFont(::Label::Body_13);
-    username_label->SetMinSize(wxSize(FromDIP(40), -1));
-    username_row->Add(username_label, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(26));
+    auto* subtitle = new wxStaticText(this, wxID_ANY, _L("Sign in to sync read-only parameters and send print jobs to your printers."));
+    subtitle->SetFont(Label::Body_12);
+    subtitle->SetForegroundColour(wxColour(107, 114, 128));
+    main_sizer->Add(subtitle, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(8));
 
-    m_username_input = new ComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(260), FromDIP(36)),
-                                    0, nullptr, 0);
-    m_username_input->SetCornerRadius(FromDIP(6));
-    username_row->Add(m_username_input, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(12));
-    main_sizer->Add(username_row, 0, wxEXPAND);
+    auto* card = new wxPanel(this, wxID_ANY);
+    card->SetBackgroundColour(*wxWHITE);
+    auto* card_sizer = new wxBoxSizer(wxVERTICAL);
 
-    auto* password_row   = new wxBoxSizer(wxHORIZONTAL);
-    auto* password_label = new wxStaticText(this, wxID_ANY, _L("密码"), wxDefaultPosition, wxDefaultSize, 0);
-    password_label->SetFont(::Label::Body_13);
-    password_label->SetMinSize(wxSize(FromDIP(40), -1));
-    password_row->Add(password_label, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(26));
+    auto* card_title = new wxStaticText(card, wxID_ANY, _L("Sign in with an SMS verification code"));
+    card_title->SetFont(Label::Body_14);
+    card_sizer->Add(card_title, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(24));
 
-    m_password_input = new TextInput(this, wxEmptyString, wxEmptyString, wxEmptyString, wxDefaultPosition,
-                                     wxSize(FromDIP(260), FromDIP(36)), wxTE_PASSWORD | wxTE_PROCESS_ENTER);
-    m_password_input->SetCornerRadius(FromDIP(6));
-    password_row->Add(m_password_input, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(12));
-    main_sizer->Add(password_row, 0, wxTOP | wxEXPAND, FromDIP(20));
+    if (wxGetApp().get_mode() == comDevelop) {
+        auto* environment_row   = new wxBoxSizer(wxHORIZONTAL);
+        auto* environment_label = new wxStaticText(card, wxID_ANY, _L("Network Environment"));
+        environment_label->SetFont(Label::Body_12);
+        environment_row->Add(environment_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
 
-    auto* environment_row   = new wxBoxSizer(wxHORIZONTAL);
-    auto* environment_label = new wxStaticText(this, wxID_ANY, _L("环境"), wxDefaultPosition, wxDefaultSize, 0);
-    environment_label->SetFont(::Label::Body_13);
-    environment_label->SetMinSize(wxSize(FromDIP(40), -1));
-    environment_row->Add(environment_label, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(26));
+        wxArrayString environments;
+        environments.Add(_L("Production Environment"));
+        environments.Add(_L("Test Environment"));
+        m_environment_choice = new wxChoice(card, wxID_ANY, wxDefaultPosition, FromDIP(wxSize(230, 32)), environments);
+        const bool use_test_environment =
+            GFD::Config::current_environment_name(wxGetApp().app_config) == GFD::Config::ENV_QA;
+        m_environment_choice->SetSelection(use_test_environment ? 1 : 0);
+        environment_row->Add(m_environment_choice, 1, wxALIGN_CENTER_VERTICAL);
+        card_sizer->Add(environment_row, 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, FromDIP(24));
+    }
 
-    auto* environment_options = new wxBoxSizer(wxHORIZONTAL);
-    environment_options->Add(create_environment_item(this, m_qa_environment_radio, _L("测试环境"), FromDIP(6),
-                                                     [this]() { select_environment(GFD::Config::ENV_QA); }),
-                             0, wxALIGN_CENTER_VERTICAL);
-    environment_options->AddSpacer(FromDIP(24));
-    environment_options->Add(create_environment_item(this, m_production_environment_radio, _L("正式环境"), FromDIP(6),
-                                                     [this]() { select_environment(GFD::Config::ENV_PRODUCTION); }),
-                             0, wxALIGN_CENTER_VERTICAL);
-    environment_row->Add(environment_options, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(12));
-    main_sizer->Add(environment_row, 0, wxTOP | wxEXPAND, FromDIP(18));
+    auto* phone_label = new wxStaticText(card, wxID_ANY, _L("Phone Number"));
+    phone_label->SetFont(Label::Body_12);
+    card_sizer->Add(phone_label, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(24));
 
-    auto* remember_row  = new wxBoxSizer(wxHORIZONTAL);
-    m_remember_checkbox = new CheckBox(this, wxID_ANY);
-    remember_row->Add(m_remember_checkbox, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(31));
-    m_remember_label = new wxStaticText(this, wxID_ANY, _L("记住账号密码"), wxDefaultPosition, wxDefaultSize, 0);
-    m_remember_label->SetFont(::Label::Body_12);
-    remember_row->Add(m_remember_label, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(8));
-    m_tip_label = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
-    m_tip_label->SetFont(::Label::Body_12);
-    m_tip_label->SetForegroundColour(wxColour(255, 0, 0));
-    m_tip_label->Wrap(FromDIP(336));
-    m_tip_label->SetMinSize(wxSize(FromDIP(336), FromDIP(34)));
-    remember_row->AddStretchSpacer(1);
-    main_sizer->Add(remember_row, 0, wxTOP | wxEXPAND, FromDIP(18));
-    main_sizer->Add(m_tip_label, 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, FromDIP(24));
+    auto* phone_row    = new wxBoxSizer(wxHORIZONTAL);
+    auto* country_code = new wxStaticText(card, wxID_ANY, "+86");
+    country_code->SetFont(Label::Body_13);
+    country_code->SetMinSize(wxSize(FromDIP(42), country_code->GetBestSize().y));
+    phone_row->Add(country_code, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+    m_phone_input = new TextInput(card, wxEmptyString, wxEmptyString, wxEmptyString, wxDefaultPosition, FromDIP(wxSize(300, 36)),
+                                  wxTE_PROCESS_ENTER);
+    m_phone_input->SetCornerRadius(FromDIP(6));
+    m_phone_input->GetTextCtrl()->SetHint(_L("Enter your phone number"));
+    phone_row->Add(m_phone_input, 1, wxALIGN_CENTER_VERTICAL);
+    card_sizer->Add(phone_row, 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, FromDIP(24));
 
-    auto* button_row = new wxBoxSizer(wxHORIZONTAL);
-    button_row->AddStretchSpacer(1);
+    auto* code_label = new wxStaticText(card, wxID_ANY, _L("SMS Verification Code"));
+    code_label->SetFont(Label::Body_12);
+    card_sizer->Add(code_label, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(24));
 
-    m_cancel_button = new Button(this, _L("取消"));
-    apply_window_button_style(m_cancel_button, ButtonStyle::Regular);
-    m_cancel_button->SetMinSize(wxSize(FromDIP(116), FromDIP(44)));
-    m_cancel_button->SetSize(wxSize(FromDIP(116), FromDIP(44)));
-    m_cancel_button->SetCornerRadius(FromDIP(22));
-    button_row->Add(m_cancel_button, 0, wxRIGHT, FromDIP(15));
+    auto* code_row = new wxBoxSizer(wxHORIZONTAL);
+    m_code_input   = new TextInput(card, wxEmptyString, wxEmptyString, wxEmptyString, wxDefaultPosition, FromDIP(wxSize(210, 36)),
+                                   wxTE_PROCESS_ENTER);
+    m_code_input->SetCornerRadius(FromDIP(6));
+    m_code_input->GetTextCtrl()->SetHint(_L("Enter the verification code"));
+    code_row->Add(m_code_input, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
+    m_send_code_button = new Button(card, _L("Get Verification Code"));
+    apply_window_button_style(m_send_code_button, ButtonStyle::Regular);
+    m_send_code_button->SetMinSize(FromDIP(wxSize(122, 36)));
+    m_send_code_button->SetCornerRadius(FromDIP(6));
+    code_row->Add(m_send_code_button, 0, wxALIGN_CENTER_VERTICAL);
+    card_sizer->Add(code_row, 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, FromDIP(24));
 
-    m_login_button = new Button(this, _L("登录"));
+    m_tip_label = new wxStaticText(card, wxID_ANY, wxEmptyString, wxDefaultPosition, FromDIP(wxSize(354, 34)));
+    m_tip_label->SetFont(Label::Body_12);
+    m_tip_label->Wrap(FromDIP(354));
+    card_sizer->Add(m_tip_label, 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, FromDIP(24));
+
+    m_login_button = new Button(card, _L("Log In"));
     apply_window_button_style(m_login_button, ButtonStyle::Confirm);
-    m_login_button->SetMinSize(wxSize(FromDIP(128), FromDIP(44)));
-    m_login_button->SetSize(wxSize(FromDIP(128), FromDIP(44)));
-    m_login_button->SetCornerRadius(FromDIP(22));
-    button_row->Add(m_login_button, 0, wxRIGHT, FromDIP(24));
+    m_login_button->SetMinSize(FromDIP(wxSize(354, 40)));
+    m_login_button->SetCornerRadius(FromDIP(6));
+    card_sizer->Add(m_login_button, 0, wxLEFT | wxRIGHT | wxTOP | wxBOTTOM | wxEXPAND, FromDIP(24));
 
-    main_sizer->Add(button_row, 0, wxBOTTOM | wxEXPAND, FromDIP(28));
+    card->SetSizer(card_sizer);
+    main_sizer->Add(card, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, FromDIP(28));
 
     SetSizerAndFit(main_sizer);
-    if (GetSize().x < FromDIP(410))
-        SetSize(wxSize(FromDIP(410), GetSize().y));
-    Centre();
+    if (GetSize().x < FromDIP(520))
+        SetSize(FromDIP(wxSize(520, GetSize().y)));
+    CentreOnParent();
 }
 
 void GFDLoginDialog::bind_events()
 {
+    if (m_environment_choice != nullptr)
+        m_environment_choice->Bind(wxEVT_CHOICE, &GFDLoginDialog::on_environment_changed, this);
+    m_send_code_button->Bind(wxEVT_BUTTON, &GFDLoginDialog::on_send_code, this);
     m_login_button->Bind(wxEVT_BUTTON, &GFDLoginDialog::on_login, this);
-    m_cancel_button->Bind(wxEVT_BUTTON, &GFDLoginDialog::on_cancel, this);
-    m_username_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, &GFDLoginDialog::on_login, this);
-    m_password_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, &GFDLoginDialog::on_login, this);
-    m_username_input->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
-        fill_saved_password(into_u8(m_username_input->GetValue()));
-    });
-    m_qa_environment_radio->Bind(wxEVT_TOGGLEBUTTON, [this](wxCommandEvent&) { select_environment(GFD::Config::ENV_QA); });
-    m_production_environment_radio->Bind(wxEVT_TOGGLEBUTTON, [this](wxCommandEvent&) { select_environment(GFD::Config::ENV_PRODUCTION); });
+    m_phone_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, &GFDLoginDialog::on_send_code, this);
+    m_code_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, &GFDLoginDialog::on_login, this);
+    Bind(
+        wxEVT_TIMER,
+        [this](wxTimerEvent&) {
+            if (m_countdown_seconds > 0)
+                --m_countdown_seconds;
+            update_countdown_label();
+        },
+        m_countdown_timer.GetId());
     Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent&) { cancel_request_and_close(); });
 }
 
-void GFDLoginDialog::load_cached_credentials()
+void GFDLoginDialog::on_environment_changed(wxCommandEvent& event)
 {
-    if (wxGetApp().app_config == nullptr)
+    AppConfig* config = wxGetApp().app_config;
+    if (config == nullptr || m_request_active || m_environment_choice == nullptr)
         return;
 
-    load_environment_selection();
-}
-
-void GFDLoginDialog::load_environment_selection()
-{
-    select_environment(GFD::Config::current_environment_name(wxGetApp().app_config));
-}
-
-void GFDLoginDialog::load_saved_credentials_for_selected_environment()
-{
-    if (wxGetApp().app_config == nullptr || m_username_input == nullptr || m_password_input == nullptr || m_remember_checkbox == nullptr)
+    const std::string current_environment = GFD::Config::current_environment_name(config);
+    const std::string selected_environment =
+        event.GetSelection() == 1 ? GFD::Config::ENV_QA : GFD::Config::ENV_PRODUCTION;
+    if (selected_environment == current_environment)
         return;
 
-    const auto credentials = GFD::Config::saved_login_credentials(wxGetApp().app_config, selected_environment());
-    m_username_input->Clear();
-    for (const auto& credential : credentials)
-        m_username_input->Append(from_u8(credential.username));
+    GFD::Config::set_environment(config, selected_environment);
+    GFDAuthManager::logout(config, false);
 
-    if (credentials.empty()) {
-        m_username_input->SetValue(wxEmptyString);
-        m_password_input->GetTextCtrl()->SetValue(wxEmptyString);
-        m_remember_checkbox->SetValue(GFD::Config::remember_login(wxGetApp().app_config));
+    m_countdown_timer.Stop();
+    m_countdown_seconds = 0;
+    if (m_code_input != nullptr)
+        m_code_input->GetTextCtrl()->Clear();
+    update_countdown_label();
+    set_tip(selected_environment == GFD::Config::ENV_QA ? _L("Switched to the test environment.")
+                                                         : _L("Switched to the production environment."),
+            false);
+
+    BOOST_LOG_TRIVIAL(info) << "GFD environment switched from login dialog"
+                            << ", from=" << current_environment << ", to=" << selected_environment;
+}
+
+void GFDLoginDialog::load_cached_phone()
+{
+    if (wxGetApp().app_config == nullptr || m_phone_input == nullptr)
         return;
-    }
-
-    m_username_input->SetSelection(0);
-    m_username_input->SetValue(from_u8(credentials.front().username));
-    m_password_input->GetTextCtrl()->SetValue(from_u8(credentials.front().password));
-    m_remember_checkbox->SetValue(!credentials.front().password.empty());
+    std::string phone = GFD::Config::user_phone(wxGetApp().app_config);
+    if (phone.empty())
+        phone = GFD::Config::cached_username(wxGetApp().app_config);
+    m_phone_input->GetTextCtrl()->SetValue(from_u8(normalize_phone(phone)));
 }
 
-void GFDLoginDialog::fill_saved_password(const std::string& username)
+bool GFDLoginDialog::validate_phone(std::string& phone)
 {
-    if (wxGetApp().app_config == nullptr || m_password_input == nullptr || m_remember_checkbox == nullptr)
-        return;
-
-    const std::string normalized_username = trim_copy(username);
-    const auto credentials = GFD::Config::saved_login_credentials(wxGetApp().app_config, selected_environment());
-    const auto credential_it = std::find_if(credentials.begin(), credentials.end(), [&normalized_username](const auto& credential) {
-        return credential.username == normalized_username;
-    });
-    if (credential_it != credentials.end() && !credential_it->password.empty()) {
-        m_password_input->GetTextCtrl()->SetValue(from_u8(credential_it->password));
-        m_remember_checkbox->SetValue(true);
-    }
-}
-
-void GFDLoginDialog::save_cached_credentials()
-{
-    if (wxGetApp().app_config == nullptr)
-        return;
-
-    const bool remember = m_remember_checkbox->GetValue();
-    const std::string username = trim_copy(into_u8(m_username_input->GetTextCtrl()->GetValue()));
-    if (remember) {
-        GFD::Config::save_login_credential(wxGetApp().app_config, username,
-                                           into_u8(m_password_input->GetTextCtrl()->GetValue()), selected_environment());
-    } else {
-        GFD::Config::save_login_credential(wxGetApp().app_config, username, "", selected_environment());
-    }
-}
-
-void GFDLoginDialog::select_environment(const std::string& environment)
-{
-    if (m_request_active)
-        return;
-
-    const bool use_qa = environment == GFD::Config::ENV_QA;
-    if (m_qa_environment_radio != nullptr)
-        m_qa_environment_radio->SetValue(use_qa);
-    if (m_production_environment_radio != nullptr)
-        m_production_environment_radio->SetValue(!use_qa);
-    load_saved_credentials_for_selected_environment();
-}
-
-std::string GFDLoginDialog::selected_environment() const
-{
-    if (m_qa_environment_radio != nullptr && m_qa_environment_radio->GetValue())
-        return GFD::Config::ENV_QA;
-    return GFD::Config::ENV_PRODUCTION;
-}
-
-bool GFDLoginDialog::apply_selected_environment()
-{
-    auto* config = wxGetApp().app_config;
-    if (config == nullptr)
+    phone = normalize_phone(into_u8(m_phone_input->GetTextCtrl()->GetValue()));
+    static const std::regex phone_regex(R"(^1[3-9][0-9]{9}$)");
+    if (!std::regex_match(phone, phone_regex)) {
+        set_tip(_L("Enter a valid mainland China phone number."));
         return false;
-
-    const std::string environment = selected_environment();
-    const bool        environment_changed = GFD::Config::current_environment_name(config) != environment;
-    GFD::Config::set_environment(config, environment);
-    if (environment_changed)
-        GFDAuthManager::logout(config, false);
-    else
-        config->save();
+    }
     return true;
 }
 
-bool GFDLoginDialog::validate_input()
+void GFDLoginDialog::on_send_code(wxCommandEvent&)
 {
-    const std::string username = trim_copy(into_u8(m_username_input->GetTextCtrl()->GetValue()));
-    if (username.empty()) {
-        m_tip_label->SetLabel(_L("请输入账户"));
-        m_tip_label->Wrap(FromDIP(336));
-        Layout();
-        return false;
-    }
-    static const std::regex email_regex(R"(^[^@\s]+@[^@\s]+\.[^@\s]+$)");
-    if (!std::regex_match(username, email_regex)) {
-        m_tip_label->SetLabel(_L("邮箱格式错误"));
-        m_tip_label->Wrap(FromDIP(336));
-        Layout();
-        return false;
-    }
-    if (into_u8(m_password_input->GetTextCtrl()->GetValue()).empty()) {
-        m_tip_label->SetLabel(_L("请输入密码"));
-        m_tip_label->Wrap(FromDIP(336));
-        Layout();
-        return false;
-    }
-    m_tip_label->SetLabel(wxEmptyString);
-    Layout();
-    return true;
+    if (m_request_active || m_countdown_seconds > 0)
+        return;
+
+    std::string phone;
+    if (!validate_phone(phone))
+        return;
+
+    start_captcha_request(phone);
 }
 
 void GFDLoginDialog::on_login(wxCommandEvent&)
 {
     if (m_request_active)
         return;
-    if (!validate_input())
-        return;
 
-    if (!apply_selected_environment()) {
-        m_tip_label->SetLabel(_L("环境配置初始化失败"));
-        m_tip_label->Wrap(FromDIP(336));
-        Layout();
+    std::string phone;
+    if (!validate_phone(phone))
+        return;
+    const std::string code = trim_copy(into_u8(m_code_input->GetTextCtrl()->GetValue()));
+    if (code.size() < 4 || code.size() > 8 ||
+        !std::all_of(code.begin(), code.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
+        set_tip(_L("Enter a valid SMS verification code."));
         return;
     }
-
-    const std::string email    = trim_copy(into_u8(m_username_input->GetTextCtrl()->GetValue()));
-    const std::string password = into_u8(m_password_input->GetTextCtrl()->GetValue());
-    start_login_attempt(email, password, true, m_remember_checkbox->GetValue());
+    start_login_request(phone, code);
 }
-
-void GFDLoginDialog::on_cancel(wxCommandEvent&) { cancel_request_and_close(); }
 
 void GFDLoginDialog::cancel_request_and_close()
 {
-    m_login_result = LoginResult::Cancelled;
     if (!m_request_active) {
         if (IsModal())
             EndModal(wxID_CANCEL);
@@ -865,102 +928,76 @@ void GFDLoginDialog::cancel_request_and_close()
             Hide();
         return;
     }
-
     m_close_when_idle = true;
-    m_last_error      = "登录已取消";
-    m_tip_label->SetLabel(_L("正在取消登录..."));
-    m_tip_label->Wrap(FromDIP(336));
-    m_cancel_button->Enable(false);
+    set_tip(_L("Canceling login..."), false);
+    if (m_worker != nullptr)
+        m_worker->cancel_all();
+}
+
+void GFDLoginDialog::set_controls_enabled(bool enabled)
+{
+    m_phone_input->Enable(enabled);
+    m_code_input->Enable(enabled);
+    if (m_environment_choice != nullptr)
+        m_environment_choice->Enable(enabled);
+    m_login_button->Enable(enabled);
+    m_send_code_button->Enable(enabled && m_countdown_seconds == 0);
+}
+
+void GFDLoginDialog::set_tip(const wxString& text, bool is_error)
+{
+    m_tip_label->SetLabel(text);
+    m_tip_label->SetForegroundColour(is_error ? wxColour(220, 38, 38) : wxColour(0, 150, 136));
+    m_tip_label->Wrap(FromDIP(354));
     Layout();
-    m_worker->cancel_all();
 }
 
-void GFDLoginDialog::set_login_controls_enabled(bool enabled)
+void GFDLoginDialog::start_countdown()
 {
-    if (m_username_input != nullptr)
-        m_username_input->Enable(enabled);
-    if (m_password_input != nullptr)
-        m_password_input->Enable(enabled);
-    if (m_qa_environment_radio != nullptr) {
-        if (enabled)
-            m_qa_environment_radio->Enable();
-        else
-            m_qa_environment_radio->Disable();
-    }
-    if (m_production_environment_radio != nullptr) {
-        if (enabled)
-            m_production_environment_radio->Enable();
-        else
-            m_production_environment_radio->Disable();
-    }
-    if (m_remember_checkbox != nullptr)
-        m_remember_checkbox->Enable(enabled);
-    if (m_login_button != nullptr)
-        m_login_button->Enable(enabled);
-    if (m_cancel_button != nullptr)
-        m_cancel_button->Enable(true);
+    m_countdown_seconds = SMS_COUNTDOWN_SECONDS;
+    if (!m_countdown_timer.IsRunning())
+        m_countdown_timer.Start(1000);
+    update_countdown_label();
 }
 
-bool GFDLoginDialog::start_login_attempt(const std::string& email,
-                                         const std::string& password,
-                                         bool               persist_credentials,
-                                         bool               remember_credentials)
+void GFDLoginDialog::update_countdown_label()
 {
-    if (m_request_active || m_worker == nullptr || wxGetApp().app_config == nullptr)
+    if (m_countdown_seconds <= 0) {
+        m_countdown_seconds = 0;
+        m_countdown_timer.Stop();
+        m_send_code_button->SetLabel(_L("Get Verification Code"));
+        m_send_code_button->Enable(!m_request_active);
+        return;
+    }
+    m_send_code_button->SetLabel(wxString::Format(_L("Try again in %d seconds"), m_countdown_seconds));
+    m_send_code_button->Enable(false);
+}
+
+bool GFDLoginDialog::start_captcha_request(const std::string& phone)
+{
+    if (m_worker == nullptr || wxGetApp().app_config == nullptr)
         return false;
 
-    clear_verify_cache_if_user_changed(email);
-    const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
-    const std::string public_key_url      = GFD::Config::public_key_url(wxGetApp().app_config);
-    const std::string login_url           = GFD::Config::login_url(wxGetApp().app_config);
-    auto              result              = std::make_shared<LoginAttemptResult>();
-
-    m_request_active = true;
-    m_close_when_idle = false;
-    m_last_error.clear();
-    set_login_controls_enabled(false);
-    m_tip_label->SetLabel(_L("正在登录，请稍候..."));
-    m_tip_label->Wrap(FromDIP(336));
-    Layout();
+    auto              result = std::make_shared<CaptchaRequestResult>();
+    const std::string url    = GFD::Config::captcha_generate_url(wxGetApp().app_config);
+    m_request_active         = true;
+    set_controls_enabled(false);
+    set_tip(_L("Loading slider CAPTCHA..."), false);
 
     const bool queued = queue_job(
         *m_worker,
-        [result, email, password, public_key_url, login_url, request_environment](Job::Ctl& ctl) {
-            std::string public_key;
+        [result, url](Job::Ctl& ctl) {
             std::string body;
             unsigned    status = 0;
-            if (!get_json_request(public_key_url, ctl, body, status, result->error_message)) {
+            if (!get_json_request(url, ctl, body, status, result->error_message)) {
                 if (result->error_message.empty())
-                    result->error_message = extract_response_message(body, "获取公钥失败");
-                return;
-            }
-            if (ctl.was_canceled() || !parse_public_key_response(body, request_environment, public_key, result->error_message))
-                return;
-
-            const std::string encrypted_password = rsa_encrypt_password(password, public_key, result->error_message);
-            if (encrypted_password.empty()) {
-                if (result->error_message.empty())
-                    result->error_message = "密码加密失败";
-                return;
-            }
-            if (ctl.was_canceled())
-                return;
-
-            json request_json;
-            request_json["email"]    = email;
-            request_json["password"] = encrypted_password;
-            body.clear();
-            status = 0;
-            if (!post_json_request(login_url, request_json.dump(), ctl, body, status, result->error_message)) {
-                if (result->error_message.empty())
-                    result->error_message = extract_response_message(body, "登录失败");
+                    result->error_message = L("Failed to load the slider CAPTCHA.");
                 return;
             }
             if (!ctl.was_canceled())
-                parse_login_response(body, request_environment, *result);
+                parse_captcha_response(body, *result);
         },
-        [this, result, email, password, persist_credentials, remember_credentials, request_environment](bool                canceled,
-                                                                                                        std::exception_ptr& eptr) mutable {
+        [this, result, phone](bool canceled, std::exception_ptr& eptr) {
             if (m_destroying) {
                 eptr = nullptr;
                 return;
@@ -971,368 +1008,136 @@ bool GFDLoginDialog::start_login_attempt(const std::string& email,
                 } catch (const std::exception& ex) {
                     result->error_message = ex.what();
                 } catch (...) {
-                    result->error_message = "登录任务发生未知异常";
+                    result->error_message = L("An error occurred while loading the slider CAPTCHA.");
                 }
                 eptr = nullptr;
             }
 
+            m_request_active = false;
             if (canceled || m_close_when_idle) {
-                m_request_active = false;
-                m_login_result   = LoginResult::Cancelled;
-                if (m_last_error.empty())
-                    m_last_error = "登录已取消";
                 if (IsModal())
                     EndModal(wxID_CANCEL);
-                finish_async_login();
                 return;
             }
-
-            if (request_environment != GFD::Config::current_environment_name(wxGetApp().app_config)) {
-                result->ok            = false;
-                result->error_message = "云环境已切换，请重新登录";
-            }
-
+            set_controls_enabled(true);
             if (!result->ok) {
-                m_request_active = false;
-                m_login_result   = LoginResult::Failed;
-                m_last_error     = result->error_message.empty() ? "登录失败" : result->error_message;
-                set_login_controls_enabled(true);
-                m_tip_label->SetLabel(from_u8(m_last_error));
-                m_tip_label->Wrap(FromDIP(336));
-                Layout();
-                finish_async_login();
+                set_tip(_L(result->error_message.empty() ? L("Failed to load the slider CAPTCHA.") : result->error_message));
                 return;
             }
 
-            std::string verify_token;
-            if (has_valid_verify_cache())
-                verify_token = GFD::Config::verify_token(wxGetApp().app_config);
-            if (verify_token.empty()) {
-                wxWindow* verify_parent = resolve_verify_parent(this);
-                BOOST_LOG_TRIVIAL(info) << "GFD login password step succeeded, opening verify dialog"
-                                        << ", env=" << request_environment << ", uuid_empty=" << result->uuid.empty()
-                                        << ", verify_parent_visible=" << (verify_parent != nullptr && verify_parent->IsShownOnScreen());
-                GFDVerifyDialog verify_dialog(verify_parent);
-                if (!verify_dialog.verify_login(result->uuid, verify_token)) {
-                    m_request_active = false;
-                    m_login_result   = LoginResult::Cancelled;
-                    m_last_error     = "验证码校验已取消或失败";
-                    if (m_close_when_idle) {
-                        if (IsModal())
-                            EndModal(wxID_CANCEL);
-                        return;
-                    }
-                    set_login_controls_enabled(true);
-                    m_tip_label->SetLabel(from_u8(m_last_error));
-                    m_tip_label->Wrap(FromDIP(336));
-                    Layout();
-                    finish_async_login();
+            // Leave the CAPTCHA-loading worker's completion callback before
+            // entering another modal loop. The slider dialog owns a separate
+            // worker for verification and SMS delivery.
+            CallAfter([this, result, phone]() {
+                if (m_destroying || m_close_when_idle)
+                    return;
+
+                GFDSliderCaptchaDialog slider_dialog(this, *result, phone);
+                if (!slider_dialog.run()) {
+                    set_tip(_L("Complete the slider CAPTCHA first."));
                     return;
                 }
-            }
 
-            if (m_close_when_idle) {
-                m_request_active = false;
-                m_login_result   = LoginResult::Cancelled;
-                m_last_error     = "登录已取消";
-                if (IsModal())
-                    EndModal(wxID_CANCEL);
-                finish_async_login();
-                return;
-            }
-
-            if (!persist_login_state(email, password, result->uuid, result->auth_token, verify_token, persist_credentials,
-                                     remember_credentials)) {
-                m_request_active = false;
-                m_login_result   = LoginResult::Failed;
-                m_last_error     = "保存登录状态失败";
-                set_login_controls_enabled(true);
-                m_tip_label->SetLabel(from_u8(m_last_error));
-                m_tip_label->Wrap(FromDIP(336));
-                Layout();
-                finish_async_login();
-                return;
-            }
-
-            m_request_active = false;
-            m_login_result   = LoginResult::Success;
-            m_last_error.clear();
-            if (persist_credentials)
-                save_cached_credentials();
-            if (IsModal())
-                EndModal(wxID_OK);
-            finish_async_login();
+                start_countdown();
+                set_tip(_L("The verification code has been sent. Please check your messages."), false);
+                m_code_input->GetTextCtrl()->SetFocus();
+            });
         });
 
     if (!queued) {
         m_request_active = false;
-        m_login_result   = LoginResult::Failed;
-        m_last_error     = "无法启动登录任务，请稍后重试";
-        set_login_controls_enabled(true);
-        m_tip_label->SetLabel(from_u8(m_last_error));
-        m_tip_label->Wrap(FromDIP(336));
-        Layout();
+        set_controls_enabled(true);
+        set_tip(_L("Unable to start the slider CAPTCHA request. Please try again later."));
     }
     return queued;
 }
 
-std::string GFDLoginDialog::rsa_encrypt_password(const std::string& password,
-                                                 const std::string& public_key_base64,
-                                                 std::string&       error_message)
+bool GFDLoginDialog::start_login_request(const std::string& phone, const std::string& code)
 {
-    std::string key_text = trim_copy(public_key_base64);
-    key_text.erase(std::remove(key_text.begin(), key_text.end(), '\n'), key_text.end());
-    key_text.erase(std::remove(key_text.begin(), key_text.end(), '\r'), key_text.end());
-    key_text.erase(std::remove(key_text.begin(), key_text.end(), ' '), key_text.end());
+    if (m_worker == nullptr || wxGetApp().app_config == nullptr)
+        return false;
 
-    std::string decoded;
-    decoded.resize(boost::beast::detail::base64::decoded_size(key_text.size()));
-    const auto result = boost::beast::detail::base64::decode(decoded.data(), key_text.data(), key_text.size());
-    decoded.resize(result.first);
-
-    const unsigned char* key_ptr = reinterpret_cast<const unsigned char*>(decoded.data());
-    RSA*                 rsa     = d2i_RSA_PUBKEY(nullptr, &key_ptr, static_cast<long>(decoded.size()));
-    if (rsa == nullptr) {
-        BIO* bio = BIO_new_mem_buf(decoded.data(), static_cast<int>(decoded.size()));
-        if (bio != nullptr) {
-            rsa = PEM_read_bio_RSA_PUBKEY(bio, nullptr, nullptr, nullptr);
-            BIO_free(bio);
-        }
-    }
-
-    if (rsa == nullptr) {
-        error_message = "公钥无效";
-        return {};
-    }
-
-    std::string encrypted(RSA_size(rsa), '\0');
-    const int   encrypted_size = RSA_public_encrypt(static_cast<int>(password.size()),
-                                                  reinterpret_cast<const unsigned char*>(password.data()),
-                                                  reinterpret_cast<unsigned char*>(&encrypted[0]), rsa, RSA_PKCS1_PADDING);
-    RSA_free(rsa);
-
-    if (encrypted_size <= 0) {
-        unsigned long openssl_error = ERR_get_error();
-        if (openssl_error != 0)
-            error_message = ERR_error_string(openssl_error, nullptr);
-        if (error_message.empty())
-            error_message = "RSA 加密失败";
-        return {};
-    }
-
-    encrypted.resize(static_cast<size_t>(encrypted_size));
-    std::string encoded;
-    encoded.resize(boost::beast::detail::base64::encoded_size(encrypted.size()));
-    encoded.resize(boost::beast::detail::base64::encode(encoded.data(), encrypted.data(), encrypted.size()));
-    return encoded;
-}
-
-GFDVerifyDialog::GFDVerifyDialog(wxWindow* parent)
-    : wxDialog(parent, wxID_ANY, _L("验证码校验"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX)
-{
-    auto worker = std::make_unique<PlaterWorker<BoostThreadWorker>>(this, std::shared_ptr<ProgressIndicator>{}, "gfd_verify_worker");
-    worker->set_busy_cursor_enabled(false);
-    m_worker = std::move(worker);
-
-    build();
-    bind_events();
-    wxGetApp().UpdateDlgDarkUI(this);
-}
-
-GFDVerifyDialog::~GFDVerifyDialog()
-{
-    m_destroying = true;
-    if (m_worker != nullptr) {
-        m_worker->cancel_all();
-        m_worker->wait_for_idle();
-    }
-}
-
-void GFDVerifyDialog::build()
-{
-    SetBackgroundColour(*wxWHITE);
-    SetMinSize(wxSize(FromDIP(360), FromDIP(180)));
-
-    auto* main_sizer = new wxBoxSizer(wxVERTICAL);
-
-    auto* title = new wxStaticText(this, wxID_ANY, _L("请输入验证码"), wxDefaultPosition, wxDefaultSize, 0);
-    title->SetFont(::Label::Head_14);
-    main_sizer->Add(title, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(20));
-
-    m_code_input = new TextInput(this, wxEmptyString, wxEmptyString, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(300), FromDIP(32)),
-                                 wxTE_PROCESS_ENTER);
-    m_code_input->SetCornerRadius(FromDIP(6));
-    main_sizer->Add(m_code_input, 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, FromDIP(20));
-
-    m_tip_label = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
-    m_tip_label->SetForegroundColour(wxColour(220, 38, 38));
-    main_sizer->Add(m_tip_label, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(20));
-
-    auto* button_row = new wxBoxSizer(wxHORIZONTAL);
-    button_row->AddStretchSpacer(1);
-
-    m_cancel_button = new Button(this, _L("取消"));
-    apply_window_button_style(m_cancel_button, ButtonStyle::Regular);
-    m_cancel_button->SetMinSize(wxSize(FromDIP(96), FromDIP(32)));
-    button_row->Add(m_cancel_button, 0, wxRIGHT, FromDIP(10));
-
-    m_confirm_button = new Button(this, _L("确认"));
-    apply_window_button_style(m_confirm_button, ButtonStyle::Confirm);
-    m_confirm_button->SetMinSize(wxSize(FromDIP(96), FromDIP(32)));
-    button_row->Add(m_confirm_button, 0);
-
-    main_sizer->Add(button_row, 0, wxALL | wxEXPAND, FromDIP(20));
-
-    SetSizerAndFit(main_sizer);
-    CentreOnParent();
-}
-
-void GFDVerifyDialog::bind_events()
-{
-    m_confirm_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { on_confirm(); });
-    m_cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { cancel_request_and_close(); });
-    m_code_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent& event) {
-        on_confirm();
-        event.Skip(false);
-    });
-    Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent&) { cancel_request_and_close(); });
-}
-
-void GFDVerifyDialog::on_confirm()
-{
-    if (m_request_active)
-        return;
-    const std::string code = trim_copy(into_u8(m_code_input->GetTextCtrl()->GetValue()));
-    if (code.empty()) {
-        set_tip(_L("请输入验证码"));
-        return;
-    }
-
-    if (m_worker == nullptr || wxGetApp().app_config == nullptr) {
-        set_tip(_L("验证码服务不可用，请稍后重试"));
-        return;
-    }
-
-    const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
-    const std::string verify_url          = GFD::Config::verify_url(wxGetApp().app_config);
-    auto              result              = std::make_shared<VerifyAttemptResult>();
-
-    json request_json;
-    request_json["uuid"]    = m_uuid;
-    request_json["tfaCode"] = code;
-    const std::string request_body = request_json.dump();
+    auto result = std::make_shared<LoginRequestResult>();
+    json request;
+    request["phone"]       = phone;
+    request["code"]        = code;
+    const std::string url  = GFD::Config::sms_login_url(wxGetApp().app_config);
+    const std::string body = request.dump();
 
     m_request_active = true;
-    m_close_when_idle = false;
-    set_verify_controls_enabled(false);
-    set_tip(_L("正在校验，请稍候..."));
+    set_controls_enabled(false);
+    set_tip(_L("Logging in..."), false);
 
     const bool queued = queue_job(
         *m_worker,
-        [result, verify_url, request_body, request_environment](Job::Ctl& ctl) {
-            std::string body;
+        [result, url, body](Job::Ctl& ctl) {
+            std::string response_body;
             unsigned    status = 0;
-            if (!post_json_request(verify_url, request_body, ctl, body, status, result->error_message)) {
+            if (!post_json_request(url, body, true, ctl, response_body, status, result->error_message)) {
                 if (result->error_message.empty())
-                    result->error_message = extract_response_message(body, "验证码校验失败");
+                    result->error_message = L("Login failed.");
                 return;
             }
             if (!ctl.was_canceled())
-                parse_verify_response(body, request_environment, *result);
+                parse_login_response(response_body, *result);
         },
-        [this, result, request_environment](bool canceled, std::exception_ptr& eptr) {
+        [this, result, phone](bool canceled, std::exception_ptr& eptr) {
             if (m_destroying) {
                 eptr = nullptr;
                 return;
             }
-            m_request_active = false;
-
             if (eptr != nullptr) {
                 try {
                     std::rethrow_exception(eptr);
                 } catch (const std::exception& ex) {
                     result->error_message = ex.what();
                 } catch (...) {
-                    result->error_message = "验证码任务发生未知异常";
+                    result->error_message = L("An error occurred while logging in.");
                 }
                 eptr = nullptr;
             }
 
+            m_request_active = false;
             if (canceled || m_close_when_idle) {
                 if (IsModal())
                     EndModal(wxID_CANCEL);
                 return;
             }
-
-            if (request_environment != GFD::Config::current_environment_name(wxGetApp().app_config)) {
-                result->ok            = false;
-                result->error_message = "云环境已切换，请重新校验";
-            }
-
             if (!result->ok) {
-                set_verify_controls_enabled(true);
-                set_tip(from_u8(result->error_message.empty() ? "验证码校验失败" : result->error_message));
+                set_controls_enabled(true);
+                set_tip(_L(result->error_message.empty() ? L("Login failed.") : result->error_message));
                 return;
             }
 
-            m_verify_token = std::move(result->verify_token);
+            AppConfig* config = wxGetApp().app_config;
+            if (GFD::Config::parameter_sync_token(config).empty() && GFD::Config::auth_mode(config) != GFD::Config::AUTH_MODE_USER_SMS) {
+                const std::string legacy_token = trim_copy(GFD::Config::auth_token(config));
+                if (!legacy_token.empty())
+                    GFD::Config::set_parameter_sync_token(config, legacy_token);
+            }
+            GFD::Config::clear_verify_cache(config);
+            GFD::Config::set_auth_token(config, result->token);
+            GFD::Config::set_auth_mode(config, GFD::Config::AUTH_MODE_USER_SMS);
+            GFD::Config::set_user_email(config, "");
+            GFD::Config::set_user_uuid(config, result->uuid);
+            GFD::Config::set_user_phone(config, phone);
+            GFD::Config::set_user_nickname(config, result->nickname.empty() ? phone : result->nickname);
+            GFD::Config::set_user_avatar(config, result->avatar);
+            GFD::Config::set_cached_username(config, phone);
+            GFD::Config::set_cached_password(config, "");
+            GFD::Config::set_remember_login(config, false);
+            config->save();
+
             if (IsModal())
                 EndModal(wxID_OK);
         });
 
     if (!queued) {
         m_request_active = false;
-        set_verify_controls_enabled(true);
-        set_tip(_L("无法启动验证码校验任务，请稍后重试"));
+        set_controls_enabled(true);
+        set_tip(_L("Unable to start the login request. Please try again later."));
     }
+    return queued;
 }
-
-void GFDVerifyDialog::cancel_request_and_close()
-{
-    if (!m_request_active) {
-        if (IsModal())
-            EndModal(wxID_CANCEL);
-        else
-            Hide();
-        return;
-    }
-
-    m_close_when_idle = true;
-    set_tip(_L("正在取消校验..."));
-    m_cancel_button->Enable(false);
-    m_worker->cancel_all();
-}
-
-void GFDVerifyDialog::set_verify_controls_enabled(bool enabled)
-{
-    if (m_code_input != nullptr)
-        m_code_input->Enable(enabled);
-    if (m_confirm_button != nullptr)
-        m_confirm_button->Enable(enabled);
-    if (m_cancel_button != nullptr)
-        m_cancel_button->Enable(true);
-}
-
-bool GFDVerifyDialog::verify_login(const std::string& uuid, std::string& verify_token)
-{
-    m_uuid = uuid;
-    m_verify_token.clear();
-    BOOST_LOG_TRIVIAL(info) << "GFD verify dialog show"
-                            << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                            << ", uuid_empty=" << m_uuid.empty()
-                            << ", parent_visible=" << (GetParent() != nullptr && GetParent()->IsShownOnScreen());
-    const int modal_result = ShowModal();
-    BOOST_LOG_TRIVIAL(info) << "GFD verify dialog closed"
-                            << ", env=" << GFD::Config::current_environment_name(wxGetApp().app_config)
-                            << ", modal_result=" << modal_result
-                            << ", token_length=" << m_verify_token.size();
-    if (modal_result != wxID_OK)
-        return false;
-
-    verify_token = m_verify_token;
-    return !verify_token.empty();
-}
-
-void GFDVerifyDialog::set_tip(const wxString& text) { m_tip_label->SetLabel(text); }
 
 }} // namespace Slic3r::GUI

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+    <id>com.wisebeginner3d.ZhiXiaoBaiSlicer</id>
+    <name>智小白切片软件</name>
+    <summary>面向用户的 3D 打印切片软件</summary>
+    <developer id="com.wisebeginner3d">
+        <name>WiseBeginner3D</name>
+    </developer>
+    <metadata_license>0BSD</metadata_license>
+    <project_license>AGPL-3.0-only</project_license>
+    <launchable type="desktop-id">com.wisebeginner3d.ZhiXiaoBaiSlicer.desktop</launchable>
+    <description>
+        <p>智小白切片软件用于准备、切片并下发 3D 打印任务。</p>
+    </description>
+    <categories>
+        <category>Graphics</category>
+    </categories>
+    <content_rating type="oars-1.1" />
+    <requires>
+        <display_length compare="gt">768</display_length>
+    </requires>
+    <recommends>
+        <control>keyboard</control>
+        <control>pointing</control>
+    </recommends>
+    <branding>
+        <color type="primary" scheme_preference="light">#009688</color>
+    </branding>
+</component>

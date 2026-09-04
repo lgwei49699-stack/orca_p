@@ -37,7 +37,9 @@ using namespace nlohmann;
 
 namespace Slic3r {
 
-static const std::string VERSION_CHECK_URL = "https://check-version.orcaslicer.com/latest";
+// The user edition must not consume OrcaSlicer's application release channel.
+// A dedicated endpoint can still be supplied through the version_check_url setting.
+static const std::string VERSION_CHECK_URL;
 static const std::string PROFILE_UPDATE_URL = "https://api.github.com/repos/OrcaSlicer/orcaslicer-profiles/releases/tags";
 static const std::string MODELS_STR = "models";
 static const std::string GFD_SECTION = "gfd";

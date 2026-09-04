@@ -33,6 +33,7 @@ struct GFDDeviceInfo
     std::string last_version;
     std::string device_sn;
     std::string device_id;
+    bool        leveling_before_print{false};
 };
 
 class GFDDeviceSelectionDialog : public wxDialog

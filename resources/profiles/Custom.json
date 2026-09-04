@@ -1,6 +1,6 @@
 {
     "name":  "Custom Printer",
-    "version":  "02.03.02.67",
+    "version":  "02.03.02.70",
     "force_update":  "0",
     "description":  "My configurations",
     "machine_model_list":  [
@@ -33,14 +33,6 @@
                                    "sub_path":  "machine/EPONE Pro.json"
                                },
                                {
-                                   "name":  "Generic RRF Printer",
-                                   "sub_path":  "machine/MyRRF.json"
-                               },
-                               {
-                                   "name":  "Generic ToolChanger Printer",
-                                   "sub_path":  "machine/MyToolChanger.json"
-                               },
-                               {
                                    "name":  "EP7",
                                    "sub_path":  "machine/EP7.json"
                                }
@@ -57,10 +49,6 @@
                          {
                              "name":  "fdm_process_marlin_common",
                              "sub_path":  "process/fdm_process_marlin_common.json"
-                         },
-                         {
-                             "name":  "fdm_process_rrf_common",
-                             "sub_path":  "process/fdm_process_rrf_common.json"
                          },
                          {
                              "name":  "0.08mm Extra Fine @MyKlipper",
@@ -103,10 +91,6 @@
                              "sub_path":  "process/0.56mm Extra Draft @MyKlipper.json"
                          },
                          {
-                             "name":  "fdm_process_mytoolchanger_common",
-                             "sub_path":  "process/fdm_process_mytoolchanger_common.json"
-                         },
-                         {
                              "name":  "0.08mm Extra Fine @MyMarlin",
                              "sub_path":  "process/0.08mm Extra Fine @MyMarlin.json"
                          },
@@ -129,70 +113,6 @@
                          {
                              "name":  "0.28mm Extra Draft @MyMarlin",
                              "sub_path":  "process/0.28mm Extra Draft @MyMarlin.json"
-                         },
-                         {
-                             "name":  "0.08mm Extra Fine @MyRRF",
-                             "sub_path":  "process/0.08mm Extra Fine @MyRRF.json"
-                         },
-                         {
-                             "name":  "0.12mm Fine @MyRRF",
-                             "sub_path":  "process/0.12mm Fine @MyRRF.json"
-                         },
-                         {
-                             "name":  "0.15mm Optimal @MyRRF",
-                             "sub_path":  "process/0.15mm Optimal @MyRRF.json"
-                         },
-                         {
-                             "name":  "0.20mm Standard @MyRRF",
-                             "sub_path":  "process/0.20mm Standard @MyRRF.json"
-                         },
-                         {
-                             "name":  "0.24mm Draft @MyRRF",
-                             "sub_path":  "process/0.24mm Draft @MyRRF.json"
-                         },
-                         {
-                             "name":  "0.28mm Extra Draft @MyRRF",
-                             "sub_path":  "process/0.28mm Extra Draft @MyRRF.json"
-                         },
-                         {
-                             "name":  "0.08mm Extra Fine @MyToolChanger",
-                             "sub_path":  "process/0.08mm Extra Fine @MyToolChanger.json"
-                         },
-                         {
-                             "name":  "0.12mm Fine @MyToolChanger",
-                             "sub_path":  "process/0.12mm Fine @MyToolChanger.json"
-                         },
-                         {
-                             "name":  "0.15mm Optimal @MyToolChanger",
-                             "sub_path":  "process/0.15mm Optimal @MyToolChanger.json"
-                         },
-                         {
-                             "name":  "0.16mm Optimal @MyToolChanger",
-                             "sub_path":  "process/0.16mm Optimal @MyToolChanger.json"
-                         },
-                         {
-                             "name":  "0.20mm Standard @MyToolChanger",
-                             "sub_path":  "process/0.20mm Standard @MyToolChanger.json"
-                         },
-                         {
-                             "name":  "0.24mm Draft @MyToolChanger",
-                             "sub_path":  "process/0.24mm Draft @MyToolChanger.json"
-                         },
-                         {
-                             "name":  "0.28mm Extra Draft @MyToolChanger",
-                             "sub_path":  "process/0.28mm Extra Draft @MyToolChanger.json"
-                         },
-                         {
-                             "name":  "0.32mm Extra Draft @MyToolChanger",
-                             "sub_path":  "process/0.32mm Extra Draft @MyToolChanger.json"
-                         },
-                         {
-                             "name":  "0.40mm Standard @MyToolChanger",
-                             "sub_path":  "process/0.40mm Extra Draft @MyToolChanger.json"
-                         },
-                         {
-                             "name":  "0.56mm Standard @MyToolChanger",
-                             "sub_path":  "process/0.56mm Extra Draft @MyToolChanger.json"
                          },
                          {
                              "name":  "0.20mm Standard @EP3",
@@ -305,10 +225,6 @@
                      ],
     "filament_list":  [
                           {
-                              "name":  "Generic PLA @MyToolChanger",
-                              "sub_path":  "filament/Generic PLA @MyToolChanger.json"
-                          },
-                          {
                               "name":  "EP3-PLA悬垂优化 @EP3",
                               "sub_path":  "filament/EP3-PLA悬垂优化 @EP3.json"
                           },
@@ -371,6 +287,46 @@
                           {
                               "name":  "Generic PLA @EP7 0.8 nozzle",
                               "sub_path":  "filament/EP7/Generic PLA @EP7 0.8 nozzle.json"
+                          },
+                          {
+                              "name":  "Generic PETG@EP7-Series",
+                              "sub_path":  "filament/EP7/Generic PETG @EP7.json"
+                          },
+                          {
+                              "name":  "Generic PETG @EP7 0.2 nozzle",
+                              "sub_path":  "filament/EP7/Generic PETG @EP7 0.2 nozzle.json"
+                          },
+                          {
+                              "name":  "Generic PETG @EP7 0.4 nozzle",
+                              "sub_path":  "filament/EP7/Generic PETG @EP7 0.4 nozzle.json"
+                          },
+                          {
+                              "name":  "Generic PETG @EP7 0.6 nozzle",
+                              "sub_path":  "filament/EP7/Generic PETG @EP7 0.6 nozzle.json"
+                          },
+                          {
+                              "name":  "Generic PETG @EP7 0.8 nozzle",
+                              "sub_path":  "filament/EP7/Generic PETG @EP7 0.8 nozzle.json"
+                          },
+                          {
+                              "name":  "Generic ABS@EP7-Series",
+                              "sub_path":  "filament/EP7/Generic ABS @EP7.json"
+                          },
+                          {
+                              "name":  "Generic ABS @EP7 0.2 nozzle",
+                              "sub_path":  "filament/EP7/Generic ABS @EP7 0.2 nozzle.json"
+                          },
+                          {
+                              "name":  "Generic ABS @EP7 0.4 nozzle",
+                              "sub_path":  "filament/EP7/Generic ABS @EP7 0.4 nozzle.json"
+                          },
+                          {
+                              "name":  "Generic ABS @EP7 0.6 nozzle",
+                              "sub_path":  "filament/EP7/Generic ABS @EP7 0.6 nozzle.json"
+                          },
+                          {
+                              "name":  "Generic ABS @EP7 0.8 nozzle",
+                              "sub_path":  "filament/EP7/Generic ABS @EP7 0.8 nozzle.json"
                           },
                           {
                               "name":  "Generic PLA Silk@EP7-Series",
@@ -627,10 +583,6 @@
                              "sub_path":  "machine/fdm_klipper_common.json"
                          },
                          {
-                             "name":  "fdm_rrf_common",
-                             "sub_path":  "machine/fdm_rrf_common.json"
-                         },
-                         {
                              "name":  "MyKlipper 0.2 nozzle",
                              "sub_path":  "machine/MyKlipper 0.2 nozzle.json"
                          },
@@ -645,30 +597,6 @@
                          {
                              "name":  "MyKlipper 0.8 nozzle",
                              "sub_path":  "machine/MyKlipper 0.8 nozzle.json"
-                         },
-                         {
-                             "name":  "fdm_toolchanger_common",
-                             "sub_path":  "machine/fdm_toolchanger_common.json"
-                         },
-                         {
-                             "name":  "MyRRF 0.4 nozzle",
-                             "sub_path":  "machine/MyRRF 0.4 nozzle.json"
-                         },
-                         {
-                             "name":  "MyToolChanger 0.2 nozzle",
-                             "sub_path":  "machine/MyToolChanger 0.2 nozzle.json"
-                         },
-                         {
-                             "name":  "MyToolChanger 0.4 nozzle",
-                             "sub_path":  "machine/MyToolChanger 0.4 nozzle.json"
-                         },
-                         {
-                             "name":  "MyToolChanger 0.6 nozzle",
-                             "sub_path":  "machine/MyToolChanger 0.6 nozzle.json"
-                         },
-                         {
-                             "name":  "MyToolChanger 0.8 nozzle",
-                             "sub_path":  "machine/MyToolChanger 0.8 nozzle.json"
                          },
                          {
                              "name":  "EP3 0.4 nozzle",

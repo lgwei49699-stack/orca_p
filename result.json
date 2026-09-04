@@ -1,9 +1,11 @@
 {
-    "error_string": "Success.",
+    "error_string": "Invalid parameters to the slicer.",
     "export_time": 0,
+    "obj_exports": [],
+    "output_files": [],
     "plate_index": 0,
     "prepare_time": 0,
-    "return_code": 0,
+    "return_code": -2,
     "support_filament_g": 0.0,
     "total_filament_g": 0.0,
     "total_time": 0

@@ -92,12 +92,12 @@ if(ORCA_TOOLS)
         add_executable(OrcaSlicer_profile_validator MACOSX_BUNDLE dev-utils/OrcaSlicer_profile_validator.cpp)
         set_target_properties(OrcaSlicer_profile_validator PROPERTIES
             MACOSX_BUNDLE TRUE
-            MACOSX_BUNDLE_BUNDLE_NAME "OrcaSlicer Profile Validator"
+            MACOSX_BUNDLE_BUNDLE_NAME "ZhiXiaoBaiSlicer Profile Validator"
             MACOSX_BUNDLE_BUNDLE_VERSION "${SLIC3R_VERSION}"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "${SLIC3R_VERSION}"
-            MACOSX_BUNDLE_IDENTIFIER "com.softfever.orcaslicer.profile-validator"
-            MACOSX_BUNDLE_COPYRIGHT "© 2024 SoftFever"
-            MACOSX_BUNDLE_GUI_IDENTIFIER "com.softfever.orcaslicer.profile-validator"
+            MACOSX_BUNDLE_IDENTIFIER "${SLIC3R_BUNDLE_IDENTIFIER}.profile-validator"
+            MACOSX_BUNDLE_COPYRIGHT "© 2026 WiseBeginner3D"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "${SLIC3R_BUNDLE_IDENTIFIER}.profile-validator"
         )
     else()
         add_executable(OrcaSlicer_profile_validator dev-utils/OrcaSlicer_profile_validator.cpp)
@@ -120,6 +120,18 @@ else ()
     add_executable(OrcaSlicer OrcaSlicer.cpp OrcaSlicer.hpp)
 endif ()
 
+if (APPLE)
+    set_target_properties(OrcaSlicer PROPERTIES
+        OUTPUT_NAME "${SLIC3R_APP_KEY}"
+        MACOSX_BUNDLE_BUNDLE_NAME "${SLIC3R_APP_NAME}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${SLIC3R_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${SoftFever_VERSION}"
+        MACOSX_BUNDLE_COPYRIGHT "Copyright(C) 2026 WiseBeginner3D All Rights Reserved"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "${SLIC3R_BUNDLE_IDENTIFIER}"
+        MACOSX_BUNDLE_ICON_FILE "images/WiseBeginnerSlicer.icns"
+    )
+endif ()
+
 if (MINGW)
     target_link_options(OrcaSlicer PUBLIC "-Wl,-allow-multiple-definition")
     set_target_properties(OrcaSlicer PROPERTIES PREFIX "")
@@ -127,8 +139,8 @@ endif (MINGW)
 
 if (NOT WIN32 AND NOT APPLE)
     # Binary name on unix like systems (Linux, Unix)
-    set_target_properties(OrcaSlicer PROPERTIES OUTPUT_NAME "orca-slicer")
-    set(SLIC3R_APP_CMD "orca-slicer")
+    set_target_properties(OrcaSlicer PROPERTIES OUTPUT_NAME "${SLIC3R_APP_KEY}")
+    set(SLIC3R_APP_CMD "${SLIC3R_APP_KEY}")
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/dev-utils/platform/unix/build_linux_image.sh.in ${CMAKE_CURRENT_BINARY_DIR}/build_linux_image.sh USE_SOURCE_PERMISSIONS @ONLY)
 endif ()
 
@@ -182,7 +194,7 @@ if (WIN32)
     endif()
     target_compile_definitions(OrcaSlicer_app_gui PRIVATE -DSLIC3R_WRAPPER_NOCONSOLE)
     add_dependencies(OrcaSlicer_app_gui OrcaSlicer)
-    set_target_properties(OrcaSlicer_app_gui PROPERTIES OUTPUT_NAME "orca-slicer")
+    set_target_properties(OrcaSlicer_app_gui PROPERTIES OUTPUT_NAME "${SLIC3R_APP_KEY}")
     target_link_libraries(OrcaSlicer_app_gui PRIVATE boost_headeronly)
 endif ()
 
@@ -230,7 +242,7 @@ else ()
     if (APPLE AND NOT CMAKE_MACOSX_BUNDLE)
         # On OSX, the name of the binary matches the name of the Application.
         add_custom_command(TARGET OrcaSlicer POST_BUILD
-            COMMAND ln -sf OrcaSlicer orca-slicer
+            COMMAND ln -sf "${SLIC3R_APP_KEY}" "zhixiaobai-slicer"
             WORKING_DIRECTORY "$<TARGET_FILE_DIR:OrcaSlicer>"
             VERBATIM)
     else ()
@@ -247,19 +259,27 @@ else ()
     endif ()
     if (CMAKE_MACOSX_BUNDLE)
         if (CMAKE_CONFIGURATION_TYPES)
-            set(BIN_RESOURCES_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/OrcaSlicer.app/Contents/Resources")
+            set(BIN_RESOURCES_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/${SLIC3R_APP_KEY}.app/Contents/Resources")
         else()
-            set(BIN_RESOURCES_DIR "${CMAKE_CURRENT_BINARY_DIR}/OrcaSlicer.app/Contents/Resources")
+            set(BIN_RESOURCES_DIR "${CMAKE_CURRENT_BINARY_DIR}/${SLIC3R_APP_KEY}.app/Contents/Resources")
         endif()
-        set(MACOSX_BUNDLE_ICON_FILE Icon.icns)
-        set(MACOSX_BUNDLE_BUNDLE_NAME "OrcaSlicer")
+        set(MACOSX_BUNDLE_ICON_FILE images/WiseBeginnerSlicer.icns)
+        set(MACOSX_BUNDLE_BUNDLE_NAME "${SLIC3R_APP_NAME}")
         set(MACOSX_BUNDLE_SHORT_VERSION_STRING ${SoftFever_VERSION})
-        set(MACOSX_BUNDLE_COPYRIGHT "Copyright(C) 2022-2024 Li Jiang All Rights Reserved")
+        set(MACOSX_BUNDLE_COPYRIGHT "Copyright(C) 2026 WiseBeginner3D All Rights Reserved")
     endif()
-    add_custom_command(TARGET OrcaSlicer POST_BUILD
-        COMMAND ln -sfn "${SLIC3R_RESOURCES_DIR}" "${BIN_RESOURCES_DIR}"
-        COMMENT "Symlinking the resources directory into the build tree"
-        VERBATIM)
+    # An in-source, non-bundle build resolves BIN_RESOURCES_DIR back to the
+    # source resources directory. Running ln against that existing directory
+    # creates resources/resources -> resources and sends recursive file
+    # watchers (for example CodeGraph) into an infinite traversal.
+    if (CMAKE_CURRENT_BINARY_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT CMAKE_MACOSX_BUNDLE)
+        message(STATUS "Skipping resources symlink for an in-source build")
+    else ()
+        add_custom_command(TARGET OrcaSlicer POST_BUILD
+            COMMAND ln -sfn "${SLIC3R_RESOURCES_DIR}" "${BIN_RESOURCES_DIR}"
+            COMMENT "Symlinking the resources directory into the build tree"
+            VERBATIM)
+    endif ()
 endif ()
 
 # Slic3r binary install target. Default build type is release in case no CMAKE_BUILD_TYPE is provided.

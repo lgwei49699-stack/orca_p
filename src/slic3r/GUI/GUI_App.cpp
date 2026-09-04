@@ -1,3 +1,7 @@
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
 #include "libslic3r/Technologies.hpp"
 #include "GUI_App.hpp"
 #include "GUI_Init.hpp"
@@ -120,9 +124,9 @@
 #include "ModelMall.hpp"
 #include "HintNotification.hpp"
 
-//#ifdef WIN32
-//#include "BaseException.h"
-//#endif
+// #ifdef WIN32
+// #include "BaseException.h"
+// #endif
 
 #ifdef __WXMSW__
 #include <dbt.h>
@@ -171,43 +175,55 @@ namespace {
 // plug-in available for device/LAN capabilities, but disable Bambu/Orca cloud accounts.
 constexpr bool ORCA_CLOUD_ACCOUNT_ENABLED = false;
 
-bool gfd_user_login_valid(const AppConfig* config)
+#ifdef __APPLE__
+const wxLanguageInfo* macos_language_info_from_identifier(wxString identifier)
 {
-    if (config == nullptr)
-        return false;
+    identifier.Replace("-", "_");
+    const wxString identifier_lower = identifier.Lower();
 
-    const std::string auth_token       = GFD::Config::auth_token(config);
-    const std::string verify_token     = GFD::Config::verify_token(config);
-    const std::string verify_expire_ts = GFD::Config::verify_expire_ts(config);
+    // wxLocale does not recognize Apple's script-based Chinese identifiers
+    // (for example zh-Hans-CN and zh-Hant-TW), while our catalogs use zh_CN
+    // and zh_TW.
+    if (identifier_lower.StartsWith("zh_hans") || identifier_lower == "zh_cn" || identifier_lower == "zh_sg")
+        return wxLocale::FindLanguageInfo("zh_CN");
+    if (identifier_lower.StartsWith("zh_hant") || identifier_lower == "zh_tw" || identifier_lower == "zh_hk" || identifier_lower == "zh_mo")
+        return wxLocale::FindLanguageInfo("zh_TW");
 
-    if (!verify_token.empty() && !verify_expire_ts.empty()) {
-        try {
-            const bool valid = static_cast<long long>(std::time(nullptr)) <= std::stoll(verify_expire_ts);
-            BOOST_LOG_TRIVIAL(info) << "GFD startup login validity"
-                                    << ", env=" << GFD::Config::current_environment_name(config)
-                                    << ", token_length=" << verify_token.size()
-                                    << ", valid=" << valid
-                                    << ", mode=" << (auth_token.empty() ? "verify_cache_only" : "verify_cache");
-            return valid;
-        } catch (...) {
-            BOOST_LOG_TRIVIAL(warning) << "GFD startup login validity parse failed"
-                                       << ", env=" << GFD::Config::current_environment_name(config)
-                                       << ", mode=" << (auth_token.empty() ? "verify_cache_only" : "verify_cache");
-            return false;
-        }
-    }
+    if (const wxLanguageInfo* info = wxLocale::FindLanguageInfo(identifier); info != nullptr)
+        return info;
 
-    if (!auth_token.empty()) {
-        BOOST_LOG_TRIVIAL(info) << "GFD startup login validity"
-                                << ", env=" << GFD::Config::current_environment_name(config)
-                                << ", token_length=" << auth_token.size()
-                                << ", valid=true"
-                                << ", mode=auth_token_only";
-        return true;
-    }
-
-    return false;
+    // Fall back to the language part when wxWidgets does not know the full
+    // BCP-47 identifier returned by macOS.
+    return wxLocale::FindLanguageInfo(identifier.BeforeFirst('_'));
 }
+
+const wxLanguageInfo* macos_preferred_language_info(wxString* preferred_identifier)
+{
+    CFArrayRef preferred_languages = CFLocaleCopyPreferredLanguages();
+    if (preferred_languages == nullptr)
+        return nullptr;
+
+    const wxLanguageInfo* result = nullptr;
+    const CFIndex         count  = CFArrayGetCount(preferred_languages);
+    for (CFIndex index = 0; index < count && result == nullptr; ++index) {
+        const auto language = static_cast<CFStringRef>(CFArrayGetValueAtIndex(preferred_languages, index));
+        if (language == nullptr || CFGetTypeID(language) != CFStringGetTypeID())
+            continue;
+
+        char identifier_utf8[128] = {};
+        if (!CFStringGetCString(language, identifier_utf8, sizeof(identifier_utf8), kCFStringEncodingUTF8))
+            continue;
+
+        const wxString identifier = wxString::FromUTF8(identifier_utf8);
+        result                    = macos_language_info_from_identifier(identifier);
+        if (result != nullptr && preferred_identifier != nullptr)
+            *preferred_identifier = identifier;
+    }
+
+    CFRelease(preferred_languages);
+    return result;
+}
+#endif
 
 bool gfd_can_show_login_ui()
 {
@@ -301,7 +317,7 @@ bool is_associate_files(std::wstring extend)
     wchar_t app_path[MAX_PATH];
     ::GetModuleFileNameW(nullptr, app_path, sizeof(app_path));
 
-    std::wstring prog_id       = L" Orca.Slicer.1";
+    std::wstring prog_id       = L"ZhiXiaoBai.Slicer.1";
     std::wstring reg_base      = L"Software\\Classes";
     std::wstring reg_extension = reg_base + L"\\." + extend;
 
@@ -833,7 +849,7 @@ static void generic_exception_handle()
         flush_logs();
         throw;
     }
-    //#endif
+    // #endif
 }
 
 void GUI_App::toggle_show_gcode_window()
@@ -908,7 +924,7 @@ void GUI_App::post_init()
         }
     }
 
-    //#if BBL_HAS_FIRST_PAGE
+    // #if BBL_HAS_FIRST_PAGE
     bool slow_bootup = false;
     if (app_config->get("slow_bootup") == "true") {
         slow_bootup = true;
@@ -921,9 +937,9 @@ void GUI_App::post_init()
         mainframe->select_tab(size_t(MainFrame::tp3DEditor));
         plater_->select_view_3D("3D");
         // BBS init the opengl resource here
-        //#ifdef __linux__
+        // #ifdef __linux__
         if (plater_->canvas3D()->get_wxglcanvas()->IsShownOnScreen() && plater_->canvas3D()->make_current_for_postinit()) {
-            //#endif
+            // #endif
             Size canvas_size = plater_->canvas3D()->get_canvas_size();
             wxGetApp().imgui()->set_display_size(static_cast<float>(canvas_size.get_width()), static_cast<float>(canvas_size.get_height()));
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ", start to init opengl";
@@ -943,11 +959,11 @@ void GUI_App::post_init()
                 plater_->canvas3D()->render(false);
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ", finished rendering a first frame for test";
             }
-            //#ifdef __linux__
+            // #ifdef __linux__
         } else {
             BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << "Found glcontext not ready, postpone the init";
         }
-        //#endif
+        // #endif
         if (is_editor())
             mainframe->select_tab(size_t(0));
         if (app_config->get("default_page") == "1")
@@ -956,7 +972,7 @@ void GUI_App::post_init()
         plater_->trigger_restore_project(1);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ", end load_gl_resources";
     }
-    //#endif
+    // #endif
 
     // BBS: remove GCodeViewer as seperate APP logic
     /*if (this->init_params->start_as_gcodeviewer) {
@@ -1039,7 +1055,8 @@ void GUI_App::post_init()
     // Neither wxShowEvent nor wxWindowCreateEvent work reliably.
     if (this->preset_updater) { // G-Code Viewer does not initialize preset_updater.
         CallAfter([this] {
-            this->config_wizard_startup();
+            if (!this->config_wizard_startup())
+                return;
 
             std::string http_url    = get_http_url(app_config->get_country_code());
             std::string language    = GUI::into_u8(current_language_code());
@@ -1047,7 +1064,6 @@ void GUI_App::post_init()
             bool        sys_preset  = app_config->get("sync_system_preset") == "true";
             this->preset_updater->sync(http_url, language, network_ver, sys_preset ? preset_bundle : nullptr);
 
-            this->check_new_version_sf();
             if (m_agent && m_agent->is_user_login() && !app_config->get_stealth_mode()) {
                 // this->check_privacy_version(0);
                 request_user_handle(0);
@@ -1264,7 +1280,15 @@ int GUI_App::download_plugin(std::string name, std::string package_name, Install
     BOOST_LOG_TRIVIAL(info) << "[download_plugin]: enter";
     m_networking_cancel_update = false;
     // get temp path
-    fs::path target_file_path = (fs::temp_directory_path() / package_name);
+    const fs::path            download_cache_dir = fs::path(data_dir()) / "cache" / "downloads";
+    boost::system::error_code directory_error;
+    fs::create_directories(download_cache_dir, directory_error);
+    if (directory_error) {
+        j["result"]    = "failed";
+        j["error_msg"] = "Failed to create the application download cache: " + directory_error.message();
+        return -1;
+    }
+    fs::path target_file_path = download_cache_dir / package_name;
     fs::path tmp_path         = target_file_path;
     tmp_path += format(".%1%%2%", get_current_pid(), ".tmp");
 
@@ -1422,7 +1446,7 @@ int GUI_App::download_plugin(std::string name, std::string package_name, Install
 int GUI_App::install_plugin(std::string name, std::string package_name, InstallProgressFn pro_fn, WasCancelledFn cancel_fn)
 {
     bool        cancel           = false;
-    std::string target_file_path = (fs::temp_directory_path() / package_name).string();
+    std::string target_file_path = (fs::path(data_dir()) / "cache" / "downloads" / package_name).string();
 
     BOOST_LOG_TRIVIAL(info) << "[install_plugin] enter";
     // get plugin folder
@@ -1986,7 +2010,10 @@ void GUI_App::init_app_config()
     SetAppName(SLIC3R_APP_KEY);
     //	SetAppName(SLIC3R_APP_KEY "-alpha");
     //  SetAppName(SLIC3R_APP_KEY "-beta");
-    //	SetAppDisplayName(SLIC3R_APP_NAME);
+    // SLIC3R_APP_NAME is a UTF-8 build-time literal. Passing it through the
+    // locale-dependent narrow-string constructor corrupts Chinese text in the
+    // native macOS Hide/Quit menu items.
+    SetAppDisplayName(wxString::FromUTF8(SLIC3R_APP_NAME));
 
     // Set the Slic3r data directory at the Slic3r XS module.
     // Unix: ~/ .Slic3r
@@ -2005,7 +2032,7 @@ void GUI_App::init_app_config()
         // On macOS, the executable is inside the .app bundle.
         _app_folder = _app_folder.parent_path().parent_path().parent_path();
 #endif
-        boost::filesystem::path app_data_dir_path = _app_folder / "data_dir";
+        boost::filesystem::path app_data_dir_path = _app_folder / (std::string(SLIC3R_APP_KEY) + "_data");
         if (boost::filesystem::exists(app_data_dir_path)) {
             set_data_dir(app_data_dir_path.string());
         } else {
@@ -2097,7 +2124,7 @@ std::map<std::string, std::string> GUI_App::get_extra_header()
 {
     std::map<std::string, std::string> extra_headers;
     extra_headers.insert(std::make_pair("X-BBL-Client-Type", "slicer"));
-    extra_headers.insert(std::make_pair("X-BBL-Client-Name", SLIC3R_APP_NAME));
+    extra_headers.insert(std::make_pair("X-BBL-Client-Name", SLIC3R_APP_KEY));
     extra_headers.insert(std::make_pair("X-BBL-Client-Version", VersionInfo::convert_full_version(SLIC3R_VERSION)));
 #if defined(__WINDOWS__)
 #ifdef _M_X64
@@ -2354,7 +2381,7 @@ bool GUI_App::on_init_inner()
         bool ssl_accept = app_config->get("tls_cert_store_accepted") == "yes" && ssl_cert_store == Slic3r::Http::tls_system_cert_store();
 
         if (!msg.empty() && !ssl_accept) {
-            RichMessageDialog dlg(nullptr, wxString::Format(_L("%s\nDo you want to continue?"), msg), "OrcaSlicer",
+            RichMessageDialog dlg(nullptr, wxString::Format(_L("%s\nDo you want to continue?"), msg), SLIC3R_APP_NAME,
                                   wxICON_QUESTION | wxYES_NO);
             dlg.ShowCheckBox(_L("Remember my choice"));
             if (dlg.ShowModal() != wxID_YES)
@@ -2400,37 +2427,24 @@ bool GUI_App::on_init_inner()
         init_label_colours();
         // update_label_colours_from_appconfig();
     }
-    if (bool new_sys_menu_enabled = app_config->get("sys_menu_enabled") == "1"; init_sys_menu_enabled != new_sys_menu_enabled)
+    if (bool new_sys_menu_enabled = app_config->get("sys_menu_enabled") == "1"; init_sys_menu_enabled != new_sys_menu_enabled) {
 #ifdef __WINDOWS__
         NppDarkMode::SetSystemMenuForApp(new_sys_menu_enabled);
 #endif
+    }
 #endif
 
-    if (is_editor()) {
-        if (!gfd_can_show_login_ui()) {
-            BOOST_LOG_TRIVIAL(info) << "Skip GFD login UI because no desktop session is available.";
-        } else {
-            BOOST_LOG_TRIVIAL(info) << "GFD login required before loading client.";
-            bool        login_finished = false;
-            bool        logged_in      = false;
-            std::string login_error;
-            wxEventLoop login_event_loop;
-            const bool  login_started = GFDAuthManager::ensure_logged_in_async(nullptr,
-                                                                               [&login_finished, &logged_in, &login_error,
-                                                                               &login_event_loop](bool        success,
-                                                                                                  std::string error_message) mutable {
-                                                                                  login_finished = true;
-                                                                                  logged_in      = success;
-                                                                                  login_error    = std::move(error_message);
-                                                                                  if (login_event_loop.IsRunning())
-                                                                                      login_event_loop.Exit();
-                                                                              });
-            if (login_started && !login_finished)
-                login_event_loop.Run();
-            if (!login_started || !logged_in) {
-                BOOST_LOG_TRIVIAL(info) << "GFD login canceled or failed, quit application before loading client.";
-                return false;
-            }
+    // The branded consumer GUI always requires an authenticated user session.
+    // Headless Linux CLI runs are excluded by gfd_can_show_login_ui().
+    if (!gfd_can_show_login_ui()) {
+        BOOST_LOG_TRIVIAL(info) << "Skip GFD login UI because no desktop session is available.";
+    } else {
+        BOOST_LOG_TRIVIAL(info) << "Validate GFD consumer session before loading client.";
+        std::string login_error;
+        if (!GFDAuthManager::ensure_startup_session(nullptr, &login_error)) {
+            BOOST_LOG_TRIVIAL(info) << "GFD startup login canceled or failed; quit before loading client"
+                                    << ", error=" << login_error;
+            return false;
         }
     }
 
@@ -2494,7 +2508,7 @@ bool GUI_App::on_init_inner()
             associate_files(L"step");
             associate_files(L"stp");
         }
-        associate_url(L"orcaslicer");
+        associate_url(L"zhixiaobaislicer");
 
         if (app_config->get("associate_gcode") == "true")
             associate_files(L"gcode");
@@ -2681,8 +2695,8 @@ please delete installed plugin and try again!");
     mainframe->Show(true);
     BOOST_LOG_TRIVIAL(info) << "main frame firstly shown";
 
-    //#if BBL_HAS_FIRST_PAGE
-    // BBS: set tp3DEditor firstly
+    // #if BBL_HAS_FIRST_PAGE
+    //  BBS: set tp3DEditor firstly
     /*plater_->canvas3D()->enable_render(false);
     mainframe->select_tab(size_t(MainFrame::tp3DEditor));
     scrn->SetText(_L("Loading Opengl resourses..."));
@@ -2697,9 +2711,9 @@ please delete installed plugin and try again!");
     plater_->canvas3D()->render();
     if (is_editor())
         mainframe->select_tab(size_t(0));*/
-    //#else
-    // plater_->trigger_restore_project(1);
-    //#endif
+    // #else
+    //  plater_->trigger_restore_project(1);
+    // #endif
 
     obj_list()->set_min_height();
 
@@ -2741,11 +2755,11 @@ please delete installed plugin and try again!");
 
         // An ugly solution to GH #5537 in which GUI_App::init_opengl (normally called from events wxEVT_PAINT
         // and wxEVT_SET_FOCUS before GUI_App::post_init is called) wasn't called before GUI_App::post_init and OpenGL wasn't initialized.
-        //#ifdef __linux__
+        // #ifdef __linux__
         //        if (!m_post_initialized && m_opengl_initialized) {
-        //#else
+        // #else
         if (!m_post_initialized && !m_adding_script_handler) {
-            //#endif
+            // #endif
             m_post_initialized = true;
 #ifdef WIN32
             this->mainframe->register_win32_callbacks();
@@ -2792,11 +2806,11 @@ void GUI_App::copy_network_if_available()
     player_library_dst  = plugin_folder.string() + "/BambuSource.dll";
     live555_library_dst = plugin_folder.string() + "/live555.dll";
 #elif defined(__WXMAC__)
-    network_library = cache_folder.string() + "/libbambu_networking.dylib";
-    player_library = cache_folder.string() + "/libBambuSource.dylib";
-    live555_library = cache_folder.string() + "/liblive555.dylib";
+    network_library     = cache_folder.string() + "/libbambu_networking.dylib";
+    player_library      = cache_folder.string() + "/libBambuSource.dylib";
+    live555_library     = cache_folder.string() + "/liblive555.dylib";
     network_library_dst = plugin_folder.string() + "/libbambu_networking.dylib";
-    player_library_dst = plugin_folder.string() + "/libBambuSource.dylib";
+    player_library_dst  = plugin_folder.string() + "/libBambuSource.dylib";
     live555_library_dst = plugin_folder.string() + "/liblive555.dylib";
 #else
     network_library     = cache_folder.string() + "/libbambu_networking.so";
@@ -3574,6 +3588,8 @@ bool GUI_App::ShowGFDLogin(wxWindow* parent)
             delete gfd_login_dlg;
             gfd_login_dlg = nullptr;
         }
+        if (mainframe != nullptr)
+            mainframe->update_gfd_account_button();
         return logged_in;
     } catch (const std::exception& ex) {
         if (gfd_login_dlg != nullptr)
@@ -4440,9 +4456,9 @@ std::string detect_updater_os_info()
     if (description.empty())
         description = wxGetOsDescription();
 
-        // Orca: workaround: wxGetOsVersion can't recognize Windows 11
-        // For Windows, use actual version numbers to properly detect Windows 11
-        // Windows 11 starts at build 22000
+    // Orca: workaround: wxGetOsVersion can't recognize Windows 11
+    // For Windows, use actual version numbers to properly detect Windows 11
+    // Windows 11 starts at build 22000
 #if defined(_WIN32)
     int major = 0, minor = 0, micro = 0;
     wxGetOsVersion(&major, &minor, &micro);
@@ -4638,6 +4654,12 @@ void GUI_App::check_new_version_sf(bool show_tips, int by_user)
     AppConfig* app_config        = wxGetApp().app_config;
     bool       check_stable_only = app_config->get_bool("check_stable_update_only");
     auto       version_check_url = app_config->version_check_url();
+    if (version_check_url.empty()) {
+        BOOST_LOG_TRIVIAL(info) << "Application update check skipped: no user-edition update endpoint is configured";
+        if (show_tips && by_user != 0)
+            no_new_version();
+        return;
+    }
 
     UpdaterQuery query{detect_updater_iid(app_config), detect_updater_version(), detect_updater_os(), detect_updater_arch(),
                        detect_updater_os_info()};
@@ -5389,7 +5411,7 @@ int GUI_App::GetSingleChoiceIndex(const wxString& message, const wxString& capti
 // select language from the list of installed languages
 bool GUI_App::select_language()
 {
-    wxArrayString                      translations = wxTranslations::Get()->GetAvailableTranslations(SLIC3R_APP_KEY);
+    wxArrayString                      translations = wxTranslations::Get()->GetAvailableTranslations(SLIC3R_L10N_CATALOG);
     std::vector<const wxLanguageInfo*> language_infos;
     language_infos.emplace_back(wxLocale::GetLanguageInfo(wxLANGUAGE_ENGLISH));
     for (size_t i = 0; i < translations.GetCount(); ++i) {
@@ -5439,11 +5461,12 @@ bool GUI_App::select_language()
             // Which language to save as the selected dictionary language?
             // 1) Hopefully the language set to wxTranslations by this->load_language(), but that API is weird and we don't want to rely on its
             //    stability in the future:
-            //    wxTranslations::Get()->GetBestTranslation(SLIC3R_APP_KEY, wxLANGUAGE_ENGLISH);
+            //    wxTranslations::Get()->GetBestTranslation(SLIC3R_L10N_CATALOG, wxLANGUAGE_ENGLISH);
             // 2) Current locale language may not match the dictionary name, see GH issue #3901
             //    m_wxLocale->GetCanonicalName()
             // 3) new_language_info->CanonicalName is a safe bet. It points to a valid dictionary name.
             app_config->set("language", new_language_info->CanonicalName.ToUTF8().data());
+            app_config->set("language_source", "user");
             return true;
         }
     }
@@ -5459,11 +5482,46 @@ bool GUI_App::load_language(wxString language, bool initial)
     if (initial) {
         // There is a static list of lookup path prefixes in wxWidgets. Add ours.
         wxFileTranslationsLoader::AddCatalogLookupPathPrefix(from_u8(localization_dir()));
-        // Get the active language from PrusaSlicer.ini, or empty string if the key does not exist.
+        // Get the active language from the application config, or an empty string if the key does not exist.
         language = app_config->get("language");
-        if (!language.empty())
-            BOOST_LOG_TRIVIAL(info) << boost::format("language provided by OrcaSlicer.conf: %1%") % language;
-        else {
+
+        bool language_selected_from_system = false;
+#ifdef __APPLE__
+        // wxLocale::GetSystemLanguage() follows the process locale on macOS.
+        // A terminal launch with LANG=C.UTF-8 can therefore report English even
+        // when the user's first language in System Settings is Chinese. Read the
+        // macOS preferred-language list directly instead.
+        wxString              macos_preferred_identifier;
+        const wxLanguageInfo* macos_preferred_language = macos_preferred_language_info(&macos_preferred_identifier);
+        const std::string     language_source          = app_config->get("language_source");
+        const wxLanguageInfo* configured_language      = language.empty() ? nullptr : wxLocale::FindLanguageInfo(language);
+        // The affected pre-fix build wrote en_GB before the first-run wizard was
+        // completed. Restrict the repair to that state so a language explicitly
+        // selected by an existing user is never overwritten.
+        const bool first_run_not_completed = !app_config->get_bool("firstguide", "finish");
+        const bool legacy_wrong_english    = language_source.empty() && first_run_not_completed && configured_language != nullptr &&
+                                          macos_preferred_language != nullptr &&
+                                          configured_language->CanonicalName.BeforeFirst('_') == "en" &&
+                                          macos_preferred_language->CanonicalName.BeforeFirst('_') != "en";
+
+        // Detect only when there is no saved language. Subsequent launches use
+        // the saved value, especially after the user changes it in Preferences.
+        if (macos_preferred_language != nullptr && (language.empty() || legacy_wrong_english)) {
+            m_language_info_system        = macos_preferred_language;
+            language                      = macos_preferred_language->CanonicalName;
+            language_selected_from_system = true;
+            app_config->set("language", language.ToUTF8().data());
+            app_config->set("language_source", "system");
+            BOOST_LOG_TRIVIAL(info) << boost::format("macOS preferred language detected: %1% -> %2%") %
+                                           macos_preferred_identifier.ToUTF8().data() % language.ToUTF8().data();
+            if (legacy_wrong_english)
+                BOOST_LOG_TRIVIAL(info) << "Corrected the legacy macOS English auto-detection stored in the application config";
+        }
+#endif
+
+        if (!language.empty() && !language_selected_from_system)
+            BOOST_LOG_TRIVIAL(info) << boost::format("language provided by %1%.conf: %2%") % SLIC3R_APP_KEY % language;
+        else if (language.empty()) {
             // Get the system language.
             const wxLanguage lang_system = wxLanguage(wxLocale::GetSystemLanguage());
             if (lang_system != wxLANGUAGE_UNKNOWN) {
@@ -5480,6 +5538,7 @@ bool GUI_App::load_language(wxString language, bool initial)
                                                m_language_info_system->CanonicalName.ToUTF8().data();
                 // BBS set language to app config
                 app_config->set("language", m_language_info_system->CanonicalName.ToUTF8().data());
+                app_config->set("language_source", "system");
             } else {
                 {
                     // Allocating a temporary locale will switch the default wxTranslations to its internal wxTranslations instance.
@@ -5494,13 +5553,14 @@ bool GUI_App::load_language(wxString language, bool initial)
                     // wxLocale::GetSystemLanguage(). The last parameter gets added to the list of detected dictionaries. This is a
                     // workaround for not having the English dictionary. Let's hope wxWidgets of various versions process this call the same
                     // way.
-                    wxString best_language = wxTranslations::Get()->GetBestTranslation(SLIC3R_APP_KEY, wxLANGUAGE_ENGLISH);
+                    wxString best_language = wxTranslations::Get()->GetBestTranslation(SLIC3R_L10N_CATALOG, wxLANGUAGE_ENGLISH);
                     if (!best_language.IsEmpty()) {
                         m_language_info_best = wxLocale::FindLanguageInfo(best_language);
                         BOOST_LOG_TRIVIAL(info)
                             << boost::format("Best translation language detected (may be different from user locales): %1%") %
                                    m_language_info_best->CanonicalName.ToUTF8().data();
                         app_config->set("language", m_language_info_best->CanonicalName.ToUTF8().data());
+                        app_config->set("language_source", "system");
                     }
 #ifdef __linux__
                     wxString lc_all;
@@ -5635,7 +5695,7 @@ bool GUI_App::load_language(wxString language, bool initial)
     // Override language at the active wxTranslations class (which is stored in the active m_wxLocale)
     // to load possibly different dictionary, for example, load Czech dictionary for Slovak language.
     wxTranslations::Get()->SetLanguage(language_dict);
-    m_wxLocale->AddCatalog(SLIC3R_APP_KEY);
+    m_wxLocale->AddCatalog(SLIC3R_L10N_CATALOG);
     m_imgui->set_language(into_u8(language_info->CanonicalName));
 
     // FIXME This is a temporary workaround, the correct solution is to switch to "C" locale during file import / export only.
@@ -5788,11 +5848,11 @@ void GUI_App::show_ip_address_enter_dialog_handler(wxCommandEvent& evt)
 //        updates")); local_menu->AppendSeparator();
 //    }
 //    local_menu->Append(config_id_base + ConfigMenuPreferences, _L("Preferences") + dots +
-//#ifdef __APPLE__
+// #ifdef __APPLE__
 //        "\tCtrl+,",
-//#else
+// #else
 //        "\tCtrl+P",
-//#endif
+// #endif
 //        _L("Application preferences"));
 //    wxMenu* mode_menu = nullptr;
 //    if (is_editor()) {
@@ -5820,11 +5880,11 @@ void GUI_App::show_ip_address_enter_dialog_handler(wxCommandEvent& evt)
 //		case ConfigMenuUpdate:
 //			check_updates(true);
 //			break;
-//#ifdef __linux__
+// #ifdef __linux__
 //        case ConfigMenuDesktopIntegration:
 //            show_desktop_integration_dialog();
 //            break;
-//#endif
+// #endif
 //        case ConfigMenuSnapshots:
 //            //BBS do not support task snapshot
 //            break;
@@ -5847,7 +5907,7 @@ void GUI_App::show_ip_address_enter_dialog_handler(wxCommandEvent& evt)
 //                    recreate_GUI(_L("Restart application") + dots);
 //                    return;
 //                }
-//#ifdef _WIN32
+// #ifdef _WIN32
 //                if (is_editor()) {
 //                    if (app_config->get("associate_3mf") == "true")
 //                        associate_3mf_files();
@@ -5858,7 +5918,7 @@ void GUI_App::show_ip_address_enter_dialog_handler(wxCommandEvent& evt)
 //                    if (app_config->get("associate_gcode") == "true")
 //                        associate_gcode_files();
 //                }
-//#endif // _WIN32
+// #endif // _WIN32
 //            }
 //            //BBS GUI refactor: remove unuse layout logic
 //            /*if (app_layout_changed) {
@@ -5942,7 +6002,7 @@ void GUI_App::open_preferences(size_t open_on_tab, const std::string& highlight_
                 associate_files(L"step");
                 associate_files(L"stp");
             }
-            associate_url(L"orcaslicer");
+            associate_url(L"zhixiaobaislicer");
         } else {
             if (app_config->get("associate_gcode") == "true")
                 associate_files(L"gcode");
@@ -6671,10 +6731,10 @@ bool GUI_App::run_wizard(ConfigWizard::RunReason reason, ConfigWizard::StartPage
 
     std::string strFinish = wxGetApp().app_config->get("firstguide", "finish");
     long        pStyle    = wxCAPTION | wxCLOSE_BOX | wxSYSTEM_MENU;
-    if (strFinish == "false" || strFinish.empty())
+    if (reason == ConfigWizard::RR_DATA_EMPTY || strFinish == "false" || strFinish.empty())
         pStyle = wxCAPTION | wxTAB_TRAVERSAL;
 
-    GuideFrame wizard(this, pStyle);
+    GuideFrame wizard(this, pStyle, reason == ConfigWizard::RR_DATA_EMPTY);
     auto       page = start_page == ConfigWizard::SP_WELCOME   ? GuideFrame::BBL_WELCOME :
                       start_page == ConfigWizard::SP_FILAMENTS ? GuideFrame::BBL_FILAMENT_ONLY :
                       start_page == ConfigWizard::SP_PRINTERS  ? GuideFrame::BBL_MODELS_ONLY :
@@ -6835,11 +6895,22 @@ void GUI_App::window_pos_center(wxTopLevelWindow* window)
 
 bool GUI_App::config_wizard_startup()
 {
-    if (!m_app_conf_exists || preset_bundle->printers.only_default_printers()) {
-        BOOST_LOG_TRIVIAL(info) << "run wizard...";
-        run_wizard(ConfigWizard::RR_DATA_EMPTY);
+    const auto has_local_printer_preset = [this]() {
+        const auto& printers = preset_bundle->printers.get_presets();
+        return std::any_of(printers.begin(), printers.end(), [](const Preset& preset) {
+            return preset.is_visible && !preset.is_default && !preset.is_external && !preset.is_project_embedded;
+        });
+    };
+    if (!has_local_printer_preset()) {
+        BOOST_LOG_TRIVIAL(info) << "No local printer preset is available; open the printer setup page.";
+        const bool configured = run_wizard(ConfigWizard::RR_DATA_EMPTY, ConfigWizard::SP_PRINTERS);
         BOOST_LOG_TRIVIAL(info) << "finished run wizard";
-        return true;
+        if (!configured || !has_local_printer_preset()) {
+            BOOST_LOG_TRIVIAL(warning) << "Printer setup did not create a usable local preset; close the application.";
+            if (mainframe != nullptr)
+                mainframe->Close(true);
+            return false;
+        }
     } /*else if (get_app_config()->legacy_datadir()) {
         // Looks like user has legacy pre-vendorbundle data directory,
         // explain what this is and run the wizard
@@ -6850,7 +6921,7 @@ bool GUI_App::config_wizard_startup()
         run_wizard(ConfigWizard::RR_DATA_LEGACY);
         return true;
     }*/
-    return false;
+    return true;
 }
 
 void GUI_App::check_updates(const bool verbose)
@@ -6953,12 +7024,18 @@ static bool del_win_registry(HKEY hkeyHive, const wchar_t* pszVar, const wchar_t
     if ((iRC != ERROR_SUCCESS) && !bDidntExist)
         return false;
 
-    if (!bDidntExist) {
-        iRC = ::RegDeleteKeyExW(hkeyHive, pszVar, KEY_ALL_ACCESS, 0);
-        if (iRC == ERROR_SUCCESS) {
-            return true;
-        }
-    }
+    if (bDidntExist)
+        return false;
+
+    // File extensions are shared registry keys. A co-installed application may
+    // have become the current owner since this application created the key, so
+    // only remove values that still point at this application's ProgID/command.
+    if (dwType != REG_SZ || ::wcscmp(szValueCurrent, pszValue) != 0)
+        return false;
+
+    iRC = ::RegDeleteKeyExW(hkeyHive, pszVar, KEY_ALL_ACCESS, 0);
+    if (iRC == ERROR_SUCCESS)
+        return true;
 
     return false;
 }
@@ -6972,8 +7049,8 @@ void GUI_App::associate_files(std::wstring extend)
     ::GetModuleFileNameW(nullptr, app_path, sizeof(app_path));
 
     std::wstring prog_path           = L"\"" + std::wstring(app_path) + L"\"";
-    std::wstring prog_id             = L" Orca.Slicer.1";
-    std::wstring prog_desc           = L"OrcaSlicer";
+    std::wstring prog_id             = L"ZhiXiaoBai.Slicer.1";
+    std::wstring prog_desc           = boost::nowide::widen(SLIC3R_APP_NAME);
     std::wstring prog_command        = prog_path + L" \"%1\"";
     std::wstring reg_base            = L"Software\\Classes";
     std::wstring reg_extension       = reg_base + L"\\." + extend;
@@ -6997,8 +7074,8 @@ void GUI_App::disassociate_files(std::wstring extend)
     ::GetModuleFileNameW(nullptr, app_path, sizeof(app_path));
 
     std::wstring prog_path           = L"\"" + std::wstring(app_path) + L"\"";
-    std::wstring prog_id             = L" Orca.Slicer.1";
-    std::wstring prog_desc           = L"OrcaSlicer";
+    std::wstring prog_id             = L"ZhiXiaoBai.Slicer.1";
+    std::wstring prog_desc           = boost::nowide::widen(SLIC3R_APP_NAME);
     std::wstring prog_command        = prog_path + L" \"%1\"";
     std::wstring reg_base            = L"Software\\Classes";
     std::wstring reg_extension       = reg_base + L"\\." + extend;

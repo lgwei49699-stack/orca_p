@@ -75,10 +75,13 @@
 #include <wx/clntdata.h>
 #include <wx/combobox.h>
 #include <wx/gauge.h>
+#include <wx/image.h>
 #include <wx/listctrl.h>
+#include <wx/mstream.h>
 #include <wx/grid.h>
 #include <wx/scrolwin.h>
 #include <wx/timer.h>
+#include <wx/ustring.h>
 
 #ifdef _WIN32
 #include <dbt.h>
@@ -113,6 +116,89 @@ wxDEFINE_EVENT(EVT_SHOW_IP_DIALOG, wxCommandEvent);
 wxDEFINE_EVENT(EVT_SET_SELECTED_MACHINE, wxCommandEvent);
 wxDEFINE_EVENT(EVT_UPDATE_MACHINE_LIST, wxCommandEvent);
 wxDEFINE_EVENT(EVT_UPDATE_PRESET_CB, SimpleEvent);
+
+namespace {
+
+std::string gfd_parameter_read_token(const AppConfig* config)
+{
+    const std::string dedicated_token = GFD::Config::parameter_sync_token(config);
+    return dedicated_token.empty() ? GFDAuthManager::current_auth_token(config) : dedicated_token;
+}
+
+constexpr int GFD_ACCOUNT_ICON_SIZE = 18;
+
+wxString gfd_account_name(const AppConfig* config, bool logged_in)
+{
+    if (!logged_in)
+        return _L("Not Signed In");
+
+    wxString account_name = from_u8(GFD::Config::user_nickname(config));
+    if (account_name.empty()) {
+        std::string phone = GFD::Config::user_phone(config);
+        if (phone.size() >= 7)
+            phone.replace(3, phone.size() - 7, "****");
+        account_name = from_u8(phone);
+    }
+    if (account_name.empty())
+        account_name = _L("Signed-in User");
+    return account_name;
+}
+
+wxString gfd_account_button_label(wxString account_name)
+{
+    account_name.Replace("\r", " ");
+    account_name.Replace("\n", " ");
+    account_name.Trim(true).Trim(false);
+    constexpr size_t max_characters = 10;
+    wxUString characters(account_name);
+    if (characters.size() <= max_characters)
+        return account_name;
+
+    characters.resize(max_characters);
+    return static_cast<wxString>(characters) + "...";
+}
+
+std::string resolve_gfd_avatar_url(const AppConfig* config, std::string avatar_url)
+{
+    boost::algorithm::trim(avatar_url);
+    if (avatar_url.empty() || boost::istarts_with(avatar_url, "http://") || boost::istarts_with(avatar_url, "https://"))
+        return avatar_url;
+
+    const std::string base_url = GFD::Config::user_api_base_url(config);
+    const auto        scheme   = base_url.find("://");
+    if (boost::istarts_with(avatar_url, "//"))
+        return scheme == std::string::npos ? "https:" + avatar_url : base_url.substr(0, scheme) + ":" + avatar_url;
+
+    if (!avatar_url.empty() && avatar_url.front() == '/') {
+        if (scheme == std::string::npos)
+            return base_url + avatar_url;
+        const auto path = base_url.find('/', scheme + 3);
+        return (path == std::string::npos ? base_url : base_url.substr(0, path)) + avatar_url;
+    }
+
+    return base_url + (base_url.empty() || base_url.back() == '/' ? "" : "/") + avatar_url;
+}
+
+wxBitmap gfd_account_avatar_bitmap(wxWindow* window, const std::string& image_data)
+{
+    if (window == nullptr || image_data.empty())
+        return {};
+
+    wxMemoryInputStream stream(image_data.data(), image_data.size());
+    wxImage             image;
+    if (!image.LoadFile(stream, wxBITMAP_TYPE_ANY) || !image.IsOk())
+        return {};
+
+    const int side = std::min(image.GetWidth(), image.GetHeight());
+    if (side <= 0)
+        return {};
+    image = image.GetSubImage(wxRect((image.GetWidth() - side) / 2, (image.GetHeight() - side) / 2, side, side));
+    const int icon_size = window->FromDIP(GFD_ACCOUNT_ICON_SIZE);
+    image.Rescale(icon_size, icon_size, wxIMAGE_QUALITY_HIGH);
+    return wxBitmap(image);
+}
+
+} // namespace
 
 
 
@@ -182,7 +268,7 @@ static wxIcon main_frame_icon(GUI_App::EAppMode app_mode)
     }
     return wxIcon(path, wxBITMAP_TYPE_ICO);
 #else // _WIN32
-    return wxIcon(Slic3r::var("OrcaSlicer_128px.png"), wxBITMAP_TYPE_PNG);
+    return wxIcon(Slic3r::var("WiseBeginnerSlicer_128px.png"), wxBITMAP_TYPE_PNG);
 #endif // _WIN32
 }
 
@@ -583,7 +669,8 @@ private:
             apply_cloud_config_response({}, "切片界面不可用");
             return;
         }
-        if (!GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
+        if (GFD::Config::parameter_sync_token(wxGetApp().app_config).empty() &&
+            !GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
             const auto   alive      = m_alive;
             const size_t generation = ++m_request_generation;
             const bool login_started = GFDAuthManager::ensure_logged_in_async(
@@ -601,9 +688,9 @@ private:
             return;
         }
 
-        const std::string token = GFDAuthManager::current_auth_token(wxGetApp().app_config);
+        const std::string token = gfd_parameter_read_token(wxGetApp().app_config);
         if (token.empty()) {
-            apply_cloud_config_response({}, "登录状态无效，请重新登录");
+            apply_cloud_config_response({}, "未配置可用的只读参数同步凭据");
             return;
         }
 
@@ -614,7 +701,7 @@ private:
 
         const bool queued = m_plater->fetch_cloud_configs_async(
             device_type, request_url, token,
-            [this, alive, generation, allow_auth_retry, request_environment, token](GFDCloudConfigFetchResult result, bool canceled) mutable {
+            [this, alive, generation, request_environment](GFDCloudConfigFetchResult result, bool canceled) mutable {
                 if (!alive || !alive->load() || generation != m_request_generation)
                     return;
                 if (canceled) {
@@ -630,14 +717,8 @@ private:
                 }
 
                 if (GFDAuthManager::is_retryable_auth_failure_response(result.status, result.body, result.error_message)) {
-                    if (GFDAuthManager::current_auth_token(wxGetApp().app_config) == token)
-                        GFDAuthManager::clear_session(wxGetApp().app_config);
-                    if (allow_auth_retry) {
-                        fetch_configs_for_selected_device(false);
-                        return;
-                    }
                     if (result.error_message.empty())
-                        result.error_message = "登录状态无效，请重新登录";
+                        result.error_message = "只读参数同步授权不可用";
                 }
 
                 if (result.ok)
@@ -898,7 +979,8 @@ private:
                                 << ", name=" << config.name
                                 << ", device_type=" << config.device_type;
 
-        if (!GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
+        if (GFD::Config::parameter_sync_token(wxGetApp().app_config).empty() &&
+            !GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
             const auto   alive      = m_alive;
             const size_t generation = ++m_request_generation;
             m_tip_label->SetLabel(_L("正在恢复登录状态..."));
@@ -923,9 +1005,9 @@ private:
             return;
         }
 
-        const std::string token = GFDAuthManager::current_auth_token(wxGetApp().app_config);
+        const std::string token = gfd_parameter_read_token(wxGetApp().app_config);
         if (token.empty()) {
-            m_tip_label->SetLabel(_L("登录状态无效，请重新登录"));
+            m_tip_label->SetLabel(_L("未配置可用的只读参数同步凭据"));
             return;
         }
 
@@ -938,8 +1020,8 @@ private:
         const size_t generation = ++m_request_generation;
         const bool queued = m_plater->prepare_cloud_config_import_async(
             config, token,
-            [this, alive, generation, config, allow_auth_retry,
-             request_environment, token](std::shared_ptr<GFDCloudConfigImportResult> result, bool canceled) mutable {
+            [this, alive, generation, config,
+             request_environment](std::shared_ptr<GFDCloudConfigImportResult> result, bool canceled) mutable {
                 if (!alive || !alive->load() || generation != m_request_generation)
                     return;
                 if (canceled) {
@@ -963,15 +1045,9 @@ private:
 
                 if (GFDAuthManager::is_retryable_auth_failure_response(result->status, result->response_body,
                                                                        result->error_message)) {
-                    if (GFDAuthManager::current_auth_token(wxGetApp().app_config) == token)
-                        GFDAuthManager::clear_session(wxGetApp().app_config);
                     set_loading_state(false);
-                    if (allow_auth_retry) {
-                        apply_config(config, false);
-                        return;
-                    }
                     if (result->error_message.empty())
-                        result->error_message = "登录状态无效，请重新登录";
+                        result->error_message = "只读参数同步授权不可用";
                 }
 
                 if (!result->ok) {
@@ -1547,6 +1623,18 @@ public:
     wxWindow* static_title() const { return m_static_title; }
     wxWindow* mode_view() const { return m_mode_view; }
 
+    void enforce_parameter_read_only()
+    {
+        for (const PageShp& page : m_pages) {
+            if (page == nullptr)
+                continue;
+            for (const ConfigOptionsGroupShp& group : page->m_optgroups) {
+                if (group != nullptr)
+                    group->disable();
+            }
+        }
+    }
+
     void activate_selected_page(std::function<void()> throw_if_canceled) override
     {
         if (!m_active_page)
@@ -1557,6 +1645,7 @@ public:
         if (m_active_page && !(m_active_page->title() == "Dependencies"))
             toggle_options();
         m_active_page->update_visibility(m_mode, true);
+        enforce_parameter_read_only();
     }
 };
 
@@ -1596,7 +1685,6 @@ private:
     wxChoice*                     m_device_choice{nullptr};
     wxStaticText*                 m_sn_label{nullptr};
     wxStaticText*                 m_tip_label{nullptr};
-    Button*                       m_save_button{nullptr};
 
     std::vector<GFDDynamicFilamentOption> m_filaments;
     nlohmann::json                        m_current_detail;
@@ -1639,6 +1727,7 @@ private:
         Layout();
         CentreOnParent();
         m_filament_tab->OnActivate();
+        m_filament_tab->enforce_parameter_read_only();
     }
 
     void detach_tab_from_app_list()
@@ -1655,6 +1744,7 @@ private:
             return;
 
         hide_top_child(m_filament_tab->preset_choice(), false);
+        hide_top_child(m_filament_tab->undo_button(), false);
         hide_top_child(m_filament_tab->save_preset_button(), false);
         hide_top_child(m_filament_tab->delete_preset_button(), false);
         hide_top_child(m_filament_tab->static_title(), false);
@@ -1664,8 +1754,6 @@ private:
 
         top_sizer->Clear(false);
         top_sizer->AddSpacer(FromDIP(SidebarProps::ContentMargin()));
-
-        top_sizer->Add(m_filament_tab->undo_button(), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
 
         auto* filament_label = new wxStaticText(top_panel, wxID_ANY, _L("耗材"));
         filament_label->SetFont(::Label::Body_13);
@@ -1691,9 +1779,10 @@ private:
         top_sizer->Add(m_sn_label, 0, wxALIGN_CENTER_VERTICAL);
         top_sizer->AddStretchSpacer(1);
 
-        m_save_button = new Button(top_panel, _L("保存"));
-        apply_dialog_action_button_style(m_save_button, ButtonStyle::Confirm, wxSize(FromDIP(72), FromDIP(30)));
-        top_sizer->Add(m_save_button, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(12));
+        auto* read_only_label = new wxStaticText(top_panel, wxID_ANY, _L("只读 · 可缓存到本地"));
+        read_only_label->SetFont(::Label::Body_12);
+        read_only_label->SetForegroundColour(wxColour(107, 114, 128));
+        top_sizer->Add(read_only_label, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(12));
         top_sizer->AddSpacer(FromDIP(SidebarProps::ContentMargin()));
         top_panel->Layout();
     }
@@ -1710,8 +1799,6 @@ private:
 
     void bind_events()
     {
-        if (m_save_button != nullptr)
-            m_save_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { save_slice_params(); });
         if (m_filament_choice != nullptr)
             m_filament_choice->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) { on_filament_changed(true); });
         if (m_device_choice != nullptr)
@@ -1747,8 +1834,8 @@ private:
             m_filament_choice->Enable(!busy && !m_filaments.empty());
         if (m_device_choice != nullptr)
             m_device_choice->Enable(!busy && m_device_choice->GetCount() > 0);
-        if (m_save_button != nullptr)
-            m_save_button->Enable(!busy && !m_selected_sn.empty());
+        if (!busy && m_filament_tab != nullptr)
+            m_filament_tab->enforce_parameter_read_only();
     }
 
     void configure_filament_dropdown()
@@ -2136,6 +2223,7 @@ private:
         m_filament_tab->m_presets       = &m_bundle->filaments;
         m_filament_tab->m_config        = &m_bundle->filaments.get_edited_preset().config;
         m_filament_tab->load_current_preset();
+        m_filament_tab->enforce_parameter_read_only();
     }
 
     std::string value_for_deserialize(const nlohmann::json& value, bool is_strings) const
@@ -2202,6 +2290,7 @@ private:
 
         m_bundle->filaments.update_saved_preset_from_current_preset();
         m_filament_tab->load_current_preset();
+        m_filament_tab->enforce_parameter_read_only();
 
         if (!skipped_keys.empty())
             set_tip(from_u8((boost::format("部分参数未识别，已跳过 %1% 项") % skipped_keys.size()).str()));
@@ -2858,7 +2947,7 @@ private:
 } // namespace
 
 MainFrame::MainFrame() :
-DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_STYLE, "mainframe")
+DPIFrame(NULL, wxID_ANY, SLIC3R_APP_NAME, wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_STYLE, "mainframe")
     , m_printhost_queue_dlg(new PrintHostQueueDialog(this))
     // BBS
     , m_recent_projects(18)
@@ -2939,7 +3028,7 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     default:
     case GUI_App::EAppMode::Editor:
         m_taskbar_icon = std::make_unique<OrcaSlicerTaskBarIcon>(wxTBI_DOCK);
-        m_taskbar_icon->SetIcon(wxIcon(Slic3r::var("OrcaSlicer-mac_256px.ico"), wxBITMAP_TYPE_ICO), "OrcaSlicer");
+        m_taskbar_icon->SetIcon(wxIcon(Slic3r::var("WiseBeginnerSlicer_256px.png"), wxBITMAP_TYPE_PNG), SLIC3R_APP_NAME);
         break;
     case GUI_App::EAppMode::GCodeViewer:
         break;
@@ -3300,6 +3389,10 @@ MainFrame::~MainFrame()
 {
     if (m_gfd_config_callback_alive)
         m_gfd_config_callback_alive->store(false);
+    if (m_gfd_account_avatar_request != nullptr) {
+        m_gfd_account_avatar_request->cancel();
+        m_gfd_account_avatar_request.reset();
+    }
 }
 
 void MainFrame::bind_diff_dialog()
@@ -4274,6 +4367,10 @@ wxBoxSizer* MainFrame::create_side_tools()
     m_print_btn = new SideButton(this, _L("Print plate"), "");
     m_print_option_btn = new SideButton(this, "", "sidebutton_dropdown", 0, 14);
     m_gfd_print_btn = new SideButton(this, _L("Print"), "");
+    m_gfd_account_btn = new SideButton(this, _L("Not Signed In"), "wisebeginner_app_logo", 0, GFD_ACCOUNT_ICON_SIZE);
+    m_gfd_account_btn->SetCanFocus(false);
+    m_gfd_account_btn->DisableFocusFromKeyboard();
+    m_gfd_account_btn->SetToolTip(_L("WiseBeginner Account"));
 
     update_side_button_style();
     // m_publish_btn->Hide();
@@ -4285,7 +4382,8 @@ wxBoxSizer* MainFrame::create_side_tools()
     sizer->Add(m_slice_btn       , 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(15));
     sizer->Add(m_print_option_btn, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(2));
     sizer->Add(m_print_btn       , 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(15));
-    sizer->Add(m_gfd_print_btn   , 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(19));
+    sizer->Add(m_gfd_print_btn   , 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(15));
+    sizer->Add(m_gfd_account_btn , 0, wxALIGN_CENTER_VERTICAL);
 
     sizer->Layout();
 
@@ -4365,6 +4463,29 @@ wxBoxSizer* MainFrame::create_side_tools()
             else
                 GUI::show_error(this, _L("请先完成切片后再打印。"));
         });
+
+    m_gfd_account_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+        auto* config = wxGetApp().app_config;
+        const bool logged_in = GFDAuthManager::has_valid_session(config);
+
+        const wxString account_name = gfd_account_name(config, logged_in);
+
+        wxMenu menu;
+        wxMenuItem* identity_item = menu.Append(wxID_ANY, account_name);
+        identity_item->Enable(false);
+        menu.AppendSeparator();
+        const int action_id = wxWindow::NewControlId();
+        menu.Append(action_id, logged_in ? _L("Sign Out") : _L("Sign In with SMS Verification Code"));
+        menu.Bind(wxEVT_MENU, [this, logged_in](wxCommandEvent&) {
+            if (logged_in) {
+                GFDAuthManager::logout(wxGetApp().app_config, false);
+                CallAfter([this]() { wxGetApp().ShowGFDLogin(this); });
+            } else {
+                wxGetApp().ShowGFDLogin(this);
+            }
+        }, action_id);
+        m_gfd_account_btn->PopupMenu(&menu, wxPoint(0, m_gfd_account_btn->GetSize().y));
+    });
 
     m_slice_option_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event)
         {
@@ -4526,10 +4647,17 @@ wxBoxSizer* MainFrame::create_side_tools()
                 p->append_button(print_plate_btn);
                 if (support_print_all) {
                     p->append_button(print_all_btn);
+                } else {
+                    // Unused popup children remain at (0, 0) on macOS and can
+                    // paint over the first visible menu row unless hidden.
+                    print_all_btn->Hide();
                 }
                 if (support_send) {
                     p->append_button(send_to_printer_btn);
                     p->append_button(send_to_printer_all_btn);
+                } else {
+                    send_to_printer_btn->Hide();
+                    send_to_printer_all_btn->Hide();
                 }
                 if (enable_multi_machine) {
                     SideButton* print_multi_machine_btn = new SideButton(p, _L("Send to Multi-device"), "");
@@ -4571,9 +4699,10 @@ wxBoxSizer* MainFrame::create_side_tools()
     });
     sizer->Add(aux_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, 1 * em / 10);
     */
-    sizer->Add(FromDIP(19), 0, 0, 0, 0);
+    sizer->Add(FromDIP(15), 0, 0, 0, 0);
     update_gfd_print_button();
     update_gfd_config_buttons();
+    update_gfd_account_button();
 
     return sizer;
 }
@@ -4769,12 +4898,6 @@ void MainFrame::update_side_button_style()
     m_slice_btn->SetCornerRadius(FromDIP(12));
     m_slice_btn->SetExtraSize(wxSize(FromDIP(38), FromDIP(10)));
     m_slice_btn->SetBottomColour(wxColour(0x3B4446));*/
-    StateColor m_btn_bg_enable = StateColor(
-        std::pair<wxColour, int>(wxColour(0, 137, 123), StateColor::Pressed),
-        std::pair<wxColour, int>(wxColour(48, 221, 112), StateColor::Hovered),
-        std::pair<wxColour, int>(wxColour(0, 150, 136), StateColor::Normal)
-    );
-
     // m_publish_btn->SetMinSize(wxSize(FromDIP(125), FromDIP(24)));
     // m_publish_btn->SetCornerRadius(FromDIP(12));
     // m_publish_btn->SetBackgroundColor(m_btn_bg_enable);
@@ -4803,6 +4926,12 @@ void MainFrame::update_side_button_style()
     m_gfd_print_btn->SetCornerRadius(FromDIP(12));
     m_gfd_print_btn->SetExtraSize(wxSize(FromDIP(38), FromDIP(10)));
     m_gfd_print_btn->SetMinSize(wxSize(-1, FromDIP(24)));
+
+    m_gfd_account_btn->SetFont(Label::Body_12);
+    m_gfd_account_btn->SetLayoutStyle(1);
+    m_gfd_account_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Center);
+    m_gfd_account_btn->SetCornerRadius(FromDIP(14));
+    m_gfd_account_btn->SetExtraSize(wxSize(FromDIP(18), FromDIP(6)));
 
     m_print_option_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Center);
     m_print_option_btn->SetCornerRadius(FromDIP(12));
@@ -4872,6 +5001,8 @@ void MainFrame::on_dpi_changed(const wxRect& suggested_rect)
     m_slice_btn->Rescale();
     m_print_btn->Rescale();
     m_gfd_print_btn->Rescale();
+    m_gfd_account_btn->Rescale();
+    update_gfd_account_button();
     m_slice_option_btn->Rescale();
     m_print_option_btn->Rescale();
     update_gfd_config_buttons();
@@ -5014,7 +5145,8 @@ static wxMenu* generate_help_menu()
 
     // About
 #ifndef __APPLE__
-    wxString about_title = wxString::Format(_L("&About %s"), SLIC3R_APP_FULL_NAME);
+    const wxString about_app_name = wxGetApp().is_editor() ? _L("WiseBeginner Slicer") : wxString::FromUTF8(GCODEVIEWER_APP_NAME);
+    wxString about_title = wxString::Format(_L("&About %s"), about_app_name);
     append_menu_item(helpMenu, wxID_ANY, about_title, about_title,
             [](wxCommandEvent&) { Slic3r::GUI::about(); });
 #endif
@@ -5611,7 +5743,8 @@ void MainFrame::init_menubar_as_editor()
 //    });
 
 #ifdef __APPLE__
-    wxString about_title = wxString::Format(_L("&About %s"), SLIC3R_APP_FULL_NAME);
+    const wxString about_app_name = wxGetApp().is_editor() ? _L("WiseBeginner Slicer") : wxString::FromUTF8(GCODEVIEWER_APP_NAME);
+    wxString about_title = wxString::Format(_L("&About %s"), about_app_name);
     //auto about_item = new wxMenuItem(parent_menu, OrcaSlicerMenuAbout + bambu_studio_id_base, about_title, "");
         //parent_menu->Bind(wxEVT_MENU, [this, bambu_studio_id_base](wxEvent& event) {
         //    switch (event.GetId() - bambu_studio_id_base) {
@@ -6530,6 +6663,103 @@ void MainFrame::bind_gfd_config_buttons()
     });
 }
 
+void MainFrame::update_gfd_account_button()
+{
+    if (m_gfd_account_btn == nullptr)
+        return;
+
+    auto set_default_icon = [this]() {
+        m_gfd_account_btn->SetIconBitmap(create_scaled_bitmap("wisebeginner_app_logo", this, GFD_ACCOUNT_ICON_SIZE));
+    };
+
+    AppConfig* config    = wxGetApp().app_config;
+    const bool logged_in = GFDAuthManager::has_valid_session(config);
+    const wxString account_name = gfd_account_name(config, logged_in);
+    const wxString button_label = logged_in ? gfd_account_button_label(account_name) : account_name;
+    m_gfd_account_btn->SetLabel(button_label);
+    m_gfd_account_btn->SetToolTip(logged_in ? account_name : _L("WiseBeginner Account"));
+    const int account_button_width = std::max(FromDIP(88),
+                                              m_gfd_account_btn->GetTextExtent(button_label).x +
+                                                  FromDIP(GFD_ACCOUNT_ICON_SIZE + 25));
+    m_gfd_account_btn->SetMinSize(wxSize(account_button_width, FromDIP(28)));
+    if (wxSizer* containing_sizer = m_gfd_account_btn->GetContainingSizer())
+        containing_sizer->Layout();
+    if (wxWindow* parent = m_gfd_account_btn->GetParent(); parent != this)
+        parent->Layout();
+
+    const std::string avatar_url = logged_in ? resolve_gfd_avatar_url(config, GFD::Config::user_avatar(config)) : std::string();
+
+    if (avatar_url != m_gfd_account_avatar_url) {
+        if (m_gfd_account_avatar_request != nullptr) {
+            m_gfd_account_avatar_request->cancel();
+            m_gfd_account_avatar_request.reset();
+        }
+        ++m_gfd_account_avatar_request_id;
+        m_gfd_account_avatar_url     = avatar_url;
+        m_gfd_account_avatar_data.clear();
+        m_gfd_account_avatar_loading = false;
+    }
+
+    if (avatar_url.empty()) {
+        set_default_icon();
+        return;
+    }
+
+    if (!m_gfd_account_avatar_data.empty()) {
+        const wxBitmap avatar = gfd_account_avatar_bitmap(this, m_gfd_account_avatar_data);
+        if (avatar.IsOk()) {
+            m_gfd_account_btn->SetIconBitmap(avatar);
+            return;
+        }
+        m_gfd_account_avatar_data.clear();
+    }
+
+    set_default_icon();
+    if (m_gfd_account_avatar_loading)
+        return;
+
+    m_gfd_account_avatar_loading = true;
+    const std::size_t request_id = ++m_gfd_account_avatar_request_id;
+    const auto callback_alive = m_gfd_config_callback_alive;
+    Slic3r::Http http = Slic3r::Http::get(avatar_url);
+    m_gfd_account_avatar_request = http.header("Accept", "image/*")
+        .timeout_connect(5)
+        .timeout_max(15)
+        .size_limit(2 * 1024 * 1024)
+        .on_complete([this, callback_alive, avatar_url, request_id](std::string body, unsigned status) mutable {
+            if (!callback_alive || !callback_alive->load())
+                return;
+            wxGetApp().CallAfter([this, callback_alive, avatar_url, request_id, body = std::move(body), status]() mutable {
+                if (!callback_alive || !callback_alive->load() || request_id != m_gfd_account_avatar_request_id ||
+                    avatar_url != m_gfd_account_avatar_url)
+                    return;
+                m_gfd_account_avatar_loading = false;
+                m_gfd_account_avatar_request.reset();
+                const wxBitmap avatar = gfd_account_avatar_bitmap(this, body);
+                if (!avatar.IsOk()) {
+                    BOOST_LOG_TRIVIAL(warning) << "Unable to decode WiseBeginner account avatar, http_status=" << status;
+                    return;
+                }
+                m_gfd_account_avatar_data = std::move(body);
+                m_gfd_account_btn->SetIconBitmap(avatar);
+            });
+        })
+        .on_error([this, callback_alive, avatar_url, request_id](std::string, std::string error, unsigned status) {
+            if (!callback_alive || !callback_alive->load())
+                return;
+            wxGetApp().CallAfter([this, callback_alive, avatar_url, request_id, error = std::move(error), status]() {
+                if (!callback_alive || !callback_alive->load() || request_id != m_gfd_account_avatar_request_id ||
+                    avatar_url != m_gfd_account_avatar_url)
+                    return;
+                m_gfd_account_avatar_loading = false;
+                m_gfd_account_avatar_request.reset();
+                BOOST_LOG_TRIVIAL(warning) << "Unable to load WiseBeginner account avatar, http_status=" << status
+                                           << ", error=" << error;
+            });
+        })
+        .perform();
+}
+
 void MainFrame::update_gfd_config_buttons()
 {
     if (m_plater == nullptr || m_plater->gfd_config_panel() == nullptr)
@@ -6966,7 +7196,7 @@ SettingsDialog::SettingsDialog(MainFrame* mainframe)
         SetIcon(wxIcon(szExeFileName, wxBITMAP_TYPE_ICO));
     }
 #else
-    SetIcon(wxIcon(var("OrcaSlicer_128px.png"), wxBITMAP_TYPE_PNG));
+    SetIcon(wxIcon(var("WiseBeginnerSlicer_128px.png"), wxBITMAP_TYPE_PNG));
 #endif // _WIN32
 
     //just hide the Frame on closing
