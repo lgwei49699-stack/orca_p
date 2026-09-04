@@ -573,19 +573,6 @@ std::vector<std::string> Config::print_device_types(const std::string& device_ty
     return button_visibility(device_type).print_device_types;
 }
 
-std::vector<std::string> Config::all_print_device_types()
-{
-    const ButtonConfigData&  data = cached_button_config();
-    std::vector<std::string> result;
-    for (const auto& entry : data.by_device) {
-        for (const std::string& type : entry.second.print_device_types) {
-            if (std::find(result.begin(), result.end(), type) == result.end())
-                result.push_back(type);
-        }
-    }
-    return result;
-}
-
 std::vector<std::string> Config::local_gfd_device_types()
 {
     std::set<std::string> unique_device_types;

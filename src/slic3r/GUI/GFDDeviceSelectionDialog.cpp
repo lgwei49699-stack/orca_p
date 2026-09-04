@@ -249,7 +249,7 @@ GFDHttpResult request_gfd_devices(const std::string& query_url, const std::strin
 {
     GFDHttpResult result;
     bool          cancellation_requested = false;
-    Http::post(query_url)
+    Http::get(query_url)
         .header("Authorization", token)
         .header("Biz", BIZ_VALUE)
         .timeout_connect(DEVICE_QUERY_CONNECT_TIMEOUT_SECONDS)

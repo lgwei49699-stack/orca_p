@@ -11792,7 +11792,9 @@ void Plater::priv::show_gfd_device_selection_dialog()
     gfd_print_export_submission_id = 0;
     gfd_selected_devices.clear();
     gfd_print_gcode_path.clear();
-    std::vector<std::string> allowed_device_types = GFD::Config::all_print_device_types();
+    std::vector<std::string> allowed_device_types;
+    if (!gfd_print_device_type.empty())
+        allowed_device_types.emplace_back(gfd_print_device_type);
     auto print_handler = [this](GFDDeviceSelectionDialog* dialog,
                                 const std::vector<GFDDeviceInfo>& devices,
                                 bool use_3mf_file) {

@@ -140,8 +140,6 @@ public:
     static std::string              current_device_type(const DynamicPrintConfig& printer_config);
     static ButtonVisibility         button_visibility(const std::string& device_type);
     static std::vector<std::string> print_device_types(const std::string& device_type);
-    // All device types declared across the central config (every "devices" entry's print_device_types, deduped).
-    static std::vector<std::string> all_print_device_types();
     static std::vector<std::string> local_gfd_device_types();
     static bool                     is_gfd_printer(const DynamicPrintConfig& printer_config);
     static bool                     should_show_print_button(const DynamicPrintConfig& printer_config);
