@@ -109,7 +109,7 @@ public:
     static constexpr const char* PATH_FILAMENT_TEMPERATURE_DETAIL = "/app/print3d/manage/v1/filamentTemperature/detail";
     static constexpr const char* PATH_FILAMENT_TEMPERATURE_UPDATE_SLICE_PARAM =
         "/app/print3d/manage/v1/filamentTemperature/updateSliceParam";
-    static constexpr const char* PATH_DEVICE_PRINT_CMD = "/app/print3d/api/v1/printJob/print";
+    static constexpr const char* PATH_DEVICE_PRINT_CMD = "/app/pmc/api/v1/deviceCmd/print";
 
     static EnvironmentConfig current_environment(const AppConfig* config);
     static std::string       current_environment_name(const AppConfig* config);

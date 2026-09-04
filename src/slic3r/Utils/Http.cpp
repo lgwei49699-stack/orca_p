@@ -427,7 +427,12 @@ void Http::priv::http_perform()
 	::curl_easy_setopt(curl, CURLOPT_POSTREDIR, CURL_REDIR_POST_ALL);
 	::curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writecb);
 	::curl_easy_setopt(curl, CURLOPT_WRITEDATA, static_cast<void*>(this));
-	::curl_easy_setopt(curl, CURLOPT_READFUNCTION, form_file_read_cb);
+	// The custom reader expects CURLOPT_READDATA (PUT) or CURLFORM_STREAM
+	// (multipart upload) to point at one of our form_file instances. Installing
+	// it for an ordinary GET/JSON request makes libcurl pass its default input
+	// stream instead, which form_file_read_cb cannot safely interpret.
+	if (putFile != nullptr || !form_files.empty())
+		::curl_easy_setopt(curl, CURLOPT_READFUNCTION, form_file_read_cb);
 	//BBS set header functions
 	::curl_easy_setopt(curl, CURLOPT_HEADERDATA, static_cast<void *>(this));
 	::curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headers_cb);

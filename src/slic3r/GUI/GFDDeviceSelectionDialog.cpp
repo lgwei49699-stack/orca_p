@@ -751,6 +751,13 @@ void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
         return;
     }
 
+    const auto missing_mac_device = std::find_if(m_selected_devices.begin(), m_selected_devices.end(),
+                                                 [](const GFDDeviceInfo& device) { return device.mac.empty(); });
+    if (missing_mac_device != m_selected_devices.end()) {
+        show_error(this, _L("所选设备缺少 MAC 地址，无法下发打印"));
+        return;
+    }
+
     if (use_3mf_file) {
         if (m_selected_devices.size() != 1) {
             BOOST_LOG_TRIVIAL(warning) << "GFD 3MF device selection confirm rejected"

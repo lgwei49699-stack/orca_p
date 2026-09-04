@@ -38,6 +38,15 @@ struct GFDDeviceFilamentInfo
     std::vector<GFDDeviceFilamentSlot> slots;
 };
 
+struct GFDConsumableMapping
+{
+    int         tool_id{-1};
+    int         slot_no{-1};
+    std::string material_type;
+    std::string logical_color;
+    std::string slot_color;
+};
+
 bool parse_gfd_device_filament_info(const std::string&     response_body,
                                     GFDDeviceFilamentInfo& filament_info,
                                     std::string&            error_message);
@@ -48,14 +57,14 @@ std::vector<size_t> match_gfd_filaments_to_slots(const std::vector<FilamentInfo>
 class GFDConsumableMappingDialog : public DPIDialog
 {
 public:
-    GFDConsumableMappingDialog(wxWindow*                         parent,
+    GFDConsumableMappingDialog(wxWindow*                          parent,
                                const std::string&                 device_mac,
+                               const std::string&                 device_type,
                                std::vector<FilamentInfo>          logical_filaments,
                                std::vector<GFDDeviceFilamentSlot> slots,
                                std::vector<size_t>                default_slot_indices);
 
-    // The PMC contract uses the zero-based logical T id as the array index; missing T ids are -1.
-    std::vector<int> selected_consumables() const;
+    std::vector<GFDConsumableMapping> selected_mappings() const;
 
 protected:
     void on_dpi_changed(const wxRect& suggested_rect) override;
@@ -66,6 +75,7 @@ private:
 
     std::vector<FilamentInfo>          m_logical_filaments;
     std::vector<GFDDeviceFilamentSlot> m_slots;
+    bool                               m_numeric_slot_labels{false};
     std::vector<size_t>                m_selected_slot_indices;
     wxScrolledWindow*                  m_mapping_scroll{nullptr};
     StaticBox*                         m_tip_panel{nullptr};
