@@ -875,10 +875,19 @@ void Tab::create_preset_tab()
     });
 
     if (m_type == Preset::TYPE_FILAMENT && !m_detached_from_app_state) {
-        m_btn_gfd_cloud_to_local = new Button(m_top_panel, _L("云端→本地"));
-        m_btn_gfd_cloud_to_local->SetStyle(ButtonStyle::Regular, ButtonType::Compact);
-        m_btn_gfd_cloud_to_local->SetMinSize(wxSize(FromDIP(88), FromDIP(28)));
-        m_btn_gfd_cloud_to_local->SetToolTip(_L("只读获取 GFD 云端参数并加载到当前本地耗材编辑状态"));
+        m_btn_gfd_cloud_to_local = new Button(m_top_panel, _L("云端同步"));
+        m_btn_gfd_cloud_to_local->SetStyle(ButtonStyle::Confirm, ButtonType::Compact);
+        m_btn_gfd_cloud_to_local->SetFont(::Label::Body_12);
+        m_btn_gfd_cloud_to_local->SetMinSize(wxSize(FromDIP(82), FromDIP(28)));
+        m_btn_gfd_cloud_to_local->SetToolTip(_L("获取当前耗材的云端参数并同步到本地"));
+    }
+    if (m_type == Preset::TYPE_PRINT && !m_detached_from_app_state) {
+        m_btn_gfd_cloud_sync = new Button(m_top_panel, _L("云端同步"));
+        m_btn_gfd_cloud_sync->SetStyle(ButtonStyle::Confirm, ButtonType::Compact);
+        m_btn_gfd_cloud_sync->SetFont(::Label::Body_12);
+        m_btn_gfd_cloud_sync->SetMinSize(wxSize(FromDIP(82), FromDIP(28)));
+        m_btn_gfd_cloud_sync->SetToolTip(_L("获取当前机型的云端工艺参数并同步到本地"));
+        m_btn_gfd_cloud_sync->Hide();
     }
 
     //add_scaled_button(panel, &m_btn_compare_preset, "compare");
@@ -957,6 +966,7 @@ void Tab::create_preset_tab()
         if (!m_detached_from_app_state && m_btn_save_preset) m_btn_save_preset->Show();
         if (!m_detached_from_app_state && m_btn_delete_preset) m_btn_delete_preset->Show(); // ORCA: fixes delete preset button visible while search box focused
         if (m_btn_gfd_cloud_to_local) m_btn_gfd_cloud_to_local->Show();
+        if (m_btn_gfd_cloud_sync) m_btn_gfd_cloud_sync->Show(m_btn_gfd_cloud_sync_was_shown_before_search);
         if (m_undo_btn) m_undo_btn->Show();          // ORCA: fixes revert preset button visible while search box focused
         if (m_btn_search) m_btn_search->Show();
         if (m_search_item) m_search_item->Hide();
@@ -991,6 +1001,10 @@ void Tab::create_preset_tab()
              m_btn_delete_preset->Hide(); // ORCA: fixes delete preset button visible while search box focused
          if (m_btn_gfd_cloud_to_local)
              m_btn_gfd_cloud_to_local->Hide();
+         if (m_btn_gfd_cloud_sync) {
+             m_btn_gfd_cloud_sync_was_shown_before_search = m_btn_gfd_cloud_sync->IsShown();
+             m_btn_gfd_cloud_sync->Hide();
+         }
          if (m_undo_btn)
              m_undo_btn->Hide();          // ORCA: fixes revert preset button visible while search box focused
          if (m_btn_search)
@@ -1036,6 +1050,8 @@ void Tab::create_preset_tab()
 #endif
     if (m_btn_gfd_cloud_to_local != nullptr)
         m_top_sizer->Add(m_btn_gfd_cloud_to_local, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::IconSpacing()));
+    if (m_btn_gfd_cloud_sync != nullptr)
+        m_top_sizer->Add(m_btn_gfd_cloud_sync, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::IconSpacing()));
     m_top_sizer->Add(m_btn_save_preset, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::IconSpacing()));
     m_top_sizer->Add(m_btn_delete_preset, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::IconSpacing()));
     m_top_sizer->Add(m_btn_search, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(SidebarProps::IconSpacing()));

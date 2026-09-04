@@ -357,7 +357,7 @@ std::string Config::device_query_url(const AppConfig* config) { return user_api_
 
 std::string Config::device_filament_info_url(const AppConfig* config) { return user_api_base_url(config) + PATH_DEVICE_FILAMENT_INFO; }
 
-std::string Config::device_slice_type_url(const AppConfig* config) { return parameter_sync_api_base_url(config) + PATH_DEVICE_SLICE_TYPE; }
+std::string Config::device_slice_type_url(const AppConfig* config) { return user_api_base_url(config) + PATH_DEVICE_SLICE_TYPE; }
 
 std::string Config::user_filament_list_url(const AppConfig* config) { return user_api_base_url(config) + PATH_USER_FILAMENT_LIST; }
 

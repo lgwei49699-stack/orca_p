@@ -119,12 +119,6 @@ wxDEFINE_EVENT(EVT_UPDATE_PRESET_CB, SimpleEvent);
 
 namespace {
 
-std::string gfd_parameter_read_token(const AppConfig* config)
-{
-    const std::string dedicated_token = GFD::Config::parameter_sync_token(config);
-    return dedicated_token.empty() ? GFDAuthManager::current_auth_token(config) : dedicated_token;
-}
-
 constexpr int GFD_ACCOUNT_ICON_SIZE = 18;
 
 wxString gfd_account_name(const AppConfig* config, bool logged_in)
@@ -480,7 +474,7 @@ class GFDCloudImportDialog : public wxDialog
 {
 public:
     GFDCloudImportDialog(wxWindow* parent, Plater* plater)
-        : wxDialog(parent, wxID_ANY, _L("云端导入"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
+        : wxDialog(parent, wxID_ANY, _L("云端参数同步"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
         , m_plater(plater)
         , m_alive(std::make_shared<std::atomic_bool>(true))
         , m_loading_timer(this)
@@ -637,7 +631,7 @@ private:
             m_device_choice->SetSelection(0);
 
         if (m_tip_label != nullptr)
-            m_tip_label->SetLabel(_L("点击刷新获取当前机型的云端配置"));
+            m_tip_label->SetLabel(_L("点击刷新获取当前机型的云端工艺参数"));
     }
 
     std::string selected_device_type() const
@@ -660,17 +654,16 @@ private:
             return;
         }
 
-        m_tip_label->SetLabel(_L("正在获取云端配置..."));
+        m_tip_label->SetLabel(_L("正在获取云端工艺参数..."));
         if (m_loading_text != nullptr)
-            m_loading_text->SetLabel(_L("正在获取云端配置，请稍候..."));
+            m_loading_text->SetLabel(_L("正在获取云端工艺参数，请稍候..."));
         set_loading_state(true);
 
         if (m_plater == nullptr) {
             apply_cloud_config_response({}, "切片界面不可用");
             return;
         }
-        if (GFD::Config::parameter_sync_token(wxGetApp().app_config).empty() &&
-            !GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
+        if (!GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
             const auto   alive      = m_alive;
             const size_t generation = ++m_request_generation;
             const bool login_started = GFDAuthManager::ensure_logged_in_async(
@@ -678,7 +671,8 @@ private:
                     if (!alive || !alive->load() || generation != m_request_generation)
                         return;
                     if (!logged_in) {
-                        apply_cloud_config_response({}, error_message.empty() ? "获取云端配置失败" : std::move(error_message));
+                        apply_cloud_config_response(
+                            {}, error_message.empty() ? "获取云端工艺参数失败" : std::move(error_message));
                         return;
                     }
                     fetch_configs_for_selected_device(allow_auth_retry);
@@ -688,9 +682,9 @@ private:
             return;
         }
 
-        const std::string token = gfd_parameter_read_token(wxGetApp().app_config);
+        const std::string token = GFDAuthManager::current_auth_token(wxGetApp().app_config);
         if (token.empty()) {
-            apply_cloud_config_response({}, "未配置可用的只读参数同步凭据");
+            apply_cloud_config_response({}, "登录状态无效，请重新登录");
             return;
         }
 
@@ -701,7 +695,8 @@ private:
 
         const bool queued = m_plater->fetch_cloud_configs_async(
             device_type, request_url, token,
-            [this, alive, generation, request_environment](GFDCloudConfigFetchResult result, bool canceled) mutable {
+            [this, alive, generation, request_environment, token,
+             allow_auth_retry](GFDCloudConfigFetchResult result, bool canceled) mutable {
                 if (!alive || !alive->load() || generation != m_request_generation)
                     return;
                 if (canceled) {
@@ -717,8 +712,28 @@ private:
                 }
 
                 if (GFDAuthManager::is_retryable_auth_failure_response(result.status, result.body, result.error_message)) {
-                    if (result.error_message.empty())
-                        result.error_message = "只读参数同步授权不可用";
+                    if (allow_auth_retry) {
+                        set_loading_state(false);
+                        if (GFDAuthManager::current_auth_token(wxGetApp().app_config) == token)
+                            GFDAuthManager::clear_session(wxGetApp().app_config);
+                        const size_t login_generation = ++m_request_generation;
+                        m_tip_label->SetLabel(_L("登录状态已失效，正在重新登录..."));
+                        const bool login_started = GFDAuthManager::ensure_logged_in_async(
+                            this, [this, alive, login_generation](bool logged_in, std::string error_message) mutable {
+                                if (!alive || !alive->load() || login_generation != m_request_generation)
+                                    return;
+                                if (!logged_in) {
+                                    apply_cloud_config_response({}, error_message.empty() ? "登录状态无效，请重新登录" :
+                                                                                           std::move(error_message));
+                                    return;
+                                }
+                                fetch_configs_for_selected_device(false);
+                            });
+                        if (!login_started)
+                            apply_cloud_config_response({}, "无法启动自动登录任务，请稍后重试");
+                        return;
+                    }
+                    result.error_message = "登录状态无效，请重新登录";
                 }
 
                 if (result.ok)
@@ -726,7 +741,7 @@ private:
                 apply_cloud_config_response(std::move(result.configs), std::move(result.error_message), result.ok);
             });
         if (!queued)
-            apply_cloud_config_response({}, "无法启动云端配置查询任务");
+            apply_cloud_config_response({}, "无法启动云端参数查询任务");
     }
 
     void apply_cloud_config_response(std::vector<GFDCloudConfigInfo> configs, std::string error_message, bool request_ok = false)
@@ -735,14 +750,14 @@ private:
             m_configs.clear();
             m_configs_environment.clear();
             rebuild_config_rows();
-            m_tip_label->SetLabel(from_u8(error_message.empty() ? "获取云端配置失败" : error_message));
+            m_tip_label->SetLabel(from_u8(error_message.empty() ? "获取云端工艺参数失败" : error_message));
             set_loading_state(false);
             return;
         }
 
         m_configs = std::move(configs);
         rebuild_config_rows();
-        m_tip_label->SetLabel(m_configs.empty() ? _L("当前机型暂无云端配置") : wxString(wxEmptyString));
+        m_tip_label->SetLabel(m_configs.empty() ? _L("当前机型暂无云端工艺参数") : wxString(wxEmptyString));
         set_loading_state(false);
     }
 
@@ -781,8 +796,8 @@ private:
         m_loading_panel->SetDoubleBuffered(true);
 
         auto* sizer    = new wxBoxSizer(wxVERTICAL);
-        m_loading_text = new wxStaticText(m_loading_panel, wxID_ANY, _L("正在获取云端配置，请稍候..."), wxDefaultPosition, wxDefaultSize,
-                                          wxALIGN_CENTER);
+        m_loading_text = new wxStaticText(m_loading_panel, wxID_ANY, _L("正在获取云端工艺参数，请稍候..."),
+                                          wxDefaultPosition, wxDefaultSize, wxALIGN_CENTER);
         m_loading_text->SetFont(::Label::Body_13);
         m_loading_gauge = new wxGauge(m_loading_panel, wxID_ANY, 100, wxDefaultPosition, FromDIP(wxSize(180, 4)), wxGA_HORIZONTAL);
 
@@ -889,9 +904,9 @@ private:
         header_panel->SetMinSize(wxSize(-1, FromDIP(38)));
         auto* row = new wxBoxSizer(wxHORIZONTAL);
         row->AddSpacer(FromDIP(8));
-        add_row_label(header_panel, row, _L("配置名称"), 120, 2);
+        add_row_label(header_panel, row, _L("参数名称"), 120, 2);
         add_row_label(header_panel, row, _L("机型"), 70, 1);
-        add_row_label(header_panel, row, _L("方案文件"), 230, 4);
+        add_row_label(header_panel, row, _L("参数文件"), 230, 4);
         add_row_label(header_panel, row, _L("备注"), 130, 2);
         row->Add(create_row_label(header_panel, _L("操作"), 100), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
         header_panel->SetSizer(row);
@@ -926,7 +941,7 @@ private:
         add_row_label(row_panel, row, from_u8(config_file_display), 230, 4);
         add_row_label(row_panel, row, from_u8(config.info), 130, 2);
 
-        auto* apply_button = new Button(row_panel, _L("设置此参数"));
+        auto* apply_button = new Button(row_panel, _L("同步到本地"));
         apply_link_button_style(apply_button, row_bg);
         apply_button->Bind(wxEVT_BUTTON, [this, index](wxCommandEvent&) { apply_config(index); });
         row->Add(apply_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
@@ -955,7 +970,7 @@ private:
     void apply_config(size_t index)
     {
         if (index >= m_configs.size() || m_plater == nullptr) {
-            m_tip_label->SetLabel(_L("请选择要导入的云端配置"));
+            m_tip_label->SetLabel(_L("请选择要同步的云端工艺参数"));
             return;
         }
 
@@ -979,8 +994,7 @@ private:
                                 << ", name=" << config.name
                                 << ", device_type=" << config.device_type;
 
-        if (GFD::Config::parameter_sync_token(wxGetApp().app_config).empty() &&
-            !GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
+        if (!GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
             const auto   alive      = m_alive;
             const size_t generation = ++m_request_generation;
             m_tip_label->SetLabel(_L("正在恢复登录状态..."));
@@ -1005,23 +1019,23 @@ private:
             return;
         }
 
-        const std::string token = gfd_parameter_read_token(wxGetApp().app_config);
+        const std::string token = GFDAuthManager::current_auth_token(wxGetApp().app_config);
         if (token.empty()) {
-            m_tip_label->SetLabel(_L("未配置可用的只读参数同步凭据"));
+            m_tip_label->SetLabel(_L("登录状态无效，请重新登录"));
             return;
         }
 
-        m_tip_label->SetLabel(_L("正在下载并解析云端配置..."));
+        m_tip_label->SetLabel(_L("正在下载并解析云端工艺参数..."));
         if (m_loading_text != nullptr)
-            m_loading_text->SetLabel(_L("正在下载并解析云端配置，请稍候..."));
+            m_loading_text->SetLabel(_L("正在下载并解析云端工艺参数，请稍候..."));
         set_loading_state(true);
 
         const auto   alive      = m_alive;
         const size_t generation = ++m_request_generation;
         const bool queued = m_plater->prepare_cloud_config_import_async(
             config, token,
-            [this, alive, generation, config,
-             request_environment](std::shared_ptr<GFDCloudConfigImportResult> result, bool canceled) mutable {
+            [this, alive, generation, config, request_environment, token,
+             allow_auth_retry](std::shared_ptr<GFDCloudConfigImportResult> result, bool canceled) mutable {
                 if (!alive || !alive->load() || generation != m_request_generation)
                     return;
                 if (canceled) {
@@ -1039,45 +1053,64 @@ private:
 
                 if (result == nullptr) {
                     set_loading_state(false);
-                    m_tip_label->SetLabel(_L("云端配置应用失败"));
+                    m_tip_label->SetLabel(_L("云端工艺参数同步失败"));
                     return;
                 }
 
                 if (GFDAuthManager::is_retryable_auth_failure_response(result->status, result->response_body,
                                                                        result->error_message)) {
                     set_loading_state(false);
-                    if (result->error_message.empty())
-                        result->error_message = "只读参数同步授权不可用";
+                    if (allow_auth_retry) {
+                        if (GFDAuthManager::current_auth_token(wxGetApp().app_config) == token)
+                            GFDAuthManager::clear_session(wxGetApp().app_config);
+                        const size_t login_generation = ++m_request_generation;
+                        m_tip_label->SetLabel(_L("登录状态已失效，正在重新登录..."));
+                        const bool login_started = GFDAuthManager::ensure_logged_in_async(
+                            this, [this, alive, login_generation, config](bool logged_in, std::string error_message) mutable {
+                                if (!alive || !alive->load() || login_generation != m_request_generation)
+                                    return;
+                                if (!logged_in) {
+                                    m_tip_label->SetLabel(
+                                        from_u8(error_message.empty() ? "登录状态无效，请重新登录" : error_message));
+                                    return;
+                                }
+                                apply_config(config, false);
+                            });
+                        if (!login_started)
+                            m_tip_label->SetLabel(_L("无法启动自动登录任务，请稍后重试"));
+                        return;
+                    }
+                    result->error_message = "登录状态无效，请重新登录";
                 }
 
                 if (!result->ok) {
-                    const std::string message = result->error_message.empty() ? "读取云端配置失败" : result->error_message;
+                    const std::string message = result->error_message.empty() ? "读取云端工艺参数失败" : result->error_message;
                     set_loading_state(false);
                     m_tip_label->SetLabel(from_u8(message));
                     show_error(this, from_u8(message));
                     return;
                 }
 
-                m_tip_label->SetLabel(_L("正在应用云端配置..."));
+                m_tip_label->SetLabel(_L("正在同步云端工艺参数..."));
                 if (m_loading_text != nullptr)
-                    m_loading_text->SetLabel(_L("正在应用云端配置，请稍候..."));
+                    m_loading_text->SetLabel(_L("正在同步云端工艺参数，请稍候..."));
                 Layout();
 
                 std::string apply_error;
                 const bool imported = m_plater != nullptr && m_plater->apply_prepared_cloud_config(config, *result, apply_error);
                 set_loading_state(false);
                 if (imported) {
-                    m_tip_label->SetLabel(_L("云端配置已应用"));
+                    m_tip_label->SetLabel(_L("云端工艺参数已同步"));
                     EndModal(wxID_CANCEL);
                 } else {
-                    const std::string message = apply_error.empty() ? "云端配置应用失败" : apply_error;
+                    const std::string message = apply_error.empty() ? "云端工艺参数同步失败" : apply_error;
                     m_tip_label->SetLabel(from_u8(message));
                     show_error(this, from_u8(message));
                 }
             });
         if (!queued) {
             set_loading_state(false);
-            m_tip_label->SetLabel(_L("无法启动云端配置导入任务"));
+            m_tip_label->SetLabel(_L("无法启动云端参数同步任务"));
         }
     }
 };
@@ -6586,10 +6619,11 @@ void MainFrame::bind_gfd_config_buttons()
         });
     };
 
-    bind_gfd_config_button(m_plater->gfd_cloud_import_button(), "cloud_import", [this]() {
-        BOOST_LOG_TRIVIAL(info) << "GFD cloud import dialog opening";
+    Tab* print_tab = wxGetApp().get_tab(Preset::TYPE_PRINT);
+    bind_gfd_config_button(print_tab != nullptr ? print_tab->gfd_cloud_sync_button() : nullptr, "cloud_sync", [this]() {
+        BOOST_LOG_TRIVIAL(info) << "GFD cloud sync dialog opening";
         GFDCloudImportDialog dialog(this, m_plater);
-        BOOST_LOG_TRIVIAL(info) << "GFD cloud import dialog ready";
+        BOOST_LOG_TRIVIAL(info) << "GFD cloud sync dialog ready";
         dialog.ShowModal();
     });
     bind_gfd_config_button(m_plater->gfd_upload_config_button(), "upload_config", [this]() {
@@ -6762,6 +6796,9 @@ void MainFrame::update_gfd_config_buttons()
     wxPanel* panel = m_plater->gfd_config_panel();
     const bool was_shown = panel->IsShown();
     const bool was_save_shown = m_plater->gfd_save_config_button() != nullptr && m_plater->gfd_save_config_button()->IsShown();
+    Tab*       print_tab = wxGetApp().get_tab(Preset::TYPE_PRINT);
+    Button*    cloud_sync_button = print_tab != nullptr ? print_tab->gfd_cloud_sync_button() : nullptr;
+    const bool was_cloud_sync_shown = cloud_sync_button != nullptr && cloud_sync_button->IsShown();
     bool should_show = false;
     const GFDPrinterState printer_state = current_gfd_printer_state();
     should_show = !printer_state.effective_device_type.empty();
@@ -6772,13 +6809,18 @@ void MainFrame::update_gfd_config_buttons()
 
     // GFD: per-device button visibility, driven by the central resources/gfd_button_config.json file.
     const auto button_vis = GFD::Config::button_visibility(printer_state.effective_device_type);
+    const bool show_upload_config = should_show && button_vis.upload_config;
     const bool show_save_config = should_show && button_vis.save_config && m_plater->has_dirty_active_imported_cloud_config();
+    const bool show_config_panel = show_upload_config || show_save_config;
 
-    panel->Show(should_show);
-    if (m_plater->gfd_cloud_import_button() != nullptr)
-        m_plater->gfd_cloud_import_button()->Show(should_show && button_vis.cloud_import);
+    panel->Show(show_config_panel);
+    const bool show_cloud_sync = should_show && button_vis.cloud_import;
+    if (cloud_sync_button != nullptr) {
+        cloud_sync_button->Show(show_cloud_sync);
+        cloud_sync_button->Enable(!m_gfd_config_operation_in_progress);
+    }
     if (m_plater->gfd_upload_config_button() != nullptr) {
-        m_plater->gfd_upload_config_button()->Show(should_show && button_vis.upload_config);
+        m_plater->gfd_upload_config_button()->Show(show_upload_config);
         m_plater->gfd_upload_config_button()->Enable(!m_gfd_config_operation_in_progress);
     }
     if (m_plater->gfd_save_config_button() != nullptr) {
@@ -6791,8 +6833,13 @@ void MainFrame::update_gfd_config_buttons()
             m_plater->gfd_save_config_button()->Hide();
     }
 
-    const bool state_changed = (was_shown != should_show) || (was_save_shown != show_save_config);
-    if (state_changed && should_show) {
+    const bool state_changed = (was_shown != show_config_panel) || (was_save_shown != show_save_config) ||
+                               (was_cloud_sync_shown != show_cloud_sync);
+    if (was_cloud_sync_shown != show_cloud_sync && cloud_sync_button != nullptr && cloud_sync_button->GetParent() != nullptr) {
+        cloud_sync_button->GetParent()->Layout();
+        cloud_sync_button->GetParent()->Refresh();
+    }
+    if (state_changed && show_config_panel) {
         panel->Layout();
         m_plater->update_gfd_config_panel_position();
         panel->Raise();
@@ -6814,6 +6861,8 @@ void MainFrame::update_gfd_config_buttons()
                             << ", effective_printer_model=" << printer_state.effective_printer_model
                             << ", effective_gfd_device_type=" << (printer_state.effective_device_type.empty() ? std::string("<empty>") : printer_state.effective_device_type)
                             << ", parameter_panel_shown=" << parameter_panel_shown
+                            << ", show_cloud_sync=" << show_cloud_sync
+                            << ", show_config_panel=" << show_config_panel
                             << ", show_save_config=" << show_save_config
                             << ", save_button_is_shown=" << (m_plater->gfd_save_config_button() != nullptr && m_plater->gfd_save_config_button()->IsShown())
                             << ", show=" << should_show;

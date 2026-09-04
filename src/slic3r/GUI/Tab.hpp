@@ -153,6 +153,8 @@ protected:
 	ScalableButton*		m_btn_save_preset;
 	ScalableButton*		m_btn_delete_preset;
 	Button*                 m_btn_gfd_cloud_to_local {nullptr};
+	Button*                 m_btn_gfd_cloud_sync {nullptr};
+	bool                    m_btn_gfd_cloud_sync_was_shown_before_search {false};
 	//ScalableButton*		m_btn_edit_ph_printer {nullptr};
 	//ScalableButton*		m_btn_hide_incompatible_presets;
 	//wxBoxSizer*			m_hsizer;
@@ -404,6 +406,7 @@ public:
     ScalableButton*     search_button() const { return m_btn_search; }
     wxWindow*           search_item() const { return m_search_item; }
     TextInput*          search_input() const { return m_search_input; }
+    Button*             gfd_cloud_sync_button() const { return m_btn_gfd_cloud_sync; }
 
 	virtual void    on_value_change(const std::string& opt_key, const boost::any& value);
 

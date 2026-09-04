@@ -105,7 +105,7 @@ public:
     static constexpr const char* PATH_TOKEN_REFRESH               = "/app/print3d/api/v1/users/getNewToken";
     static constexpr const char* PATH_DEVICE_FILAMENT_INFO        = "/app/print3d/api/v1/devices/filamentInfo";
     static constexpr const char* PATH_USER_FILAMENT_LIST          = "/app/print3d/api/v1/devices/ftList";
-    static constexpr const char* PATH_DEVICE_SLICE_TYPE           = "/app/print3d/manage/v1/slice-param-config/device-and-slice-type";
+    static constexpr const char* PATH_DEVICE_SLICE_TYPE           = "/app/pds/api/v1/slice-param-config/device-and-slice-type";
     static constexpr const char* PATH_FILAMENT_TEMPERATURE_DETAIL = "/app/print3d/manage/v1/filamentTemperature/detail";
     static constexpr const char* PATH_FILAMENT_TEMPERATURE_UPDATE_SLICE_PARAM =
         "/app/print3d/manage/v1/filamentTemperature/updateSliceParam";

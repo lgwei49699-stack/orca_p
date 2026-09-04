@@ -3046,7 +3046,7 @@ GFDHttpResult gfd_download_cloud_config_with_token(const std::string& url,
                             << ", output_path=" << output_path.string();
     Http::get(url)
         .header("Authorization", token)
-        .header("Biz", GFD::Config::parameter_sync_biz(wxGetApp().app_config))
+        .header("Biz", "ZXB")
         .timeout_connect(GFD_API_CONNECT_TIMEOUT_SECONDS)
         .timeout_max(GFD_CLOUD_DOWNLOAD_TIMEOUT_SECONDS)
         .on_progress([&](Http::Progress, bool& cancel) {
@@ -3326,7 +3326,6 @@ struct Plater::priv
     std::vector<wxPanel*> panels;
     Sidebar*              sidebar;
     wxPanel*              gfd_config_panel{nullptr};
-    Button*               gfd_cloud_import_btn{nullptr};
     Button*               gfd_upload_config_btn{nullptr};
     Button*               gfd_save_config_btn{nullptr};
     wxBoxSizer*           gfd_config_sizer{nullptr};
@@ -4221,13 +4220,12 @@ Plater::priv::priv(Plater* q, MainFrame* main_frame)
         return btn;
     };
 
-    gfd_cloud_import_btn = create_gfd_config_button("云\n端\n导\n入");
     gfd_upload_config_btn = create_gfd_config_button("上\n传\n配\n置");
     gfd_save_config_btn = create_gfd_config_button("保\n存\n配\n置");
 
     gfd_config_sizer->AddSpacer(wxWindow::FromDIP(176, gfd_config_panel));
     gfd_config_sizer->AddStretchSpacer(1);
-    for (Button* btn : {gfd_cloud_import_btn, gfd_upload_config_btn, gfd_save_config_btn})
+    for (Button* btn : {gfd_upload_config_btn, gfd_save_config_btn})
         gfd_config_sizer->Add(btn, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, wxWindow::FromDIP(4, gfd_config_panel));
     gfd_config_sizer->AddStretchSpacer(1);
     gfd_config_sizer->Fit(gfd_config_panel);
@@ -9582,7 +9580,7 @@ bool Plater::priv::gfd_fetch_cloud_configs(const std::string&               devi
         bool          cancellation_requested = false;
         Http::get(request_url)
             .header("Authorization", auth_token)
-            .header("Biz", GFD::Config::parameter_sync_biz(wxGetApp().app_config))
+            .header("Biz", "ZXB")
             .timeout_connect(GFD_API_CONNECT_TIMEOUT_SECONDS)
             .timeout_max(20)
             .on_progress([&](Http::Progress, bool& cancel) {
@@ -9613,8 +9611,17 @@ bool Plater::priv::gfd_fetch_cloud_configs(const std::string&               devi
     };
 
     std::string effective_token = token;
-    if (effective_token.empty() && !gfd_resolve_parameter_read_token(auth_parent, effective_token, error_message))
-        return false;
+    if (effective_token.empty()) {
+        if (!GFDAuthManager::has_valid_session(wxGetApp().app_config) &&
+            !GFDAuthManager::ensure_logged_in(auth_parent, &error_message))
+            return false;
+        effective_token = GFDAuthManager::current_auth_token(wxGetApp().app_config);
+        if (effective_token.empty()) {
+            if (error_message.empty())
+                error_message = "登录状态无效，请重新登录";
+            return false;
+        }
+    }
 
     GFDHttpResult result = request_once(effective_token);
     body                 = std::move(result.body);
@@ -9624,7 +9631,7 @@ bool Plater::priv::gfd_fetch_cloud_configs(const std::string&               devi
     if (response_body != nullptr)
         *response_body = body;
     if (GFDAuthManager::is_retryable_auth_failure_response(result.status, body, error_message)) {
-        error_message = "只读参数同步授权不可用";
+        error_message = "登录状态无效，请重新登录";
         return false;
     }
     if (!result.ok)
@@ -15891,7 +15898,6 @@ void                  Plater::collapse_sidebar(bool collapse) { p->collapse_side
 bool                  Plater::is_sidebar_visible() { return p != nullptr && p->is_sidebar_visible(); }
 Sidebar::DockingState Plater::get_sidebar_docking_state() const { return p->get_sidebar_docking_state(); }
 wxPanel*              Plater::gfd_config_panel() { return p != nullptr ? p->gfd_config_panel : nullptr; }
-Button*               Plater::gfd_cloud_import_button() { return p != nullptr ? p->gfd_cloud_import_btn : nullptr; }
 Button*               Plater::gfd_upload_config_button() { return p != nullptr ? p->gfd_upload_config_btn : nullptr; }
 Button*               Plater::gfd_save_config_button() { return p != nullptr ? p->gfd_save_config_btn : nullptr; }
 void                  Plater::update_gfd_config_panel_position()
