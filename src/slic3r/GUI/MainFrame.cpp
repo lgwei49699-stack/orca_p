@@ -6592,12 +6592,6 @@ void MainFrame::bind_gfd_config_buttons()
         BOOST_LOG_TRIVIAL(info) << "GFD cloud import dialog ready";
         dialog.ShowModal();
     });
-    bind_gfd_config_button(m_plater->gfd_dynamic_params_button(), "dynamic_params", [this]() {
-        BOOST_LOG_TRIVIAL(info) << "GFD dynamic params dialog opening";
-        GFDDynamicMaterialDialog dialog(this, m_plater);
-        BOOST_LOG_TRIVIAL(info) << "GFD dynamic params dialog ready";
-        dialog.ShowModal();
-    });
     bind_gfd_config_button(m_plater->gfd_upload_config_button(), "upload_config", [this]() {
         if (m_gfd_config_operation_in_progress)
             return;
@@ -6787,8 +6781,6 @@ void MainFrame::update_gfd_config_buttons()
         m_plater->gfd_upload_config_button()->Show(should_show && button_vis.upload_config);
         m_plater->gfd_upload_config_button()->Enable(!m_gfd_config_operation_in_progress);
     }
-    if (m_plater->gfd_dynamic_params_button() != nullptr)
-        m_plater->gfd_dynamic_params_button()->Show(should_show && button_vis.dynamic_params);
     if (m_plater->gfd_save_config_button() != nullptr) {
         m_plater->gfd_save_config_button()->Enable(show_save_config && !m_gfd_config_operation_in_progress);
         if (panel->GetSizer() != nullptr)

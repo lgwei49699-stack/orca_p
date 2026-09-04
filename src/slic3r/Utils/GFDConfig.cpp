@@ -359,10 +359,7 @@ std::string Config::device_filament_info_url(const AppConfig* config) { return u
 
 std::string Config::device_slice_type_url(const AppConfig* config) { return parameter_sync_api_base_url(config) + PATH_DEVICE_SLICE_TYPE; }
 
-std::string Config::filament_temperature_list_url(const AppConfig* config)
-{
-    return parameter_sync_api_base_url(config) + PATH_FILAMENT_TEMPERATURE_LIST;
-}
+std::string Config::user_filament_list_url(const AppConfig* config) { return user_api_base_url(config) + PATH_USER_FILAMENT_LIST; }
 
 std::string Config::filament_temperature_detail_url(const AppConfig* config)
 {
@@ -485,7 +482,6 @@ void parse_button_visibility(const json& node, ButtonVisibility& visibility)
     };
 
     read_bool("cloud_import", visibility.cloud_import);
-    read_bool("dynamic_params", visibility.dynamic_params);
     read_bool("upload_config", visibility.upload_config);
     read_bool("save_config", visibility.save_config);
     read_bool("print", visibility.print);

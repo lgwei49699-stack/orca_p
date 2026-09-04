@@ -3102,11 +3102,11 @@ GFDHttpResult gfd_fetch_dynamic_filament_list_once(const std::string&        req
 {
     GFDHttpResult result;
     bool          cancellation_requested = false;
-    BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament list request"
+    BOOST_LOG_TRIVIAL(info) << "GFD user filament list request"
                             << ", url=" << request_url;
     Http::get(request_url)
         .header("Authorization", token)
-        .header("Biz", GFD::Config::parameter_sync_biz(wxGetApp().app_config))
+        .header("Biz", "ZXB")
         .timeout_connect(GFD_API_CONNECT_TIMEOUT_SECONDS)
         .timeout_max(GFD_API_REQUEST_TIMEOUT_SECONDS)
         .on_progress([&](Http::Progress, bool& cancel) {
@@ -3117,7 +3117,7 @@ GFDHttpResult gfd_fetch_dynamic_filament_list_once(const std::string&        req
             result.body   = std::move(response_body);
             result.status = status;
             result.ok     = true;
-            BOOST_LOG_TRIVIAL(info) << "GFD dynamic params filament list response"
+            BOOST_LOG_TRIVIAL(info) << "GFD user filament list response"
                                     << ", http_status=" << status
                                     << ", body_length=" << result.body.size();
         })
@@ -3125,7 +3125,7 @@ GFDHttpResult gfd_fetch_dynamic_filament_list_once(const std::string&        req
             result.body          = std::move(response_body);
             result.status        = status;
             result.error_message = error.empty() ? result.body : std::move(error);
-            BOOST_LOG_TRIVIAL(error) << "GFD dynamic params filament list failed"
+            BOOST_LOG_TRIVIAL(error) << "GFD user filament list failed"
                                      << ", http_status=" << status
                                      << ", error=" << result.error_message
                                      << ", body=" << result.body;
@@ -3327,7 +3327,6 @@ struct Plater::priv
     Sidebar*              sidebar;
     wxPanel*              gfd_config_panel{nullptr};
     Button*               gfd_cloud_import_btn{nullptr};
-    Button*               gfd_dynamic_params_btn{nullptr};
     Button*               gfd_upload_config_btn{nullptr};
     Button*               gfd_save_config_btn{nullptr};
     wxBoxSizer*           gfd_config_sizer{nullptr};
@@ -4223,12 +4222,10 @@ Plater::priv::priv(Plater* q, MainFrame* main_frame)
     };
 
     gfd_cloud_import_btn = create_gfd_config_button("云\n端\n导\n入");
-    gfd_dynamic_params_btn = create_gfd_config_button("动\n态\n参\n数");
     gfd_upload_config_btn = create_gfd_config_button("上\n传\n配\n置");
     gfd_save_config_btn = create_gfd_config_button("保\n存\n配\n置");
 
     gfd_config_sizer->AddSpacer(wxWindow::FromDIP(176, gfd_config_panel));
-    gfd_config_sizer->Add(gfd_dynamic_params_btn, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, wxWindow::FromDIP(4, gfd_config_panel));
     gfd_config_sizer->AddStretchSpacer(1);
     for (Button* btn : {gfd_cloud_import_btn, gfd_upload_config_btn, gfd_save_config_btn})
         gfd_config_sizer->Add(btn, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, wxWindow::FromDIP(4, gfd_config_panel));
@@ -11266,19 +11263,12 @@ bool Plater::priv::gfd_prepare_multicolor_consumable(const GFDDeviceInfo&       
 
 bool Plater::priv::gfd_fetch_dynamic_filament_list(std::string& body, std::string& error_message) const
 {
-    const std::string request_url = GFD::Config::filament_temperature_list_url(wxGetApp().app_config);
-    std::string       token;
-    if (!gfd_resolve_parameter_read_token(q, token, error_message))
-        return false;
-
-    GFDHttpResult result = gfd_fetch_dynamic_filament_list_once(request_url, token);
-    body                 = std::move(result.body);
-    if (GFDAuthManager::is_retryable_auth_failure_response(result.status, body, result.error_message)) {
-        error_message = "只读参数同步授权不可用";
-        return false;
-    }
-    error_message = std::move(result.error_message);
-    return result.ok;
+    const std::string request_url = GFD::Config::user_filament_list_url(wxGetApp().app_config);
+    return GFDAuthManager::perform_authenticated_request(
+        [&](const std::string& token) { return gfd_fetch_dynamic_filament_list_once(request_url, token); },
+        body,
+        error_message,
+        q);
 }
 
 bool Plater::priv::gfd_fetch_dynamic_filament_detail(const std::string& filament_sn, std::string& body, std::string& error_message) const
@@ -15902,7 +15892,6 @@ bool                  Plater::is_sidebar_visible() { return p != nullptr && p->i
 Sidebar::DockingState Plater::get_sidebar_docking_state() const { return p->get_sidebar_docking_state(); }
 wxPanel*              Plater::gfd_config_panel() { return p != nullptr ? p->gfd_config_panel : nullptr; }
 Button*               Plater::gfd_cloud_import_button() { return p != nullptr ? p->gfd_cloud_import_btn : nullptr; }
-Button*               Plater::gfd_dynamic_params_button() { return p != nullptr ? p->gfd_dynamic_params_btn : nullptr; }
 Button*               Plater::gfd_upload_config_button() { return p != nullptr ? p->gfd_upload_config_btn : nullptr; }
 Button*               Plater::gfd_save_config_button() { return p != nullptr ? p->gfd_save_config_btn : nullptr; }
 void                  Plater::update_gfd_config_panel_position()
@@ -18660,7 +18649,10 @@ bool Plater::start_dynamic_filament_request(GFDDynamicRequestType       request_
         return true;
     }
 
-    const bool has_dedicated_read_token = is_read_request && !GFD::Config::parameter_sync_token(wxGetApp().app_config).empty();
+    const bool uses_user_session = request_type == GFDDynamicRequestType::FilamentList ||
+                                   request_type == GFDDynamicRequestType::UpdateSliceParam;
+    const bool has_dedicated_read_token = is_read_request && !uses_user_session &&
+                                          !GFD::Config::parameter_sync_token(wxGetApp().app_config).empty();
     if (!has_dedicated_read_token && !GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
         const bool login_started = GFDAuthManager::ensure_logged_in_async(
             this,
@@ -18693,25 +18685,20 @@ bool Plater::start_dynamic_filament_request(GFDDynamicRequestType       request_
         return true;
     }
 
-    const std::string auth_token = is_read_request ? gfd_parameter_read_token() :
-                                                    GFDAuthManager::current_auth_token(wxGetApp().app_config);
+    const std::string auth_token = uses_user_session ? GFDAuthManager::current_auth_token(wxGetApp().app_config) :
+                                                      gfd_parameter_read_token();
     if (auth_token.empty()) {
         GFDAsyncRequestResult result;
-        result.error_message = is_read_request ? "未配置可用的只读参数同步凭据" : "登录状态无效，请重新登录";
+        result.error_message = uses_user_session ? "登录状态无效，请重新登录" : "未配置可用的只读参数同步凭据";
         finish_later(std::move(result));
         return true;
     }
-    // A manage-endpoint authorization failure must never invalidate the
-    // consumer login token. Parameter reads may optimistically use that token,
-    // but their authorization lifecycle remains independent.
-    const bool uses_user_session = !is_read_request;
-
     const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
     std::string       request_url;
     std::string       request_body;
     switch (request_type) {
     case GFDDynamicRequestType::FilamentList:
-        request_url = GFD::Config::filament_temperature_list_url(wxGetApp().app_config);
+        request_url = GFD::Config::user_filament_list_url(wxGetApp().app_config);
         break;
     case GFDDynamicRequestType::FilamentDetail:
         request_url = GFD::Config::filament_temperature_detail_url(wxGetApp().app_config) + "?sn=" + Http::url_encode(filament_sn);

@@ -2,7 +2,6 @@
     "comment":  "GFD per-device button visibility. Matched by gfd_device_type (e.g. EP7). \u0027default\u0027 applies to any device not listed under \u0027devices\u0027. \u0027print_device_types\u0027 lists the device types shown in the print (下发打印) dialog dropdown; empty = use cloud-returned types.",
     "default":  {
                     "cloud_import":  true,
-                    "dynamic_params":  true,
                     "upload_config":  false,
                     "save_config":  false,
                     "print":  true,
@@ -14,7 +13,6 @@
     "devices":  {
                     "EP7":  {
                                 "cloud_import":  true,
-                                "dynamic_params":  true,
                                 "upload_config":  false,
                                 "save_config":  false,
                                 "print":  true,
@@ -25,7 +23,6 @@
                             },
                     "EP3":  {
                                 "cloud_import":  true,
-                                "dynamic_params":  true,
                                 "upload_config":  false,
                                 "save_config":  false,
                                 "print":  true,
@@ -36,7 +33,6 @@
                             },
                     "EP3Pro":  {
                                    "cloud_import":  true,
-                                   "dynamic_params":  true,
                                    "upload_config":  false,
                                    "save_config":  false,
                                    "print":  true,
@@ -47,7 +43,6 @@
                                },
                     "EP3Plus":  {
                                     "cloud_import":  true,
-                                    "dynamic_params":  true,
                                     "upload_config":  false,
                                     "save_config":  false,
                                     "print":  true,
@@ -58,7 +53,6 @@
                                 },
                     "EPONE":  {
                                   "cloud_import":  true,
-                                  "dynamic_params":  true,
                                   "upload_config":  false,
                                   "save_config":  false,
                                   "print":  true,
@@ -69,7 +63,6 @@
                               },
                     "EPONEPro":  {
                                      "cloud_import":  true,
-                                     "dynamic_params":  true,
                                      "upload_config":  false,
                                      "save_config":  false,
                                      "print":  true,
@@ -80,7 +73,6 @@
                                  },
                     "AD5X":  {
                                   "cloud_import":  true,
-                                  "dynamic_params":  true,
                                   "upload_config":  false,
                                   "save_config":  false,
                                   "print":  true,
@@ -91,7 +83,6 @@
                               },
                     "AD5M":  {
                                   "cloud_import":  true,
-                                  "dynamic_params":  true,
                                   "upload_config":  false,
                                   "save_config":  false,
                                   "print":  true,

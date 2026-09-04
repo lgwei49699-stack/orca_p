@@ -30,7 +30,6 @@ struct SavedLoginCredential
 struct ButtonVisibility
 {
     bool cloud_import   = true;
-    bool dynamic_params = true;
     bool upload_config  = true;
     bool save_config    = true;
     bool print          = true;
@@ -105,8 +104,8 @@ public:
     static constexpr const char* PATH_USER_INFO                   = "/app/print3d/api/v1/users/info";
     static constexpr const char* PATH_TOKEN_REFRESH               = "/app/print3d/api/v1/users/getNewToken";
     static constexpr const char* PATH_DEVICE_FILAMENT_INFO        = "/app/print3d/api/v1/devices/filamentInfo";
+    static constexpr const char* PATH_USER_FILAMENT_LIST          = "/app/print3d/api/v1/devices/ftList";
     static constexpr const char* PATH_DEVICE_SLICE_TYPE           = "/app/print3d/manage/v1/slice-param-config/device-and-slice-type";
-    static constexpr const char* PATH_FILAMENT_TEMPERATURE_LIST   = "/app/print3d/manage/v1/filamentTemperature/list";
     static constexpr const char* PATH_FILAMENT_TEMPERATURE_DETAIL = "/app/print3d/manage/v1/filamentTemperature/detail";
     static constexpr const char* PATH_FILAMENT_TEMPERATURE_UPDATE_SLICE_PARAM =
         "/app/print3d/manage/v1/filamentTemperature/updateSliceParam";
@@ -133,7 +132,7 @@ public:
     static std::string              parameter_sync_biz(const AppConfig* config);
     static std::string              device_filament_info_url(const AppConfig* config);
     static std::string              device_slice_type_url(const AppConfig* config);
-    static std::string              filament_temperature_list_url(const AppConfig* config);
+    static std::string              user_filament_list_url(const AppConfig* config);
     static std::string              filament_temperature_detail_url(const AppConfig* config);
     static std::string              filament_temperature_update_slice_param_url(const AppConfig* config);
     static std::string              device_print_cmd_url(const AppConfig* config);

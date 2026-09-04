@@ -86,6 +86,7 @@ struct GFDLocalFilamentOption
 {
     std::string label;
     std::string sn;
+    json        payload;
 };
 
 std::string gfd_local_sync_json_string(const json& value)
@@ -114,29 +115,6 @@ std::string gfd_local_sync_first_string(const json& object, std::initializer_lis
     return {};
 }
 
-std::string gfd_local_sync_first_string_recursive(const json& node, std::initializer_list<const char*> keys, int depth = 0)
-{
-    if (depth > 8)
-        return {};
-    const std::string direct_value = gfd_local_sync_first_string(node, keys);
-    if (!direct_value.empty())
-        return direct_value;
-    if (node.is_array()) {
-        for (const json& item : node) {
-            const std::string value = gfd_local_sync_first_string_recursive(item, keys, depth + 1);
-            if (!value.empty())
-                return value;
-        }
-    } else if (node.is_object()) {
-        for (auto it = node.begin(); it != node.end(); ++it) {
-            const std::string value = gfd_local_sync_first_string_recursive(it.value(), keys, depth + 1);
-            if (!value.empty())
-                return value;
-        }
-    }
-    return {};
-}
-
 void gfd_local_sync_collect_filaments(const json& node,
                                       std::vector<GFDLocalFilamentOption>& options,
                                       std::set<std::string>&              seen_sn)
@@ -149,21 +127,21 @@ void gfd_local_sync_collect_filaments(const json& node,
     if (!node.is_object())
         return;
 
-    const std::string sn = gfd_local_sync_first_string_recursive(node, {"sn", "filamentSn", "materialSn", "serialNo", "serialNumber"});
+    const std::string sn = gfd_local_sync_first_string(node, {"sn", "filamentSn", "materialSn", "serialNo", "serialNumber"});
     if (!sn.empty() && seen_sn.insert(sn).second) {
-        const std::string color = gfd_local_sync_first_string_recursive(
+        const std::string color = gfd_local_sync_first_string(
             node, {"colorTitle", "colorName", "colourName", "colorCn", "colourCn", "color", "colour"});
-        const std::string name = gfd_local_sync_first_string_recursive(
-            node, {"name", "title", "materialName", "filamentName", "material", "filamentType"});
-        const std::string barcode = gfd_local_sync_first_string_recursive(
+        const std::string name = gfd_local_sync_first_string(
+            node, {"categoryFirstName", "name", "title", "materialName", "filamentName", "material", "filamentType"});
+        const std::string barcode = gfd_local_sync_first_string(
             node, {"barcode", "barCode", "bar_code", "barcodeNo", "barCodeNo"});
 
-        std::string label = !color.empty() ? color : name;
+        std::string label = !name.empty() && !color.empty() ? name + " · " + color : (!color.empty() ? color : name);
         if (!barcode.empty() && label.find(barcode) == std::string::npos)
             label += (label.empty() ? "" : " ") + barcode;
         if (label.empty())
             label = sn;
-        options.push_back({std::move(label), sn});
+        options.push_back({std::move(label), sn, node});
     }
 
     for (auto it = node.begin(); it != node.end(); ++it) {
@@ -446,12 +424,18 @@ public:
 
     std::string selected_sn() const
     {
+        const GFDLocalFilamentOption* filament = selected_filament();
+        return filament == nullptr ? std::string() : filament->sn;
+    }
+
+    const GFDLocalFilamentOption* selected_filament() const
+    {
         if (m_filament_choice == nullptr)
-            return {};
+            return nullptr;
         const int selection = m_filament_choice->GetSelection();
         if (selection <= 0 || selection > static_cast<int>(m_filaments.size()))
-            return {};
-        return m_filaments[static_cast<size_t>(selection - 1)].sn;
+            return nullptr;
+        return &m_filaments[static_cast<size_t>(selection - 1)];
     }
 
 private:
@@ -1245,38 +1229,16 @@ void Tab::sync_gfd_filament()
     if (target_dialog.ShowModal() != wxID_OK)
         return;
 
-    const std::string filament_sn = target_dialog.selected_sn();
-    if (filament_sn.empty()) {
+    const GFDLocalFilamentOption* cloud_filament = target_dialog.selected_filament();
+    if (cloud_filament == nullptr || cloud_filament->sn.empty()) {
         gfd_local_sync_show_error(this, "请选择云端耗材");
         return;
     }
-
-    GFDAsyncRequestResult detail_result;
-    bool                  detail_canceled = false;
-    GFDLocalSyncRequestDialog detail_dialog(
-        this,
-        plater,
-        _L("正在获取云端耗材详情..."),
-        "获取云端耗材详情失败",
-        true,
-        [plater, filament_sn](GFDDynamicRequestFinishedFn finished) {
-            return plater->fetch_dynamic_filament_detail_async(filament_sn, std::move(finished));
-        });
-    if (!detail_dialog.run(detail_result, detail_canceled)) {
-        if (!detail_canceled)
-            gfd_local_sync_show_error(
-                this, detail_result.error_message.empty() ? "获取云端耗材详情失败" : detail_result.error_message);
-        return;
-    }
-    if (!detail_result.ok) {
-        gfd_local_sync_show_error(
-            this, detail_result.error_message.empty() ? "获取云端耗材详情失败" : detail_result.error_message);
-        return;
-    }
+    const std::string filament_sn = cloud_filament->sn;
 
     std::string error_message;
     json remote_values;
-    if (!gfd_local_sync_extract_cloud_params(detail_result.body, device_type, remote_values, error_message)) {
+    if (!gfd_local_sync_extract_cloud_params(cloud_filament->payload.dump(), device_type, remote_values, error_message)) {
         gfd_local_sync_show_error(this, error_message.empty() ? "解析云端耗材参数失败" : error_message);
         return;
     }

@@ -432,7 +432,6 @@ public:
     Sidebar::DockingState get_sidebar_docking_state() const;
     wxPanel* gfd_config_panel();
     Button*  gfd_cloud_import_button();
-    Button*  gfd_dynamic_params_button();
     Button*  gfd_upload_config_button();
     Button*  gfd_save_config_button();
     void     update_gfd_config_panel_position();
