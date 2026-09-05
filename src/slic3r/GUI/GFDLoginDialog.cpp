@@ -37,6 +37,7 @@
 #include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
+#include <wx/weakref.h>
 
 namespace Slic3r { namespace GUI {
 
@@ -1028,19 +1029,21 @@ bool GFDLoginDialog::start_captcha_request(const std::string& phone)
             // Leave the CAPTCHA-loading worker's completion callback before
             // entering another modal loop. The slider dialog owns a separate
             // worker for verification and SMS delivery.
-            CallAfter([this, result, phone]() {
-                if (m_destroying || m_close_when_idle)
+            const wxWeakRef<GFDLoginDialog> dialog(this);
+            CallAfter([dialog, result, phone]() {
+                GFDLoginDialog* const login_dialog = dialog.get();
+                if (login_dialog == nullptr || login_dialog->m_destroying || login_dialog->m_close_when_idle)
                     return;
 
-                GFDSliderCaptchaDialog slider_dialog(this, *result, phone);
+                GFDSliderCaptchaDialog slider_dialog(login_dialog, *result, phone);
                 if (!slider_dialog.run()) {
-                    set_tip(_L("Complete the slider CAPTCHA first."));
+                    login_dialog->set_tip(_L("Complete the slider CAPTCHA first."));
                     return;
                 }
 
-                start_countdown();
-                set_tip(_L("The verification code has been sent. Please check your messages."), false);
-                m_code_input->GetTextCtrl()->SetFocus();
+                login_dialog->start_countdown();
+                login_dialog->set_tip(_L("The verification code has been sent. Please check your messages."), false);
+                login_dialog->m_code_input->GetTextCtrl()->SetFocus();
             });
         });
 

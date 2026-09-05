@@ -82,6 +82,7 @@
 #include <wx/scrolwin.h>
 #include <wx/timer.h>
 #include <wx/ustring.h>
+#include <wx/weakref.h>
 
 #ifdef _WIN32
 #include <dbt.h>
@@ -4525,12 +4526,18 @@ wxBoxSizer* MainFrame::create_side_tools()
         const int action_id = wxWindow::NewControlId();
         menu.Append(action_id, logged_in ? _L("Sign Out") : _L("Sign In with SMS Verification Code"));
         menu.Bind(wxEVT_MENU, [this, logged_in](wxCommandEvent&) {
-            if (logged_in) {
+            if (logged_in)
                 GFDAuthManager::logout(wxGetApp().app_config, false);
-                CallAfter([this]() { wxGetApp().ShowGFDLogin(this); });
-            } else {
-                wxGetApp().ShowGFDLogin(this);
-            }
+
+            // On macOS, opening a modal dialog synchronously from a popup-menu
+            // callback may leave mouse capture with the button that opened the
+            // menu. Wait until PopupMenu() has fully unwound before showing the
+            // login dialog so clicks cannot be routed back to the account button.
+            const wxWeakRef<MainFrame> frame(this);
+            CallAfter([frame]() {
+                if (frame)
+                    wxGetApp().ShowGFDLogin(frame.get());
+            });
         }, action_id);
         m_gfd_account_btn->PopupMenu(&menu, wxPoint(0, m_gfd_account_btn->GetSize().y));
     });

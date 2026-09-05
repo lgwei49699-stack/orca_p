@@ -1183,9 +1183,16 @@ void GUI_App::shutdown()
         login_dlg = nullptr;
     }
     if (gfd_login_dlg != nullptr) {
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": destroy GFD login dialog");
-        delete gfd_login_dlg;
-        gfd_login_dlg = nullptr;
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": close GFD login dialog");
+        if (gfd_login_dlg->IsModal()) {
+            // Let ShowModal() unwind and keep destruction in ShowGFDLogin().
+            // Deleting a live modal dialog here can leave wxWidgets' nested
+            // event loop pointing at an already-destroyed native window.
+            gfd_login_dlg->EndModal(wxID_ABORT);
+        } else {
+            delete gfd_login_dlg;
+            gfd_login_dlg = nullptr;
+        }
     }
 
     if (m_is_recreating_gui)
@@ -3588,7 +3595,7 @@ bool GUI_App::ShowGFDLogin(wxWindow* parent)
             delete gfd_login_dlg;
             gfd_login_dlg = nullptr;
         }
-        if (mainframe != nullptr)
+        if (mainframe != nullptr && !m_is_closing)
             mainframe->update_gfd_account_button();
         return logged_in;
     } catch (const std::exception& ex) {
