@@ -4,6 +4,7 @@
 #include <boost/filesystem/operations.hpp>
 #include <boost/filesystem/path.hpp>
 #include <boost/iostreams/detail/select.hpp>
+#include <algorithm>
 #include <chrono>
 #include <set>
 #include <string.h>
@@ -112,6 +113,31 @@ bool is_user_guide_filament(const std::string& vendor, const std::string& filame
     return vendor == USER_GUIDE_CUSTOM_VENDOR;
 }
 
+int user_guide_model_order(const std::string& model)
+{
+    if (model == "EP3")
+        return 0;
+    if (model == "EP3 Pro")
+        return 1;
+    if (model == "EP3Plus" || model == "EP3 Plus")
+        return 2;
+    if (model == "EPONE")
+        return 3;
+    if (model == "EPONE Pro")
+        return 4;
+    if (model == "EP7")
+        return 5;
+    if (model == USER_GUIDE_AD5X_MODEL)
+        return 6;
+    if (model == USER_GUIDE_AD5M_MODEL)
+        return 7;
+    if (model == "Generic Klipper Printer")
+        return 8;
+    if (model == "Generic Marlin Printer")
+        return 9;
+    return 10;
+}
+
 void append_material_names(const std::string& materials, std::set<std::string>& result)
 {
     std::vector<std::string> names;
@@ -166,6 +192,13 @@ void filter_user_guide_models(json& profile)
         visible_model["display_vendor"] = USER_GUIDE_CUSTOM_VENDOR;
         visible_models.push_back(std::move(visible_model));
     }
+
+    // The source bundles are discovered through directory iteration, whose
+    // order is platform-dependent. Keep the consumer catalogue in a stable,
+    // product-defined order regardless of which vendor bundle loads first.
+    std::stable_sort(visible_models.begin(), visible_models.end(), [](const json& lhs, const json& rhs) {
+        return user_guide_model_order(lhs.value("model", std::string())) < user_guide_model_order(rhs.value("model", std::string()));
+    });
 
     profile["model"] = std::move(visible_models);
 }

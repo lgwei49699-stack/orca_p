@@ -23,6 +23,7 @@
 #endif /* L */
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -752,22 +753,20 @@ bool Preset::is_custom_defined()
 BedType Preset::get_default_bed_type(PresetBundle* preset_bundle)
 {
     if (config.has("default_bed_type") && !config.opt_string("default_bed_type").empty()) {
-        try {
-            std::string str_bed_type = config.opt_string("default_bed_type");
-            
-            // Try parsing as integer first (legacy format)
-            int bed_type_value = atoi(str_bed_type.c_str());
-            if (bed_type_value > 0) {
-                return BedType(bed_type_value);
-            }
-            else {
-                BOOST_LOG_TRIVIAL(error) << "default_bed_type: invalid bed type: " << str_bed_type;
-            }
-            return BedType::btPEI;
+        const std::string str_bed_type = config.opt_string("default_bed_type");
 
-        } catch(...) {
-            ;
-        }
+        BedType bed_type;
+        if (ConfigOptionEnum<BedType>::from_string(str_bed_type, bed_type) && bed_type > btDefault && bed_type < btCount)
+            return bed_type;
+
+        // Keep compatibility with legacy profiles that store the enum as an integer.
+        char*      end            = nullptr;
+        const long bed_type_value = std::strtol(str_bed_type.c_str(), &end, 10);
+        if (end != str_bed_type.c_str() && *end == '\0' && bed_type_value > btDefault && bed_type_value < btCount)
+            return static_cast<BedType>(bed_type_value);
+
+        BOOST_LOG_TRIVIAL(error) << "default_bed_type: invalid bed type: " << str_bed_type;
+        return BedType::btPEI;
     }
 
     std::string model_id = this->get_printer_type(preset_bundle);

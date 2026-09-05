@@ -93,6 +93,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <regex>
@@ -189,6 +190,20 @@ wxBitmap gfd_account_avatar_bitmap(wxWindow* window, const std::string& image_da
     image = image.GetSubImage(wxRect((image.GetWidth() - side) / 2, (image.GetHeight() - side) / 2, side, side));
     const int icon_size = window->FromDIP(GFD_ACCOUNT_ICON_SIZE);
     image.Rescale(icon_size, icon_size, wxIMAGE_QUALITY_HIGH);
+
+    if (!image.HasAlpha())
+        image.InitAlpha();
+    unsigned char* alpha        = image.GetAlpha();
+    const double   center       = (icon_size - 1) / 2.0;
+    const double   radius       = icon_size / 2.0;
+    for (int y = 0; y < icon_size; ++y) {
+        for (int x = 0; x < icon_size; ++x) {
+            const double distance = std::hypot(x - center, y - center);
+            const double coverage = std::clamp(radius + 0.5 - distance, 0.0, 1.0);
+            const size_t offset   = static_cast<size_t>(y * icon_size + x);
+            alpha[offset]         = static_cast<unsigned char>(alpha[offset] * coverage);
+        }
+    }
     return wxBitmap(image);
 }
 
@@ -4954,10 +4969,10 @@ void MainFrame::update_side_button_style()
     m_print_btn->SetExtraSize(wxSize(FromDIP(38), FromDIP(10)));
     m_print_btn->SetMinSize(wxSize(-1, FromDIP(24)));
 
-    m_gfd_print_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Left, FromDIP(15));
+    m_gfd_print_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Center);
     m_gfd_print_btn->SetLayoutStyle(1);
     m_gfd_print_btn->SetCornerRadius(FromDIP(12));
-    m_gfd_print_btn->SetExtraSize(wxSize(FromDIP(38), FromDIP(10)));
+    m_gfd_print_btn->SetExtraSize(wxSize(FromDIP(32), FromDIP(10)));
     m_gfd_print_btn->SetMinSize(wxSize(-1, FromDIP(24)));
 
     m_gfd_account_btn->SetFont(Label::Body_12);

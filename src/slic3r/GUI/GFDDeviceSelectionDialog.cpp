@@ -333,39 +333,43 @@ void GFDDeviceSelectionDialog::build()
 
     auto* main_sizer = new wxBoxSizer(wxVERTICAL);
 
-    const int control_h    = FromDIP(30);
-    const int field_gap    = FromDIP(10);
-    const int label_gap    = FromDIP(6);
+    const int control_h       = FromDIP(30);
+    const int control_min_w   = FromDIP(120);
+    const int field_gap       = FromDIP(8);
+    const int label_gap       = FromDIP(4);
 
     auto* filter_sizer = new wxBoxSizer(wxHORIZONTAL);
     filter_sizer->SetMinSize(wxSize(-1, FromDIP(38)));
 
     auto add_labeled = [this, filter_sizer, label_gap, field_gap](const wxString& label, wxWindow* control) {
         filter_sizer->Add(new wxStaticText(this, wxID_ANY, label), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, label_gap);
-        filter_sizer->Add(control, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, field_gap);
+        filter_sizer->Add(control, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, field_gap);
     };
 
-    m_mac_input = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(180), control_h));
+    m_mac_input = new wxTextCtrl(this, wxID_ANY);
+    m_mac_input->SetMinSize(wxSize(control_min_w, control_h));
     apply_flat_filter_input_style(m_mac_input);
     m_mac_input->SetHint(_L("请输入设备MAC"));
     add_labeled(_L("设备MAC:"), m_mac_input);
 
-    m_operator_input = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(160), control_h));
+    m_operator_input = new wxTextCtrl(this, wxID_ANY);
+    m_operator_input->SetMinSize(wxSize(control_min_w, control_h));
     apply_flat_filter_input_style(m_operator_input);
     m_operator_input->SetHint(_L("请输入设备名称"));
     add_labeled(_L("设备名称:"), m_operator_input);
 
-    m_type_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(180), control_h));
+    m_type_choice = new wxChoice(this, wxID_ANY);
+    m_type_choice->SetMinSize(wxSize(control_min_w, control_h));
     apply_flat_filter_choice_style(m_type_choice);
     append_choice(m_type_choice, _L("全部"), ALL_VALUE);
     add_labeled(_L("设备机型:"), m_type_choice);
 
-    m_status_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(160), control_h));
+    m_status_choice = new wxChoice(this, wxID_ANY);
+    m_status_choice->SetMinSize(wxSize(control_min_w, control_h));
     apply_flat_filter_choice_style(m_status_choice);
     append_choice(m_status_choice, _L("全部"), ALL_VALUE);
     add_labeled(_L("设备状态:"), m_status_choice);
 
-    filter_sizer->AddStretchSpacer(1);
     m_search_button = new Button(this, _L("查找"));
     apply_flat_filter_button_style(m_search_button, true);
     filter_sizer->Add(m_search_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
