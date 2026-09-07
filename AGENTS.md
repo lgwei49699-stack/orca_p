@@ -4,7 +4,16 @@
 OrcaSlicer 的 C++17 源码位于 `src/`，按功能模块和平台适配层拆分。用户资源、图标、打印机预设位于 `resources/`；翻译文件位于 `localization/`。测试位于 `tests/`，按领域分组，例如 `libslic3r/`、`sla_print/` 等，测试夹具放在 `tests/data/`。CMake 辅助文件位于 `cmake/`，较长的参考文档位于 `doc/` 和 `SoftFever_doc/`。自动化脚本应放在 `scripts/` 和 `tools/`。`deps/` 与 `deps_src/` 中的内容视为第三方快照，除非同步对应上游 tag，否则不要直接修改。
 
 ## 构建、测试与开发命令
+
+### AI 编译与验证约束
+
+- 默认不主动执行编译、构建或打包，包括全量编译、局部编译、测试目标编译，以及会触发编译的脚本。用户会自行编译、验证并提供日志。
+- 只有用户明确要求编译、构建或打包时，才执行对应命令；修改代码、添加日志或分析问题不视为编译授权。
+- 默认通过源码审阅、`git diff --check` 等不触发编译的静态检查验证改动，并在交付时明确说明未编译。若必须依赖编译结果才能继续，先说明原因并询问用户。
+- 本约束优先于本文其他构建验证建议；下述命令仅供参考，不构成执行授权。
+
 使用 out-of-source 构建：
+
 - `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`：配置依赖并生成构建文件。
 - `cmake --build build --target OrcaSlicer --config Release`：编译应用；可加 `--parallel` 加速。
 - `cmake --build build --target tests` 后执行 `ctest --test-dir build --output-on-failure`：运行自动化测试。

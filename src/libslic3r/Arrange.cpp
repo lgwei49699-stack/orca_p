@@ -9,6 +9,11 @@
 #include <libnest2d/selections/firstfit.hpp>
 #include <libnest2d/utils/rotcalipers.hpp>
 
+#include <atomic>
+#include <cmath>
+#include <cstdint>
+#include <iomanip>
+#include <map>
 #include <numeric>
 #include <ClipperUtils.hpp>
 
@@ -77,6 +82,13 @@ namespace bgi = boost::geometry::index;
 using SpatElement = std::pair<Box, unsigned>;
 using SpatIndex = bgi::rtree< SpatElement, bgi::rstar<16, 4> >;
 using ItemGroup = std::vector<std::reference_wrapper<Item>>;
+
+namespace {
+
+// One ID per core invocation, including GUI wipe-tower retries and CLI calls.
+std::atomic<std::uint64_t> arrange_diagnostic_sequence{0};
+
+} // namespace
 
 bool arrange_groups_compatible(const std::string& candidate_group, const std::set<std::string>& existing_groups)
 {
@@ -815,9 +827,7 @@ public:
                     }
                 });
 
-        m_pck.unfitIndicator([this](std::string name) {
-            BOOST_LOG_TRIVIAL(debug) << "arrange progress: " + name;
-                });
+        m_pck.unfitIndicator([](std::string name) { BOOST_LOG_TRIVIAL(debug) << "arrange progress: " + name; });
 
         if (stopcond) m_pck.stopCondition(stopcond);
 
@@ -977,6 +987,50 @@ Radians fit_into_box_rotation(const S &sh, const _Box<TPoint<S>> &box)
     return fitIntoBoxRotation<S, TCompute<S>, boost::rational<LargeInt>>(sh, box);
 }
 
+std::optional<double> stable_arrange_seed_rotation(const ExPolygon& footprint)
+{
+    if (footprint.contour.points.size() < 3 || footprint.contour.area() == 0.0)
+        return std::nullopt;
+
+    // Stabilize the canonical rectangle axis at the quarter-turn boundary.
+    // The angular tolerance corresponds to two grid units at the furthest vertex;
+    // selecting an equivalent rectangle axis can still turn an asymmetric object
+    // by 90 degrees. No contour is simplified and all fit/collision checks remain.
+    double radius = 1.0;
+    for (const Point& point : footprint.contour.points)
+        radius = std::max(radius, std::hypot(double(point.x()), double(point.y())));
+    const double     angle_epsilon = std::min(1e-7, 2.0 / radius);
+    constexpr double quarter_turn  = PI / 2.0;
+
+    using Unit  = TCompute<ExPolygon>;
+    using Ratio = boost::rational<LargeInt>;
+    Ratio                 min_area;
+    std::optional<double> best_angle;
+    try {
+        // Reuse upstream calipers and exact area arithmetic. Equal-area boxes
+        // use the smallest canonical axis instead of the last visited edge.
+        rotcalipers<ExPolygon, Unit, Ratio>(footprint, [&](const auto& box) {
+            const Ratio area = rectarea<Ratio>(box);
+            if (area <= 0 || (best_angle && area > min_area))
+                return true;
+            double angle = std::fmod(double(box.angleToX()), quarter_turn);
+            if (angle < 0.0)
+                angle += quarter_turn;
+            if (angle <= angle_epsilon || quarter_turn - angle <= angle_epsilon)
+                angle = 0.0;
+            if (!best_angle || area < min_area || (area == min_area && angle < *best_angle)) {
+                min_area   = area;
+                best_angle = angle;
+            }
+            return true;
+        });
+    } catch (const std::exception& e) {
+        BOOST_LOG_TRIVIAL(warning) << "[arrange-diag] stable seed unavailable; using legacy rotation: " << e.what();
+        return std::nullopt;
+    }
+    return best_angle;
+}
+
 template<class BinT> // Arrange for arbitrary bin type
 void _arrange(
         std::vector<Item> &           shapes,
@@ -1012,7 +1066,25 @@ void _arrange(
     // polygon nesting, a convex hull needs to be calculated.
     if (params.allow_rotations) {
         for (auto &itm : shapes) {
-            itm.rotate(min_area_boundingbox_rotation(itm.transformedShape()));
+            const double          input_rotation = itm.rotation();
+            std::optional<double> stable_seed;
+            if (!params.is_seq_print && !params.align_to_y_axis && !itm.is_virt_object && !itm.is_wipe_tower) {
+                // Work on this temporary 2D item only. Its inflation stays intact,
+                // and the same offset cache is reused by the actual packing pass.
+                const Point input_translation = itm.translation();
+                itm.rotation(0.0);
+                itm.translation({0, 0});
+                stable_seed = stable_arrange_seed_rotation(itm.transformedShape());
+                itm.translation(input_translation);
+                itm.rotation(input_rotation);
+            }
+            if (stable_seed) {
+                // This is an absolute seed computed in local coordinates, not a
+                // correction to the previous arrange result's rotation.
+                itm.rotation(*stable_seed);
+            } else {
+                itm.rotate(min_area_boundingbox_rotation(itm.transformedShape()));
+            }
 
             // If the item is too big, try to find a rotation that makes it fit
             if constexpr (std::is_same_v<BinT, Box>) {
@@ -1141,6 +1213,18 @@ void arrange(ArrangePolygons &      arrangables,
 {
     namespace clppr = Slic3r::ClipperLib;
 
+    const std::uint64_t diagnostic_id = arrange_diagnostic_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    const auto          bed_bb        = sl::boundingBox(to_nestbin(bed));
+    BOOST_LOG_TRIVIAL(info) << std::setprecision(17) << "[arrange-diag] run=" << diagnostic_id << " begin movable=" << arrangables.size()
+                            << " fixed=" << excludes.size() << " distance_mm=" << unscale<double>(params.min_obj_distance)
+                            << " bed_bbox_mm=" << unscale<double>(bed_bb.minCorner().x()) << ',' << unscale<double>(bed_bb.minCorner().y())
+                            << ':' << unscale<double>(bed_bb.maxCorner().x()) << ',' << unscale<double>(bed_bb.maxCorner().y())
+                            << " rotations=" << params.allow_rotations << " parallel=" << params.parallel << " accuracy=" << params.accuracy
+                            << " sequential=" << params.is_seq_print << " final_align=" << params.do_final_align
+                            << " align_center=" << params.align_center.transpose()
+                            << " multi_materials=" << params.allow_multi_materials_on_same_plate
+                            << " printable_height_mm=" << params.printable_height
+                            << " relative_angles_deg=" << (params.allow_rotations ? "0,45,90,135" : "0");
     std::vector<Item> items, fixeditems;
     items.reserve(arrangables.size());
 
@@ -1154,13 +1238,28 @@ void arrange(ArrangePolygons &      arrangables,
 
     _arrange(items, fixeditems, to_nestbin(bed), params, params.progressind, params.stopcondition);
 
+    std::map<int, size_t> objects_per_bed;
+    size_t                unarranged = 0;
     for(size_t i = 0; i < items.size(); ++i) {
         Point tr = items[i].translation();
         arrangables[i].translation = {coord_t(tr.x()), coord_t(tr.y())};
         arrangables[i].rotation    = items[i].rotation();
         arrangables[i].bed_idx     = items[i].binId();
         arrangables[i].itemid      = items[i].itemId();  // arrange order is useful for sequential printing
+        BOOST_LOG_TRIVIAL(debug) << std::setprecision(17) << "[arrange-diag] run=" << diagnostic_id << " output index=" << i
+                                 << " name=" << std::quoted(items[i].name) << " packed_order=" << items[i].itemId()
+                                 << " bed=" << items[i].binId() << " rotation_deg=" << double(items[i].rotation()) * 180.0 / PI
+                                 << " xy_mm=" << unscale<double>(tr.x()) << ',' << unscale<double>(tr.y());
+        if (items[i].binId() < 0)
+            ++unarranged;
+        else if (!items[i].is_virt_object)
+            ++objects_per_bed[items[i].binId()];
     }
+    for (const auto& entry : objects_per_bed)
+        BOOST_LOG_TRIVIAL(info) << "[arrange-diag] run=" << diagnostic_id << " bed_summary bed=" << entry.first
+                                << " movable_objects=" << entry.second;
+    BOOST_LOG_TRIVIAL(info) << "[arrange-diag] run=" << diagnostic_id << " end beds_with_movable_objects=" << objects_per_bed.size()
+                            << " unarranged=" << unarranged;
 }
 
 template void arrange(ArrangePolygons &items, const ArrangePolygons &excludes, const BoundingBox &bed, const ArrangeParams &params);

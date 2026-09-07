@@ -24,6 +24,7 @@ add_executable(${_TEST_NAME}_tests
     # test_png_io.cpp
 	test_indexed_triangle_set.cpp
 	test_model_arrange.cpp
+	test_arrange_rotation.cpp
 	test_obj.cpp
 	test_saved_painting.cpp
 	test_texture_painting.cpp

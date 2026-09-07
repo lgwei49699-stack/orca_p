@@ -5,6 +5,7 @@
 #include "PrintConfig.hpp"
 #include "Print.hpp"
 
+#include <optional>
 #include <set>
 #include <string>
 
@@ -193,6 +194,11 @@ void update_selected_items_inflation(ArrangePolygons& selected, const DynamicPri
 void update_unselected_items_inflation(ArrangePolygons& unselected, const DynamicPrintConfig* print_cfg, const ArrangeParams& params);
 
 void update_selected_items_axis_align(ArrangePolygons& selected, const DynamicPrintConfig* print_cfg, const ArrangeParams& params);
+
+// Absolute Z seed in the unrotated, already-inflated footprint's coordinate system.
+// Canonicalizes the minimum rectangle's axis to [0, PI/2), not the model's geometry.
+// Returns no value for degenerate geometry so callers can keep the legacy path.
+std::optional<double> stable_arrange_seed_rotation(const ExPolygon& footprint);
 
 Points get_shrink_bedpts(const DynamicPrintConfig* print_cfg, const ArrangeParams& params);
 
