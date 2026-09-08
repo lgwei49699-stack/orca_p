@@ -15,6 +15,7 @@
 // Include igl first. It defines "L" macro which then clashes with our localization
 #include <igl/copyleft/cgal/mesh_boolean.h>
 #undef L
+#include "libslic3r/I18N.hpp"
 
 // CGAL headers
 #include <CGAL/Polygon_mesh_processing/corefinement.h>
@@ -567,7 +568,9 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
     if (repaired_errors != nullptr)
         repaired_errors->clear();
 
-    const auto fail = [error](const std::string& message) {
+    const char* stage = "input_validation";
+    const auto  fail  = [error, &stage](const std::string& message) {
+        BOOST_LOG_TRIVIAL(warning) << "CGAL repair: event=failed, stage=" << stage << ", reason=" << message;
         if (error != nullptr)
             *error = message;
         return false;
@@ -589,6 +592,9 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
     }
 
     try {
+        BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=started, vertices=" << mesh.its.vertices.size()
+                                << ", faces=" << mesh.its.indices.size();
+        stage                          = "closed_candidate";
         indexed_triangle_set compacted = mesh.its;
         its_compactify_vertices(compacted, true);
         if (compacted.vertices.empty() || compacted.indices.empty())
@@ -597,6 +603,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
         const bool               input_had_no_open_edges = its_num_open_edges(compacted) == 0;
         _EpicMesh                cgal_mesh;
         std::optional<_EpicMesh> fallback_fidelity_reference;
+        bool                     soup_vertices_split = false;
         bool                     direct_closed_candidate = false;
         std::string              direct_candidate_error;
         try {
@@ -725,6 +732,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
         }
 
         if (cgal_mesh.is_empty()) {
+            stage = "soup_cleanup";
             indexed_triangle_set cleaned = mesh.its;
             its_remove_degenerate_faces(cleaned, true);
             cleaned.indices.erase(std::remove_if(cleaned.indices.begin(), cleaned.indices.end(),
@@ -755,12 +763,21 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
             if (points.empty() || polygons.empty())
                 return fail("Repair failed: polygon soup cleanup removed all geometry.");
 
-            // Polygon-soup repair does not establish the consistent orientation
-            // required by polygon_soup_to_polygon_mesh().
-            if (!PMP::orient_polygon_soup(points, polygons))
-                return fail("Repair failed: polygon soup could not be oriented consistently.");
+            // false means that CGAL duplicated singular vertices, not that the
+            // modified soup cannot be converted. Such a candidate still needs
+            // all topology, self-intersection and fidelity checks below.
+            const size_t points_before_orientation = points.size();
+            stage                                  = "soup_orientation";
+            soup_vertices_split                    = !PMP::orient_polygon_soup(points, polygons);
+            BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=soup_oriented, split_vertices=" << points.size() - points_before_orientation
+                                    << ", faces=" << polygons.size();
+            if (!PMP::is_polygon_soup_a_polygon_mesh(polygons))
+                return fail(L("Repair failed: polygon soup is still invalid after orientation and vertex splitting."));
 
             PMP::polygon_soup_to_polygon_mesh(points, polygons, cgal_mesh);
+            if (cgal_mesh.is_empty() || cgal_mesh.num_faces() != polygons.size() || !CGAL::is_valid_polygon_mesh(cgal_mesh) ||
+                !CGAL::is_triangle_mesh(cgal_mesh))
+                return fail(L("Repair failed: polygon soup is still invalid after orientation and vertex splitting."));
             if (input_had_no_open_edges) {
                 // For an input whose quick topology was already closed, soup
                 // cleanup may canonicalize duplicated/inconsistent faces but
@@ -773,8 +790,14 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
                     return fail("Repair failed: closed mesh became open or invalid during polygon-soup cleanup.");
                 fallback_fidelity_reference = cgal_mesh;
             }
+            // A split candidate also needs a baseline when the original was
+            // open. Its existing surface must survive; new hole patches need
+            // not have the same area or volume as an incomplete input.
+            if (soup_vertices_split)
+                fallback_fidelity_reference = cgal_mesh;
         }
 
+        stage = "mesh_cleanup";
         if (!PMP::remove_degenerate_faces(cgal_mesh))
             return fail("Repair failed: mesh still contains degenerate faces after cleanup.");
         PMP::remove_isolated_vertices(cgal_mesh);
@@ -787,6 +810,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
             return fail("Repair failed: mesh cleanup removed all geometry.");
 
         if (!CGAL::is_closed(cgal_mesh)) {
+            stage = "border_stitching";
             const size_t stitched_borders = PMP::stitch_borders(cgal_mesh);
             cgal_mesh.collect_garbage();
             BOOST_LOG_TRIVIAL(debug) << "CGAL repair border stitching: stitched=" << stitched_borders << ", faces=" << cgal_mesh.num_faces()
@@ -794,6 +818,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
         }
 
         if (!CGAL::is_closed(cgal_mesh)) {
+            stage = "hole_filling";
             using halfedge_descriptor = boost::graph_traits<_EpicMesh>::halfedge_descriptor;
 
             std::vector<halfedge_descriptor> borders;
@@ -803,6 +828,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
                 PMP::triangulate_and_refine_hole(cgal_mesh, border);
         }
 
+        stage = "topology_validation";
         if (cgal_mesh.is_empty() || cgal_mesh.num_faces() == 0)
             return fail("Repair failed: repaired mesh is empty.");
         if (!CGAL::is_valid_polygon_mesh(cgal_mesh))
@@ -813,8 +839,27 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
             return fail("Repair failed: mesh is still open after hole filling.");
 
         // Volume orientation assumes a self-intersection-free mesh.
-        if (PMP::does_self_intersect(cgal_mesh))
+        if (PMP::does_self_intersect(cgal_mesh)) {
+            // Do not retry intersecting vertex-split soups with experimental
+            // patch repair: this path has triggered native crashes, which are
+            // not caught by C++ exception handlers. Reject before calling it.
+            if (soup_vertices_split) {
+                stage = "split_soup_self_intersections_unsupported";
+                return fail(L("Repair failed: this model has complex intersecting surfaces that cannot be safely repaired automatically."));
+            }
             return fail("Repair failed: repaired mesh still self-intersects.");
+        }
+
+        if (soup_vertices_split) {
+            using face_descriptor     = boost::graph_traits<_EpicMesh>::face_descriptor;
+            using halfedge_descriptor = boost::graph_traits<_EpicMesh>::halfedge_descriptor;
+            std::vector<face_descriptor>     degenerate_faces;
+            std::vector<halfedge_descriptor> non_manifold_vertices;
+            PMP::degenerate_faces(cgal_mesh, std::back_inserter(degenerate_faces));
+            PMP::non_manifold_vertices(cgal_mesh, std::back_inserter(non_manifold_vertices));
+            if (!degenerate_faces.empty() || !non_manifold_vertices.empty())
+                return fail(L("Repair failed: vertex splitting left intersections or invalid topology that could not be safely repaired."));
+        }
 
         // does_bound_a_volume() accepts inward level-0 shells as the boundary
         // of an unbounded volume. Normalize nesting-aware component orientation
@@ -824,14 +869,16 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
             return fail("Repair failed: mesh orientation does not bound a volume.");
 
         if (fallback_fidelity_reference) {
-            _EpicMesh&         reference       = *fallback_fidelity_reference;
-            const CGAL::Bbox_3 reference_bbox  = PMP::bbox(reference);
-            const CGAL::Bbox_3 repaired_bbox   = PMP::bbox(cgal_mesh);
-            const double       bbox_dx         = reference_bbox.xmax() - reference_bbox.xmin();
-            const double       bbox_dy         = reference_bbox.ymax() - reference_bbox.ymin();
-            const double       bbox_dz         = reference_bbox.zmax() - reference_bbox.zmin();
-            const double       bbox_diagonal   = std::sqrt(bbox_dx * bbox_dx + bbox_dy * bbox_dy + bbox_dz * bbox_dz);
-            const double       hausdorff_limit = std::clamp(bbox_diagonal * 1.e-4, 0.005, 0.05);
+            stage                               = "fidelity_validation";
+            _EpicMesh&         reference        = *fallback_fidelity_reference;
+            const bool         reference_closed = CGAL::is_closed(reference);
+            const CGAL::Bbox_3 reference_bbox   = PMP::bbox(reference);
+            const CGAL::Bbox_3 repaired_bbox    = PMP::bbox(cgal_mesh);
+            const double       bbox_dx          = reference_bbox.xmax() - reference_bbox.xmin();
+            const double       bbox_dy          = reference_bbox.ymax() - reference_bbox.ymin();
+            const double       bbox_dz          = reference_bbox.zmax() - reference_bbox.zmin();
+            const double       bbox_diagonal    = std::sqrt(bbox_dx * bbox_dx + bbox_dy * bbox_dy + bbox_dz * bbox_dz);
+            const double       hausdorff_limit  = std::clamp(bbox_diagonal * 1.e-4, 0.005, 0.05);
 
             const ConnectedComponentVolumeMeasure reference_measure =
                 measure_connected_component_volumes(reference, "f:model_repair_fallback_reference_component");
@@ -852,22 +899,31 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
                                         std::abs(repaired_bbox.ymax() - reference_bbox.ymax()) <= hausdorff_limit &&
                                         std::abs(repaired_bbox.zmax() - reference_bbox.zmax()) <= hausdorff_limit;
             const double hausdorff_error_bound = std::max(1.e-5, hausdorff_limit * 0.01);
-            const double hausdorff_distance    = PMP::bounded_error_symmetric_Hausdorff_distance<CGAL::Sequential_tag>(reference, cgal_mesh,
-                                                                                                                       hausdorff_error_bound);
-            const bool   fidelity_valid        = reference_components == repaired_components && bbox_preserved && volume_delta <= 1.e-3 &&
-                                        area_delta <= 2.e-3 && hausdorff_distance + hausdorff_error_bound <= hausdorff_limit;
+            const double hausdorff_distance =
+                reference_closed ?
+                    PMP::bounded_error_symmetric_Hausdorff_distance<CGAL::Sequential_tag>(reference, cgal_mesh, hausdorff_error_bound) :
+                    PMP::bounded_error_Hausdorff_distance<CGAL::Sequential_tag>(reference, cgal_mesh, hausdorff_error_bound);
+            const bool size_preserved = reference_closed ? volume_delta <= 1.e-3 && area_delta <= 2.e-3 :
+                                                           repaired_area >= reference_area * (1. - 2.e-3);
+            const bool fidelity_valid = reference_components == repaired_components && bbox_preserved && size_preserved &&
+                                        hausdorff_distance + hausdorff_error_bound <= hausdorff_limit;
 
-            BOOST_LOG_TRIVIAL(debug) << "CGAL closed polygon-soup repair: accepted=" << fidelity_valid
-                                     << ", components=" << reference_components << "->" << repaired_components
-                                     << ", volume_delta=" << volume_delta << ", area_delta=" << area_delta
-                                     << ", hausdorff=" << hausdorff_distance << "/" << hausdorff_limit;
-            if (!fidelity_valid)
+            BOOST_LOG_TRIVIAL(info) << "CGAL polygon-soup repair: event=fidelity_checked, accepted=" << fidelity_valid
+                                    << ", split_soup=" << soup_vertices_split << ", reference_closed=" << reference_closed
+                                    << ", components=" << reference_components << "->" << repaired_components
+                                    << ", volume_delta=" << volume_delta << ", area_delta=" << area_delta
+                                    << ", hausdorff=" << hausdorff_distance << "/" << hausdorff_limit;
+            if (!fidelity_valid) {
+                if (soup_vertices_split)
+                    return fail(L("Repair failed: vertex-split repair exceeded the geometry-preservation limits."));
                 return fail("Repair failed: closed polygon-soup cleanup exceeded the geometry-preservation limits.");
+            }
         }
 
         // Surface_mesh descriptors may contain gaps after removals. Compact them
         // before converting because cgal_to_indexed_triangle_set uses descriptor
         // indices directly.
+        stage = "output_validation";
         cgal_mesh.collect_garbage();
 
         if (cgal_mesh.is_empty() || cgal_mesh.num_faces() == 0 || !CGAL::is_valid_polygon_mesh(cgal_mesh) ||
@@ -888,6 +944,9 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
                 return fail("Repair failed: converted mesh contains non-finite vertices.");
         if (its_num_open_edges(repaired) != 0)
             return fail("Repair failed: converted mesh is not closed.");
+
+        BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=candidate_validated, split_soup=" << soup_vertices_split
+                                << ", faces=" << mesh.its.indices.size() << "->" << repaired.indices.size();
 
         // CGAL does not expose action counters for this pipeline. Keep the
         // legacy counters at zero; callers should compare geometry before/after.

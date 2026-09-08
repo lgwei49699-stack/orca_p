@@ -268,3 +268,127 @@ TEST_CASE("Plane cut clears painted facet annotations by default", "[SavedPainti
         CHECK(result->volumes.front()->supported_facets.empty());
     }
 }
+
+TEST_CASE("Plane cut cannot borrow annotations from another source volume", "[SavedPainting][Cut][Provenance]")
+{
+    const double offset        = GENERATE(0., 5., 10., 15.); // coincident, overlapping, touching, separated
+    const bool   keep_as_parts = GENERATE(false, true);
+    Model        model;
+    ModelObject* object = model.add_object();
+    object->add_instance();
+    ModelVolume* painted = object->add_volume(make_cube(10., 10., 10.));
+    ModelVolume* plain   = object->add_volume(make_cube(10., 10., 10.));
+    plain->translate(Vec3d(offset, 0., 0.));
+    paint_all_facets(painted->supported_facets, painted->mesh(), EnforcerBlockerType::ENFORCER);
+    paint_all_facets(painted->seam_facets, painted->mesh(), EnforcerBlockerType::BLOCKER);
+    paint_all_facets(painted->mmu_segmentation_facets, painted->mesh(), EnforcerBlockerType::Extruder3);
+    paint_all_facets(painted->fuzzy_skin_facets, painted->mesh(), EnforcerBlockerType::FUZZY_SKIN);
+    ModelObjectCutAttributes attributes = ModelObjectCutAttribute::KeepUpper | ModelObjectCutAttribute::KeepLower |
+                                          ModelObjectCutAttribute::KeepPaint;
+    if (keep_as_parts)
+        attributes = attributes | ModelObjectCutAttribute::KeepAsParts;
+    Cut         cut(object, 0, Geometry::translation_transform(Vec3d(0., 0., 5.)), attributes);
+    const auto& results = cut.perform_with_plane();
+    REQUIRE(results.size() == (keep_as_parts ? 1 : 2));
+    size_t painted_parts = 0;
+    size_t plain_parts   = 0;
+    for (const ModelObject* result : results)
+        for (const ModelVolume* volume : result->volumes) {
+            if (volume->cut_info.painting_source_id == painted->id()) {
+                ++painted_parts;
+                CHECK(volume->supported_facets.has_facets(*volume, EnforcerBlockerType::ENFORCER));
+                CHECK(volume->seam_facets.has_facets(*volume, EnforcerBlockerType::BLOCKER));
+                CHECK(volume->mmu_segmentation_facets.has_facets(*volume, EnforcerBlockerType::Extruder3));
+                CHECK(volume->fuzzy_skin_facets.has_facets(*volume, EnforcerBlockerType::FUZZY_SKIN));
+            } else {
+                REQUIRE(volume->cut_info.painting_source_id == plain->id());
+                ++plain_parts;
+                CHECK(volume->supported_facets.empty());
+                CHECK(volume->seam_facets.empty());
+                CHECK(volume->mmu_segmentation_facets.empty());
+                CHECK(volume->fuzzy_skin_facets.empty());
+            }
+        }
+    CHECK(painted_parts == 2);
+    CHECK(plain_parts == 2);
+}
+
+TEST_CASE("Contour cut preserves source identity through preview splitting and merged annotations",
+          "[SavedPainting][Cut][Contour][Provenance]")
+{
+    Model        model;
+    ModelObject* object = model.add_object();
+    object->add_instance();
+    // The second painted island forces the preview through ModelVolume::split.
+    ModelVolume* painted = object->add_volume(two_cubes());
+    ModelVolume* plain   = object->add_volume(make_cube(10., 10., 10.));
+    plain->translate(Vec3d(10., 0., 0.));
+    paint_all_facets(painted->mmu_segmentation_facets, painted->mesh(), EnforcerBlockerType::Extruder3);
+    const Transform3d plane = Geometry::translation_transform(Vec3d(0., 0., 5.));
+    Cut               preview(object, 0, plane);
+    Model             part_model;
+    ModelObject*      part_object = part_model.add_object(*preview.perform_with_plane().front());
+    for (int i = int(part_object->volumes.size()) - 1; i >= 0; --i)
+        part_object->volumes[size_t(i)]->split(1, false);
+    std::vector<Cut::Part> parts;
+    size_t                 painted_upper_faces = 0;
+    size_t                 painted_lower_faces = 0;
+    for (const ModelVolume* volume : part_object->volumes) {
+        const bool upper = volume->is_from_upper();
+        parts.push_back({upper, false});
+        if (volume->cut_info.painting_source_id == painted->id())
+            (upper ? painted_upper_faces : painted_lower_faces) += volume->mesh().its.indices.size();
+    }
+    REQUIRE(painted_upper_faces > 0);
+    REQUIRE(painted_lower_faces > 0);
+    const ModelObjectCutAttributes attributes = ModelObjectCutAttribute::KeepUpper | ModelObjectCutAttribute::KeepLower |
+                                                ModelObjectCutAttribute::KeepPaint;
+    Cut         cut(part_object, 0, plane, attributes);
+    const auto& results = cut.perform_by_contour(object, std::move(parts), 0);
+    REQUIRE(results.size() == 2);
+    for (size_t i = 0; i < results.size(); ++i) {
+        REQUIRE(results[i]->volumes.size() == 1);
+        const ModelVolume* volume = results[i]->volumes.front();
+        REQUIRE(volume->mmu_segmentation_facets.has_facets(*volume, EnforcerBlockerType::Extruder3));
+        const size_t painted_faces = i == 0 ? painted_upper_faces : painted_lower_faces;
+        REQUIRE(volume->mesh().its.indices.size() > painted_faces);
+        for (const auto& mapping : volume->mmu_segmentation_facets.get_data().triangles_to_split) {
+            CHECK(mapping.triangle_idx >= 0);
+            CHECK(size_t(mapping.triangle_idx) < painted_faces);
+        }
+    }
+}
+
+TEST_CASE("Groove subcuts keep the original painting source identity", "[SavedPainting][Cut][Groove][Provenance]")
+{
+    Model        model;
+    ModelObject* object = model.add_object();
+    object->add_instance();
+    ModelVolume* painted = object->add_volume(make_cube(40., 40., 40.));
+    ModelVolume* plain   = object->add_volume(make_cube(40., 40., 40.));
+    plain->translate(Vec3d(40., 0., 0.));
+    paint_all_facets(painted->mmu_segmentation_facets, painted->mesh(), EnforcerBlockerType::Extruder3);
+    Cut::Groove groove;
+    groove.depth                              = 5.f;
+    groove.width                              = 10.f;
+    groove.flaps_angle                        = float(PI) / 3.f;
+    const ModelObjectCutAttributes attributes = ModelObjectCutAttribute::KeepUpper | ModelObjectCutAttribute::KeepLower |
+                                                ModelObjectCutAttribute::KeepPaint;
+    Cut         cut(object, 0, Geometry::translation_transform(Vec3d(0., 0., 20.)), attributes);
+    const auto& results       = cut.perform_with_groove(groove, Transform3d::Identity(), true);
+    size_t      painted_count = 0;
+    size_t      plain_count   = 0;
+    for (const ModelObject* result : results)
+        for (const ModelVolume* volume : result->volumes) {
+            if (volume->cut_info.painting_source_id == plain->id()) {
+                ++plain_count;
+                CHECK(volume->mmu_segmentation_facets.empty());
+            } else {
+                REQUIRE(volume->cut_info.painting_source_id == painted->id());
+                if (volume->mmu_segmentation_facets.has_facets(*volume, EnforcerBlockerType::Extruder3))
+                    ++painted_count;
+            }
+        }
+    CHECK(painted_count > 0);
+    CHECK(plain_count > 0);
+}

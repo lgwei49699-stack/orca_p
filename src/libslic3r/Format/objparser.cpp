@@ -244,10 +244,13 @@ static bool obj_parseline(const char *line, ObjData &data)
                 vertex.normalIdx += (int)data.normals.size() / 3;
             else
 				-- vertex.normalIdx;
-			if (vertex.textureCoordIdx < 0)
-                vertex.textureCoordIdx += (int)data.textureCoordinates.size() / 3;
-            else
-				-- vertex.textureCoordIdx;
+            if (vertex.textureCoordIdx < 0) {
+                vertex.textureCoordIdx += (int) data.textureCoordinates.size() / 2;
+                // Keep an invalid relative index distinct from an omitted UV (-1).
+                if (vertex.textureCoordIdx < 0)
+                    vertex.textureCoordIdx = -2;
+            } else
+                -- vertex.textureCoordIdx;
 			data.vertices.push_back(vertex);
 			EATWS();
 		}

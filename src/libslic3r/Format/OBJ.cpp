@@ -401,7 +401,7 @@ bool load_obj_material_libraries(const char* path, std::vector<std::string>& lib
     return true;
 }
 
-bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::string& message)
+bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::string& message, bool geometry_only)
 {
     if (meshptr == nullptr)
         return false;
@@ -414,7 +414,7 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
         return false;
     }
     bool exist_mtl = false;
-    if (data.mtllibs.size() > 0) { // read mtl
+    if (!geometry_only && data.mtllibs.size() > 0) { // read mtl
         const fs::path obj_path(path);
         for (const std::string& mtl_name : data.mtllibs) {
             if (mtl_name.empty()) {
@@ -470,7 +470,7 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
     size_t               num_vertices = data.coordinates.size() / OBJ_VERTEX_LENGTH;
     its.vertices.reserve(num_vertices);
     its.indices.reserve(num_faces + num_quads);
-    const bool has_material_assignments = !data.usemtls.empty();
+    const bool has_material_assignments = !geometry_only && !data.usemtls.empty();
     if (exist_mtl) {
         obj_info.is_single_mtl = data.usemtls.size() == 1 && mtl_data.new_mtl_unmap.size() == 1;
         obj_info.face_colors.reserve(num_faces + num_quads);
@@ -481,7 +481,7 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
     for (size_t i = 0; i < num_vertices; ++ i) {
         size_t j = i * OBJ_VERTEX_LENGTH;
         its.vertices.emplace_back(data.coordinates[j], data.coordinates[j + 1], data.coordinates[j + 2]);
-        if (data.has_vertex_color) {
+        if (!geometry_only && data.has_vertex_color) {
             RGBA color{std::clamp(data.coordinates[j + 3], 0.f, 1.f), std::clamp(data.coordinates[j + 4], 0.f, 1.f),
                        std::clamp(data.coordinates[j + 5], 0.f, 1.f), std::clamp(data.coordinates[j + 6], 0.f, 1.f)};
             obj_info.vertex_colors.emplace_back(color);
@@ -511,6 +511,17 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
                 }
             if (cnt) {
                 assert(cnt == 3 || cnt == 4);
+                if (!geometry_only) {
+                    for (int corner = 0; corner < cnt; ++corner) {
+                        // -1 denotes an omitted UV. Other negative or out-of-range
+                        // indices must not reach the unchecked vector accesses below.
+                        if (uvs[corner] < -1 || (uvs[corner] >= 0 && size_t(uvs[corner]) >= data.textureCoordinates.size() / 2)) {
+                            message = "The file contains an invalid texture coordinate index.";
+                            BOOST_LOG_TRIVIAL(error) << "load_obj: " << message << " " << path;
+                            return false;
+                        }
+                    }
+                }
                 // Insert one or two faces (triangulate a quad).
                 its.indices.emplace_back(indices[0], indices[1], indices[2]);
                 int  face_index =its.indices.size() - 1;
@@ -534,7 +545,8 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
                             }
                         }
                         face_color[3] = mtl_data.new_mtl_unmap[mtl_name]->Tr; // alpha
-                        if (mtl_data.new_mtl_unmap[mtl_name]->map_Kd.size() > 0) {
+                        const bool has_face_uv = uvs[0] >= 0 && uvs[1] >= 0 && uvs[2] >= 0;
+                        if (has_face_uv && mtl_data.new_mtl_unmap[mtl_name]->map_Kd.size() > 0) {
                             auto png_name       = mtl_data.new_mtl_unmap[mtl_name]->map_Kd;
                             obj_info.has_uv_png = true;
                             if (obj_info.pngs.find(png_name) == obj_info.pngs.end()) {
@@ -542,10 +554,14 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
                             }
                             obj_info.uv_map_pngs[face_index] = png_name;
                         }
-                        if (data.textureCoordinates.size() > 0) {
-                            Vec2f                uv0(data.textureCoordinates[uvs[0] * 2], data.textureCoordinates[uvs[0] * 2 + 1]);
-                            Vec2f                uv1(data.textureCoordinates[uvs[1] * 2], data.textureCoordinates[uvs[1] * 2 + 1]);
-                            Vec2f                uv2(data.textureCoordinates[uvs[2] * 2], data.textureCoordinates[uvs[2] * 2 + 1]);
+                        if (has_face_uv) {
+                            const auto read_uv = [&data](int index) {
+                                const size_t offset = size_t(index) * 2;
+                                return Vec2f(data.textureCoordinates[offset], data.textureCoordinates[offset + 1]);
+                            };
+                            Vec2f                uv0 = read_uv(uvs[0]);
+                            Vec2f                uv1 = read_uv(uvs[1]);
+                            Vec2f                uv2 = read_uv(uvs[2]);
                             std::array<Vec2f, 3> uv_array{uv0, uv1, uv2};
                             obj_info.uvs.emplace_back(uv_array);
                         }
@@ -579,6 +595,9 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
                 }
                 if (cnt == 4) {
                     its.indices.emplace_back(indices[0], indices[2], indices[3]);
+                    // The second triangle is (0, 2, 3), including its UV corners.
+                    uvs[1]         = uvs[2];
+                    uvs[2]         = uvs[3];
                     int face_index = its.indices.size() - 1;
                     if (has_material_assignments) {
                         set_face_color_by_mtl(face_index);
@@ -598,11 +617,11 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
     return true;
 }
 
-bool load_obj(const char *path, Model *model, ObjInfo& obj_info, std::string &message, const char *object_name_in)
+bool load_obj(const char* path, Model* model, ObjInfo& obj_info, std::string& message, const char* object_name_in, bool geometry_only)
 {
     TriangleMesh mesh;
 
-    bool ret = load_obj(path, &mesh, obj_info, message);
+    bool ret = load_obj(path, &mesh, obj_info, message, geometry_only);
 
     if (ret) {
         std::string  object_name;
@@ -710,6 +729,8 @@ bool store_multicolor_obj(const char *path, const Model &model, const std::vecto
                 std::vector<indexed_triangle_set> facets_per_filament;
                 volume->mmu_segmentation_facets.get_facets(*volume, facets_per_filament);
                 for (size_t state = 0; state < facets_per_filament.size(); ++state) {
+                    // Basic repair color policy: unmapped/new faces retain state 0
+                    // and use this part's base color, never a new arbitrary palette color.
                     const int filament_id = state == 0 ? base_filament : static_cast<int>(state);
                     volume_groups.emplace_back(filament_id, std::move(facets_per_filament[state]));
                 }

@@ -7817,7 +7817,9 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     // Actions:
     def          = this->add("export_obj", coBool);
     def->label = L("Export OBJ");
-    def->tooltip = L("Export the model(s) as a geometry-only OBJ without materials or textures.");
+    def->tooltip = L(
+        "Export OBJ. With --repair-model cgal, preserve supported MTL face colors and write an MTL when colors are present. "
+        "Use --repair-ignore-materials for geometry only. Without repair, export geometry only. Original textures are not preserved.");
     def->set_default_value(new ConfigOptionBool(false));
 
     def             = this->add("export_multicolor_obj", coString);
@@ -8364,6 +8366,13 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->tooltip = L("Output directory for the exported files.");
     def->cli_params = "dir";
     def->set_default_value(new ConfigOptionString());
+
+    def          = this->add("repair_ignore_materials", coBool);
+    def->label   = L("Ignore OBJ materials during repair");
+    def->tooltip = L("With --repair-model cgal, import OBJ geometry without reading MTL libraries, colors or UVs. "
+                     "Cannot be combined with material bindings, color grouping or multicolor OBJ export.");
+    def->cli     = "repair-ignore-materials";
+    def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("auto_repair_model", coBool);
     def->label = L("Automatically repair imported model");

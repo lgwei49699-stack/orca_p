@@ -20,11 +20,83 @@ OrcaSlicer 的 C++17 源码位于 `src/`，按功能模块和平台适配层拆�
 
 平台辅助脚本如 `build_linux.sh`、`build_release_macos.sh`、`build_release_vs2022.bat` 会封装同一套流程并附带工具链参数。复现 macOS 构建问题时优先使用 `build_release_macos.sh -sx`，需要可复现的容器构建时使用 `scripts/DockerBuild.sh`。
 
+## 界面语言与翻译范围
+
+- 产品主要面向简体中文和英文用户。新增或修改界面文案时，默认完整覆盖英文原文与简体中文翻译。
+- 沿用项目现有国际化机制：代码中使用英文原文及翻译标记，并同步维护 `localization/i18n/zh_CN/OrcaSlicer_zh_CN.po`；不要直接硬编码中文界面文案。
+- 其他语言缺少对应翻译时，允许回退显示英文，不作为默认入库阻塞项。除非用户明确要求多语言适配，否则不主动批量补译其他语言的 `.po` 文件。
+- 保留现有其他语言翻译，不删除或覆盖无关条目；中英文验证应关注菜单、提示、错误信息及占位符的一致性。
+
 ## 代码风格与命名约定
 `.clang-format` 约定 4 空格缩进、140 列限制、对齐初始化器，并对类和函数使用花括号换行。提交前对改动文件执行 `clang-format -i <file>`；当 LLVM 工具位于 PATH 中时，也可以使用 CMake 的 `clang-format` target。类名优先使用 `CamelCase`，函数和局部变量使用 `snake_case`，常量使用 `SCREAMING_CASE`，并与 `src/` 中既有风格保持一致。头文件应自包含，include 顺序需与 IWYU pragma 保持一致。
 
 ## 测试指南
 单元测试基于 Catch2（`tests/catch2/`）。测试文件按被测组件命名，例如 `tests/libslic3r/TestPlanarHole.cpp`；长耗时用例应添加标签，保证 `ctest -L fast` 仍然可用。新算法应配套确定性的 fixture 或样例 G-code，放在 `tests/data/`。当自动化覆盖不足时，在 PR 中说明手动打印机验证或切片回归检查过程。
+
+### 模型修复专项测试：固定命令入口
+
+- 由用户执行编译和验证并提供日志。AI 修改代码、测试或本文档，不代表获得编译或运行测试的授权；默认仅做静态检查。
+- 不需要为每次修复修改构建页面的测试菜单。页面的 CTest 标签下拉框与 Catch2 标签不是一回事；不得直接把 `[ModelRepair]` 等当成 `ctest -L` 的标签。
+- 固定编译目标为 `libslic3r_tests`。只编译 OrcaSlicer GUI 不会更新测试程序；编译失败时必须停止，不得继续运行旧二进制。
+- 完整修复专项过滤器为 `'[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]'`，逗号表示匹配任一标签。新增修复/涂色用例应沿用这些标签，避免每次修改入口命令。
+- 本轮缺陷聚焦过滤器可用 `'[ModelRepair][Scale],[SavedPainting][Provenance]'`，相邻方括号表示同时满足两个标签；它不替代完整专项回归。
+- 顶点拆分候选修复的聚焦过滤器为 `'[ModelRepair][SoupOrientation]'`，已包含于完整专项；拆分后仍相交的候选直接报告不支持安全自动修复，不进入新增实验性自交修复，检查失败后网格/涂色/所有权不变及正常朝向修复。它不替代真实 OBJ/MTL 的 GUI/CLI 修复验收，也不能使用 `[OBJ][GUIColor]` 通过结果作为其验证证明。
+- 主要用例文件：`tests/libslic3r/test_model_repair.cpp`、`test_meshboolean.cpp`、`test_saved_painting.cpp`、`test_obj.cpp`、`test_stl.cpp`。专项通过不等于 GUI、Undo/Redo、跨平台或完整 CTest 已通过。
+
+#### macOS arm64 / Release（当前构建页面对应目录）
+
+在仓库根目录执行下面整段命令。显式使用 Bash，使 macOS 默认 zsh 下也能正确读取 `PIPESTATUS`，并用子进程退出避免关闭用户终端。构建日志写入 `planning/build/`，测试日志写入 `planning/repair/`。
+
+```bash
+bash <<'BASH'
+set -e -o pipefail
+mkdir -p planning/build planning/repair
+repair_stamp=$(date +%Y%m%d-%H%M%S)
+repair_build_log="planning/build/model-repair-build-${repair_stamp}.log"
+repair_test_log="planning/repair/model-repair-test-${repair_stamp}.log"
+printf 'Build log: %s\nTest log: %s\n' "$repair_build_log" "$repair_test_log"
+
+cmake --build build/arm64 --config Release --target libslic3r_tests --parallel 2 2>&1 \
+  | tee "$repair_build_log"
+
+set +e
+./build/arm64/tests/libslic3r/Release/libslic3r_tests.app/Contents/MacOS/libslic3r_tests \
+  '[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]' \
+  --reporter compact 2>&1 | tee "$repair_test_log"
+repair_codes=("${PIPESTATUS[@]}")
+printf 'Test exit code: %s; log writer exit code: %s\n' "${repair_codes[0]}" "${repair_codes[1]}" \
+  | tee -a "$repair_test_log"
+if (( repair_codes[0] != 0 )); then exit "${repair_codes[0]}"; fi
+exit "${repair_codes[1]}"
+BASH
+```
+
+前提是该目录已配置 `BUILD_TESTS=ON` 并生成 `libslic3r_tests` 目标。缺少目标时先检查既有 CMake 配置和平台依赖，不要擅自切换生成器或另建不同依赖配置。此处提供命令不构成 AI 自动执行授权。
+
+#### 不同构建目录不能混用
+
+| 已配置构建目录 | 编译命令 | 测试程序路径（相对仓库根目录） |
+|---|---|---|
+| `build/arm64`，Ninja Multi-Config | `cmake --build build/arm64 --config Release --target libslic3r_tests --parallel 2` | `build/arm64/tests/libslic3r/Release/libslic3r_tests.app/Contents/MacOS/libslic3r_tests` |
+| 历史 `build`，Unix Makefiles | `cmake --build build --target libslic3r_tests --parallel 2` | `build/tests/libslic3r/libslic3r_tests` |
+
+以上路径来自本机现有生成配置；其他平台或生成器应先核对实际输出位置。Windows/Linux 沿用相同目标和 Catch2 过滤器，不照搬 macOS 的 `.app` 路径。不要运行旧 `repair_review_probe` 或复用历史 81/798 等通过数字来证明新补丁已验证。
+
+#### 反馈与结果判定
+
+- 基础补洞颜色规则：可映射部分保留原色，无映射部分使用所属部件默认色（OBJ exporter 的 state 0 → base_filament）；不创建新色，不推断多色洞口图案。`[ModelRepair][CGAL][Painting][HoleColor]` 用例已纳入既有专项过滤器。用户已确认不需要 UV 贴图/完整渲染材质往返，不将其列为本次基础功能门禁。
+
+- 常用 OBJ 修复命令为 `--repair-model cgal --export-obj`：严格保留支持的 MTL 面颜色，有颜色自动输出 OBJ+MTL，无颜色输出普通 OBJ。映射失败报错；原贴图/顶点色往返不在此能力内。仅需几何时加 `--repair-ignore-materials`。显式多色参数保留兼容；无修复参数的 `--export-obj` 保持旧纯几何语义。CLI 冒烟脚本已追加自动选择、带色补洞及旧命令兼容用例，修改后须重新构建验证。
+
+- CLI OBJ/MTL 专项新增用例使用 `[OBJ][CLI][Import]`，已包含于完整修复过滤器；无需改构建页面菜单。
+- GUI OBJ 原色/耗材复用策略用例使用 `[OBJ][GUIColor]`（位于 `test_obj.cpp`），已包含于完整 `[OBJ]` 过滤器；聚焦验证可用 `'[OBJ][GUIColor]'`，无需改构建页面菜单。此类用例不替代实际 GUI 导入/配色/导出的验证；修改后必须重新构建，不能复用旧 GUI 的产物检查作为通过证明。
+- 用户重新构建 OrcaSlicer 应用后，可执行 `python3 scripts/test_cli_repair_materials.py ./build/arm64/OrcaSlicer/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`。服务器替换为当前平台新构建的可执行文件路径。脚本不编译，每次创建独立临时证据目录并保留 JSON/日志，验证 `--repair-ignore-materials` 策略及参数冲突；它不替代 Catch2 完整专项，也不构成 AI 自动执行授权。
+- `--repair-ignore-materials` 默认关闭，仅配合 `--repair-model cgal` 显式用于不需要材质/颜色/UV 的任务。纯几何输出不是保色输出；以 JSON 的 `input_materials_ignored` 和输出语义判断，不只看 `annotations_cleared`。
+
+- 编译失败：提供本次构建日志，不继续测试旧程序。
+- 测试完成：提供本次测试日志，检查最终用例/断言统计及退出码，不只看中间是否出现 `[error]`；部分负向用例预期输出错误日志。
+- `No test cases matched`、程序不存在、日志写入失败或非零退出码均不能算验证通过。
+- 记录实际 checkout、构建目录、配置、平台和新日志；未执行的 GUI、完整回归或其他平台验证必须明确标注。
 
 ## AI 工具使用
 本仓库已初始化 CodeGraph，项目索引位于 `.codegraph/`。在 Codex 中分析代码时，优先使用 CodeGraph 的 MCP 能力进行结构化查询，再结合 `rg`、源码阅读和测试验证。

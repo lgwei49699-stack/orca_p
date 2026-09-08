@@ -33,17 +33,19 @@ class Cut {
     int                         m_instance;
     const Transform3d           m_cut_matrix;
     ModelObjectCutAttributes    m_attributes;
+    std::vector<ObjectID>       m_painting_source_ids;
 
     void post_process(ModelObject* object, ModelObjectPtrs& objects, bool keep, bool place_on_cut, bool flip);
     void post_process(ModelObject* upper_object, ModelObject* lower_object, ModelObjectPtrs& objects);
-    void finalize(const ModelObjectPtrs& objects, const std::vector<std::optional<TriangleSelector::SavedPainting>>& saved_paintings);
+    void finalize(const ModelObjectPtrs& objects);
 
 public:
-
-    Cut(const ModelObject* object, int instance, const Transform3d& cut_matrix, 
-        ModelObjectCutAttributes attributes = ModelObjectCutAttribute::KeepUpper |
-                                              ModelObjectCutAttribute::KeepLower |
-                                              ModelObjectCutAttribute::KeepAsParts );
+    Cut(const ModelObject*       object,
+        int                      instance,
+        const Transform3d&       cut_matrix,
+        ModelObjectCutAttributes attributes = ModelObjectCutAttribute::KeepUpper | ModelObjectCutAttribute::KeepLower |
+                                              ModelObjectCutAttribute::KeepAsParts,
+        bool preserve_painting_source_ids = false);
     ~Cut() { m_model.clear_objects(); }
 
     struct Groove

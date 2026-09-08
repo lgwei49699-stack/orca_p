@@ -8,12 +8,48 @@
 #include "ObjectID.hpp"
 
 #include <boost/log/trivial.hpp>
+#include <array>
+#include <limits>
+#include <map>
+#include <stdexcept>
 
 namespace Slic3r {
 
 using namespace Geometry;
 
-using SavedPaintings = std::vector<std::optional<TriangleSelector::SavedPainting>>;
+using SavedPaintings = std::map<ObjectID, std::optional<TriangleSelector::SavedPainting>>;
+
+static void restore_cut_paintings(const ModelObjectPtrs& objects, const SavedPaintings& saved_paintings)
+{
+    for (ModelObject* object : objects) {
+        if (object == nullptr)
+            continue;
+        for (ModelVolume* volume : object->volumes) {
+            if (!volume->is_model_part() || volume->is_cut_connector())
+                continue;
+            const auto source = saved_paintings.find(volume->cut_info.painting_source_id);
+            // Unknown provenance is not permission to borrow neighboring paint.
+            if (source == saved_paintings.end())
+                continue;
+            volume->reset_extra_facets();
+            if (!source->second || !source->second->mesh)
+                continue;
+            const auto& saved   = *source->second;
+            const auto  restore = [&](const TriangleSelector::TriangleSplittingData& data, FacetsAnnotation& target) {
+                if (!data.bitstream.empty())
+                    target.set_data(
+                        TriangleSelector::remap_painting(saved.mesh->its, data, volume->mesh().its, volume->get_matrix(), std::nullopt));
+            };
+            // Cut sources have their instance transform baked in. Split preview
+            // volumes may be re-centered: their volume matrix, not init_shift
+            // alone, places them back in the same cut coordinate system.
+            restore(saved.supported, volume->supported_facets);
+            restore(saved.seam, volume->seam_facets);
+            restore(saved.mmu, volume->mmu_segmentation_facets);
+            restore(saved.fuzzy, volume->fuzzy_skin_facets);
+        }
+    }
+}
 
 static std::optional<TriangleSelector::SavedPainting> save_transformed_painting(const ModelVolume* volume,
                                                                                  const Transform3d& transform)
@@ -261,14 +297,19 @@ static void reset_instance_transformation(ModelObject* object, size_t src_instan
     }
 }
 
-
-Cut::Cut(const ModelObject* object, int instance, const Transform3d& cut_matrix,
-         ModelObjectCutAttributes attributes/*= ModelObjectCutAttribute::KeepUpper | ModelObjectCutAttribute::KeepLower | ModelObjectCutAttribute::KeepAsParts*/)
+Cut::Cut(const ModelObject*       object,
+         int                      instance,
+         const Transform3d&       cut_matrix,
+         ModelObjectCutAttributes attributes,
+         bool                     preserve_painting_source_ids)
     : m_instance(instance), m_cut_matrix(cut_matrix), m_attributes(attributes)
 {
     m_model = Model();
-    if (object)
+    if (object) {
+        for (const ModelVolume* volume : object->volumes)
+            m_painting_source_ids.push_back(preserve_painting_source_ids ? volume->cut_info.painting_source_id : volume->id());
         m_model.add_object(*object);
+    }
 }
 
 void Cut::post_process(ModelObject* object, ModelObjectPtrs& cut_object_ptrs, bool keep, bool place_on_cut, bool flip)
@@ -296,21 +337,8 @@ void Cut::post_process(ModelObject* upper, ModelObject* lower, ModelObjectPtrs& 
         m_attributes.has(ModelObjectCutAttribute::PlaceOnCutLower) || m_attributes.has(ModelObjectCutAttribute::FlipLower));
 }
 
-
-void Cut::finalize(const ModelObjectPtrs& objects, const SavedPaintings& saved_paintings)
+void Cut::finalize(const ModelObjectPtrs& objects)
 {
-    // Restore each source volume's painting onto all geometrically matching
-    // result volumes. keep_existing_paint merges annotations when a cut result
-    // contains geometry originating from more than one source volume.
-    for (const auto& saved_painting : saved_paintings) {
-        if (!saved_painting)
-            continue;
-        for (ModelObject* object : objects)
-            for (ModelVolume* volume : object->volumes)
-                if (volume->is_model_part() && !volume->is_cut_connector())
-                    volume->restore_painting(saved_painting, true);
-    }
-
     // Clear model from temporary objects.
     m_model.clear_objects();
 
@@ -351,14 +379,14 @@ const ModelObjectPtrs& Cut::perform_with_plane()
     const Transform3d       inverse_cut_matrix = cut_transformation.get_rotation_matrix().inverse() * translation_transform(-1. * cut_transformation.get_offset());
 
     SavedPaintings saved_paintings;
-    if (m_attributes.has(ModelObjectCutAttribute::KeepPaint))
-        saved_paintings.reserve(mo->volumes.size());
-
-    for (ModelVolume* volume : mo->volumes) {
+    for (size_t volume_index = 0; volume_index < mo->volumes.size(); ++volume_index) {
+        ModelVolume* volume                 = mo->volumes[volume_index];
+        volume->cut_info.painting_source_id = m_painting_source_ids[volume_index];
         // reset_extra_facets() intentionally drops painting. Save it first so
-        // it can be remapped to the new cut topology in finalize().
+        // it can be remapped to this source's result volumes before finalize().
         if (m_attributes.has(ModelObjectCutAttribute::KeepPaint))
-            saved_paintings.emplace_back(save_transformed_painting(volume, instance_matrix * volume->get_matrix()));
+            saved_paintings.emplace(volume->cut_info.painting_source_id,
+                                    save_transformed_painting(volume, instance_matrix * volume->get_matrix()));
 
         volume->reset_extra_facets();
 
@@ -415,7 +443,8 @@ const ModelObjectPtrs& Cut::perform_with_plane()
         }
     }
 
-    finalize(cut_object_ptrs, saved_paintings);
+    restore_cut_paintings(cut_object_ptrs, saved_paintings);
+    finalize(cut_object_ptrs);
 
     BOOST_LOG_TRIVIAL(trace) << "ModelObject::cut - end";
 
@@ -442,21 +471,59 @@ static void distribute_modifiers_from_object(ModelObject* from_obj, const int in
         }
 }
 
-static void merge_solid_parts_inside_object(ModelObjectPtrs& objects)
+static void append_cut_annotation(TriangleSelector::TriangleSplittingData&       target,
+                                  const TriangleSelector::TriangleSplittingData& source,
+                                  size_t                                         face_offset)
+{
+    const size_t max_index  = size_t(std::numeric_limits<int>::max());
+    const size_t bit_offset = target.bitstream.size();
+    if (face_offset > max_index || bit_offset > max_index || source.bitstream.size() > max_index - bit_offset)
+        throw std::overflow_error("Cut painting exceeds supported index range");
+    for (const auto& mapping : source.triangles_to_split) {
+        if (mapping.triangle_idx < 0 || size_t(mapping.triangle_idx) > max_index - face_offset || mapping.bitstream_start_idx < 0 ||
+            size_t(mapping.bitstream_start_idx) >= source.bitstream.size())
+            throw std::runtime_error("Invalid cut painting index");
+        target.triangles_to_split.emplace_back(int(face_offset + size_t(mapping.triangle_idx)),
+                                               int(bit_offset + size_t(mapping.bitstream_start_idx)));
+    }
+    target.bitstream.insert(target.bitstream.end(), source.bitstream.begin(), source.bitstream.end());
+    target.used_states.resize(std::max(target.used_states.size(), source.used_states.size()), false);
+    for (size_t i = 0; i < source.used_states.size(); ++i)
+        target.used_states[i] = target.used_states[i] || source.used_states[i];
+}
+
+static void merge_solid_parts_inside_object(ModelObjectPtrs& objects, bool keep_painting)
 {
     for (ModelObject* mo : objects) {
         TriangleMesh mesh;
+        std::array<TriangleSelector::TriangleSplittingData, 4> annotations;
         // Merge all SolidPart but not Connectors
         for (const ModelVolume* mv : mo->volumes) {
             if (mv->is_model_part() && !mv->is_cut_connector()) {
                 TriangleMesh m = mv->mesh();
                 m.transform(mv->get_matrix());
+                // TriangleMesh::merge appends faces without reordering them.
+                // Preserve each source's already-remapped annotations by index,
+                // not by another spatial search over coincident contact faces.
+                if (keep_painting) {
+                    const size_t face_offset = mesh.its.indices.size();
+                    append_cut_annotation(annotations[0], mv->supported_facets.get_data(), face_offset);
+                    append_cut_annotation(annotations[1], mv->seam_facets.get_data(), face_offset);
+                    append_cut_annotation(annotations[2], mv->mmu_segmentation_facets.get_data(), face_offset);
+                    append_cut_annotation(annotations[3], mv->fuzzy_skin_facets.get_data(), face_offset);
+                }
                 mesh.merge(m);
             }
         }
         if (!mesh.empty()) {
             ModelVolume* new_volume = mo->add_volume(mesh);
             new_volume->name = mo->name;
+            if (keep_painting) {
+                new_volume->supported_facets.set_data(std::move(annotations[0]));
+                new_volume->seam_facets.set_data(std::move(annotations[1]));
+                new_volume->mmu_segmentation_facets.set_data(std::move(annotations[2]));
+                new_volume->fuzzy_skin_facets.set_data(std::move(annotations[3]));
+            }
             // Delete all merged SolidPart but not Connectors
             for (int i = int(mo->volumes.size()) - 2; i >= 0; --i) {
                 const ModelVolume* mv = mo->volumes[i];
@@ -487,10 +554,9 @@ const ModelObjectPtrs& Cut::perform_by_contour(const ModelObject* source_object,
 
     SavedPaintings saved_paintings;
     if (m_attributes.has(ModelObjectCutAttribute::KeepPaint) && source_object != nullptr) {
-        saved_paintings.reserve(source_object->volumes.size());
         const Transform3d instance_matrix = source_object->instances[m_instance]->get_transformation().get_matrix_no_offset();
         for (const ModelVolume* volume : source_object->volumes)
-            saved_paintings.emplace_back(save_transformed_painting(volume, instance_matrix * volume->get_matrix()));
+            saved_paintings.emplace(volume->id(), save_transformed_painting(volume, instance_matrix * volume->get_matrix()));
     }
 
     const size_t cut_parts_cnt = parts.size();
@@ -519,10 +585,11 @@ const ModelObjectPtrs& Cut::perform_by_contour(const ModelObject* source_object,
         post_process(upper, lower, cut_object_ptrs);
 
         // Now merge all model parts together:
-        merge_solid_parts_inside_object(cut_object_ptrs);
+        restore_cut_paintings(cut_object_ptrs, saved_paintings);
+        merge_solid_parts_inside_object(cut_object_ptrs, m_attributes.has(ModelObjectCutAttribute::KeepPaint));
 
-        // replace initial objects in model with cut object 
-        finalize(cut_object_ptrs, saved_paintings);
+        // replace initial objects in model with cut object
+        finalize(cut_object_ptrs);
     }
     else if (volumes.size() > cut_parts_cnt) {
         // Means that object is cut with connectors
@@ -550,10 +617,11 @@ const ModelObjectPtrs& Cut::perform_by_contour(const ModelObject* source_object,
         post_process(upper, lower, cut_object_ptrs);
 
         // Now merge all model parts together:
-        merge_solid_parts_inside_object(cut_object_ptrs);
+        restore_cut_paintings(cut_object_ptrs, saved_paintings);
+        merge_solid_parts_inside_object(cut_object_ptrs, m_attributes.has(ModelObjectCutAttribute::KeepPaint));
 
         // replace initial objects in model with cut object
-        finalize(cut_object_ptrs, saved_paintings);
+        finalize(cut_object_ptrs);
 
         // Add Dowel-connectors as separate objects to model
         if (cut_connectors_obj.size() >= 3)
@@ -581,11 +649,13 @@ const ModelObjectPtrs& Cut::perform_with_groove(const Groove& groove, const Tran
     }
 
     SavedPaintings saved_paintings;
+    for (size_t i = 0; i < cut_mo->volumes.size(); ++i)
+        cut_mo->volumes[i]->cut_info.painting_source_id = m_painting_source_ids[i];
     if (m_attributes.has(ModelObjectCutAttribute::KeepPaint)) {
-        saved_paintings.reserve(cut_mo->volumes.size());
         const Transform3d instance_matrix = cut_mo->instances[m_instance]->get_transformation().get_matrix_no_offset();
         for (const ModelVolume* volume : cut_mo->volumes)
-            saved_paintings.emplace_back(save_transformed_painting(volume, instance_matrix * volume->get_matrix()));
+            saved_paintings.emplace(volume->cut_info.painting_source_id,
+                                    save_transformed_painting(volume, instance_matrix * volume->get_matrix()));
     }
     const double groove_half_depth = 0.5 * double(groove.depth);
 
@@ -607,9 +677,10 @@ const ModelObjectPtrs& Cut::perform_with_groove(const Groove& groove, const Tran
             }
     };
 
-    auto cut = [this, add_volumes_from_cut]
-                (ModelObject* object, const Transform3d& cut_matrix, const ModelObjectCutAttribute add_volumes_attribute, Model& tmp_model_for_cut) {
-        Cut cut(object, m_instance, cut_matrix);
+    auto cut = [this, add_volumes_from_cut](ModelObject* object, const Transform3d& cut_matrix,
+                                            const ModelObjectCutAttribute add_volumes_attribute, Model& tmp_model_for_cut) {
+        Cut cut(object, m_instance, cut_matrix,
+                ModelObjectCutAttribute::KeepUpper | ModelObjectCutAttribute::KeepLower | ModelObjectCutAttribute::KeepAsParts, true);
 
         tmp_model_for_cut = Model();
         tmp_model_for_cut.add_object(*cut.perform_with_plane().front());
@@ -694,6 +765,7 @@ const ModelObjectPtrs& Cut::perform_with_groove(const Groove& groove, const Tran
 
         // add lower object to the cut_object_ptrs just to correct delete it from the Model destructor and avoid memory leaks
         cut_object_ptrs.push_back(lower);
+        restore_cut_paintings(cut_object_ptrs, saved_paintings);
     }
     else {
         // add modifiers if object has any
@@ -710,10 +782,11 @@ const ModelObjectPtrs& Cut::perform_with_groove(const Groove& groove, const Tran
         post_process(upper, lower, cut_object_ptrs);
 
         // Now merge all model parts together:
-        merge_solid_parts_inside_object(cut_object_ptrs);
+        restore_cut_paintings(cut_object_ptrs, saved_paintings);
+        merge_solid_parts_inside_object(cut_object_ptrs, m_attributes.has(ModelObjectCutAttribute::KeepPaint));
     }
 
-    finalize(cut_object_ptrs, saved_paintings);
+    finalize(cut_object_ptrs);
 
     return m_model.objects;
 }

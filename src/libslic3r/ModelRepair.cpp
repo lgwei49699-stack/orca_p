@@ -38,9 +38,9 @@ bool has_valid_indices(const TriangleMesh& mesh)
     return true;
 }
 
-// Equivalent in intent to the latest OrcaSlicer CGAL wrapper. Degenerate
-// faces are ignored for diagnosis, while the original mesh is retained until
-// the transaction commits.
+// Only discard demonstrably degenerate geometry, not geometry that happens
+// to be small in volume-local coordinates. The same mesh may have differently
+// scaled instances; no dimensional tolerance here may delete their shared solid.
 bool is_not_3dimensional_part(const TriangleMesh& mesh)
 {
     if (mesh.its.indices.empty())
@@ -53,7 +53,7 @@ bool is_not_3dimensional_part(const TriangleMesh& mesh)
                                              const Vec3d a = cleaned.vertices[size_t(face[0])].cast<double>();
                                              const Vec3d b = cleaned.vertices[size_t(face[1])].cast<double>();
                                              const Vec3d c = cleaned.vertices[size_t(face[2])].cast<double>();
-                                             return (b - a).cross(c - a).squaredNorm() <= std::numeric_limits<double>::epsilon();
+                                             return (b - a).cross(c - a).squaredNorm() == 0.0;
                                          }),
                           cleaned.indices.end());
     if (cleaned.indices.empty())
@@ -63,35 +63,23 @@ bool is_not_3dimensional_part(const TriangleMesh& mesh)
     const BoundingBoxf3 bbox    = Slic3r::bounding_box(cleaned);
     const Vec3d         size    = bbox.size();
     const double        min_dim = std::min(size.x(), std::min(size.y(), size.z()));
-    const double        max_dim = std::max(size.x(), std::max(size.y(), size.z()));
-    if (min_dim <= EPSILON)
+    if (min_dim == 0.0)
         return true;
 
-    // Do not use signed mesh volume here. A genuinely three-dimensional shell
-    // with locally reversed faces may have canceling signed contributions and
-    // is exactly the kind of input CGAL should orient and repair. Measuring
-    // absolute tetrahedra from a mesh vertex is orientation-independent while
-    // remaining zero for coplanar geometry.
-    const Vec3d reference                   = cleaned.vertices[size_t(cleaned.indices.front()[0])].cast<double>();
-    double      absolute_tetrahedral_volume = 0.0;
-    for (const stl_triangle_vertex_indices& face : cleaned.indices) {
-        const Vec3d a = cleaned.vertices[size_t(face[0])].cast<double>() - reference;
-        const Vec3d b = cleaned.vertices[size_t(face[1])].cast<double>() - reference;
-        const Vec3d c = cleaned.vertices[size_t(face[2])].cast<double>() - reference;
-        absolute_tetrahedral_volume += std::abs(a.dot(b.cross(c))) / 6.0;
-    }
-    const double bbox_volume = size.x() * size.y() * size.z();
-    if (absolute_tetrahedral_volume <= EPSILON)
-        return true;
-
-    constexpr double min_relative_thickness = 1e-6;
-    constexpr double min_volume_ratio       = 1e-6;
-    if (min_dim / max_dim <= min_relative_thickness)
-        return true;
-    if (bbox_volume > 0.0 && absolute_tetrahedral_volume / bbox_volume <= min_volume_ratio)
-        return true;
-
-    return false;
+    // Test affine dimension, not volume: an open cone with every face incident
+    // to the chosen reference vertex has zero tetrahedral sum but is still 3D.
+    // Reversed faces also must not cancel away an otherwise valid solid.
+    const auto& face   = cleaned.indices.front();
+    const Vec3d a      = cleaned.vertices[size_t(face[0])].cast<double>();
+    const Vec3d b      = cleaned.vertices[size_t(face[1])].cast<double>();
+    const Vec3d c      = cleaned.vertices[size_t(face[2])].cast<double>();
+    const Vec3d normal = (b - a).cross(c - a);
+    for (const stl_vertex& vertex : cleaned.vertices)
+        if (normal.dot(vertex.cast<double>() - a) != 0.0)
+            return false;
+    // A numerically ambiguous near-plane is retained for CGAL validation.
+    // Safe failure is preferable to silently deleting a thin but valid solid.
+    return true;
 }
 
 bool target_selected(const ModelRepairOptions& options, size_t object_index, size_t volume_index)

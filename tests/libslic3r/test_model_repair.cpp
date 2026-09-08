@@ -38,6 +38,19 @@ TriangleMesh overlapping_cubes()
     return first;
 }
 
+TriangleMesh tetrahedra_sharing_an_edge()
+{
+    // Four faces meet at edge (0, 1). Each tetrahedron is closed and has
+    // positive volume, but the shared edge is not manifold. Soup orientation
+    // must duplicate its endpoints; the resulting shells still touch in space.
+    indexed_triangle_set its;
+    its.vertices = {Vec3f(0.f, 0.f, 0.f),  Vec3f(10.f, 0.f, 0.f),  Vec3f(0.f, 10.f, 0.f),
+                    Vec3f(0.f, 0.f, 10.f), Vec3f(0.f, -10.f, 0.f), Vec3f(0.f, 0.f, -10.f)};
+    its.indices  = {Vec3i32(0, 2, 1), Vec3i32(0, 1, 3), Vec3i32(0, 3, 2), Vec3i32(1, 2, 3),
+                    Vec3i32(0, 4, 1), Vec3i32(0, 1, 5), Vec3i32(0, 5, 4), Vec3i32(1, 4, 5)};
+    return TriangleMesh(std::move(its));
+}
+
 TriangleMesh two_disjoint_shells(bool reverse_second)
 {
     TriangleMesh first  = make_cube(20., 20., 20.);
@@ -439,6 +452,65 @@ TEST_CASE("CGAL repair fails closed for overlapping self-intersecting shells", "
     CHECK(its_volume(mesh.its) == Approx(original_volume));
 }
 
+TEST_CASE("Intersecting vertex-split soup is rejected without experimental repair or mutation",
+          "[ModelRepair][MeshBoolean][CGAL][SoupOrientation]")
+{
+    TriangleMesh               mesh   = tetrahedra_sharing_an_edge();
+    const indexed_triangle_set before = mesh.its;
+    std::string                error;
+    REQUIRE_FALSE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
+    INFO(error);
+    // Require the explicit unsupported-case result, not an exception from an
+    // experimental repair attempt or the old orientation failure message.
+    CHECK(error == "Repair failed: this model has complex intersecting surfaces that cannot be safely repaired automatically.");
+    CHECK(mesh.its.vertices == before.vertices);
+    CHECK(mesh.its.indices == before.indices);
+}
+
+TEST_CASE("Vertex-split soup failure preserves model painting and ownership", "[ModelRepair][CGAL][SoupOrientation][Painting]")
+{
+    Model        model  = make_model(tetrahedra_sharing_an_edge());
+    ModelVolume* volume = model.objects.front()->volumes.front();
+    volume->mmu_segmentation_facets.set_triangle_from_string(0, "1");
+    volume->supported_facets.set_triangle_from_string(0, "1");
+    const Model        before(model);
+    const auto         original_mesh = volume->mesh_ptr();
+    ModelRepairOptions options;
+    options.split_components     = false;
+    options.preserve_annotations = true;
+
+    ModelRepairReport report;
+    REQUIRE_FALSE(repair_model(model, report, options));
+    CHECK_FALSE(report.committed);
+    REQUIRE(report.failures.size() == 1);
+    CHECK(report.failures.front().message ==
+          "Repair failed: this model has complex intersecting surfaces that cannot be safely repaired automatically.");
+    CHECK(model.objects.front()->volumes.front() == volume);
+    CHECK(volume->mesh_ptr() == original_mesh);
+    CHECK(volume->mmu_segmentation_facets.equals(before.objects.front()->volumes.front()->mmu_segmentation_facets));
+    CHECK(volume->supported_facets.equals(before.objects.front()->volumes.front()->supported_facets));
+}
+
+TEST_CASE("Soup orientation preserves separated shells and their geometry", "[ModelRepair][MeshBoolean][CGAL][SoupOrientation]")
+{
+    // Orientation-only cleanup must still work without vertex splitting, and
+    // must not union away a separate shell. Color mapping is covered separately.
+    TriangleMesh mesh = two_disjoint_shells(false);
+    std::swap(mesh.its.indices.front()[1], mesh.its.indices.front()[2]);
+    const auto   before_bbox  = mesh.bounding_box();
+    const size_t before_faces = mesh.its.indices.size();
+    std::string  error;
+    REQUIRE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
+    INFO(error);
+    CHECK(error.empty());
+    CHECK(mesh.its.indices.size() == before_faces);
+    CHECK(its_volume(mesh.its) == Approx(8125.));
+    CHECK(mesh.bounding_box().min == before_bbox.min);
+    CHECK(mesh.bounding_box().max == before_bbox.max);
+    CHECK(its_num_open_edges(mesh.its) == 0);
+    CHECK_FALSE(MeshBoolean::cgal::requires_repair(mesh));
+}
+
 TEST_CASE("Headless model repair clears face annotations invalidated by topology changes", "[ModelRepair][CGAL]")
 {
     Model        model  = make_model(cube_with_open_side());
@@ -487,6 +559,56 @@ TEST_CASE("Headless model repair remaps supported painting when requested", "[Mo
     CHECK_FALSE(volume->seam_facets.empty());
     CHECK_FALSE(volume->mmu_segmentation_facets.empty());
     CHECK_FALSE(volume->fuzzy_skin_facets.empty());
+}
+
+TEST_CASE("Repair hole faces without source painting use the part base color", "[ModelRepair][CGAL][Painting][HoleColor]")
+{
+    indexed_triangle_set input;
+    input.vertices      = {Vec3f(0, 0, 0), Vec3f(10, 0, 0), Vec3f(0, 10, 0), Vec3f(0, 0, 10)};
+    input.indices       = {Vec3i32(0, 2, 1), Vec3i32(0, 1, 3), Vec3i32(0, 3, 2)};
+    Model        model  = make_model(TriangleMesh(std::move(input)));
+    ModelVolume* volume = model.objects.front()->volumes.front();
+    volume->config.set("extruder", 2);
+    paint_facet(volume->mmu_segmentation_facets, volume->mesh(), 0, EnforcerBlockerType::Extruder3);
+
+    const auto&  vertices          = volume->mesh().its.vertices;
+    const Vec3f  origin            = vertices[1];
+    const Vec3f  cross             = (vertices[2] - origin).cross(vertices[3] - origin);
+    const double expected_cap_area = 0.5 * double(cross.norm());
+    const Vec3f  normal            = cross.normalized();
+
+    ModelRepairOptions options;
+    options.preserve_annotations      = true;
+    options.allow_annotation_clearing = false;
+    options.remove_non_3d_parts       = false;
+    ModelRepairReport report;
+    REQUIRE(repair_model(model, report, options));
+    REQUIRE(report.committed);
+    REQUIRE(report.after_open_edges == 0);
+    REQUIRE_FALSE(report.volume_reports.front().annotations_cleared);
+    volume = model.objects.front()->volumes.front();
+    CHECK(volume->extruder_id() == 2);
+
+    std::vector<indexed_triangle_set> groups;
+    volume->mmu_segmentation_facets.get_facets(*volume, groups);
+    REQUIRE(groups.size() > 3);
+    CHECK_FALSE(groups[3].indices.empty()); // The original secondary color survives.
+    double cap_area = 0.0;
+    for (size_t state = 0; state < groups.size(); ++state) {
+        const auto& group = groups[state];
+        for (const auto& face : group.indices) {
+            const Vec3f& a = group.vertices[face[0]];
+            const Vec3f& b = group.vertices[face[1]];
+            const Vec3f& c = group.vertices[face[2]];
+            if (std::abs(normal.dot(a - origin)) < 1e-4f && std::abs(normal.dot(b - origin)) < 1e-4f &&
+                std::abs(normal.dot(c - origin)) < 1e-4f) {
+                // State 0 is exported using volume->extruder_id(), not palette slot 1.
+                CHECK(state == 0);
+                cap_area += 0.5 * double((b - a).cross(c - a).norm());
+            }
+        }
+    }
+    CHECK(cap_area == Approx(expected_cap_area).margin(1e-3));
 }
 
 TEST_CASE("Headless model repair preserves painting when CGAL reverses an inward shell", "[ModelRepair][CGAL][Painting][Orientation]")
@@ -1065,28 +1187,83 @@ TEST_CASE("Headless model repair removes a planar component after splitting", "[
     CHECK(report.volume_reports.front().removed_parts == 1);
 }
 
-TEST_CASE("Headless model repair removes a vanishingly thin component after splitting", "[ModelRepair][CGAL][Split]")
+TEST_CASE("Headless model repair retains a thin solid component after splitting", "[ModelRepair][CGAL][Split]")
 {
     Model model = make_model(cube_with_thin_component());
 
     ModelRepairReport report;
     REQUIRE(repair_model(model, report));
 
-    REQUIRE(model.objects.front()->volumes.size() == 1);
-    const TriangleMesh& surviving_mesh = model.objects.front()->volumes.front()->mesh();
-    CHECK(surviving_mesh.its.indices.size() == 12);
-    CHECK(its_num_open_edges(surviving_mesh.its) == 0);
-    CHECK(its_volume(surviving_mesh.its) > 0.);
+    REQUIRE(model.objects.front()->volumes.size() == 2);
+    for (const ModelVolume* volume : model.objects.front()->volumes) {
+        CHECK(volume->mesh().its.indices.size() == 12);
+        CHECK(its_num_open_edges(volume->mesh().its) == 0);
+        CHECK(its_volume(volume->mesh().its) > 0.);
+    }
     CHECK(report.repaired == 1);
     CHECK(report.mesh_repaired == 0);
     CHECK(report.split_volumes == 1);
     CHECK(report.created_parts == 1);
-    CHECK(report.removed_parts == 1);
+    CHECK(report.removed_parts == 0);
     CHECK(report.changed_object_indices == std::vector<size_t>{0});
     REQUIRE(report.volume_reports.size() == 1);
     CHECK(report.volume_reports.front().repaired_parts == 0);
     CHECK(report.volume_reports.front().split_parts == 2);
-    CHECK(report.volume_reports.front().removed_parts == 1);
+    CHECK(report.volume_reports.front().removed_parts == 0);
+}
+
+TEST_CASE("Headless model repair retains small local solids under instance and volume scaling", "[ModelRepair][CGAL][Scale]")
+{
+    const double edge          = GENERATE(0.01, 0.00001);
+    const bool   scale_volume  = GENERATE(false, true);
+    Model        model         = make_model(make_cube(edge, edge, edge));
+    ModelObject* object        = model.objects.front();
+    ModelVolume* volume        = object->volumes.front();
+    const auto   original_mesh = volume->mesh_ptr();
+    if (scale_volume)
+        volume->set_scaling_factor(Vec3d::Constant(10. / edge));
+    else
+        object->instances.front()->set_scaling_factor(Vec3d::Constant(10. / edge));
+    const Vec3d before_size = object->bounding_box_exact().size();
+    REQUIRE(before_size.isApprox(Vec3d::Constant(10.), 1e-5));
+
+    ModelRepairReport report;
+    REQUIRE(repair_model(model, report));
+    CHECK(report.removed_parts == 0);
+    CHECK_FALSE(report.committed);
+    REQUIRE(object->volumes.size() == 1);
+    CHECK(object->volumes.front()->mesh_ptr() == original_mesh);
+    CHECK(object->bounding_box_exact().size().isApprox(before_size));
+}
+
+TEST_CASE("Headless model repair cannot discard a solid shared by differently scaled instances", "[ModelRepair][CGAL][Scale]")
+{
+    Model        model  = make_model(make_cube(0.01, 0.01, 0.01));
+    ModelObject* object = model.objects.front();
+    object->instances.front()->set_scaling_factor(Vec3d::Constant(1000.));
+    object->add_instance()->set_scaling_factor(Vec3d::Constant(0.5));
+    ModelRepairReport report;
+    REQUIRE(repair_model(model, report));
+    CHECK(report.removed_parts == 0);
+    REQUIRE(object->volumes.size() == 1);
+    REQUIRE(object->instances.size() == 2);
+    CHECK(object->instances[0]->get_scaling_factor().isApprox(Vec3d::Constant(1000.)));
+    CHECK(object->instances[1]->get_scaling_factor().isApprox(Vec3d::Constant(0.5)));
+}
+
+TEST_CASE("Headless model repair retains an open three-dimensional fan for hole filling", "[ModelRepair][CGAL][Scale]")
+{
+    indexed_triangle_set fan;
+    fan.vertices            = {Vec3f(0.f, 0.f, 10.f), Vec3f(0.f, 0.f, 0.f), Vec3f(10.f, 0.f, 0.f), Vec3f(0.f, 10.f, 0.f)};
+    fan.indices             = {Vec3i32(0, 1, 2), Vec3i32(0, 2, 3), Vec3i32(0, 3, 1)};
+    Model             model = make_model(TriangleMesh(std::move(fan)));
+    ModelRepairReport report;
+    REQUIRE(repair_model(model, report));
+    CHECK(report.removed_parts == 0);
+    CHECK(report.mesh_repaired == 1);
+    REQUIRE(model.objects.front()->volumes.size() == 1);
+    CHECK(its_num_open_edges(model.objects.front()->volumes.front()->mesh().its) == 0);
+    CHECK(its_volume(model.objects.front()->volumes.front()->mesh().its) > 0.);
 }
 
 TEST_CASE("Headless model repair removes a purely planar volume", "[ModelRepair][CGAL][Split]")

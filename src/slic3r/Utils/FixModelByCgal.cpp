@@ -6,6 +6,7 @@
 #include "slic3r/GUI/GUI.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <exception>
@@ -118,6 +119,8 @@ bool stage_owned_model_repair_by_cgal_gui(std::shared_ptr<Model>                
                                           bool                                  progress_initialized)
 {
     staged_repair = StagedModelRepair{};
+    static std::atomic<size_t> next_transaction_id{0};
+    staged_repair.transaction_id = ++next_transaction_id;
     if (working_model == nullptr) {
         staged_repair.error = "Could not stage model repair: working model is missing.";
         return true;
@@ -168,12 +171,13 @@ bool stage_owned_model_repair_by_cgal_gui(std::shared_ptr<Model>                
     }
 
     staged_repair.report = std::move(report);
-    BOOST_LOG_TRIVIAL(info) << "CGAL GUI model repair summary: status=" << staged_repair.report.status()
-                            << ", committed=" << staged_repair.report.committed << ", objects=" << staged_repair.report.objects
-                            << ", volumes=" << staged_repair.report.volumes << ", repaired=" << staged_repair.report.repaired
-                            << ", skipped=" << staged_repair.report.skipped << ", failed=" << staged_repair.report.failed
-                            << ", facets=" << staged_repair.report.before_facets << "->" << staged_repair.report.after_facets
-                            << ", open_edges=" << staged_repair.report.before_open_edges << "->" << staged_repair.report.after_open_edges;
+    BOOST_LOG_TRIVIAL(info) << "CGAL GUI model repair summary: event=staging_completed, transaction=" << staged_repair.transaction_id
+                            << ", status=" << staged_repair.report.status() << ", staging_changed=" << staged_repair.report.committed
+                            << ", objects=" << staged_repair.report.objects << ", volumes=" << staged_repair.report.volumes
+                            << ", repaired=" << staged_repair.report.repaired << ", skipped=" << staged_repair.report.skipped
+                            << ", failed=" << staged_repair.report.failed << ", facets=" << staged_repair.report.before_facets << "->"
+                            << staged_repair.report.after_facets << ", open_edges=" << staged_repair.report.before_open_edges << "->"
+                            << staged_repair.report.after_open_edges;
     for (const ModelRepairFailure& failure : staged_repair.report.failures)
         BOOST_LOG_TRIVIAL(warning) << "CGAL GUI model repair failure: object=" << failure.object_name << ", volume=" << failure.volume_name
                                    << ", message=" << failure.message;
@@ -252,40 +256,54 @@ bool fix_model_with_cgal_gui(ModelObject&         model_object,
         target.volume_index = static_cast<size_t>(volume_idx);
 
     StagedModelRepair staged_repair;
+    const auto        log_result = [&staged_repair](const char* event) {
+        BOOST_LOG_TRIVIAL(info) << "CGAL cut model repair: transaction=" << staged_repair.transaction_id << ", event=" << event;
+    };
     if (!stage_owned_model_repair_by_cgal_gui(std::move(working_source), {target}, progress_dialog, message_header, staged_repair,
-                                              keep_painting, false))
+                                              keep_painting, false)) {
+        log_result("canceled");
         return false;
+    }
 
     if (repair_report != nullptr)
         *repair_report = staged_repair.report;
 
     if (!staged_repair.error.empty()) {
+        log_result("staging_failed");
         fix_result = staged_repair.error;
         return true;
     }
     if (!staged_repair.report.success || staged_repair.model == nullptr) {
+        log_result("repair_failed");
         fix_result = staged_repair.report.failures.empty() ? "Repair failed." : staged_repair.report.failures.front().message;
         return true;
     }
 
     ModelObject* repaired_object = staged_repair.model->objects.front();
     if (repaired_object == nullptr) {
+        log_result("staged_object_missing");
         fix_result = "Repair failed: staged model object is missing.";
         return true;
     }
 
-    if (!staged_repair.report.committed)
+    if (!staged_repair.report.committed) {
+        log_result("no_change");
         return true;
+    }
 
     try {
         model_object.replace_volume_structure(*repaired_object);
     } catch (const std::exception& exception) {
         fix_result = std::string("Repair commit failed: ") + exception.what();
+        log_result("commit_failed");
         return true;
     } catch (...) {
         fix_result = "Repair commit failed.";
+        log_result("commit_failed");
         return true;
     }
+    // The target here is a temporary cut object, not the GUI scene.
+    log_result("cut_object_committed");
     return true;
 }
 

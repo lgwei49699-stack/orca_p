@@ -16,6 +16,7 @@
 #include <wx/sizer.h>
 
 #include "libslic3r/ObjColorUtils.hpp"
+#include "libslic3r/ObjColorMapping.hpp"
 
 using namespace Slic3r;
 using namespace Slic3r::GUI;
@@ -197,13 +198,13 @@ RGBA     convert_to_rgba(const wxColour &color)
     rgba[3] = std::clamp(color.Alpha() / 255.f, 0.f, 1.f);
     return rgba;
 }
-wxColour convert_to_wxColour(const RGBA &color)
+wxColour convert_to_wxColour(const RGBA& color)
 {
-    auto     r = std::clamp((int) (color[0] * 255.f), 0, 255);
-    auto     g = std::clamp((int) (color[1] * 255.f), 0, 255);
-    auto     b = std::clamp((int) (color[2] * 255.f), 0, 255);
-    auto     a = std::clamp((int) (color[3] * 255.f), 0, 255);
-    wxColour wx_color(r,g,b,a);
+    auto     r = ObjColorMapping::to_byte(color[0]);
+    auto     g = ObjColorMapping::to_byte(color[1]);
+    auto     b = ObjColorMapping::to_byte(color[2]);
+    auto     a = ObjColorMapping::to_byte(color[3]);
+    wxColour wx_color(r, g, b, a);
     return wx_color;
 }
 // This panel contains all control widgets for both simple and advanced mode (these reside in separate sizers)
@@ -393,20 +394,23 @@ bool ObjColorPanel::is_ok() {
 void ObjColorPanel::update_filament_ids()
 {
     if (m_is_add_filament) {
-        for (auto c:m_new_add_colors) {
-            /*auto evt = new ColorEvent(EVT_ADD_CUSTOM_FILAMENT, c);
-            wxQueueEvent(wxGetApp().plater(), evt);*/
-            wxGetApp().sidebar().add_custom_filament(c);
+        std::vector<ObjColorMapping::RGB8> proposed;
+        for (const wxColour& color : m_new_add_colors)
+            proposed.push_back({color.Red(), color.Green(), color.Blue()});
+        const auto plan = ObjColorMapping::compact_filaments(m_colours.size(), proposed, m_cluster_map_filaments);
+        for (const auto& color : plan.added) {
+            wxGetApp().sidebar().add_custom_filament(wxColour(color[0], color[1], color[2]));
         }
+        m_cluster_map_filaments = plan.slots;
     }
-   //deal m_filament_ids
-   m_filament_ids.clear();
-   m_filament_ids.reserve(m_input_colors_size);
-   for (size_t i = 0; i < m_input_colors_size; i++) {
-       auto label = m_cluster_labels_from_algo[i];
-       m_filament_ids.emplace_back(m_cluster_map_filaments[label]);
-   }
-   m_first_extruder_id = m_cluster_map_filaments[0];
+    // deal m_filament_ids
+    m_filament_ids.clear();
+    m_filament_ids.reserve(m_input_colors_size);
+    for (size_t i = 0; i < m_input_colors_size; i++) {
+        auto label = m_cluster_labels_from_algo[i];
+        m_filament_ids.emplace_back(m_cluster_map_filaments[label]);
+    }
+    m_first_extruder_id = m_cluster_map_filaments[0];
 }
 
 wxBoxSizer *ObjColorPanel::create_approximate_match_btn_sizer(wxWindow *parent)
@@ -543,7 +547,7 @@ ComboBox *ObjColorPanel::CreateEditorCtrl(wxWindow *parent, int id) // wxRect la
     return c_editor;
 }
 
-void ObjColorPanel::deal_approximate_match_btn()
+void ObjColorPanel::deal_approximate_match_btn(bool only_unmapped)
 {
     auto calc_color_distance = [](wxColour c1, wxColour c2) {
         float lab[2][3];
@@ -553,11 +557,17 @@ void ObjColorPanel::deal_approximate_match_btn()
         return DeltaE76(lab[0][0], lab[0][1], lab[0][2], lab[1][0], lab[1][1], lab[1][2]);
     };
     m_warning_text->SetLabelText("");
-    if (m_result_icon_list.size() == 0) { return; }
-    auto map_count = m_result_icon_list[0]->bitmap_combox->GetCount() -1;
-    if (map_count < 1) { return; }
+    if (m_result_icon_list.size() == 0) {
+        return;
+    }
+    auto map_count = m_result_icon_list[0]->bitmap_combox->GetCount() - 1;
+    if (map_count < 1) {
+        return;
+    }
     for (size_t i = 0; i < m_cluster_colours.size(); i++) {
-        auto    c = m_cluster_colours[i];
+        if (only_unmapped && m_cluster_map_filaments[i] != 0)
+            continue;
+        auto                        c = m_cluster_colours[i];
         std::vector<ColorDistValue> color_dists;
         color_dists.resize(map_count);
         for (size_t j = 0; j < map_count; j++) {
@@ -686,14 +696,18 @@ void ObjColorPanel::draw_table()
     m_scrolledWindow->SetScrollRate(20, 20);
 }
 
-void ObjColorPanel::deal_algo(char cluster_number, bool redraw_ui)
+void ObjColorPanel::deal_algo(int cluster_number, bool redraw_ui)
 {
     if (m_last_cluster_number == cluster_number) {
         return;
     }
-    m_last_cluster_number = cluster_number;
-    QuantKMeans quant(10);
-    quant.apply(m_input_colors, m_cluster_colors_from_algo, m_cluster_labels_from_algo, (int)cluster_number);
+    m_last_cluster_number    = cluster_number;
+    const size_t exact_limit = cluster_number < 1 ? size_t(g_max_color) : std::min(size_t(cluster_number), size_t(g_max_color));
+    if (!ObjColorMapping::collect_exact(m_input_colors, exact_limit, m_cluster_colors_from_algo, m_cluster_labels_from_algo)) {
+        // Retain the existing reduction algorithm for high-color inputs or explicit color reduction.
+        QuantKMeans quant(10);
+        quant.apply(m_input_colors, m_cluster_colors_from_algo, m_cluster_labels_from_algo, cluster_number);
+    }
     m_cluster_colours.clear();
     m_cluster_colours.reserve(m_cluster_colors_from_algo.size());
     for (size_t i = 0; i < m_cluster_colors_from_algo.size(); i++) {
@@ -708,7 +722,7 @@ void ObjColorPanel::deal_algo(char cluster_number, bool redraw_ui)
     if (cluster_number == -1) {
         m_color_num_recommend = m_color_cluster_num_by_algo;
     }
-    //redraw ui
+    // redraw ui
     if (redraw_ui) {
         redraw_part_table();
         deal_default_strategy();
@@ -718,48 +732,41 @@ void ObjColorPanel::deal_algo(char cluster_number, bool redraw_ui)
 void ObjColorPanel::deal_default_strategy()
 {
     deal_add_btn();
-    deal_approximate_match_btn();
-    m_warning_text->SetLabelText(_L("Note: The color has been selected, you can choose OK \nto continue or manually adjust it."));
+    if (m_warning_text->GetLabel().empty())
+        m_warning_text->SetLabelText(_L("Note: The color has been selected, you can choose OK \nto continue or manually adjust it."));
 }
 
 void ObjColorPanel::deal_add_btn()
 {
-    if (m_colours.size() > g_max_color) { return; }
     deal_reset_btn();
-    std::vector<wxBitmap *> new_icons;
-    auto  new_color_size = m_cluster_colors_from_algo.size();
-    new_icons.reserve(new_color_size);
-    m_new_add_colors.clear();
-    m_new_add_colors.reserve(new_color_size);
-    int new_index = m_colours.size() + 1;
-    bool is_exceed = false;
-    for (size_t i = 0; i < new_color_size; i++) {
-        if (m_colours.size() + new_icons.size() >= g_max_color) {
-            is_exceed = true;
-            break;
-        }
-        wxColour cur_color = convert_to_wxColour(m_cluster_colors_from_algo[i]);
-        m_new_add_colors.emplace_back(cur_color);
-        new_icons.emplace_back(get_extruder_color_icon(cur_color.GetAsString(wxC2S_HTML_SYNTAX).ToStdString(),
-                std::to_string(new_index), m_combox_icon_width, m_combox_icon_height));
-        new_index++;
+    std::vector<ObjColorMapping::RGB8> colors, existing;
+    for (const wxColour& color : m_cluster_colours)
+        colors.push_back({color.Red(), color.Green(), color.Blue()});
+    for (const wxColour& color : m_colours)
+        existing.push_back({color.Red(), color.Green(), color.Blue()});
+    const auto             plan = ObjColorMapping::plan_filaments(colors, existing, g_max_color);
+    std::vector<wxBitmap*> new_icons;
+    for (const auto& color : plan.added) {
+        m_new_add_colors.emplace_back(color[0], color[1], color[2]);
+        new_icons.push_back(get_extruder_color_icon(m_new_add_colors.back().GetAsString(wxC2S_HTML_SYNTAX).ToStdString(),
+                                                    std::to_string(m_colours.size() + new_icons.size() + 1), m_combox_icon_width,
+                                                    m_combox_icon_height));
     }
-    new_index = m_colours.size() + 1;
+    m_cluster_map_filaments = plan.slots;
     for (size_t i = 0; i < m_result_icon_list.size(); i++) {
         auto item = m_result_icon_list[i];
         for (size_t k = 0; k < new_icons.size(); k++) {
             item->bitmap_combox->Append(wxString::Format("%d", item->bitmap_combox->GetCount()), *new_icons[k]);
-            item->bitmap_combox->SetItemTooltip(item->bitmap_combox->GetCount() -1,m_new_add_colors[k].GetAsString(wxC2S_HTML_SYNTAX));
+            item->bitmap_combox->SetItemTooltip(item->bitmap_combox->GetCount() - 1, m_new_add_colors[k].GetAsString(wxC2S_HTML_SYNTAX));
         }
-        item->bitmap_combox->SetSelection(new_index);
-        m_cluster_map_filaments[i] = new_index;
-        new_index++;
+        if (i < m_cluster_map_filaments.size())
+            item->bitmap_combox->SetSelection(m_cluster_map_filaments[i]);
     }
-    if (is_exceed) {
-        deal_approximate_match_btn();
+    if (std::find(plan.slots.begin(), plan.slots.end(), 0) != plan.slots.end()) {
+        deal_approximate_match_btn(true);
         m_warning_text->SetLabelText(_L("Warning: The count of newly added and \ncurrent extruders exceeds 16."));
     }
-    m_is_add_filament = true;
+    m_is_add_filament = !m_new_add_colors.empty();
 }
 
 void ObjColorPanel::deal_reset_btn()

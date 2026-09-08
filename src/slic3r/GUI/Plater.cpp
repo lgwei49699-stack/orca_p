@@ -57,6 +57,7 @@
 
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Format/STL.hpp"
+#include "libslic3r/Format/OBJ.hpp"
 #include "libslic3r/Format/STEP.hpp"
 #include "libslic3r/Format/AMF.hpp"
 //#include "libslic3r/Format/3mf.hpp"
@@ -16423,6 +16424,155 @@ TriangleMesh Plater::combine_mesh_fff(const ModelObject& mo, int instance_id, st
     } else if (0 <= instance_id && instance_id < int(mo.instances.size()))
         mesh.transform(mo.instances[instance_id]->get_matrix(), true);
     return mesh;
+}
+
+void Plater::export_obj()
+{
+    const Selection& selection = p->get_selection();
+    if (wxGetApp().preset_bundle->printers.get_selected_preset().printer_technology() != ptFFF ||
+        !(selection.is_single_full_instance() || selection.is_single_full_object() || selection.is_multiple_full_instance() ||
+          selection.is_multiple_full_object()))
+        return;
+
+    try {
+        // Snapshot on the GUI thread: retain only selected instances and printable geometry.
+        // Export never repairs or modifies the scene, and does not create an Undo entry.
+        Model snapshot;
+        bool  has_geometry = false;
+        bool  has_painting = false;
+        // The older STL helper only returns multiple full objects; get_content()
+        // also covers a single object and subsets of an object's instances.
+        for (const auto& entry : selection.get_content()) {
+            if (entry.first < 0 || size_t(entry.first) >= p->model.objects.size())
+                return;
+            const ModelObject* source = p->model.objects[entry.first];
+            for (int instance : entry.second)
+                if (instance < 0 || size_t(instance) >= source->instances.size())
+                    return;
+            for (const ModelVolume* volume : source->volumes) {
+                if (volume->is_negative_volume()) {
+                    show_error(this, _L("OBJ export does not support negative volumes. Save as 3MF to preserve them."));
+                    return;
+                }
+            }
+            ModelObject* object = snapshot.add_object(*source);
+            for (size_t i = object->instances.size(); i-- > 0;)
+                if (entry.second.count(int(i)) == 0)
+                    object->delete_instance(i);
+            for (size_t i = object->volumes.size(); i-- > 0;) {
+                if (!object->volumes[i]->is_model_part())
+                    object->delete_volume(i);
+                else {
+                    has_geometry |= !object->volumes[i]->mesh().empty();
+                    has_painting |= !object->volumes[i]->mmu_segmentation_facets.empty();
+                }
+            }
+        }
+        if (!has_geometry)
+            return;
+
+        std::vector<RGBA> colors;
+        for (const std::string& color : get_extruder_colors_from_plater_config()) {
+            unsigned char rgba[4] = {};
+            if (!BitmapCache::parse_color4(color, rgba)) {
+                show_error(this, _L("Cannot export OBJ: invalid or missing filament colors."));
+                return;
+            }
+            colors.push_back({rgba[0] / 255.f, rgba[1] / 255.f, rgba[2] / 255.f, rgba[3] / 255.f});
+        }
+        if (has_painting && colors.empty()) {
+            show_error(this, _L("Cannot export OBJ: invalid or missing filament colors."));
+            return;
+        }
+
+        fs::path suggested = snapshot.objects.front()->get_export_filename();
+        if (suggested.stem().empty())
+            suggested = "model.obj";
+        wxFileDialog dialog(this, _L("Export as OBJ"), from_u8(wxGetApp().app_config->get_last_dir()),
+                            from_u8(suggested.stem().string() + "_exported.obj"), file_wildcards(FT_OBJ), wxFD_SAVE | wxPD_APP_MODAL);
+        if (dialog.ShowModal() != wxID_OK)
+            return;
+        fs::path obj_path = into_path(dialog.GetPath());
+        if (!boost::algorithm::iequals(obj_path.extension().string(), ".obj"))
+            obj_path.replace_extension(".obj");
+        std::vector<fs::path> outputs{obj_path};
+        if (!colors.empty()) {
+            fs::path mtl_path = obj_path;
+            outputs.push_back(mtl_path.replace_extension(".mtl"));
+        }
+
+        // Protect all loaded source files, including OBJ sidecars and path aliases.
+        // A confirmation to overwrite an output must not overwrite an input instead.
+        std::set<std::string> sources;
+        for (const ModelObject* object : p->model.objects) {
+            if (!object->input_file.empty())
+                sources.insert(object->input_file);
+            for (const ModelVolume* volume : object->volumes)
+                if (!volume->source.input_file.empty())
+                    sources.insert(volume->source.input_file);
+        }
+        std::vector<fs::path> protected_paths;
+        for (const std::string& source : sources) {
+            protected_paths.emplace_back(source);
+            if (boost::algorithm::iequals(fs::path(source).extension().string(), ".obj") && fs::is_regular_file(source)) {
+                std::vector<std::string> libraries;
+                std::string              message;
+                if (!load_obj_material_libraries(source.c_str(), libraries, message)) {
+                    show_error(this, _L("Cannot verify the source OBJ material files. Export was cancelled to protect the originals.") +
+                                         "\n" + from_u8(source));
+                    return;
+                }
+                for (const std::string& library : libraries)
+                    protected_paths.emplace_back(library);
+            }
+        }
+        for (const fs::path& output : outputs) {
+            const std::string normalized_output = fs::weakly_canonical(fs::absolute(output)).string();
+            for (const fs::path& source : protected_paths) {
+                const std::string normalized_source = fs::weakly_canonical(fs::absolute(source)).string();
+                bool              same_path         = normalized_output == normalized_source;
+#if defined(_WIN32) || defined(__APPLE__)
+                same_path |= boost::algorithm::iequals(normalized_output, normalized_source);
+#endif
+                if (same_path || (fs::exists(output) && fs::exists(source) && fs::equivalent(output, source))) {
+                    show_error(this, _L("Cannot overwrite a source model or material file. Choose a different export name or directory.") +
+                                         "\n" + from_path(output));
+                    return;
+                }
+            }
+        }
+        wxString existing_outputs;
+        for (const fs::path& output : outputs)
+            if (fs::exists(output))
+                existing_outputs += "\n" + from_path(output);
+        // Confirm after extension normalization, and include the MTL even if only it exists.
+        if (!existing_outputs.empty()) {
+            wxMessageDialog confirm(this, _L("Replace these existing export files?") + existing_outputs, _L("Confirm Save As"),
+                                    wxYES_NO | wxNO_DEFAULT | wxICON_WARNING);
+            if (confirm.ShowModal() != wxID_YES)
+                return;
+        }
+        bool success;
+        {
+            wxBusyCursor wait;
+            success = colors.empty() ? store_obj(obj_path.string().c_str(), &snapshot) :
+                                       store_multicolor_obj(obj_path.string().c_str(), snapshot, colors);
+        }
+        if (!success) {
+            show_error(this, _L("OBJ export failed. Check the model, filament colors and output permissions.") + "\n" + from_path(obj_path));
+            return;
+        }
+        wxGetApp().app_config->update_last_output_dir(obj_path.parent_path().string());
+        BOOST_LOG_TRIVIAL(info) << "GUI OBJ export completed: " << obj_path.string() << ", objects=" << snapshot.objects.size()
+                                << ", with_mtl=" << !colors.empty();
+        wxString exported_files = _L("OBJ export completed:");
+        for (const fs::path& output : outputs)
+            exported_files += "\n" + from_path(output);
+        get_notification_manager()->push_notification(into_u8(exported_files));
+    } catch (const std::exception& error) {
+        BOOST_LOG_TRIVIAL(error) << "GUI OBJ export failed: " << error.what();
+        show_error(this, _L("OBJ export failed. Check the model, filament colors and output permissions.") + "\n" + from_u8(error.what()));
+    }
 }
 
 // BBS export with/without boolean, however, stil merge mesh

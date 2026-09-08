@@ -17,6 +17,42 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 "X-Generator: Poedit 3.2.2\n"
 
+msgid "Repair failed: polygon soup is still invalid after orientation and vertex splitting."
+msgstr "修复失败：统一面朝向并拆分顶点后，网格连接关系仍不合法。"
+
+msgid "Repair failed: this model has complex intersecting surfaces that cannot be safely repaired automatically."
+msgstr "修复失败：模型存在复杂的面相交，当前无法安全自动修复。请先在建模软件中处理。"
+
+msgid "Repair failed: vertex splitting left intersections or invalid topology that could not be safely repaired."
+msgstr "修复失败：拆分顶点后仍有相交或异常连接，无法安全修复。原模型未被替换。"
+
+msgid "Repair failed: vertex-split repair exceeded the geometry-preservation limits."
+msgstr "修复失败：拆分顶点后的修复结果改变了原有外形或连通部分，超出安全范围。"
+
+msgid "Export as OBJ"
+msgstr "导出为 OBJ"
+
+msgid "OBJ export does not support negative volumes. Save as 3MF to preserve them."
+msgstr "OBJ 导出暂不支持负体积。请保存为 3MF 以保留挖孔等信息。"
+
+msgid "Cannot export OBJ: invalid or missing filament colors."
+msgstr "无法导出 OBJ：耗材颜色无效或缺失。"
+
+msgid "Cannot verify the source OBJ material files. Export was cancelled to protect the originals."
+msgstr "无法核实原始 OBJ 引用的材质文件。为保护原文件，已取消导出。"
+
+msgid "Cannot overwrite a source model or material file. Choose a different export name or directory."
+msgstr "不能覆盖原始模型或材质文件。请选择其他导出文件名或目录。"
+
+msgid "Replace these existing export files?"
+msgstr "是否替换以下已有的导出文件？"
+
+msgid "OBJ export failed. Check the model, filament colors and output permissions."
+msgstr "OBJ 导出失败。请检查模型、耗材颜色及输出目录权限。"
+
+msgid "OBJ export completed:"
+msgstr "OBJ 导出完成："
+
 msgid "Current AMS humidity"
 msgstr "当前AMS湿度"
 

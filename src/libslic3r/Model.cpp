@@ -344,7 +344,9 @@ Model Model::read_from_file(const std::string&               input_file,
                             bool                             repair_stl,
                             MeshRepairReport*                repair_report,
                             const std::vector<unsigned int>* obj_material_extruder_ids,
-                            std::string*                     obj_primary_color_group)
+                            std::string*                     obj_primary_color_group,
+                            bool                             obj_geometry_only,
+                            bool                             obj_require_color_mapping)
 {
     Model model;
 
@@ -377,14 +379,35 @@ Model Model::read_from_file(const std::string&               input_file,
         result = load_stl(input_file.c_str(), &model, nullptr, stlFn, 256, repair_stl, repair_report);
     else if (boost::algorithm::iends_with(input_file, ".obj")) {
         ObjInfo                 obj_info;
-        result = load_obj(input_file.c_str(), &model, obj_info, message);
-        if (result){
+        if (obj_geometry_only && obj_material_extruder_ids != nullptr)
+            throw Slic3r::RuntimeError("Geometry-only OBJ import cannot bind source materials to filaments.");
+        result = load_obj(input_file.c_str(), &model, obj_info, message, nullptr, obj_geometry_only);
+        if (result && !obj_geometry_only) {
+            // Automatic color-preserving CLI output must not silently turn unsupported
+            // vertex/texture colors or unresolved materials into an unpainted model.
+            if (obj_require_color_mapping && obj_material_extruder_ids == nullptr && objFn == nullptr) {
+                if (!obj_info.vertex_colors.empty() || obj_info.has_uv_png)
+                    throw Slic3r::RuntimeError("Repair OBJ export currently preserves MTL face colors, not vertex colors or textures. "
+                                               "Use --repair-ignore-materials only if geometry-only output is intended.");
+                if (!obj_info.material_names.empty() &&
+                    obj_info.face_colors.size() != model.objects.front()->volumes.front()->mesh().facets_count())
+                    throw Slic3r::RuntimeError("Cannot preserve OBJ colors: a face material is missing or unresolved. "
+                                               "Provide the referenced MTL or explicitly use --repair-ignore-materials.");
+                std::set<std::string> colors;
+                for (const RGBA& color : obj_info.face_colors)
+                    colors.insert(rgba_to_html(color));
+                // Automatic OBJ mapping starts at slot 2; reject excess colors
+                // before the unsigned-char slot counter can wrap or discard them.
+                if (colors.size() + 1 >= CONST_FILAMENTS.size())
+                    throw Slic3r::RuntimeError("Too many MTL colors for lossless CLI filament mapping. "
+                                               "Reduce the source palette or explicitly use --repair-ignore-materials.");
+            }
             if (obj_primary_color_group != nullptr)
                 *obj_primary_color_group = primary_obj_color_group(obj_info);
             unsigned char first_extruder_id;
-            bool              has_color_mapping = false;
+            bool          has_color_mapping = false;
             if (obj_material_extruder_ids != nullptr) {
-                const std::vector<unsigned int> &material_slots = *obj_material_extruder_ids;
+                const std::vector<unsigned int>& material_slots = *obj_material_extruder_ids;
                 if (obj_info.material_names.empty()) {
                     if (material_slots.size() != 1)
                         throw Slic3r::RuntimeError("OBJ without usemtl requires exactly one --model-filaments entry: " + input_file);

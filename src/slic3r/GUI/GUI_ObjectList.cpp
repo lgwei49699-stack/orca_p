@@ -5732,6 +5732,9 @@ void ObjectList::fix_through_cgal()
     StagedModelRepair staged_repair;
     bool completed = stage_model_repair_by_cgal_gui(model, targets, progress_dlg, _L("Repairing model object") + ": ", staged_repair,
                                                     keep_painting);
+    const auto        log_repair_result = [&staged_repair](const char* event) {
+        BOOST_LOG_TRIVIAL(info) << "CGAL GUI model repair: transaction=" << staged_repair.transaction_id << ", event=" << event;
+    };
     if (completed)
         completed = progress_dlg.Update(100, "");
 
@@ -5742,16 +5745,19 @@ void ObjectList::fix_through_cgal()
     };
 
     if (!completed) {
+        log_repair_result("canceled");
         notify(_L("Repairing was canceled"));
         return;
     }
 
     if (!staged_repair.error.empty()) {
+        log_repair_result("staging_failed");
         notify(from_u8(staged_repair.error) + "\n" + _L("The selected model was not modified."));
         return;
     }
 
     if (!staged_repair.report.success || staged_repair.model == nullptr) {
+        log_repair_result("repair_failed");
         wxString message = _L("Failed to repair following model object") + ":";
         if (staged_repair.report.failures.empty()) {
             message += "\n   - " + _L("Repair failed.");
@@ -5759,7 +5765,9 @@ void ObjectList::fix_through_cgal()
             for (const ModelRepairFailure& failure : staged_repair.report.failures) {
                 const std::string name = failure.volume_name.empty() ? failure.object_name :
                                                                        failure.object_name + " / " + failure.volume_name;
-                message += "\n   - " + from_u8(name) + ": " + from_u8(failure.message);
+                // Core errors stay English for CLI/logs; translate known GUI
+                // messages here, falling back to the original diagnostic.
+                message += "\n   - " + from_u8(name) + ": " + _L(failure.message);
             }
         }
         message += "\n" + _L("The selected model was not modified.");
@@ -5768,6 +5776,7 @@ void ObjectList::fix_through_cgal()
     }
 
     if (!staged_repair.report.committed) {
+        log_repair_result("no_change");
         notify(_L("No model repair was needed."));
         return;
     }
@@ -5782,6 +5791,7 @@ void ObjectList::fix_through_cgal()
             model.objects[object_index]->id() != staged_repair.model->objects[object_index]->id() ||
             model.objects[object_index]->volumes.size() != state_it->volumes.size() ||
             model.objects[object_index]->instances.size() != state_it->instances.size()) {
+            log_repair_result("discarded_scene_changed");
             notify(_L("The model changed while it was being repaired. The repair result was discarded."));
             return;
         }
@@ -5798,6 +5808,7 @@ void ObjectList::fix_through_cgal()
                   current_volume->name != state.name || current_volume->type() != state.type ||
                   current_volume->material_id() != state.material_id ||
                   model_volume_repair_metadata_fingerprint(*current_volume) != state.repair_metadata_fingerprint))) {
+                log_repair_result("discarded_volume_changed");
                 notify(_L("The model changed while it was being repaired. The repair result was discarded."));
                 return;
             }
@@ -5810,6 +5821,7 @@ void ObjectList::fix_through_cgal()
                 for (size_t annotation_index = 0; annotation_index < annotations.size(); ++annotation_index) {
                     if (annotations[annotation_index]->id() != state.annotations[annotation_index].first ||
                         annotations[annotation_index]->timestamp() != state.annotations[annotation_index].second) {
+                        log_repair_result("discarded_annotations_changed");
                         notify(_L("The model changed while it was being repaired. The repair result was discarded."));
                         return;
                     }
@@ -5824,6 +5836,7 @@ void ObjectList::fix_through_cgal()
                 (current_instance != nullptr &&
                  (current_instance->id() != state.id ||
                   !transformation_exactly_matches(current_instance->get_transformation(), state.transformation)))) {
+                log_repair_result("discarded_instance_changed");
                 notify(_L("The model changed while it was being repaired. The repair result was discarded."));
                 return;
             }
@@ -5834,9 +5847,11 @@ void ObjectList::fix_through_cgal()
     try {
         prepared = model.prepare_move_object_volume_structures(*staged_repair.model, staged_repair.report.changed_object_indices);
     } catch (const std::exception& exception) {
+        log_repair_result("commit_failed");
         notify(from_u8(std::string("Repair commit failed: ") + exception.what()) + "\n" + _L("The selected model was not modified."));
         return;
     } catch (...) {
+        log_repair_result("commit_failed");
         notify(_L("Repair commit failed.") + "\n" + _L("The selected model was not modified."));
         return;
     }
@@ -5856,6 +5871,7 @@ void ObjectList::fix_through_cgal()
     part_selection_changed();
 
     model.commit_move_object_volume_structures(std::move(prepared));
+    log_repair_result("scene_committed");
 
     for (size_t object_index : staged_repair.report.changed_object_indices) {
         ModelObject* changed_object = model.objects[object_index];

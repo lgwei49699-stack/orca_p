@@ -186,6 +186,7 @@ typedef struct _model_repair_info {
     std::string              engine{"admesh"};
     MeshRepairReport         report;
     ModelRepairReport        cgal_report;
+    bool                     input_materials_ignored{false};
     std::vector<std::string> output_files;
 } model_repair_info_t;
 
@@ -641,6 +642,7 @@ bool record_exit_reson(std::string                        outputdir,
             if (repair_info.engine == "cgal") {
                 const ModelRepairReport& report = repair_info.cgal_report;
                 repair_json["repair_enabled"]   = true;
+                repair_json["input_materials_ignored"] = repair_info.input_materials_ignored;
                 repair_json["repair_attempted"] = report.attempted;
                 repair_json["load_succeeded"]   = true;
                 repair_json["status"]           = report.status();
@@ -1471,10 +1473,32 @@ int CLI::run(int argc, char **argv)
     const bool has_explicit_arrange_group = std::any_of(m_model_cli_specs.begin(), m_model_cli_specs.end(),
                                                         [](const ModelCliSpec& spec) { return spec.arrange_group.has_value(); });
 
+    // Validate before material catalog loading and before the no-action GUI branch.
+    const bool cgal_repair_requested   = std::find(m_actions.begin(), m_actions.end(), "repair_model") != m_actions.end();
+    const bool repair_ignore_materials = m_config.opt_bool("repair_ignore_materials");
+    const bool repair_preserve_colors  = cgal_repair_requested && !repair_ignore_materials &&
+                                        (m_config.opt_bool("export_obj") ||
+                                         std::find(m_actions.begin(), m_actions.end(), "export_multicolor_obj") != m_actions.end());
+    if (repair_ignore_materials) {
+        std::string error_message;
+        if (!cgal_repair_requested)
+            error_message = "--repair-ignore-materials requires --repair-model cgal.";
+        else if (has_model_filament_mapping || m_config.opt_bool("split_by_color") || m_config.opt_bool("arrange_by_color") ||
+                 std::find(m_actions.begin(), m_actions.end(), "export_multicolor_obj") != m_actions.end())
+            error_message = "--repair-ignore-materials cannot be combined with --model-filaments, --split-by-color, "
+                            "--arrange-by-color or --export-multicolor-obj.";
+        if (!error_message.empty()) {
+            boost::nowide::cerr << error_message << std::endl;
+            record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, error_message, sliced_info);
+            flush_and_exit(CLI_INVALID_PARAMS);
+        }
+        BOOST_LOG_TRIVIAL(warning) << "Geometry-only repair import: OBJ MTL libraries, colors and UVs will be ignored.";
+    }
+
     if (!m_model_cli_specs.empty()) {
         if (m_model_cli_specs.size() != m_input_files.size()) {
-            boost::nowide::cerr << "--model block count " << m_model_cli_specs.size()
-                                << " does not match positional model count " << m_input_files.size() << std::endl;
+            boost::nowide::cerr << "--model block count " << m_model_cli_specs.size() << " does not match positional model count "
+                                << m_input_files.size() << std::endl;
             record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
             flush_and_exit(CLI_INVALID_PARAMS);
         }
@@ -1739,7 +1763,6 @@ int CLI::run(int argc, char **argv)
         auto_repair_model = option->value;
     BOOST_LOG_TRIVIAL(info) << "auto_repair_model=" << auto_repair_model;
 
-    const bool  cgal_repair_requested = std::find(m_actions.begin(), m_actions.end(), "repair_model") != m_actions.end();
     std::string repair_engine;
     if (cgal_repair_requested) {
         repair_engine = boost::algorithm::to_lower_copy(m_config.opt_string("repair_model"));
@@ -1974,7 +1997,8 @@ int CLI::run(int argc, char **argv)
                 model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets,
                                               &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice, nullptr,
                                               auto_repair_model, collect_repair_report ? &model_repair_info.report : nullptr,
-                                              explicit_material_slots, arrange_by_color ? &detected_obj_color_group : nullptr);
+                                              explicit_material_slots, arrange_by_color ? &detected_obj_color_group : nullptr,
+                                              repair_ignore_materials, repair_preserve_colors);
                 if (arrange_grouping_enabled) {
                     const std::string explicit_group = input_index < m_model_cli_specs.size() &&
                                                                m_model_cli_specs[input_index].arrange_group.has_value() ?
@@ -4043,6 +4067,13 @@ int CLI::run(int argc, char **argv)
     // so reports retain their source-file identity and all outputs see the
     // same committed geometry.
     if (cgal_repair_requested) {
+        if (repair_preserve_colors && obj_multicolor_auto_mapping && !has_model_filament_mapping && loaded_model_sources.size() > 1) {
+            const std::string error_message = "Automatic colored OBJ repair requires one input per invocation. "
+                                              "Use separate jobs or explicit --model-filaments bindings for multiple inputs.";
+            record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, error_message, sliced_info);
+            boost::nowide::cerr << error_message << std::endl;
+            flush_and_exit(CLI_INVALID_PARAMS);
+        }
         for (size_t model_index = 0; model_index < m_models.size(); ++model_index) {
             model_repair_info_t repair_info;
             repair_info.engine      = repair_engine;
@@ -4051,8 +4082,15 @@ int CLI::run(int argc, char **argv)
                 repair_info.input_file = loaded_model_sources[model_index];
             else if (!m_models[model_index].objects.empty())
                 repair_info.input_file = m_models[model_index].objects.front()->input_file;
+            repair_info.input_materials_ignored = repair_ignore_materials && boost::algorithm::iends_with(repair_info.input_file, ".obj");
 
-            const bool               repair_succeeded = repair_model(m_models[model_index], repair_info.cgal_report);
+            ModelRepairOptions repair_options;
+            repair_options.preserve_annotations      = repair_preserve_colors;
+            repair_options.allow_annotation_clearing = !repair_preserve_colors;
+            // A strict color transaction must not discard a painted planar part
+            // during cleanup before the annotation coverage check can see it.
+            repair_options.remove_non_3d_parts        = !repair_preserve_colors;
+            const bool               repair_succeeded = repair_model(m_models[model_index], repair_info.cgal_report, repair_options);
             const ModelRepairReport& report           = repair_info.cgal_report;
             BOOST_LOG_TRIVIAL(info)
                 << boost::format("CGAL model repair summary: input=%1%, status=%2%, committed=%3%, volumes=%4%, repaired=%5%, "
@@ -6448,6 +6486,9 @@ int CLI::run(int argc, char **argv)
         return path;
     };
 
+    // Reuse the existing multicolor exporter for the common repair + export-obj
+    // command. Non-repair exports retain their previous geometry-only behavior.
+    const bool  auto_multicolor_obj = repair_preserve_colors && (obj_multicolor_auto_mapping || has_model_filament_mapping);
     std::string obj_preflight_error;
     for (const std::string& action : m_actions) {
         if (action == "export_multicolor_obj" || action == "export_texture_obj") {
@@ -6462,6 +6503,12 @@ int CLI::run(int argc, char **argv)
                 const boost::filesystem::path obj_path(this->output_filepath(model, IO::OBJ));
                 if (!claim_obj_artifact(obj_path, "--export-obj", obj_preflight_error))
                     break;
+                if (auto_multicolor_obj) {
+                    boost::filesystem::path mtl_path = obj_path;
+                    mtl_path.replace_extension(".mtl");
+                    if (!claim_obj_artifact(mtl_path, "--export-obj", obj_preflight_error))
+                        break;
+                }
             }
             if (!obj_preflight_error.empty())
                 break;
@@ -6593,15 +6640,16 @@ int CLI::run(int argc, char **argv)
                 record_exit_reson(outfile_dir, CLI_EXPORT_STL_ERROR, 0, cli_errors[CLI_EXPORT_STL_ERROR], sliced_info);
                 flush_and_exit(CLI_EXPORT_STL_ERROR);
             }
-        } else if (opt_key == "export_multicolor_obj") {
+        } else if (opt_key == "export_multicolor_obj" || (opt_key == "export_obj" && m_config.opt_bool(opt_key) && auto_multicolor_obj)) {
+            const std::string export_action = opt_key == "export_obj" ? "--export-obj" : "--export-multicolor-obj";
             if (m_models.size() != 1) {
-                const std::string error_message = "--export-multicolor-obj currently requires exactly one output model.";
+                const std::string error_message = export_action + " currently requires exactly one output model.";
                 BOOST_LOG_TRIVIAL(error) << error_message;
                 record_exit_reson(outfile_dir, CLI_EXPORT_OBJ_ERROR, 0, error_message, sliced_info);
                 flush_and_exit(CLI_EXPORT_OBJ_ERROR);
             }
             if (!model_has_exportable_geometry(m_models.front())) {
-                const std::string error_message = "--export-multicolor-obj cannot export a model with no MODEL_PART triangles.";
+                const std::string error_message = export_action + " cannot export a model with no MODEL_PART triangles.";
                 BOOST_LOG_TRIVIAL(error) << error_message;
                 record_exit_reson(outfile_dir, CLI_EXPORT_OBJ_ERROR, 0, error_message, sliced_info);
                 flush_and_exit(CLI_EXPORT_OBJ_ERROR);
@@ -6617,15 +6665,16 @@ int CLI::run(int argc, char **argv)
                                                                                      });
                                                               });
             if (annotations_were_cleared) {
-                const std::string error_message =
-                    "--export-multicolor-obj was refused because model repair changed topology and cleared MMU/paint annotations.";
+                const std::string error_message = export_action +
+                                                  " was refused because model repair changed topology and cleared MMU/paint annotations.";
                 BOOST_LOG_TRIVIAL(error) << error_message;
                 record_exit_reson(outfile_dir, CLI_EXPORT_OBJ_ERROR, 0, error_message, sliced_info);
                 flush_and_exit(CLI_EXPORT_OBJ_ERROR);
             }
 
-            boost::filesystem::path export_path(m_config.opt_string(opt_key));
-            if (export_path.is_relative() && !outfile_dir.empty())
+            boost::filesystem::path export_path(opt_key == "export_obj" ? this->output_filepath(m_models.front(), IO::OBJ) :
+                                                                          m_config.opt_string(opt_key));
+            if (opt_key != "export_obj" && export_path.is_relative() && !outfile_dir.empty())
                 export_path = boost::filesystem::path(outfile_dir) / export_path;
             if (!boost::algorithm::iends_with(export_path.extension().string(), ".obj"))
                 export_path.replace_extension(".obj");

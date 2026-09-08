@@ -4,16 +4,120 @@
 #include <boost/nowide/fstream.hpp>
 
 #include <algorithm>
+#include <array>
 #include <iterator>
 #include <limits>
 #include <string>
 
 #include <libslic3r/Format/OBJ.hpp>
 #include <libslic3r/Model.hpp>
+#include <libslic3r/ObjColorMapping.hpp>
 #include <libslic3r/TexturePainting.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 
 using namespace Slic3r;
+
+TEST_CASE("OBJ GUI RGB8 conversion is stable and bounded", "[OBJ][GUIColor]")
+{
+    for (int value = 0; value <= 255; ++value)
+        CHECK(ObjColorMapping::to_byte(value / 255.f) == value);
+    CHECK(ObjColorMapping::to_byte(0.5f) == 128);
+    CHECK(ObjColorMapping::to_byte(-1.f) == 0);
+    CHECK(ObjColorMapping::to_byte(2.f) == 255);
+    CHECK(ObjColorMapping::to_byte(std::numeric_limits<float>::quiet_NaN()) == 0);
+}
+
+TEST_CASE("OBJ GUI discrete colors survive repeated palette creation", "[OBJ][GUIColor]")
+{
+    const RGBA        red   = {204.f / 255.f, 64.f / 255.f, 55.f / 255.f, 1.f};
+    const RGBA        white = {1.f, 1.f, 1.f, 1.f};
+    std::vector<RGBA> input = {red, white, red};
+    std::vector<RGBA> colors;
+    std::vector<int>  labels;
+    REQUIRE(ObjColorMapping::collect_exact(input, 16, colors, labels));
+    REQUIRE((colors == std::vector<RGBA>{red, white}));
+    REQUIRE((labels == std::vector<int>{0, 1, 0}));
+    for (int round = 0; round < 5; ++round) {
+        input = colors;
+        REQUIRE(ObjColorMapping::collect_exact(input, 16, colors, labels));
+        CHECK((colors == std::vector<RGBA>{red, white}));
+        CHECK((labels == std::vector<int>{0, 1}));
+    }
+}
+
+TEST_CASE("OBJ GUI exact palette respects reduction and capacity", "[OBJ][GUIColor]")
+{
+    std::vector<RGBA> input;
+    for (int i = 0; i < 16; ++i)
+        input.push_back({i / 255.f, 0.f, 0.f, 1.f});
+    std::vector<RGBA> colors;
+    std::vector<int>  labels;
+    REQUIRE(ObjColorMapping::collect_exact(input, 16, colors, labels));
+    CHECK(colors.size() == 16);
+    // Asking for fewer colors must fall back to the existing reduction algorithm.
+    CHECK_FALSE(ObjColorMapping::collect_exact(input, 2, colors, labels));
+    CHECK(colors.empty());
+    CHECK(labels.empty());
+    input.push_back({16.f / 255.f, 0.f, 0.f, 1.f});
+    CHECK_FALSE(ObjColorMapping::collect_exact(input, 16, colors, labels));
+    CHECK(colors.empty());
+    CHECK(labels.empty());
+}
+
+TEST_CASE("OBJ GUI uses printable RGB rather than alpha as filament identity", "[OBJ][GUIColor]")
+{
+    const std::vector<RGBA> input = {{1.f, 0.f, 0.f, 1.f}, {1.f, 0.f, 0.f, 0.5f}};
+    std::vector<RGBA>       colors;
+    std::vector<int>        labels;
+    REQUIRE(ObjColorMapping::collect_exact(input, 16, colors, labels));
+    CHECK(colors.size() == 1);
+    CHECK((labels == std::vector<int>{0, 0}));
+}
+
+TEST_CASE("OBJ GUI reuses existing and proposed filament colors", "[OBJ][GUIColor]")
+{
+    using ObjColorMapping::RGB8;
+    const RGB8              red = {204, 64, 55}, white = {255, 255, 255}, green = {0, 255, 0};
+    const std::vector<RGB8> input = {red, white, red};
+    const auto              first = ObjColorMapping::plan_filaments(input, {green, red}, 16);
+    CHECK((first.slots == std::vector<int>{2, 3, 2}));
+    CHECK((first.added == std::vector<RGB8>{white}));
+    const auto again = ObjColorMapping::plan_filaments(input, {green, red, white}, 16);
+    CHECK(again.added.empty());
+    CHECK(again.slots == first.slots);
+    // Duplicate existing colors reuse the first slot deterministically.
+    const auto duplicate = ObjColorMapping::plan_filaments({red}, {red, red}, 16);
+    CHECK((duplicate.slots == std::vector<int>{1}));
+    CHECK(duplicate.added.empty());
+    const auto proposed = ObjColorMapping::plan_filaments({white, white}, {green}, 16);
+    CHECK((proposed.slots == std::vector<int>{2, 2}));
+    CHECK(proposed.added.size() == 1);
+}
+
+TEST_CASE("OBJ GUI full palette still reuses exact colors after overflow", "[OBJ][GUIColor]")
+{
+    using ObjColorMapping::RGB8;
+    const RGB8 red = {255, 0, 0}, white = {255, 255, 255}, green = {0, 255, 0};
+    const auto plan = ObjColorMapping::plan_filaments({white, red, green}, {red}, 2);
+    CHECK((plan.slots == std::vector<int>{2, 1, 0}));
+    CHECK((plan.added == std::vector<RGB8>{white}));
+    const auto full = ObjColorMapping::plan_filaments({green, red, white}, {red, white}, 2);
+    CHECK((full.slots == std::vector<int>{0, 1, 2}));
+    CHECK(full.added.empty());
+}
+
+TEST_CASE("OBJ GUI commits only referenced new filaments after manual remapping", "[OBJ][GUIColor]")
+{
+    using ObjColorMapping::RGB8;
+    const RGB8 red = {255, 0, 0}, white = {255, 255, 255};
+    // One existing slot; proposed slots 2 and 3. User remapped slot 2 to existing slot 1.
+    const auto plan = ObjColorMapping::compact_filaments(1, {red, white}, {1, 3, 3});
+    CHECK((plan.added == std::vector<RGB8>{white}));
+    CHECK((plan.slots == std::vector<int>{1, 2, 2}));
+    const auto all_existing = ObjColorMapping::compact_filaments(1, {red, white}, {1, 1});
+    CHECK(all_existing.added.empty());
+    CHECK((all_existing.slots == std::vector<int>{1, 1}));
+}
 
 namespace {
 
@@ -66,6 +170,159 @@ private:
 };
 
 } // namespace
+
+namespace {
+
+struct ObjImportFixture
+{
+    boost::filesystem::path directory = boost::filesystem::temp_directory_path() /
+                                        boost::filesystem::unique_path("orcaslicer-obj-import-%%%%-%%%%");
+
+    ObjImportFixture()
+    {
+        REQUIRE(boost::filesystem::create_directory(directory));
+        write("palette.mtl", "newmtl color\nKd 1 0 0\nmap_Kd texture.png\n");
+    }
+
+    ~ObjImportFixture()
+    {
+        boost::system::error_code error;
+        boost::filesystem::remove_all(directory, error);
+    }
+
+    void write(const std::string& name, const std::string& contents) const
+    {
+        boost::nowide::ofstream stream((directory / name).string());
+        REQUIRE(stream.is_open());
+        stream << contents;
+        stream.close();
+        REQUIRE(stream.good());
+    }
+
+    void obj(const std::string& faces) const
+    {
+        write("input.obj", "mtllib palette.mtl\nv 0 0 0 1 0 0\nv 1 0 0 1 0 0\n"
+                           "v 1 1 0 1 0 0\nv 0 1 0 1 0 0\n"
+                           "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\nusemtl color\n" +
+                               faces);
+    }
+
+    bool load(TriangleMesh& mesh, ObjInfo& info, std::string& message, bool geometry_only = false) const
+    {
+        return load_obj((directory / "input.obj").string().c_str(), &mesh, info, message, geometry_only);
+    }
+};
+
+} // namespace
+
+TEST_CASE("OBJ material import tolerates faces with omitted UV coordinates", "[OBJ][CLI][Import]")
+{
+    ObjImportFixture fixture;
+    SECTION("all UVs omitted") { fixture.obj("f 1 2 3\n"); }
+    SECTION("normal references without UVs") { fixture.obj("f 1//1 2//1 3//1\n"); }
+    SECTION("one corner omits its UV") { fixture.obj("f 1/1 2 3/3\n"); }
+    TriangleMesh mesh;
+    ObjInfo      info;
+    std::string  message;
+    REQUIRE(fixture.load(mesh, info, message));
+    CHECK(mesh.facets_count() == 1);
+    CHECK(info.face_colors.size() == 1);
+    CHECK(info.uvs.empty());
+    CHECK_FALSE(info.has_uv_png);
+    CHECK(info.uv_map_pngs.empty());
+}
+
+TEST_CASE("OBJ import rejects invalid UV indices unless explicitly loading geometry only", "[OBJ][CLI][Import]")
+{
+    ObjImportFixture fixture;
+    SECTION("positive out of range") { fixture.obj("f 1/5 2/2 3/3\n"); }
+    SECTION("negative out of range") { fixture.obj("f 1/-5 2/-3 3/-2\n"); }
+    SECTION("invalid fourth corner") { fixture.obj("f 1/1 2/2 3/3 4/9\n"); }
+    TriangleMesh mesh;
+    ObjInfo      info;
+    std::string  message;
+    CHECK_FALSE(fixture.load(mesh, info, message));
+    CHECK(message.find("texture coordinate index") != std::string::npos);
+    ObjInfo geometry_info;
+    REQUIRE(fixture.load(mesh, geometry_info, message, true));
+    CHECK(geometry_info.face_colors.empty());
+    CHECK(geometry_info.uvs.empty());
+}
+
+TEST_CASE("OBJ negative UV indices and quad triangulation preserve UV corner order", "[OBJ][CLI][Import]")
+{
+    ObjImportFixture fixture;
+    fixture.obj("f 1/-4 2/-3 3/-2 4/-1\n");
+    TriangleMesh mesh;
+    ObjInfo      info;
+    std::string  message;
+    REQUIRE(fixture.load(mesh, info, message));
+    REQUIRE(mesh.facets_count() == 2);
+    REQUIRE(info.uvs.size() == 2);
+    const std::array<Vec2f, 3> first{Vec2f(0, 0), Vec2f(1, 0), Vec2f(1, 1)};
+    const std::array<Vec2f, 3> second{Vec2f(0, 0), Vec2f(1, 1), Vec2f(0, 1)};
+    for (size_t i = 0; i < 3; ++i) {
+        CHECK((info.uvs[0][i] - first[i]).squaredNorm() == 0.f);
+        CHECK((info.uvs[1][i] - second[i]).squaredNorm() == 0.f);
+    }
+}
+
+TEST_CASE("Geometry-only OBJ import skips a failing MTL parser and all color metadata", "[OBJ][CLI][Import]")
+{
+    ObjImportFixture fixture;
+    fixture.obj("f 1/1 2/2 3/3\n");
+    fixture.write("palette.mtl", std::string(70000, 'X'));
+    TriangleMesh mesh;
+    ObjInfo      info;
+    std::string  message;
+    CHECK_FALSE(fixture.load(mesh, info, message));
+    ObjInfo geometry_info;
+    REQUIRE(fixture.load(mesh, geometry_info, message, true));
+    CHECK(mesh.facets_count() == 1);
+    CHECK(geometry_info.vertex_colors.empty());
+    CHECK(geometry_info.face_colors.empty());
+    CHECK(geometry_info.material_names.empty());
+    CHECK(geometry_info.face_material_ids.empty());
+    CHECK(geometry_info.uvs.empty());
+    CHECK(geometry_info.pngs.empty());
+
+    // Exercise the Model::read_from_file forwarding used by the CLI, not just the low-level loader.
+    Model model = Model::read_from_file((fixture.directory / "input.obj").string(), nullptr, nullptr, LoadStrategy::AddDefaultInstances,
+                                        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, false, nullptr, nullptr,
+                                        nullptr, true);
+    REQUIRE(model.objects.size() == 1);
+    REQUIRE(model.objects.front()->volumes.size() == 1);
+    CHECK(model.objects.front()->volumes.front()->mmu_segmentation_facets.empty());
+}
+
+TEST_CASE("Geometry-only OBJ import still rejects invalid geometry indices", "[OBJ][CLI][Import]")
+{
+    ObjImportFixture fixture;
+    fixture.obj("f 1 2 99\n");
+    TriangleMesh mesh;
+    ObjInfo      info;
+    std::string  message;
+    CHECK_FALSE(fixture.load(mesh, info, message, true));
+    CHECK(message.find("vertex index") != std::string::npos);
+}
+
+TEST_CASE("Strict CLI color import rejects unsupported or unresolved source colors", "[OBJ][CLI][Import]")
+{
+    ObjImportFixture fixture;
+    fixture.write("input.obj", "mtllib palette.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\n"
+                               "vt 0 0\nvt 1 0\nvt 0 1\nusemtl color\nf 1/1 2/2 3/3\n");
+    SECTION("texture colors") {}
+    SECTION("vertex colors") { fixture.obj("f 1 2 3\n"); }
+    SECTION("missing material") { fixture.write("palette.mtl", "newmtl unrelated\nKd 1 0 0\n"); }
+    const auto load = [&](bool geometry_only, bool strict_colors) {
+        return Model::read_from_file((fixture.directory / "input.obj").string(), nullptr, nullptr, LoadStrategy::AddDefaultInstances,
+                                     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, false, nullptr, nullptr,
+                                     nullptr, geometry_only, strict_colors);
+    };
+    REQUIRE_THROWS(load(false, true));
+    CHECK_NOTHROW(load(false, false)); // Existing import policy remains available outside repair color output.
+    CHECK_NOTHROW(load(true, false));
+}
 
 TEST_CASE("Geometry-only OBJ export propagates file-open errors", "[OBJ][CLI]")
 {

@@ -15,6 +15,7 @@ class ModelObject;
 
 struct StagedModelRepair
 {
+    size_t                 transaction_id = 0;
     ModelRepairReport      report;
     std::shared_ptr<Model> model;
     std::string            error;

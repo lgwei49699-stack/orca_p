@@ -47,11 +47,12 @@ private:
     void draw_table();
     void show_sizer(wxSizer *sizer, bool show);
     void redraw_part_table();
-    void deal_approximate_match_btn();
-    void deal_add_btn();
-    void deal_reset_btn();
-    void deal_algo(char cluster_number,bool redraw_ui =false);
-    void deal_default_strategy();
+    void        deal_approximate_match_btn(bool only_unmapped = false);
+    void        deal_add_btn();
+    void        deal_reset_btn();
+    void        deal_algo(int cluster_number, bool redraw_ui = false);
+    void        deal_default_strategy();
+
 private:
     //view ui
     wxScrolledWindow *        m_scrolledWindow = nullptr;
@@ -75,7 +76,7 @@ private:
     wxGridSizer*            m_gridsizer = nullptr;
     wxStaticText *            m_test      = nullptr;
     //data
-    char                       m_last_cluster_number{-2};
+    int                        m_last_cluster_number{-2};
     std::vector<Slic3r::RGBA>& m_input_colors;
     int m_color_num_recommend{0};
     int m_color_cluster_num_by_algo{0};

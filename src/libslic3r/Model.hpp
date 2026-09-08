@@ -830,6 +830,9 @@ public:
     // It contains information about connetors
     struct CutInfo
     {
+        // Transient provenance for the active cut/PartSelection pipeline. Copied
+        // through split volumes, deliberately not serialized into projects or Undo.
+        ObjectID            painting_source_id;
         bool                is_from_upper{ true };
         bool                is_connector{ false };
         bool                is_processed{ true };
@@ -1658,9 +1661,13 @@ public:
                                 bool                             repair_stl                = true,
                                 MeshRepairReport*                repair_report             = nullptr,
                                 const std::vector<unsigned int>* obj_material_extruder_ids = nullptr,
-                                std::string*                     obj_primary_color_group   = nullptr);
+                                std::string*                     obj_primary_color_group   = nullptr,
+                                bool                             obj_geometry_only         = false,
+                                bool                             obj_require_color_mapping = false);
     // BBS
-    static bool    obj_import_vertex_color_deal(const std::vector<unsigned char> &vertex_filament_ids, const unsigned char &first_extruder_id, Model *model);
+    static bool obj_import_vertex_color_deal(const std::vector<unsigned char>& vertex_filament_ids,
+                                             const unsigned char&              first_extruder_id,
+                                             Model*                            model);
     static bool    obj_import_face_color_deal(const std::vector<unsigned char> &face_filament_ids, const unsigned char &first_extruder_id, Model *model);
     static double findMaxSpeed(const ModelObject* object);
     static double getThermalLength(const ModelVolume* modelVolumePtr);
