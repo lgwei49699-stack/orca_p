@@ -61,6 +61,7 @@
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/Slicing.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/GCode/Thumbnails.hpp"
 #include "libslic3r/SLAPrint.hpp"
@@ -111,6 +112,38 @@ using namespace Slic3r;
 }error_message;*/
 
 #define MAX_CLONEABLE_SIZE 512
+
+static bool cli_variable_layer_height_profiles_equal(const std::vector<coordf_t> &lhs, const std::vector<coordf_t> &rhs)
+{
+    if (lhs.size() != rhs.size())
+        return false;
+    for (size_t i = 0; i < lhs.size(); ++i)
+        if (std::abs(lhs[i] - rhs[i]) > EPSILON)
+            return false;
+    return true;
+}
+
+static std::vector<coordf_t> cli_generate_variable_layer_height_profile(
+    const PrintObject &print_object,
+    float quality_speed,
+    bool smooth,
+    unsigned int smoothing_radius,
+    bool keep_min)
+{
+    if (print_object.instances().empty() || print_object.instances().front().model_instance == nullptr)
+        throw std::runtime_error("Cannot generate a variable layer height profile without a printable instance.");
+
+    std::vector<coordf_t> profile = layer_height_profile_adaptive(
+        print_object.slicing_parameters(),
+        *print_object.model_object(),
+        *print_object.instances().front().model_instance,
+        quality_speed);
+    if (smooth) {
+        const HeightProfileSmoothingParams smoothing_params(smoothing_radius, keep_min);
+        profile = smooth_height_profile(profile, print_object.slicing_parameters(), smoothing_params);
+    }
+    return profile;
+}
 
 std::map<int, std::string> cli_errors =
     {{CLI_SUCCESS, "Success."},
@@ -1463,6 +1496,44 @@ int CLI::run(int argc, char **argv)
     long long global_begin_time = 0, global_current_time;
     sliced_info_t sliced_info;
     std::map<std::string, std::string> record_key_values;
+
+    enum class CLIVariableLayerHeightMode { Preserve, Adaptive, Reset };
+    std::string variable_layer_height_mode_name = m_config.opt_string("variable_layer_height_mode");
+    boost::algorithm::to_lower(variable_layer_height_mode_name);
+    CLIVariableLayerHeightMode variable_layer_height_mode;
+    if (variable_layer_height_mode_name == "preserve")
+        variable_layer_height_mode = CLIVariableLayerHeightMode::Preserve;
+    else if (variable_layer_height_mode_name == "adaptive")
+        variable_layer_height_mode = CLIVariableLayerHeightMode::Adaptive;
+    else if (variable_layer_height_mode_name == "reset")
+        variable_layer_height_mode = CLIVariableLayerHeightMode::Reset;
+    else {
+        const std::string message = "Invalid --variable-layer-height-mode '" + variable_layer_height_mode_name +
+                                    "'; expected preserve, adaptive, or reset.";
+        BOOST_LOG_TRIVIAL(error) << message;
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        flush_and_exit(CLI_INVALID_PARAMS);
+    }
+
+    const float variable_layer_height_quality_speed = float(m_config.opt_float("variable_layer_height_quality_speed"));
+    const bool variable_layer_height_smooth = m_config.opt_bool("variable_layer_height_smooth");
+    const unsigned int variable_layer_height_smoothing_radius =
+        unsigned(m_config.opt_int("variable_layer_height_smoothing_radius"));
+    const bool variable_layer_height_keep_min = m_config.opt_bool("variable_layer_height_keep_min");
+    const bool variable_layer_height_changes_profile =
+        variable_layer_height_mode != CLIVariableLayerHeightMode::Preserve;
+
+    if (variable_layer_height_changes_profile &&
+        std::find(m_actions.begin(), m_actions.end(), "load_slicedata") != m_actions.end()) {
+        const std::string message =
+            "--variable-layer-height-mode adaptive/reset cannot be combined with --load-slicedata because cached layers may use a different layer-height profile.";
+        BOOST_LOG_TRIVIAL(error) << message;
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        flush_and_exit(CLI_INVALID_PARAMS);
+    }
+
     std::vector<std::string> effective_load_filaments = requested_load_filaments;
     std::vector<std::vector<unsigned int>> model_material_slots(m_input_files.size());
     const bool has_model_filament_mapping = std::any_of(
@@ -6763,9 +6834,10 @@ int CLI::run(int argc, char **argv)
             }
 #endif
             // Make a copy of the model if the current action is not the last action, as the model may be
-            // modified by the centering and such.
+            // modified by the centering and such. CLI variable layer height is a runtime slicing override;
+            // always keep it off the canonical model so action ordering cannot accidentally persist it to 3MF.
             Model model_copy;
-            bool  make_copy = &opt_key != &m_actions.back();
+            bool  make_copy = variable_layer_height_changes_profile || &opt_key != &m_actions.back();
             for (Model &model_in : m_models) {
                 if (make_copy)
                     model_copy = model_in;
@@ -6992,6 +7064,100 @@ int CLI::run(int argc, char **argv)
                             }
                         }
                         print->apply(model, new_print_config);
+
+                        if (variable_layer_height_changes_profile) {
+                            std::map<int, std::pair<std::string, std::vector<coordf_t>>> generated_profiles;
+                            std::set<int> active_object_ids;
+                            std::string variable_layer_height_error;
+
+                            if (print_fff == nullptr) {
+                                variable_layer_height_error = "CLI variable layer height requires an FFF print.";
+                            } else {
+                                try {
+                                    for (const PrintObject *print_object : print_fff->objects()) {
+                                        const ModelObject *model_object = print_object->model_object();
+                                        const int object_id = model_object->id().id;
+                                        active_object_ids.insert(object_id);
+
+                                        if (variable_layer_height_mode != CLIVariableLayerHeightMode::Adaptive)
+                                            continue;
+
+                                        std::vector<coordf_t> profile = cli_generate_variable_layer_height_profile(
+                                            *print_object,
+                                            variable_layer_height_quality_speed,
+                                            variable_layer_height_smooth,
+                                            variable_layer_height_smoothing_radius,
+                                            variable_layer_height_keep_min);
+
+                                        auto existing_profile = generated_profiles.find(object_id);
+                                        if (existing_profile == generated_profiles.end()) {
+                                            generated_profiles.emplace(
+                                                object_id, std::make_pair(model_object->name, std::move(profile)));
+                                        } else if (!cli_variable_layer_height_profiles_equal(existing_profile->second.second, profile)) {
+                                            variable_layer_height_error =
+                                                "Object '" + model_object->name +
+                                                "' has printable instances with different poses or scales that require different variable layer-height profiles. "
+                                                "Split those instances into separate objects before using --variable-layer-height-mode adaptive.";
+                                            break;
+                                        }
+                                    }
+                                } catch (const std::exception &ex) {
+                                    variable_layer_height_error =
+                                        std::string("Failed to generate CLI variable layer height: ") + ex.what();
+                                }
+                            }
+
+                            if (!variable_layer_height_error.empty()) {
+                                BOOST_LOG_TRIVIAL(error) << "plate " << index + 1 << ": " << variable_layer_height_error;
+                                boost::nowide::cerr << variable_layer_height_error << std::endl;
+                                record_exit_reson(outfile_dir, CLI_VALIDATE_ERROR, index + 1, variable_layer_height_error, sliced_info);
+                                flush_and_exit(CLI_VALIDATE_ERROR);
+                            }
+
+                            bool profile_changed = false;
+                            size_t updated_object_count = 0;
+                            for (ModelObject *model_object : model.objects) {
+                                if (active_object_ids.find(model_object->id().id) == active_object_ids.end())
+                                    continue;
+
+                                if (variable_layer_height_mode == CLIVariableLayerHeightMode::Reset) {
+                                    if (!model_object->layer_height_profile.empty()) {
+                                        model_object->layer_height_profile.clear();
+                                        profile_changed = true;
+                                        ++updated_object_count;
+                                    }
+                                } else {
+                                    const auto profile_it = generated_profiles.find(model_object->id().id);
+                                    if (profile_it == generated_profiles.end()) {
+                                        variable_layer_height_error =
+                                            "Unable to match generated variable layer height to object '" + model_object->name + "'.";
+                                        break;
+                                    }
+                                    const std::vector<coordf_t> current_profile = model_object->layer_height_profile.get();
+                                    if (current_profile != profile_it->second.second) {
+                                        model_object->layer_height_profile.set(profile_it->second.second);
+                                        profile_changed = true;
+                                        ++updated_object_count;
+                                    }
+                                }
+                            }
+
+                            if (!variable_layer_height_error.empty()) {
+                                BOOST_LOG_TRIVIAL(error) << "plate " << index + 1 << ": " << variable_layer_height_error;
+                                boost::nowide::cerr << variable_layer_height_error << std::endl;
+                                record_exit_reson(outfile_dir, CLI_VALIDATE_ERROR, index + 1, variable_layer_height_error, sliced_info);
+                                flush_and_exit(CLI_VALIDATE_ERROR);
+                            }
+
+                            if (profile_changed)
+                                print->apply(model, new_print_config);
+
+                            BOOST_LOG_TRIVIAL(info)
+                                << "plate " << index + 1 << ": CLI variable layer height mode="
+                                << variable_layer_height_mode_name << ", updated_objects=" << updated_object_count
+                                << ", quality_speed=" << variable_layer_height_quality_speed
+                                << ", smooth=" << variable_layer_height_smooth;
+                        }
                         BOOST_LOG_TRIVIAL(info) << boost::format("set no_check to %1%:")%no_check;
                         print->set_no_check_flag(no_check);//BBS
                         StringObjectException warning;

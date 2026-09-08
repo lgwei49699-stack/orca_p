@@ -12,6 +12,7 @@ add_executable(${_TEST_NAME}_tests
 	test_geometry.cpp
 	test_placeholder_parser.cpp
 	test_polygon.cpp
+	test_slicing.cpp
 	test_mutable_polygon.cpp
 	test_mutable_priority_queue.cpp
 	test_stl.cpp
@@ -39,6 +40,8 @@ target_include_directories(${_TEST_NAME}_tests PRIVATE ${PROJECT_SOURCE_DIR}/src
 set_property(TARGET ${_TEST_NAME}_tests PROPERTY FOLDER "tests")
 
 if (WIN32)
+	target_link_libraries(${_TEST_NAME}_tests OpenSSL::Crypto bcrypt)
+
 	if ("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
 	orcaslicer_copy_dlls(COPY_DLLS "Debug" "d" output_dlls_Debug)
 	elseif("${CMAKE_BUILD_TYPE}" STREQUAL "RelWithDebInfo")

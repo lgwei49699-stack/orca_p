@@ -71,7 +71,7 @@
     "min_layer_height": [
         "0.08"
     ],
-    "printable_height": "100",
+    "printable_height": "110",
     "extruder_clearance_radius": "65",
     "extruder_clearance_height_to_rod": "36",
     "extruder_clearance_height_to_lid": "140",
@@ -131,8 +131,8 @@
     "version": "2.3.0.3",
     "printable_area": [
         "0x0",
-        "123x0",
-        "123x100",
+        "120x0",
+        "120x100",
         "0x100"
     ],
     "bed_mesh_min": "-0,-0",
