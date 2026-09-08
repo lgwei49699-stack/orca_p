@@ -67,6 +67,7 @@ private:
     void accept_selection(bool use_3mf_file = false);
     void update_confirm_button_state();
     void toggle_row_checked(long row);
+    bool copy_row_mac(long row);
     void sync_checked_keys_from_table();
     void update_table_column_widths();
     void set_tip_message(const wxString& message, bool is_error = false);

@@ -35,8 +35,11 @@
 #include <wx/statbox.h>
 #include <wx/statbmp.h>
 #include <wx/filedlg.h>
+#include <wx/textdlg.h>
 #include <wx/dnd.h>
 #include <wx/progdlg.h>
+#include <wx/listctrl.h>
+#include <wx/scrolwin.h>
 #include <wx/string.h>
 #include <wx/datetime.h>
 #include <wx/wupdlock.h>
@@ -2526,6 +2529,7 @@ bool gfd_refresh_auth_token_for_worker(
 struct GFDImportRestoreState
 {
     std::string              printer_preset_name;
+    std::string              process_preset_name;
     std::string              selected_filament_preset_name;
     std::vector<std::string> filament_presets;
     std::vector<std::string> filament_colors;
@@ -2538,6 +2542,7 @@ GFDImportRestoreState gfd_capture_import_restore_state(const PresetBundle* bundl
         return state;
 
     state.printer_preset_name           = bundle->printers.get_selected_preset_name();
+    state.process_preset_name           = bundle->prints.get_selected_preset_name();
     state.selected_filament_preset_name = bundle->filaments.get_selected_preset_name();
     state.filament_presets              = bundle->filament_presets;
     if (const ConfigOptionStrings* filament_colors = bundle->project_config.option<ConfigOptionStrings>("filament_colour");
@@ -2669,129 +2674,6 @@ std::string gfd_current_cloud_process_name(const PresetBundle* bundle)
     return edited_preset;
 }
 
-std::string gfd_unique_process_preset_name(PresetCollection& prints, const std::string& base_name)
-{
-    std::string candidate = base_name;
-    for (size_t index = 2; prints.find_preset(candidate, false, true) != nullptr; ++index)
-        candidate = (boost::format("%1%_%2%") % base_name % index).str();
-    return candidate;
-}
-
-std::string gfd_unique_preset_name(PresetCollection& presets, const std::string& base_name)
-{
-    std::string candidate = base_name;
-    for (size_t index = 2; presets.find_preset(candidate, false, true) != nullptr; ++index)
-        candidate = (boost::format("%1%_%2%") % base_name % index).str();
-    return candidate;
-}
-
-std::string gfd_name_with_import_index(const std::string& base_name, size_t import_index)
-{
-    if (import_index <= 1)
-        return base_name;
-    return (boost::format("%1%_%2%") % base_name % import_index).str();
-}
-
-std::string gfd_trim_cloud_import_index_suffix(const std::string& name)
-{
-    const size_t separator = name.rfind('_');
-    if (separator == std::string::npos || separator + 1 >= name.size())
-        return name;
-
-    if (!std::all_of(name.begin() + separator + 1, name.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; }))
-        return name;
-
-    return name.substr(0, separator);
-}
-
-bool gfd_device_type_matches(const std::string& value, const std::string& expected_prefix)
-{
-    if (value.empty() || expected_prefix.empty() || value.size() < expected_prefix.size())
-        return false;
-
-    for (size_t index = 0; index < expected_prefix.size(); ++index) {
-        if (std::tolower(static_cast<unsigned char>(value[index])) != std::tolower(static_cast<unsigned char>(expected_prefix[index])))
-            return false;
-    }
-
-    if (value.size() == expected_prefix.size())
-        return true;
-
-    const unsigned char suffix_char = static_cast<unsigned char>(value[expected_prefix.size()]);
-    return !std::isalpha(suffix_char);
-}
-
-const Preset* gfd_find_system_printer_by_device_type(const PresetBundle& bundle, const std::string& device_type)
-{
-    if (device_type.empty())
-        return nullptr;
-
-    const Preset* best_match = nullptr;
-    size_t        best_score  = 0;
-    for (const Preset& preset : bundle.printers) {
-        if (!preset.is_system)
-            continue;
-
-        const std::string preset_device_type = GFD::Config::explicit_device_type(preset.config);
-        if (!gfd_device_type_matches(device_type, preset_device_type))
-            continue;
-
-        const size_t score = preset.name == preset_device_type ? preset_device_type.size() + 1000 : preset_device_type.size();
-        if (score > best_score) {
-            best_score  = score;
-            best_match = &preset;
-        }
-    }
-
-    return best_match;
-}
-
-std::string gfd_cloud_process_base_name(const std::string& source_name, const std::string& imported_name)
-{
-    if (!source_name.empty())
-        return source_name;
-
-    const std::string normalized_imported_name = gfd_normalize_cloud_process_name(imported_name);
-    return normalized_imported_name.empty() ? "cloud_config" : normalized_imported_name;
-}
-
-std::string gfd_resolve_compatible_printer_name(const PresetBundle& bundle, const std::string& printer_preset_name)
-{
-    if (!printer_preset_name.empty()) {
-        if (const Preset* printer_preset = bundle.printers.find_preset(printer_preset_name, false); printer_preset != nullptr) {
-            const std::string parent_printer_name = printer_preset->inherits();
-            // A system preset may inherit another system machine only to share settings; it is still a distinct
-            // compatibility target. User-renamed presets, on the other hand, match through their system parent.
-            return printer_preset->is_system || parent_printer_name.empty() ? printer_preset->name : parent_printer_name;
-        }
-        return printer_preset_name;
-    }
-
-    const Preset& base_printer = bundle.printers.get_selected_preset_base();
-    return !base_printer.name.empty() ? base_printer.name : bundle.printers.get_selected_preset_name();
-}
-
-void gfd_bind_preset_to_printer(Preset& preset, const std::string& compatible_printer_name)
-{
-    if (compatible_printer_name.empty())
-        return;
-
-    ConfigOptionStrings* compatible_printers = preset.config.option<ConfigOptionStrings>("compatible_printers", true);
-    if (compatible_printers == nullptr)
-        return;
-
-    // Cloud imports are local copies for the machine that is active at import time.
-    compatible_printers->values = {compatible_printer_name};
-    if (ConfigOptionString* condition = preset.config.option<ConfigOptionString>("compatible_printers_condition", true);
-        condition != nullptr)
-        condition->value.clear();
-}
-
-std::string gfd_cloud_import_timestamp()
-{
-    return into_u8(wxDateTime::Now().Format("%Y%m%d_%H%M%S"));
-}
-
 std::string gfd_cloud_export_preset_name(const std::string& name)
 {
     static const std::regex timestamp_suffix_pattern(R"(^(.+)_\d{8}_\d{6}(?:_\d+)?$)");
@@ -2824,101 +2706,7 @@ void gfd_sanitize_cloud_export_config(DynamicPrintConfig& config)
     }
 }
 
-std::string gfd_cloud_import_preset_name(const std::string& device_type, const std::string& base_name, const std::string& timestamp)
-{
-    const std::string source_machine = device_type.empty() ? "cloud" : device_type;
-    const std::string name           = base_name.empty() ? "config" : base_name;
-    return (boost::format("%1%(%2%)_%3%") % name % source_machine % timestamp).str();
-}
-
-std::string gfd_cloud_related_preset_base_name(const std::string& source_name,
-                                               const std::string& preset_name,
-                                               const std::string& fallback_name)
-{
-    std::string normalized_name = Preset::remove_suffix_modified(preset_name);
-    normalized_name             = gfd_trim_cloud_import_index_suffix(normalized_name);
-
-    const std::string prefix = source_name + " - ";
-    if (boost::algorithm::starts_with(normalized_name, prefix))
-        normalized_name.erase(0, prefix.size());
-
-    const size_t close_pos = normalized_name.size();
-    if (close_pos >= 2 && normalized_name.back() == ')') {
-        const size_t open_pos = normalized_name.rfind('(');
-        if (open_pos != std::string::npos && open_pos > 0 && open_pos < close_pos - 1)
-            normalized_name.erase(open_pos);
-    }
-
-    boost::algorithm::trim(normalized_name);
-    return normalized_name.empty() ? fallback_name : normalized_name;
-}
-
-std::string gfd_cloud_filament_base_name(const std::string& source_name,
-                                         const std::string& preset_name,
-                                         const std::string& fallback_name)
-{
-    std::string name = gfd_cloud_related_preset_base_name(source_name, preset_name, fallback_name);
-
-    // Filament IDs exported by 3MF commonly use "base material - parameter name".
-    // The base material is redundant because the imported copy is already scoped
-    // by source machine; retain only the actual cloud parameter name.
-    if (const size_t separator = name.rfind(" - "); separator != std::string::npos && separator + 3 < name.size())
-        name.erase(0, separator + 3);
-
-    name = gfd_trim_cloud_import_index_suffix(name);
-    boost::algorithm::trim(name);
-    return name.empty() ? fallback_name : name;
-}
-
-std::vector<std::string> gfd_filament_names_with_import_index(const std::vector<std::string>& filament_base_names, size_t import_index)
-{
-    std::vector<std::string>                filament_names;
-    std::map<std::string, size_t>           duplicate_counts;
-    filament_names.reserve(filament_base_names.size());
-
-    for (const std::string& filament_base_name : filament_base_names) {
-        std::string candidate = gfd_name_with_import_index(filament_base_name, import_index);
-        size_t&     count     = duplicate_counts[candidate];
-        ++count;
-        if (count > 1)
-            candidate = (boost::format("%1%_%2%") % candidate % count).str();
-        filament_names.emplace_back(std::move(candidate));
-    }
-
-    return filament_names;
-}
-
-size_t gfd_resolve_cloud_import_index(PresetBundle&                   bundle,
-                                      const std::string&             process_base_name,
-                                      const std::string&             printer_base_name,
-                                      const std::vector<std::string>& filament_base_names)
-{
-    for (size_t import_index = 1;; ++import_index) {
-        const std::string process_candidate = gfd_name_with_import_index(process_base_name, import_index);
-        if (!process_candidate.empty() && bundle.prints.find_preset(process_candidate, false, true) != nullptr)
-            continue;
-
-        const std::string printer_candidate = gfd_name_with_import_index(printer_base_name, import_index);
-        if (!printer_candidate.empty() && bundle.printers.find_preset(printer_candidate, false, true) != nullptr)
-            continue;
-
-        const std::vector<std::string> filament_candidates = gfd_filament_names_with_import_index(filament_base_names, import_index);
-        bool                           has_filament_collision = false;
-        for (const std::string& filament_candidate : filament_candidates) {
-            if (!filament_candidate.empty() && bundle.filaments.find_preset(filament_candidate, false, true) != nullptr) {
-                has_filament_collision = true;
-                break;
-            }
-        }
-
-        if (!has_filament_collision)
-            return import_index;
-    }
-}
-
-bool gfd_extract_project_settings_file(const std::string& config_3mf_path,
-                                       std::string&       project_settings_text,
-                                       std::string&       error_message)
+bool gfd_extract_project_settings_file(const std::string& config_3mf_path, std::string& project_settings_text, std::string& error_message)
 {
     if (config_3mf_path.empty() || !fs::exists(config_3mf_path)) {
         error_message = "配置 3MF 文件不存在";
@@ -2994,10 +2782,434 @@ bool gfd_parse_project_settings(const std::string& text, DynamicPrintConfig& con
     return true;
 }
 
-GFDHttpResult gfd_download_cloud_config_with_token(const std::string& url,
-                                                   const std::string& filename_hint,
-                                                   const std::string& token,
-                                                   fs::path&          output_path,
+struct GFDCloudPresetReplaceItem
+{
+    Preset::Type       type{Preset::TYPE_INVALID};
+    wxString           category;
+    std::string        local_name;
+    std::string        cloud_name;
+    std::string        compatible_printer_name;
+    DynamicPrintConfig local_config;
+    DynamicPrintConfig replacement_config;
+};
+
+std::string gfd_config_string(const DynamicPrintConfig& config, const char* key)
+{
+    const ConfigOptionString* option = config.option<ConfigOptionString>(key);
+    return option != nullptr ? option->value : std::string();
+}
+
+std::vector<std::string> gfd_config_strings(const DynamicPrintConfig& config, const char* key)
+{
+    const ConfigOptionStrings* option = config.option<ConfigOptionStrings>(key);
+    return option != nullptr ? option->values : std::vector<std::string>();
+}
+
+const Preset* gfd_find_cloud_preset(const std::vector<std::unique_ptr<Preset>>& presets,
+                                    Preset::Type                                type,
+                                    const std::string&                          preferred_name = {},
+                                    size_t                                      type_index     = 0)
+{
+    if (!preferred_name.empty()) {
+        const auto exact = std::find_if(presets.begin(), presets.end(), [type, &preferred_name](const std::unique_ptr<Preset>& preset) {
+            return preset != nullptr && preset->type == type && preset->name == preferred_name;
+        });
+        if (exact != presets.end())
+            return exact->get();
+    }
+
+    size_t index = 0;
+    for (const std::unique_ptr<Preset>& preset : presets) {
+        if (preset == nullptr || preset->type != type)
+            continue;
+        if (index++ == type_index)
+            return preset.get();
+    }
+    return nullptr;
+}
+
+void gfd_apply_cloud_preset_options(DynamicPrintConfig&             target,
+                                    const DynamicPrintConfig&       source,
+                                    const std::vector<std::string>& option_keys,
+                                    const std::set<std::string>&    preserved_keys = {})
+{
+    for (const std::string& key : option_keys) {
+        if (preserved_keys.count(key) != 0)
+            continue;
+        const ConfigOption* source_option = source.option(key);
+        if (source_option != nullptr)
+            target.set_key_value(key, source_option->clone());
+    }
+}
+
+bool gfd_has_cloud_preset_options(const DynamicPrintConfig& config, const std::vector<std::string>& option_keys)
+{
+    return std::any_of(option_keys.begin(), option_keys.end(), [&config](const std::string& key) { return config.option(key) != nullptr; });
+}
+
+DynamicPrintConfig gfd_cloud_replacement_config(const DynamicPrintConfig&       local_config,
+                                                const DynamicPrintConfig&       cloud_config,
+                                                const std::vector<std::string>& option_keys,
+                                                const std::set<std::string>&    preserved_keys = {})
+{
+    DynamicPrintConfig replacement = local_config;
+    gfd_apply_cloud_preset_options(replacement, cloud_config, option_keys, preserved_keys);
+    return replacement;
+}
+
+std::string gfd_current_printer_compatibility_name(const PresetBundle& bundle)
+{
+    const Preset& current_printer = bundle.printers.get_selected_preset();
+    if (current_printer.is_system || current_printer.inherits().empty())
+        return current_printer.name;
+
+    // Orca matches a user printer through its exact parent preset name. Do not
+    // use a device-type prefix here: EPONE and EPONE Pro are different targets.
+    return current_printer.inherits();
+}
+
+void gfd_bind_cloud_import_to_printer(DynamicPrintConfig& config, Preset::Type type, const std::string& compatible_printer_name)
+{
+    if ((type != Preset::TYPE_FILAMENT && type != Preset::TYPE_PRINT) || compatible_printer_name.empty())
+        return;
+
+    if (ConfigOptionStrings* compatible_printers = config.option<ConfigOptionStrings>("compatible_printers", true);
+        compatible_printers != nullptr) {
+        compatible_printers->values = {compatible_printer_name};
+        // The slice service loads EPONE jobs through the MyMarlin machine
+        // alias. Keep that alias without ever adding the other EPONE model.
+        if (compatible_printer_name == "EPONE 0.4 nozzle" || compatible_printer_name == "EPONE Pro 0.4 nozzle")
+            compatible_printers->values.emplace_back("MyMarlin 0.4 nozzle");
+    }
+    if (ConfigOptionString* condition = config.option<ConfigOptionString>("compatible_printers_condition", true); condition != nullptr)
+        condition->value.clear();
+}
+
+std::string gfd_cloud_save_as_default_name(const GFDCloudPresetReplaceItem& item)
+{
+    std::string base_name = boost::algorithm::trim_copy(item.cloud_name.empty() ? item.local_name : item.cloud_name);
+    if (base_name.empty())
+        base_name = "cloud_config";
+    if (!item.compatible_printer_name.empty())
+        return (boost::format("%1% (%2%)") % base_name % item.compatible_printer_name).str();
+    return base_name + " - copy";
+}
+
+wxString gfd_cloud_option_value(const DynamicPrintConfig& config, const std::string& key)
+{
+    if (config.option(key) == nullptr)
+        return _L("未设置");
+    return from_u8(config.opt_serialize(key));
+}
+
+wxString gfd_cloud_option_label(const DynamicPrintConfig& config, const std::string& key)
+{
+    const ConfigOptionDef* definition = config.def() != nullptr ? config.def()->get(key) : nullptr;
+    if (definition == nullptr)
+        return from_u8(key);
+    const std::string& label = definition->full_label.empty() ? definition->label : definition->full_label;
+    return label.empty() ? from_u8(key) : _(label);
+}
+
+void gfd_show_cloud_preset_differences(wxWindow* parent, const GFDCloudPresetReplaceItem& item)
+{
+    wxDialog dialog(parent, wxID_ANY, _L("参数差异"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+    dialog.SetSize(wxSize(dialog.FromDIP(1040), dialog.FromDIP(620)));
+    dialog.SetMinSize(wxSize(dialog.FromDIP(820), dialog.FromDIP(480)));
+
+    auto* main_sizer = new wxBoxSizer(wxVERTICAL);
+    main_sizer->Add(new wxStaticText(&dialog, wxID_ANY,
+                                     format_wxstr(_L("%1%：本地“%2%” 与云端“%3%”"), item.category, from_u8(item.local_name),
+                                                  from_u8(item.cloud_name))),
+                    0, wxEXPAND | wxALL, dialog.FromDIP(14));
+
+    auto* differences = new wxListCtrl(&dialog, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                       wxLC_REPORT | wxLC_HRULES | wxLC_VRULES | wxBORDER_SIMPLE);
+    differences->AppendColumn(_L("中文名称"), wxLIST_FORMAT_LEFT, dialog.FromDIP(190));
+    differences->AppendColumn(_L("英文参数"), wxLIST_FORMAT_LEFT, dialog.FromDIP(210));
+    differences->AppendColumn(_L("本地值"), wxLIST_FORMAT_LEFT, dialog.FromDIP(290));
+    differences->AppendColumn(_L("云端值"), wxLIST_FORMAT_LEFT, dialog.FromDIP(290));
+
+    t_config_option_keys keys = item.local_config.diff(item.replacement_config);
+    std::sort(keys.begin(), keys.end());
+    for (const std::string& key : keys) {
+        const long row = differences->InsertItem(differences->GetItemCount(), gfd_cloud_option_label(item.replacement_config, key));
+        differences->SetItem(row, 1, from_u8(key));
+        differences->SetItem(row, 2, gfd_cloud_option_value(item.local_config, key));
+        differences->SetItem(row, 3, gfd_cloud_option_value(item.replacement_config, key));
+    }
+    main_sizer->Add(differences, 1, wxEXPAND | wxLEFT | wxRIGHT, dialog.FromDIP(14));
+
+    if (keys.empty())
+        main_sizer->Add(new wxStaticText(&dialog, wxID_ANY, _L("本地参数与云端参数一致。")), 0, wxALIGN_CENTER | wxTOP, dialog.FromDIP(10));
+
+    auto* close_button = new wxButton(&dialog, wxID_CLOSE, _L("关闭"));
+    close_button->Bind(wxEVT_BUTTON, [&dialog](wxCommandEvent&) { dialog.EndModal(wxID_CLOSE); });
+    main_sizer->Add(close_button, 0, wxALIGN_RIGHT | wxALL, dialog.FromDIP(14));
+    dialog.SetSizer(main_sizer);
+    wxGetApp().UpdateDlgDarkUI(&dialog);
+    dialog.CentreOnParent();
+    dialog.ShowModal();
+}
+
+class GFDCloudPresetReplaceDialog final : public wxDialog
+{
+public:
+    using ReplaceHandler = std::function<bool(size_t, std::string&)>;
+    using SaveAsHandler  = std::function<bool(size_t, const std::string&, std::string&)>;
+
+    GFDCloudPresetReplaceDialog(wxWindow*                               parent,
+                                std::vector<GFDCloudPresetReplaceItem>& items,
+                                ReplaceHandler                          replace_handler,
+                                SaveAsHandler                           save_as_handler)
+        : wxDialog(parent, wxID_ANY, _L("云端参数导入确认"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+        , m_items(items)
+        , m_replace_handler(std::move(replace_handler))
+        , m_save_as_handler(std::move(save_as_handler))
+    {
+        SetSize(wxSize(FromDIP(1140), FromDIP(520)));
+        SetMinSize(wxSize(FromDIP(1000), FromDIP(420)));
+        build();
+        wxGetApp().UpdateDlgDarkUI(this);
+        CentreOnParent();
+    }
+
+    bool changed() const { return m_changed; }
+
+private:
+    std::vector<GFDCloudPresetReplaceItem>& m_items;
+    ReplaceHandler                          m_replace_handler;
+    SaveAsHandler                           m_save_as_handler;
+    bool                                    m_changed{false};
+
+    void build()
+    {
+        auto* main_sizer  = new wxBoxSizer(wxVERTICAL);
+        auto* description = new wxStaticText(this, wxID_ANY,
+                                             _L("请先查看差异，再逐项选择替换、另存为或取消。另存为可保留本地参数并用新名称保存云端参数；"
+                                                "导入的耗材和工艺参数只适用于当前机型。"));
+        description->Wrap(FromDIP(1080));
+        main_sizer->Add(description, 0, wxEXPAND | wxALL, FromDIP(16));
+
+        auto* scroll = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL | wxBORDER_SIMPLE);
+        scroll->SetScrollRate(0, FromDIP(10));
+        auto* rows = new wxBoxSizer(wxVERTICAL);
+
+        auto* header       = new wxPanel(scroll);
+        auto* header_sizer = new wxBoxSizer(wxHORIZONTAL);
+        header_sizer->Add(new wxStaticText(header, wxID_ANY, _L("参数类型")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+        header_sizer->Add(new wxStaticText(header, wxID_ANY, _L("本地参数名称")), 2, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+        header_sizer->Add(new wxStaticText(header, wxID_ANY, _L("云端参数名称")), 2, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+        header_sizer->Add(new wxStaticText(header, wxID_ANY, _L("状态")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+        header_sizer->Add(new wxStaticText(header, wxID_ANY, _L("操作")), 0, wxALIGN_CENTER_VERTICAL);
+        header->SetSizer(header_sizer);
+        rows->Add(header, 0, wxEXPAND | wxALL, FromDIP(10));
+
+        for (size_t index = 0; index < m_items.size(); ++index) {
+            const GFDCloudPresetReplaceItem& item      = m_items[index];
+            auto*                            row_panel = new wxPanel(scroll);
+            auto*                            row       = new wxBoxSizer(wxHORIZONTAL);
+
+            auto* category   = new wxStaticText(row_panel, wxID_ANY, item.category, wxDefaultPosition, wxSize(FromDIP(100), -1));
+            auto* local_name = new wxStaticText(row_panel, wxID_ANY, from_u8(item.local_name), wxDefaultPosition, wxSize(FromDIP(230), -1),
+                                                wxST_ELLIPSIZE_END);
+            auto* cloud_name = new wxStaticText(row_panel, wxID_ANY, from_u8(item.cloud_name), wxDefaultPosition, wxSize(FromDIP(230), -1),
+                                                wxST_ELLIPSIZE_END);
+            auto* status     = new wxStaticText(row_panel, wxID_ANY, _L("待选择"), wxDefaultPosition, wxSize(FromDIP(72), -1));
+            local_name->SetToolTip(from_u8(item.local_name));
+            cloud_name->SetToolTip(from_u8(item.cloud_name));
+
+            auto* view_button    = new wxButton(row_panel, wxID_ANY, _L("查看"), wxDefaultPosition, wxSize(FromDIP(70), FromDIP(30)));
+            auto* replace_button = new wxButton(row_panel, wxID_ANY, _L("替换"), wxDefaultPosition, wxSize(FromDIP(70), FromDIP(30)));
+            auto* save_as_button = new wxButton(row_panel, wxID_ANY, _L("另存为"), wxDefaultPosition, wxSize(FromDIP(76), FromDIP(30)));
+            auto* cancel_button  = new wxButton(row_panel, wxID_ANY, _L("取消"), wxDefaultPosition, wxSize(FromDIP(70), FromDIP(30)));
+
+            view_button->Bind(wxEVT_BUTTON, [this, index](wxCommandEvent&) { gfd_show_cloud_preset_differences(this, m_items[index]); });
+            replace_button->Bind(wxEVT_BUTTON, [this, index, status, replace_button, save_as_button, cancel_button](wxCommandEvent&) {
+                std::string error_message;
+                if (!m_replace_handler || !m_replace_handler(index, error_message)) {
+                    show_error(this, from_u8(error_message.empty() ? "替换参数失败" : error_message));
+                    return;
+                }
+                m_changed = true;
+                status->SetLabel(_L("已替换"));
+                replace_button->Disable();
+                save_as_button->Disable();
+                cancel_button->Disable();
+            });
+            save_as_button->Bind(wxEVT_BUTTON, [this, index, status, replace_button, save_as_button, cancel_button](wxCommandEvent&) {
+                wxTextEntryDialog name_dialog(this, _L("请输入新的参数名称："), _L("云端参数另存为"),
+                                              from_u8(gfd_cloud_save_as_default_name(m_items[index])));
+                wxGetApp().UpdateDlgDarkUI(&name_dialog);
+                if (name_dialog.ShowModal() != wxID_OK)
+                    return;
+
+                const std::string new_name = boost::algorithm::trim_copy(into_u8(name_dialog.GetValue()));
+                std::string       error_message;
+                if (!m_save_as_handler || !m_save_as_handler(index, new_name, error_message)) {
+                    show_error(this, from_u8(error_message.empty() ? "另存参数失败" : error_message));
+                    return;
+                }
+                m_changed = true;
+                status->SetLabel(_L("已另存"));
+                replace_button->Disable();
+                save_as_button->Disable();
+                cancel_button->Disable();
+            });
+            cancel_button->Bind(wxEVT_BUTTON, [status, replace_button, save_as_button, cancel_button](wxCommandEvent&) {
+                status->SetLabel(_L("已取消"));
+                replace_button->Disable();
+                save_as_button->Disable();
+                cancel_button->Disable();
+            });
+
+            row->Add(category, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+            row->Add(local_name, 2, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+            row->Add(cloud_name, 2, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+            row->Add(status, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+            row->Add(view_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+            row->Add(replace_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+            row->Add(save_as_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+            row->Add(cancel_button, 0, wxALIGN_CENTER_VERTICAL);
+            row_panel->SetSizer(row);
+            rows->Add(row_panel, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(10));
+        }
+
+        scroll->SetSizer(rows);
+        scroll->FitInside();
+        main_sizer->Add(scroll, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(16));
+
+        auto* close_button = new wxButton(this, wxID_CLOSE, _L("关闭"));
+        close_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_CLOSE); });
+        main_sizer->Add(close_button, 0, wxALIGN_RIGHT | wxALL, FromDIP(16));
+        SetSizer(main_sizer);
+    }
+};
+
+bool gfd_replace_cloud_preset(PresetBundle& bundle, const GFDCloudPresetReplaceItem& item, std::string& error_message)
+{
+    PresetCollection* collection = nullptr;
+    switch (item.type) {
+    case Preset::TYPE_PRINTER: collection = &bundle.printers; break;
+    case Preset::TYPE_FILAMENT: collection = &bundle.filaments; break;
+    case Preset::TYPE_PRINT: collection = &bundle.prints; break;
+    default: error_message = "不支持的参数类型"; return false;
+    }
+
+    const Preset* target = collection->find_preset(item.local_name, false, true);
+    if (target == nullptr) {
+        error_message = "未找到要替换的本地参数: " + item.local_name;
+        return false;
+    }
+    if (target->is_default || target->is_system) {
+        error_message = "系统参数不能直接覆盖，请先复制为用户参数后再导入: " + item.local_name;
+        return false;
+    }
+
+    Preset replacement = *target;
+    replacement.config = item.replacement_config;
+    gfd_bind_cloud_import_to_printer(replacement.config, item.type, item.compatible_printer_name);
+    collection->save_current_preset(item.local_name, false, false, &replacement);
+    Preset* saved = collection->find_preset(item.local_name, false, true);
+    if (saved == nullptr) {
+        error_message = "保存替换后的参数失败: " + item.local_name;
+        return false;
+    }
+    saved->is_external   = false;
+    saved->is_visible    = true;
+    saved->is_compatible = true;
+    return true;
+}
+
+bool gfd_save_cloud_preset_as(PresetBundle&                    bundle,
+                              const GFDCloudPresetReplaceItem& item,
+                              const std::string&               requested_name,
+                              std::string&                     error_message)
+{
+    PresetCollection* collection = nullptr;
+    switch (item.type) {
+    case Preset::TYPE_PRINTER: collection = &bundle.printers; break;
+    case Preset::TYPE_FILAMENT: collection = &bundle.filaments; break;
+    case Preset::TYPE_PRINT: collection = &bundle.prints; break;
+    default: error_message = "不支持的参数类型"; return false;
+    }
+
+    const std::string new_name = boost::algorithm::trim_copy(requested_name);
+    if (new_name.empty()) {
+        error_message = "参数名称不能为空";
+        return false;
+    }
+    static constexpr const char* invalid_name_characters = "<>[]:/\\|?*\"";
+    if (new_name.find_first_of(invalid_name_characters) != std::string::npos) {
+        error_message = std::string("参数名称包含非法字符: ") + invalid_name_characters;
+        return false;
+    }
+    if (new_name.find(PresetCollection::get_suffix_modified()) != std::string::npos) {
+        error_message = "参数名称不能包含修改状态后缀";
+        return false;
+    }
+    if (collection->find_preset(new_name, false, true) != nullptr) {
+        error_message = "本地已存在同名参数，请使用其他名称: " + new_name;
+        return false;
+    }
+
+    const Preset* source = collection->find_preset(item.local_name, false, true);
+    if (source == nullptr) {
+        error_message = "未找到另存所需的本地基础参数: " + item.local_name;
+        return false;
+    }
+
+    Preset saved_copy = *source;
+    saved_copy.config = item.replacement_config;
+    gfd_bind_cloud_import_to_printer(saved_copy.config, item.type, item.compatible_printer_name);
+    collection->save_current_preset(new_name, false, false, &saved_copy);
+
+    Preset* saved = collection->find_preset(new_name, false, true);
+    if (saved == nullptr) {
+        error_message = "另存云端参数失败: " + new_name;
+        return false;
+    }
+    saved->is_external   = false;
+    saved->is_visible    = true;
+    saved->is_compatible = true;
+    return true;
+}
+
+bool gfd_save_new_cloud_process(PresetBundle&             bundle,
+                                const std::string&        process_name,
+                                const DynamicPrintConfig& process_config,
+                                std::string&              error_message)
+{
+    if (process_name.empty()) {
+        error_message = "云端工艺参数名称为空";
+        return false;
+    }
+    if (bundle.prints.find_preset(process_name, false, true) != nullptr) {
+        error_message = "本地已存在同名工艺参数: " + process_name;
+        return false;
+    }
+
+    Preset process(Preset::TYPE_PRINT, process_name, false);
+    process.config        = process_config;
+    process.loaded        = true;
+    process.is_external   = false;
+    process.is_visible    = true;
+    process.is_compatible = true;
+    bundle.prints.save_current_preset(process_name, true, false, &process);
+    if (Preset* saved = bundle.prints.find_preset(process_name, false, true); saved != nullptr) {
+        saved->is_external   = false;
+        saved->is_visible    = true;
+        saved->is_compatible = true;
+        return true;
+    }
+    error_message = "保存云端工艺参数失败: " + process_name;
+    return false;
+}
+
+GFDHttpResult gfd_download_cloud_config_with_token(const std::string&        url,
+                                                   const std::string&        filename_hint,
+                                                   const std::string&        token,
+                                                   fs::path&                 output_path,
                                                    const GFDRequestCancelFn& cancel_callback = {})
 {
     GFDHttpResult result;
@@ -3735,21 +3947,21 @@ struct Plater::priv
                                                         const std::function<void(int)>& progress_callback = {},
                                                         const GFDRequestCancelFn&       cancel_callback   = {},
                                                         long                            timeout_seconds = GFD_OBS_UPLOAD_DEFAULT_TIMEOUT_SECONDS) const;
-    fs::path    gfd_temp_config_3mf_path();
-    bool        gfd_extract_project_settings_from_3mf(const std::string& config_3mf_path,
-                                                      std::string&       project_settings_text,
-                                                      std::string&       error_message) const;
-    void        gfd_log_3mf_archive_contents(const std::string& config_3mf_path) const;
-    bool        gfd_save_config_to_server(const std::string& config_name,
-                                          const std::string& remarks,
-                                          const std::string& file_url,
-                                          const std::string& project_settings_text,
-                                          const std::string& save_mode,
-                                          const std::string& cloud_config_id,
-                                          std::string&       body,
-                                          std::string&       error_message) const;
-    bool        gfd_upload_current_config(const std::string& config_name, const std::string& remarks);
-    bool        gfd_save_active_imported_cloud_config();
+    fs::path                 gfd_temp_config_3mf_path();
+    bool                     gfd_extract_project_settings_from_3mf(const std::string& config_3mf_path,
+                                                                   std::string&       project_settings_text,
+                                                                   std::string&       error_message) const;
+    void                     gfd_log_3mf_archive_contents(const std::string& config_3mf_path) const;
+    bool                     gfd_save_config_to_server(const std::string& config_name,
+                                                       const std::string& remarks,
+                                                       const std::string& file_url,
+                                                       const std::string& project_settings_text,
+                                                       const std::string& save_mode,
+                                                       const std::string& cloud_config_id,
+                                                       std::string&       body,
+                                                       std::string&       error_message) const;
+    bool                     gfd_upload_current_config(const std::string& config_name, const std::string& remarks);
+    bool                     gfd_save_active_imported_cloud_config();
     static bool              gfd_fetch_cloud_configs(const std::string&               device_type,
                                                      std::vector<GFDCloudConfigInfo>& configs,
                                                      std::string&                     error_message,
@@ -3758,58 +3970,29 @@ struct Plater::priv
                                                      const std::string&               request_url_override = std::string(),
                                                      unsigned*                        http_status          = nullptr,
                                                      std::string*                     response_body        = nullptr,
-                                                     const GFDRequestCancelFn&         cancel_callback      = {});
-    bool                     gfd_download_file_to_temp(const std::string& url,
-                                                       const std::string& filename_hint,
-                                                       fs::path&          output_path,
-                                                       std::string&       error_message) const;
-    bool        gfd_parse_project_settings_text(const std::string& text,
-                                                DynamicPrintConfig& config,
-                                                std::string& error_message) const;
-    void        gfd_prepare_imported_config_for_device_type(DynamicPrintConfig& config,
-                                                            const std::string& device_type) const;
-    bool        gfd_apply_project_config_text(const std::string& text,
-                                              const std::string& source_name,
-                                              std::string& error_message,
-                                              const std::string& device_type = std::string());
-    void        gfd_apply_cloud_process_name(const DynamicPrintConfig& imported_config,
-                                             const std::string& source_name,
-                                             const std::string& device_type);
-    void        gfd_refresh_after_cloud_config_import(const DynamicPrintConfig& imported_config,
-                                                      const std::string& source_name,
-                                                      const std::string& device_type = std::string(),
-                                                      const GFDImportRestoreState& restore_state = {});
-    bool        gfd_apply_config_3mf(const std::string& path,
-                                     const std::string& source_name,
-                                     std::string& error_message,
-                                     const std::string& device_type = std::string());
-    bool        gfd_apply_prepared_cloud_config(const GFDCloudConfigInfo& config,
-                                                GFDCloudConfigImportResult& prepared,
-                                                std::string& error_message);
-    std::vector<std::string> gfd_persist_imported_printer_and_filaments(const std::string& source_name,
-                                                                        const std::string& device_type,
-                                                                        const DynamicPrintConfig& imported_config,
-                                                                        const GFDImportRestoreState& restore_state);
-    bool        gfd_import_cloud_config(const GFDCloudConfigInfo& config);
-    void        gfd_record_imported_cloud_config(const GFDCloudConfigInfo& config);
-    bool        gfd_has_active_imported_cloud_config() const;
-    bool        gfd_has_dirty_active_imported_cloud_config() const;
-    bool        gfd_get_active_imported_cloud_config(GFDCloudImportState& state) const;
-    bool        gfd_fetch_dynamic_filament_list(std::string& body, std::string& error_message) const;
-    bool        gfd_fetch_dynamic_filament_detail(const std::string& filament_sn, std::string& body, std::string& error_message) const;
-    bool        gfd_update_dynamic_filament_slice_param(const std::string& filament_sn,
-                                                        const std::string& device_type,
-                                                        const std::string& slice_param,
-                                                        std::string&       body,
-                                                        std::string&       error_message) const;
-    bool        gfd_prepare_config_upload(const std::string& config_name,
-                                          const std::string& remarks,
-                                          const std::string& save_mode,
-                                          const std::string& cloud_config_id,
-                                          std::string&       device_type,
-                                          fs::path&          config_3mf_path,
-                                          std::string&       project_settings_text,
-                                          std::string&       error_message);
+                                                     const GFDRequestCancelFn&        cancel_callback      = {});
+    void                     gfd_refresh_after_cloud_config_import(const GFDImportRestoreState& restore_state);
+    bool gfd_apply_prepared_cloud_config(const GFDCloudConfigInfo& config, GFDCloudConfigImportResult& prepared, std::string& error_message);
+    bool           gfd_import_cloud_config(const GFDCloudConfigInfo& config);
+    void           gfd_record_imported_cloud_config(const GFDCloudConfigInfo& config);
+    bool           gfd_has_active_imported_cloud_config() const;
+    bool           gfd_has_dirty_active_imported_cloud_config() const;
+    bool           gfd_get_active_imported_cloud_config(GFDCloudImportState& state) const;
+    bool           gfd_fetch_dynamic_filament_list(std::string& body, std::string& error_message) const;
+    bool           gfd_fetch_dynamic_filament_detail(const std::string& filament_sn, std::string& body, std::string& error_message) const;
+    bool           gfd_update_dynamic_filament_slice_param(const std::string& filament_sn,
+                                                           const std::string& device_type,
+                                                           const std::string& slice_param,
+                                                           std::string&       body,
+                                                           std::string&       error_message) const;
+    bool           gfd_prepare_config_upload(const std::string& config_name,
+                                             const std::string& remarks,
+                                             const std::string& save_mode,
+                                             const std::string& cloud_config_id,
+                                             std::string&       device_type,
+                                             fs::path&          config_3mf_path,
+                                             std::string&       project_settings_text,
+                                             std::string&       error_message);
     nlohmann::json gfd_load_cloud_process_records() const;
     void           gfd_save_cloud_process_records(const nlohmann::json& records) const;
     std::vector<FilamentInfo> gfd_current_plate_filaments();
@@ -9732,11 +9915,8 @@ bool Plater::priv::gfd_fetch_cloud_configs(const std::string&               devi
                 info.info                 = json_string(conf, "info");
                 info.system_config        = json_bool(conf, "systemConfig");
                 BOOST_LOG_TRIVIAL(info) << "GFD cloud config parsed item"
-                                        << ", id=" << info.id
-                                        << ", name=" << info.name
-                                        << ", device_type=" << info.device_type
-                                        << ", file_url=" << info.config_file_url
-                                        << ", file_name=" << info.config_file_name
+                                        << ", id=" << info.id << ", name=" << info.name << ", device_type=" << info.device_type
+                                        << ", file_url=" << info.config_file_url << ", file_name=" << info.config_file_name
                                         << ", default_process_conf_length=" << info.default_process_conf.size()
                                         << ", system_config=" << info.system_config;
                 configs.emplace_back(std::move(info));
@@ -9745,217 +9925,20 @@ bool Plater::priv::gfd_fetch_cloud_configs(const std::string&               devi
     }
 
     BOOST_LOG_TRIVIAL(info) << "GFD fetch cloud configs parsed"
-                            << ", device_type=" << requested_device_type
-                            << ", count=" << configs.size();
+                            << ", device_type=" << requested_device_type << ", count=" << configs.size();
     return true;
 }
 
-bool Plater::priv::gfd_download_file_to_temp(const std::string& url,
-                                             const std::string& filename_hint,
-                                             fs::path& output_path,
-                                             std::string& error_message) const
-{
-    std::string response_body;
-    return GFDAuthManager::perform_authenticated_request(
-        [&](const std::string& token) {
-            return gfd_download_cloud_config_with_token(url, filename_hint, token, output_path);
-        },
-        response_body,
-        error_message,
-        q);
-}
-
-bool Plater::priv::gfd_parse_project_settings_text(const std::string& text,
-                                                   DynamicPrintConfig& config,
-                                                   std::string& error_message) const
-{
-    const bool parsed = gfd_parse_project_settings(text, config, error_message);
-    if (parsed) {
-        BOOST_LOG_TRIVIAL(info) << "GFD parse project settings text finished"
-                                << ", text_length=" << text.size()
-                                << ", option_count=" << config.keys().size();
-    } else {
-        BOOST_LOG_TRIVIAL(error) << "GFD parse project settings text failed"
-                                 << ", text_length=" << text.size()
-                                 << ", error=" << error_message;
-    }
-    return parsed;
-}
-
-void Plater::priv::gfd_prepare_imported_config_for_device_type(DynamicPrintConfig& config,
-                                                               const std::string& device_type) const
-{
-    if (device_type.empty())
-        return;
-
-    auto string_value = [](const DynamicPrintConfig& cfg, const char* key) -> std::string {
-        const ConfigOptionString* opt = cfg.option<ConfigOptionString>(key);
-        return opt != nullptr ? opt->value : std::string();
-    };
-
-    const std::string before_printer_model       = string_value(config, "printer_model");
-    const std::string before_printer_settings_id = string_value(config, "printer_settings_id");
-    const std::string before_gfd_device_type     = string_value(config, "gfd_device_type");
-    const std::string explicit_device_type       = GFD::Config::explicit_device_type(config);
-
-    // The cloud device type is retained for naming/auditing, while the imported
-    // parameter data is rebound to the machine that is currently selected.
-    if (wxGetApp().preset_bundle != nullptr) {
-        const DynamicPrintConfig& current_machine = wxGetApp().preset_bundle->printers.get_selected_preset().config;
-        for (const char* key : {"printer_model", "printer_variant", "gfd_device_type"}) {
-            const ConfigOption* current_option = current_machine.option(key);
-            if (current_option != nullptr)
-                config.set_key_value(key, current_option->clone());
-        }
-    } else {
-        config.option<ConfigOptionString>("gfd_device_type", true)->value = device_type;
-    }
-
-    BOOST_LOG_TRIVIAL(info) << "GFD prepared imported cloud config for device type"
-                            << ", cloud_device_type=" << device_type
-                            << ", before_printer_model=" << before_printer_model
-                            << ", before_printer_settings_id=" << before_printer_settings_id
-                            << ", before_gfd_device_type=" << before_gfd_device_type
-                            << ", imported_explicit_device_type=" << explicit_device_type
-                            << ", after_printer_model=" << string_value(config, "printer_model")
-                            << ", after_gfd_device_type=" << string_value(config, "gfd_device_type");
-}
-
-bool Plater::priv::gfd_apply_project_config_text(const std::string& text,
-                                                 const std::string& source_name,
-                                                 std::string& error_message,
-                                                 const std::string& device_type)
-{
-    DynamicPrintConfig config;
-    if (!gfd_parse_project_settings_text(text, config, error_message))
-        return false;
-    gfd_prepare_imported_config_for_device_type(config, device_type);
-
-    std::map<std::string, std::string> validity = config.validate();
-    if (!validity.empty()) {
-        BOOST_LOG_TRIVIAL(warning) << "GFD cloud config has invalid values"
-                                   << ", source=" << source_name
-                                   << ", count=" << validity.size();
-        for (const auto& item : validity)
-            BOOST_LOG_TRIVIAL(warning) << "GFD cloud config invalid value"
-                                       << ", key=" << item.first
-                                       << ", reason=" << item.second;
-    }
-
-    if (wxGetApp().preset_bundle == nullptr) {
-        error_message = "PresetBundle 未初始化";
-        return false;
-    }
-
-    const GFDImportRestoreState restore_state = gfd_capture_import_restore_state(wxGetApp().preset_bundle);
-    DynamicPrintConfig imported_config_snapshot = config;
-    wxGetApp().preset_bundle->load_config_model(source_name.empty() ? "cloud_config" : source_name, std::move(config), Semver(), false);
-    const std::vector<std::string> persisted_filament_presets =
-        gfd_persist_imported_printer_and_filaments(source_name, device_type, imported_config_snapshot, restore_state);
-    gfd_refresh_after_cloud_config_import(imported_config_snapshot, source_name, device_type, restore_state);
-    gfd_apply_cloud_process_name(imported_config_snapshot, source_name, device_type);
-
-    if (wxGetApp().app_config != nullptr) {
-        for (const std::string& filament_name : persisted_filament_presets) {
-            if (!filament_name.empty())
-                wxGetApp().app_config->set(AppConfig::SECTION_FILAMENTS, filament_name, "true");
-        }
-    }
-
-    BOOST_LOG_TRIVIAL(info) << "GFD cloud config applied"
-                            << ", source=" << source_name
-                            << ", filament_count=" << wxGetApp().preset_bundle->filament_presets.size();
-    return true;
-}
-
-void Plater::priv::gfd_apply_cloud_process_name(const DynamicPrintConfig& imported_config,
-                                                const std::string& source_name,
-                                                const std::string& device_type)
-{
-    gfd_last_imported_cloud_process_preset.clear();
-
-    if (wxGetApp().preset_bundle == nullptr || source_name.empty())
-        return;
-
-    const ConfigOptionString* print_settings_id = imported_config.option<ConfigOptionString>("print_settings_id");
-    const std::string         original_name     = print_settings_id != nullptr ? print_settings_id->value : std::string();
-    if (original_name.empty())
-        return;
-
-    const std::string base_target_name = gfd_cloud_import_preset_name(
-        device_type, gfd_cloud_process_base_name(std::string(), original_name), gfd_cloud_import_timestamp());
-    PresetBundle&     bundle                  = *wxGetApp().preset_bundle;
-    const std::string target_name             = gfd_unique_process_preset_name(bundle.prints, base_target_name);
-    const std::string before_name             = bundle.prints.get_selected_preset_name();
-    const std::string selected_printer_name   = bundle.printers.get_selected_preset_name();
-    const std::string compatible_printer_name = gfd_resolve_compatible_printer_name(bundle, selected_printer_name);
-    Preset            process_snapshot        = bundle.prints.get_edited_preset();
-    gfd_bind_preset_to_printer(process_snapshot, compatible_printer_name);
-
-    bundle.prints.save_current_preset(target_name, false, false, &process_snapshot);
-    if (Preset* saved_preset = bundle.prints.find_preset(target_name, false, true); saved_preset != nullptr) {
-        saved_preset->is_visible    = true;
-        saved_preset->is_compatible = true;
-        saved_preset->is_external   = false;
-    }
-    bundle.prints.select_preset_by_name(target_name, true);
-    bundle.update_compatible(PresetSelectCompatibleType::Never);
-    if (Preset* saved_preset = bundle.prints.find_preset(target_name, false, true); saved_preset != nullptr) {
-        saved_preset->is_visible    = true;
-        saved_preset->is_compatible = true;
-    }
-    bundle.prints.select_preset_by_name(target_name, true);
-    gfd_last_imported_cloud_process_preset = gfd_normalize_cloud_process_name(target_name);
-
-    if (sidebar != nullptr)
-        sidebar->update_all_preset_comboboxes();
-    if (wxGetApp().mainframe != nullptr)
-        wxGetApp().mainframe->update_side_preset_ui();
-
-    BOOST_LOG_TRIVIAL(info) << "GFD cloud process preset renamed"
-                            << ", source=" << source_name
-                            << ", device_type=" << device_type
-                            << ", original_print_settings_id=" << original_name
-                            << ", base_target_print=" << base_target_name
-                            << ", selected_printer=" << selected_printer_name
-                            << ", compatible_printer=" << compatible_printer_name
-                            << ", before_selected_print=" << before_name
-                            << ", target_print=" << target_name
-                            << ", after_selected_print=" << bundle.prints.get_selected_preset_name();
-}
-
-void Plater::priv::gfd_refresh_after_cloud_config_import(const DynamicPrintConfig& imported_config,
-                                                         const std::string& source_name,
-                                                         const std::string& device_type,
-                                                         const GFDImportRestoreState& restore_state)
+void Plater::priv::gfd_refresh_after_cloud_config_import(const GFDImportRestoreState& restore_state)
 {
     if (wxGetApp().preset_bundle == nullptr)
         return;
 
-    auto config_string = [](const DynamicPrintConfig& config, const char* key) -> std::string {
-        const ConfigOptionString* opt = config.option<ConfigOptionString>(key);
-        return opt != nullptr ? opt->value : std::string();
-    };
-
     PresetBundle& preset_bundle = *wxGetApp().preset_bundle;
-    const std::string imported_printer_settings_id = config_string(imported_config, "printer_settings_id");
-    const std::string imported_printer_model       = config_string(imported_config, "printer_model");
-    const std::string imported_gfd_device_type     = config_string(imported_config, "gfd_device_type");
-
-    BOOST_LOG_TRIVIAL(info) << "GFD refresh after cloud config import begin"
-                            << ", source=" << source_name
-                            << ", cloud_device_type=" << device_type
-                            << ", imported_printer_settings_id=" << imported_printer_settings_id
-                            << ", imported_printer_model=" << imported_printer_model
-                            << ", imported_gfd_device_type=" << imported_gfd_device_type;
-
-    bool printer_restored = false;
-    if (!restore_state.printer_preset_name.empty()) {
-        printer_restored = preset_bundle.printers.select_preset_by_name(restore_state.printer_preset_name, true);
-        BOOST_LOG_TRIVIAL(info) << "GFD restore printer preset after cloud import"
-                                << ", printer_preset=" << restore_state.printer_preset_name
-                                << ", restored=" << printer_restored;
-    }
+    if (!restore_state.printer_preset_name.empty())
+        preset_bundle.printers.select_preset_by_name(restore_state.printer_preset_name, true);
+    if (!restore_state.process_preset_name.empty())
+        preset_bundle.prints.select_preset_by_name(restore_state.process_preset_name, true);
     gfd_restore_filament_selection(preset_bundle, restore_state);
 
     wxGetApp().load_current_presets(false, false);
@@ -9972,99 +9955,6 @@ void Plater::priv::gfd_refresh_after_cloud_config_import(const DynamicPrintConfi
         wxGetApp().mainframe->update_gfd_config_buttons();
         wxGetApp().mainframe->update_gfd_print_button();
     }
-
-    const Preset& selected_printer = preset_bundle.printers.get_selected_preset();
-    const Preset& edited_printer   = preset_bundle.printers.get_edited_preset();
-    BOOST_LOG_TRIVIAL(info) << "GFD refresh after cloud config import finished"
-                            << ", selected_printer=" << selected_printer.name
-                            << ", selected_printer_model=" << config_string(selected_printer.config, "printer_model")
-                            << ", selected_gfd_device_type="
-                            << GFD::Config::current_device_type(selected_printer.config)
-                            << ", edited_printer=" << edited_printer.name
-                            << ", edited_printer_model=" << config_string(edited_printer.config, "printer_model")
-                            << ", edited_gfd_device_type="
-                            << GFD::Config::current_device_type(edited_printer.config);
-}
-
-bool Plater::priv::gfd_apply_config_3mf(const std::string& path,
-                                        const std::string& source_name,
-                                        std::string& error_message,
-                                        const std::string& device_type)
-{
-    if (path.empty() || !fs::exists(path)) {
-        error_message = "云端配置 3MF 文件不存在";
-        return false;
-    }
-
-    DynamicPrintConfig          config_loaded;
-    ConfigSubstitutionContext   config_substitutions{ForwardCompatibilitySubstitutionRule::Enable};
-    En3mfType                   file_type = En3mfType::From_BBS;
-    Semver                      file_version;
-    PlateDataPtrs               plate_data;
-    std::vector<Preset*>        project_presets;
-
-    try {
-        Model::read_from_archive(path, &config_loaded, &config_substitutions, file_type,
-                                 LoadStrategy::LoadConfig | LoadStrategy::CheckVersion,
-                                 &plate_data, &project_presets, &file_version, nullptr);
-    } catch (const std::exception& ex) {
-        for (Preset* preset : project_presets)
-            delete preset;
-        project_presets.clear();
-        release_PlateData_list(plate_data);
-        BOOST_LOG_TRIVIAL(error) << "GFD import cloud config 3MF failed"
-                                 << ", path=" << path
-                                 << ", error=" << ex.what();
-        error_message = std::string("读取云端 3MF 配置失败: ") + ex.what();
-        return false;
-    }
-
-    BOOST_LOG_TRIVIAL(info) << "GFD cloud config 3MF loaded"
-                            << ", path=" << path
-                            << ", project_presets=" << project_presets.size()
-                            << ", config_options=" << config_loaded.keys().size()
-                            << ", file_version=" << file_version.to_string();
-
-    // Do not load the embedded preset collection wholesale. The normalized project
-    // config below is used to create local copies scoped to the current machine.
-
-    for (Preset* preset : project_presets)
-        delete preset;
-    project_presets.clear();
-    release_PlateData_list(plate_data);
-
-    if (config_loaded.empty()) {
-        std::string project_settings_text;
-        if (!gfd_extract_project_settings_from_3mf(path, project_settings_text, error_message))
-            return false;
-        return gfd_apply_project_config_text(project_settings_text, source_name, error_message, device_type);
-    }
-
-    Preset::normalize(config_loaded);
-    gfd_prepare_imported_config_for_device_type(config_loaded, device_type);
-    if (wxGetApp().preset_bundle == nullptr) {
-        error_message = "PresetBundle 未初始化";
-        return false;
-    }
-
-    const GFDImportRestoreState restore_state = gfd_capture_import_restore_state(wxGetApp().preset_bundle);
-    DynamicPrintConfig imported_config_snapshot = config_loaded;
-    wxGetApp().preset_bundle->load_config_model(source_name.empty() ? path : source_name, std::move(config_loaded), file_version, false);
-    const std::vector<std::string> persisted_filament_presets =
-        gfd_persist_imported_printer_and_filaments(source_name, device_type, imported_config_snapshot, restore_state);
-    gfd_refresh_after_cloud_config_import(imported_config_snapshot, source_name, device_type, restore_state);
-    gfd_apply_cloud_process_name(imported_config_snapshot, source_name, device_type);
-
-    if (wxGetApp().app_config != nullptr) {
-        for (const std::string& filament_name : persisted_filament_presets) {
-            if (!filament_name.empty())
-                wxGetApp().app_config->set(AppConfig::SECTION_FILAMENTS, filament_name, "true");
-        }
-    }
-
-    BOOST_LOG_TRIVIAL(info) << "GFD cloud config 3MF applied"
-                            << ", path=" << path << ", source=" << source_name;
-    return true;
 }
 
 bool Plater::priv::gfd_apply_prepared_cloud_config(const GFDCloudConfigInfo&   config,
@@ -10081,305 +9971,245 @@ bool Plater::priv::gfd_apply_prepared_cloud_config(const GFDCloudConfigInfo&   c
     }
 
     try {
-        DynamicPrintConfig config_loaded = std::move(prepared.config);
-        if (config_loaded.empty() && prepared.project_presets.empty()) {
-            error_message = "云端配置中没有可应用的参数";
+        DynamicPrintConfig cloud_project_config = prepared.config;
+        if (!cloud_project_config.empty())
+            Preset::normalize(cloud_project_config);
+        if (cloud_project_config.empty() && prepared.project_presets.empty()) {
+            error_message = "云端配置中没有可导入的参数";
             return false;
         }
 
-        const bool has_project_config = !config_loaded.empty();
-        if (has_project_config) {
-            Preset::normalize(config_loaded);
-            gfd_prepare_imported_config_for_device_type(config_loaded, config.device_type);
-            const std::map<std::string, std::string> validity = config_loaded.validate();
-            if (!validity.empty()) {
-                BOOST_LOG_TRIVIAL(warning) << "GFD prepared cloud config has invalid values"
-                                           << ", source=" << config.name << ", count=" << validity.size();
-                for (const auto& item : validity)
-                    BOOST_LOG_TRIVIAL(warning) << "GFD prepared cloud config invalid value"
-                                               << ", key=" << item.first << ", reason=" << item.second;
+        PresetBundle&                          bundle        = *wxGetApp().preset_bundle;
+        const GFDImportRestoreState            restore_state = gfd_capture_import_restore_state(&bundle);
+        std::vector<GFDCloudPresetReplaceItem> replace_items;
+        const std::string                      compatible_printer_name = gfd_current_printer_compatibility_name(bundle);
+        if (compatible_printer_name.empty()) {
+            error_message = "无法确定当前机型，不能导入云端参数";
+            return false;
+        }
+        gfd_last_imported_cloud_process_preset.clear();
+
+        static const std::set<std::string> printer_identity_keys{"inherits", "printer_settings_id", "printer_model", "printer_variant",
+                                                                 "gfd_device_type"};
+        static const std::set<std::string> filament_identity_keys{"inherits", "filament_settings_id", "compatible_printers",
+                                                                  "compatible_printers_condition"};
+        static const std::set<std::string> process_identity_keys{"print_settings_id"};
+
+        const std::string         cloud_printer_id = gfd_config_string(cloud_project_config, "printer_settings_id");
+        const Preset*             cloud_printer = gfd_find_cloud_preset(prepared.project_presets, Preset::TYPE_PRINTER, cloud_printer_id);
+        const DynamicPrintConfig* cloud_printer_config = cloud_printer != nullptr ?
+                                                             &cloud_printer->config :
+                                                             (gfd_has_cloud_preset_options(cloud_project_config, Preset::printer_options()) ?
+                                                                  &cloud_project_config :
+                                                                  nullptr);
+        if (cloud_printer_config != nullptr) {
+            const Preset&             local_printer = bundle.printers.get_selected_preset();
+            GFDCloudPresetReplaceItem item;
+            item.type       = Preset::TYPE_PRINTER;
+            item.category   = _L("机器参数");
+            item.local_name = local_printer.name;
+            item.cloud_name = cloud_printer != nullptr ? cloud_printer->name : (!cloud_printer_id.empty() ? cloud_printer_id : config.name);
+            item.compatible_printer_name = compatible_printer_name;
+            item.local_config            = local_printer.config;
+            item.replacement_config = gfd_cloud_replacement_config(local_printer.config, *cloud_printer_config, Preset::printer_options(),
+                                                                   printer_identity_keys);
+            replace_items.emplace_back(std::move(item));
+        }
+
+        std::vector<std::string> local_filament_names = restore_state.filament_presets;
+        if (local_filament_names.empty() && !restore_state.selected_filament_preset_name.empty())
+            local_filament_names.emplace_back(restore_state.selected_filament_preset_name);
+        const std::vector<std::string> cloud_filament_ids = gfd_config_strings(cloud_project_config, "filament_settings_id");
+        std::set<std::string>          added_local_filaments;
+        for (size_t index = 0; index < local_filament_names.size(); ++index) {
+            const std::string& local_name = local_filament_names[index];
+            if (local_name.empty() || !added_local_filaments.insert(local_name).second)
+                continue;
+
+            const Preset* local_filament = bundle.filaments.find_preset(local_name, false, true);
+            if (local_filament == nullptr)
+                continue;
+
+            const std::string  preferred_cloud_name = index < cloud_filament_ids.size() ? cloud_filament_ids[index] : std::string();
+            const Preset*      cloud_filament = gfd_find_cloud_preset(prepared.project_presets, Preset::TYPE_FILAMENT, preferred_cloud_name,
+                                                                 index);
+            DynamicPrintConfig extracted_filament;
+            const DynamicPrintConfig* cloud_filament_config = nullptr;
+            if (cloud_filament != nullptr) {
+                cloud_filament_config = &cloud_filament->config;
+            } else if (gfd_extract_filament_config(cloud_project_config, index, extracted_filament)) {
+                cloud_filament_config = &extracted_filament;
+            }
+            if (cloud_filament_config == nullptr)
+                continue;
+
+            GFDCloudPresetReplaceItem item;
+            item.type       = Preset::TYPE_FILAMENT;
+            item.category   = local_filament_names.size() > 1 ? format_wxstr(_L("耗材参数 %1%"), index + 1) : _L("耗材参数");
+            item.local_name = local_name;
+            item.cloud_name = cloud_filament != nullptr ? cloud_filament->name :
+                                                          (!preferred_cloud_name.empty() ? preferred_cloud_name : config.name);
+            item.compatible_printer_name = compatible_printer_name;
+            item.local_config            = local_filament->config;
+            item.replacement_config      = gfd_cloud_replacement_config(local_filament->config, *cloud_filament_config,
+                                                                   Preset::filament_options(), filament_identity_keys);
+            gfd_bind_cloud_import_to_printer(item.replacement_config, item.type, compatible_printer_name);
+            replace_items.emplace_back(std::move(item));
+        }
+
+        const std::string         embedded_process_id = gfd_config_string(cloud_project_config, "print_settings_id");
+        const Preset*             cloud_process = gfd_find_cloud_preset(prepared.project_presets, Preset::TYPE_PRINT, embedded_process_id);
+        const DynamicPrintConfig* cloud_process_config = cloud_process != nullptr ?
+                                                             &cloud_process->config :
+                                                             (gfd_has_cloud_preset_options(cloud_project_config, Preset::print_options()) ?
+                                                                  &cloud_project_config :
+                                                                  nullptr);
+
+        std::string process_name = boost::algorithm::trim_copy(config.name);
+        if (process_name.empty())
+            process_name = cloud_process != nullptr ? cloud_process->name : embedded_process_id;
+
+        bool   process_imported = false;
+        size_t changed_count    = 0;
+        if (cloud_process_config != nullptr && !process_name.empty()) {
+            if (const Preset* local_process = bundle.prints.find_preset(process_name, false, true); local_process != nullptr) {
+                GFDCloudPresetReplaceItem item;
+                item.type                    = Preset::TYPE_PRINT;
+                item.category                = _L("工艺参数");
+                item.local_name              = process_name;
+                item.cloud_name              = process_name;
+                item.compatible_printer_name = compatible_printer_name;
+                item.local_config            = local_process->config;
+                item.replacement_config      = gfd_cloud_replacement_config(local_process->config, *cloud_process_config,
+                                                                       Preset::print_options(), process_identity_keys);
+                gfd_bind_cloud_import_to_printer(item.replacement_config, item.type, compatible_printer_name);
+                replace_items.emplace_back(std::move(item));
+            } else {
+                DynamicPrintConfig process_config = gfd_cloud_replacement_config(bundle.prints.default_preset().config,
+                                                                                 *cloud_process_config, Preset::print_options(),
+                                                                                 process_identity_keys);
+                gfd_bind_cloud_import_to_printer(process_config, Preset::TYPE_PRINT, compatible_printer_name);
+                if (!gfd_save_new_cloud_process(bundle, process_name, process_config, error_message))
+                    return false;
+                process_imported                       = true;
+                changed_count                          = 1;
+                gfd_last_imported_cloud_process_preset = gfd_normalize_cloud_process_name(process_name);
+                BOOST_LOG_TRIVIAL(info) << "GFD imported cloud process preset with original cloud name"
+                                        << ", cloud_config_id=" << config.id << ", process_name=" << process_name;
             }
         }
 
-        if (!prepared.project_presets.empty()) {
-            std::vector<Preset*> raw_project_presets;
-            raw_project_presets.reserve(prepared.project_presets.size());
-            for (const std::unique_ptr<Preset>& preset : prepared.project_presets) {
-                // The parser stores embedded preset files in the parsed Model's temporary backup directory.
-                // That directory is gone once background preparation returns; retain the parsed config, not a stale path.
-                if (preset != nullptr)
-                    preset->file.clear();
-                raw_project_presets.emplace_back(preset.get());
-            }
+        if (replace_items.empty() && !process_imported) {
+            error_message = "云端配置中没有可替换或保存的机器、耗材、工艺参数";
+            return false;
+        }
 
-            PresetsConfigSubstitutions preset_substitutions =
-                wxGetApp().preset_bundle->load_project_embedded_presets(raw_project_presets, ForwardCompatibilitySubstitutionRule::Enable);
-            if (!preset_substitutions.empty())
-                show_substitutions_info(preset_substitutions);
-            for (const std::unique_ptr<Preset>& preset : prepared.project_presets) {
-                if (preset != nullptr && preset->loading_substitutions != nullptr) {
-                    delete preset->loading_substitutions;
-                    preset->loading_substitutions = nullptr;
+        if (!replace_items.empty()) {
+            GFDCloudPresetReplaceDialog replace_dialog(
+                q, replace_items,
+                [&](size_t index, std::string& replace_error) {
+                    if (index >= replace_items.size()) {
+                        replace_error = "参数索引无效";
+                        return false;
+                    }
+                    if (!gfd_replace_cloud_preset(bundle, replace_items[index], replace_error))
+                        return false;
+                    ++changed_count;
+                    if (replace_items[index].type == Preset::TYPE_PRINT) {
+                        process_imported                       = true;
+                        gfd_last_imported_cloud_process_preset = gfd_normalize_cloud_process_name(replace_items[index].local_name);
+                    }
+                    BOOST_LOG_TRIVIAL(info) << "GFD replaced local preset from cloud"
+                                            << ", cloud_config_id=" << config.id
+                                            << ", type=" << Preset::get_type_string(replace_items[index].type)
+                                            << ", local_name=" << replace_items[index].local_name
+                                            << ", cloud_name=" << replace_items[index].cloud_name
+                                            << ", compatible_printer=" << replace_items[index].compatible_printer_name;
+                    return true;
+                },
+                [&](size_t index, const std::string& new_name, std::string& save_error) {
+                    if (index >= replace_items.size()) {
+                        save_error = "参数索引无效";
+                        return false;
+                    }
+                    if (!gfd_save_cloud_preset_as(bundle, replace_items[index], new_name, save_error))
+                        return false;
+                    ++changed_count;
+                    if (replace_items[index].type == Preset::TYPE_PRINT) {
+                        process_imported                       = true;
+                        gfd_last_imported_cloud_process_preset = gfd_normalize_cloud_process_name(new_name);
+                    }
+                    BOOST_LOG_TRIVIAL(info) << "GFD saved cloud preset as local copy"
+                                            << ", cloud_config_id=" << config.id
+                                            << ", type=" << Preset::get_type_string(replace_items[index].type)
+                                            << ", local_base_name=" << replace_items[index].local_name << ", saved_name=" << new_name
+                                            << ", cloud_name=" << replace_items[index].cloud_name
+                                            << ", compatible_printer=" << replace_items[index].compatible_printer_name;
+                    return true;
+                });
+            replace_dialog.ShowModal();
+        }
+
+        if (changed_count > 0) {
+            gfd_refresh_after_cloud_config_import(restore_state);
+            if (wxGetApp().app_config != nullptr) {
+                bundle.export_selections(*wxGetApp().app_config);
+                for (const std::string& filament_name : bundle.filament_presets) {
+                    if (!filament_name.empty())
+                        wxGetApp().app_config->set(AppConfig::SECTION_FILAMENTS, filament_name, "true");
                 }
+                wxGetApp().app_config->save();
             }
-            prepared.project_presets.clear();
+            if (process_imported)
+                gfd_record_imported_cloud_config(config);
         }
 
-        PresetBundle&            preset_bundle = *wxGetApp().preset_bundle;
-        std::vector<std::string> persisted_filament_presets;
-        if (has_project_config) {
-            const GFDImportRestoreState restore_state            = gfd_capture_import_restore_state(&preset_bundle);
-            DynamicPrintConfig          imported_config_snapshot = config_loaded;
-            preset_bundle.load_config_model(config.name.empty() ? "cloud_config" : config.name, std::move(config_loaded),
-                                            prepared.file_version, false);
-            persisted_filament_presets = gfd_persist_imported_printer_and_filaments(config.name, config.device_type,
-                                                                                    imported_config_snapshot, restore_state);
-            gfd_refresh_after_cloud_config_import(imported_config_snapshot, config.name, config.device_type, restore_state);
-            gfd_apply_cloud_process_name(imported_config_snapshot, config.name, config.device_type);
-        }
-
-        if (wxGetApp().app_config != nullptr) {
-            preset_bundle.export_selections(*wxGetApp().app_config);
-            for (const std::string& filament_name : persisted_filament_presets) {
-                if (!filament_name.empty())
-                    wxGetApp().app_config->set(AppConfig::SECTION_FILAMENTS, filament_name, "true");
-            }
-            for (const std::string& filament_name : preset_bundle.filament_presets) {
-                if (!filament_name.empty())
-                    wxGetApp().app_config->set(AppConfig::SECTION_FILAMENTS, filament_name, "true");
-            }
-            wxGetApp().app_config->save();
-        }
-
-        if (has_project_config)
-            gfd_record_imported_cloud_config(config);
         if (wxGetApp().mainframe != nullptr)
             wxGetApp().mainframe->update_gfd_config_buttons();
 
-        BOOST_LOG_TRIVIAL(info) << "GFD prepared cloud config applied"
-                                << ", id=" << config.id << ", name=" << config.name << ", device_type=" << config.device_type;
-        GUI::show_info(q, has_project_config ? _L("云端配置已导入并应用。") : _L("云端配置中的内嵌预设已导入。"), _L("提示"));
+        BOOST_LOG_TRIVIAL(info) << "GFD cloud import decisions finished"
+                                << ", id=" << config.id << ", name=" << config.name << ", changed_count=" << changed_count
+                                << ", process_imported=" << process_imported;
+        GUI::show_info(q,
+                       changed_count > 0 ? format_wxstr(_L("云端配置导入完成，已保存或替换 %1% 项参数。"), changed_count) :
+                                           _L("未替换任何参数。"),
+                       _L("提示"));
         return true;
     } catch (const std::exception& ex) {
-        error_message = std::string("应用云端配置失败: ") + ex.what();
+        error_message = std::string("导入云端配置失败: ") + ex.what();
         BOOST_LOG_TRIVIAL(error) << "GFD apply prepared cloud config failed"
                                  << ", id=" << config.id << ", error=" << ex.what();
     } catch (...) {
-        error_message = "应用云端配置失败";
+        error_message = "导入云端配置失败";
         BOOST_LOG_TRIVIAL(error) << "GFD apply prepared cloud config failed with unknown exception"
                                  << ", id=" << config.id;
     }
     return false;
 }
-
-std::vector<std::string> Plater::priv::gfd_persist_imported_printer_and_filaments(const std::string& source_name,
-                                                                                  const std::string& device_type,
-                                                                                  const DynamicPrintConfig& imported_config,
-                                                                                  const GFDImportRestoreState& restore_state)
-{
-    std::vector<std::string> persisted_filament_presets;
-    if (wxGetApp().preset_bundle == nullptr)
-        return persisted_filament_presets;
-
-    PresetBundle& bundle = *wxGetApp().preset_bundle;
-    const Preset& current_printer           = bundle.printers.get_selected_preset();
-    const std::string printer_name          = current_printer.name;
-    const bool printer_was_external         = current_printer.is_external;
-    const bool printer_file_exists          = !current_printer.file.empty() && fs::exists(current_printer.file);
-    const std::string import_timestamp      = gfd_cloud_import_timestamp();
-    const ConfigOptionString* imported_printer_id = imported_config.option<ConfigOptionString>("printer_settings_id");
-    const std::string imported_printer_name = imported_printer_id != nullptr ? imported_printer_id->value : std::string();
-    const std::string printer_base_name     = gfd_cloud_related_preset_base_name(
-        source_name, imported_printer_name.empty() ? printer_name : imported_printer_name, "printer");
-    const std::string compatible_printer_name =
-        gfd_resolve_compatible_printer_name(bundle, restore_state.printer_preset_name);
-
-    const std::vector<std::string> filament_preset_names = bundle.filament_presets;
-    const ConfigOptionStrings* imported_filament_ids = imported_config.option<ConfigOptionStrings>("filament_settings_id");
-    std::vector<std::string>       filament_base_names;
-    std::set<std::string>          temporary_filament_presets;
-    filament_base_names.reserve(filament_preset_names.size());
-    for (size_t index = 0; index < filament_preset_names.size(); ++index) {
-        const std::string imported_filament_name =
-            imported_filament_ids != nullptr && index < imported_filament_ids->values.size()
-                ? imported_filament_ids->values[index]
-                : std::string();
-        filament_base_names.emplace_back(
-            gfd_cloud_filament_base_name(source_name,
-                                         imported_filament_name.empty() ? filament_preset_names[index] : imported_filament_name,
-                                         (boost::format("filament_%1%") % (index + 1)).str()));
-    }
-
-    const std::string printer_target_name = gfd_unique_preset_name(
-        bundle.printers, gfd_cloud_import_preset_name(device_type, printer_base_name, import_timestamp));
-    if (!printer_name.empty()) {
-        Preset printer_snapshot = current_printer;
-        if (const Preset* target_printer = bundle.printers.find_preset(restore_state.printer_preset_name, false);
-            target_printer != nullptr) {
-            for (const char* key : {"printer_model", "printer_variant", "gfd_device_type"}) {
-                const ConfigOption* target_option = target_printer->config.option(key);
-                if (target_option != nullptr)
-                    printer_snapshot.config.set_key_value(key, target_option->clone());
-            }
-        }
-        bundle.printers.save_current_preset(printer_target_name, false, false, &printer_snapshot);
-        if (Preset* saved_printer = bundle.printers.find_preset(printer_target_name, false, true); saved_printer != nullptr) {
-            saved_printer->is_external   = false;
-            saved_printer->is_visible    = true;
-            saved_printer->is_compatible = true;
-        }
-        bundle.printers.select_preset_by_name(printer_target_name, true);
-        BOOST_LOG_TRIVIAL(info) << "GFD persisted imported printer preset"
-                                << ", source=" << source_name
-                                << ", device_type=" << device_type
-                                << ", original_printer=" << printer_name
-                                << ", imported_printer=" << imported_printer_name
-                                << ", saved_printer=" << printer_target_name
-                                << ", file_exists_before=" << printer_file_exists
-                                << ", was_external=" << printer_was_external;
-    }
-
-    for (size_t index = 0; index < filament_preset_names.size(); ++index) {
-        const std::string& filament_name = filament_preset_names[index];
-        if (filament_name.empty())
-            continue;
-
-        if (!bundle.filaments.select_preset_by_name(filament_name, true))
-            continue;
-
-        const Preset& selected_filament             = bundle.filaments.get_selected_preset();
-        const bool    current_filament_was_external = selected_filament.is_external;
-        const bool    filament_file_exists          = !selected_filament.file.empty() && fs::exists(selected_filament.file);
-        Preset        filament_snapshot             = selected_filament;
-        if (!gfd_extract_filament_config(imported_config, index, filament_snapshot.config)) {
-            BOOST_LOG_TRIVIAL(warning) << "GFD skip persisting imported filament preset: failed to extract filament config"
-                                       << ", source=" << source_name
-                                       << ", index=" << index
-                                       << ", original_filament=" << filament_name;
-            continue;
-        }
-        // Persist a self-contained local copy. Keeping the temporary external
-        // preset as its parent would force both entries to remain visible.
-        filament_snapshot.config.opt_string("inherits", true).clear();
-        gfd_bind_preset_to_printer(filament_snapshot, compatible_printer_name);
-
-        if (current_filament_was_external)
-            temporary_filament_presets.insert(filament_name);
-
-        const std::string filament_target_name = gfd_unique_preset_name(
-            bundle.filaments, gfd_cloud_import_preset_name(device_type, filament_base_names[index], import_timestamp));
-
-        bundle.filaments.save_current_preset(filament_target_name, false, false, &filament_snapshot, nullptr);
-        if (Preset* saved_filament = bundle.filaments.find_preset(filament_target_name, false, true); saved_filament != nullptr) {
-            saved_filament->is_external   = false;
-            saved_filament->is_visible    = true;
-            saved_filament->is_compatible = true;
-            persisted_filament_presets.emplace_back(saved_filament->name);
-        }
-
-        BOOST_LOG_TRIVIAL(info) << "GFD persisted imported filament preset"
-                                << ", source=" << source_name
-                                << ", device_type=" << device_type
-                                << ", index=" << index
-                                << ", original_filament=" << filament_name
-                                << ", imported_filament_base=" << filament_base_names[index]
-                                << ", saved_filament=" << filament_target_name
-                                << ", compatible_printer=" << compatible_printer_name
-                                << ", file_exists_before=" << filament_file_exists
-                                << ", persisted=true"
-                                << ", was_external=" << current_filament_was_external;
-    }
-
-    for (const std::string& temporary_name : temporary_filament_presets) {
-        if (const Preset* temporary = bundle.filaments.find_preset(temporary_name, false, true);
-            temporary != nullptr && temporary->is_external) {
-            bundle.filaments.delete_preset(temporary_name);
-            BOOST_LOG_TRIVIAL(info) << "GFD removed temporary imported filament preset"
-                                    << ", preset=" << temporary_name;
-        }
-    }
-
-    if (!restore_state.printer_preset_name.empty())
-        bundle.printers.select_preset_by_name(restore_state.printer_preset_name, true);
-    gfd_restore_filament_selection(bundle, restore_state);
-    if (sidebar != nullptr)
-        sidebar->update_all_preset_comboboxes();
-    return persisted_filament_presets;
-}
-
 bool Plater::priv::gfd_import_cloud_config(const GFDCloudConfigInfo& config)
 {
     BOOST_LOG_TRIVIAL(info) << "GFD import cloud config begin"
-                            << ", id=" << config.id
-                            << ", name=" << config.name
-                            << ", device_type=" << config.device_type
-                            << ", file_url=" << config.config_file_url
-                            << ", file_name=" << config.config_file_name
-                            << ", default_process_conf_length=" << config.default_process_conf.size();
+                            << ", id=" << config.id << ", name=" << config.name << ", device_type=" << config.device_type;
 
     if (!ensure_gfd_login()) {
         show_error(q, _L("登录状态无效，请重新登录。"));
         return false;
     }
 
-    std::string error_message;
-    bool        applied = false;
-    fs::path    downloaded_path;
-    if (!config.config_file_url.empty()) {
-        if (!gfd_download_file_to_temp(config.config_file_url, config.config_file_name, downloaded_path, error_message)) {
-            show_error(q, from_u8(error_message.empty() ? "下载云端配置失败" : error_message));
-            return false;
-        }
-        if (boost::algorithm::iends_with(downloaded_path.string(), ".3mf")) {
-            applied = gfd_apply_config_3mf(downloaded_path.string(), config.name, error_message, config.device_type);
-        } else {
-            std::string text;
-            try {
-                load_string_file(downloaded_path, text);
-            } catch (const std::exception& ex) {
-                error_message = std::string("读取云端配置文件失败: ") + ex.what();
-            }
-            if (!text.empty())
-                applied = gfd_apply_project_config_text(text, config.name, error_message, config.device_type);
-        }
-    } else if (!config.default_process_conf.empty()) {
-        applied = gfd_apply_project_config_text(config.default_process_conf, config.name, error_message, config.device_type);
-    } else {
-        error_message = "云端配置没有配置文件，也没有参数文本";
-    }
-
-    if (!downloaded_path.empty()) {
-        boost::system::error_code ignored_error;
-        fs::remove(downloaded_path, ignored_error);
-        fs::remove(fs::path(downloaded_path.string() + ".download"), ignored_error);
-    }
-
-    if (!applied) {
-        BOOST_LOG_TRIVIAL(error) << "GFD import cloud config failed"
-                                 << ", id=" << config.id
-                                 << ", name=" << config.name
-                                 << ", error=" << error_message;
-        show_error(q, from_u8(error_message.empty() ? "导入云端配置失败" : error_message));
+    std::shared_ptr<GFDCloudConfigImportResult> prepared = q->prepare_cloud_config_import_with_token(config, gfd_auth_token());
+    if (prepared == nullptr || !prepared->ok) {
+        const std::string message = prepared != nullptr && !prepared->error_message.empty() ? prepared->error_message : "读取云端配置失败";
+        show_error(q, from_u8(message));
         return false;
     }
 
-    if (wxGetApp().app_config != nullptr && wxGetApp().preset_bundle != nullptr) {
-        wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
-        for (const std::string& filament_name : wxGetApp().preset_bundle->filament_presets) {
-            if (!filament_name.empty())
-                wxGetApp().app_config->set(AppConfig::SECTION_FILAMENTS, filament_name, "true");
-        }
-        wxGetApp().app_config->save();
+    std::string error_message;
+    if (!gfd_apply_prepared_cloud_config(config, *prepared, error_message)) {
+        show_error(q, from_u8(error_message.empty() ? "导入云端配置失败" : error_message));
+        return false;
     }
-
-    gfd_record_imported_cloud_config(config);
-    if (wxGetApp().mainframe != nullptr)
-        wxGetApp().mainframe->update_gfd_config_buttons();
-
-    GUI::show_info(q, _L("云端配置已导入并应用。"), _L("提示"));
     return true;
 }
-
 nlohmann::json Plater::priv::gfd_load_cloud_process_records() const
 {
     const fs::path record_path = gfd_cloud_process_record_path();
@@ -10395,8 +10225,7 @@ nlohmann::json Plater::priv::gfd_load_cloud_process_records() const
         return records.is_object() ? records : nlohmann::json::object();
     } catch (const std::exception& ex) {
         BOOST_LOG_TRIVIAL(error) << "GFD load cloud process records failed"
-                                 << ", path=" << record_path.string()
-                                 << ", error=" << ex.what();
+                                 << ", path=" << record_path.string() << ", error=" << ex.what();
         return nlohmann::json::object();
     }
 }
@@ -10408,12 +10237,10 @@ void Plater::priv::gfd_save_cloud_process_records(const nlohmann::json& records)
         boost::filesystem::create_directories(record_path.parent_path());
         save_string_file(record_path, records.dump(2));
         BOOST_LOG_TRIVIAL(info) << "GFD saved cloud process records"
-                                << ", path=" << record_path.string()
-                                << ", count=" << records.size();
+                                << ", path=" << record_path.string() << ", count=" << records.size();
     } catch (const std::exception& ex) {
         BOOST_LOG_TRIVIAL(error) << "GFD save cloud process records failed"
-                                 << ", path=" << record_path.string()
-                                 << ", error=" << ex.what();
+                                 << ", path=" << record_path.string() << ", error=" << ex.what();
     }
 }
 
@@ -10424,22 +10251,24 @@ void Plater::priv::gfd_record_imported_cloud_config(const GFDCloudConfigInfo& co
 
     const std::string selected_print_preset = gfd_normalize_cloud_process_name(wxGetApp().preset_bundle->prints.get_selected_preset_name());
     const std::string edited_print_preset   = gfd_normalize_cloud_process_name(wxGetApp().preset_bundle->prints.get_edited_preset().name);
-    const std::string current_print_preset  = !gfd_last_imported_cloud_process_preset.empty()
-                                                ? gfd_last_imported_cloud_process_preset
-                                                : gfd_current_cloud_process_name(wxGetApp().preset_bundle);
+    const std::string current_print_preset  = !gfd_last_imported_cloud_process_preset.empty() ?
+                                                  gfd_last_imported_cloud_process_preset :
+                                                  gfd_current_cloud_process_name(wxGetApp().preset_bundle);
 
     GFDCloudImportState state;
-    state.cloud_config_id  = config.id;
+    state.cloud_config_id   = config.id;
     state.cloud_config_name = config.name;
     state.printer_preset    = wxGetApp().preset_bundle->printers.get_selected_preset_name();
     state.device_type       = config.device_type;
     state.print_preset      = current_print_preset;
     state.filament_presets  = wxGetApp().preset_bundle->filament_presets;
 
-    const auto duplicate = std::find_if(gfd_imported_cloud_configs.begin(), gfd_imported_cloud_configs.end(), [&state](const GFDCloudImportState& existing) {
-        return existing.device_type == state.device_type &&
-               existing.print_preset == state.print_preset;
-    });
+    const auto duplicate = std::find_if(gfd_imported_cloud_configs.begin(), gfd_imported_cloud_configs.end(),
+                                        [&state](const GFDCloudImportState& existing) {
+                                            return existing.printer_preset == state.printer_preset &&
+                                                   existing.filament_presets == state.filament_presets &&
+                                                   existing.print_preset == state.print_preset;
+                                        });
     if (duplicate != gfd_imported_cloud_configs.end())
         *duplicate = state;
     else
@@ -10456,13 +10285,10 @@ void Plater::priv::gfd_record_imported_cloud_config(const GFDCloudConfigInfo& co
     gfd_save_cloud_process_records(records);
 
     BOOST_LOG_TRIVIAL(info) << "GFD recorded imported cloud config state"
-                            << ", cloud_config_id=" << config.id
-                            << ", cloud_config_name=" << config.name
+                            << ", cloud_config_id=" << config.id << ", cloud_config_name=" << config.name
                             << ", printer_preset=" << wxGetApp().preset_bundle->printers.get_selected_preset_name()
-                            << ", device_type=" << config.device_type
-                            << ", selected_print_preset=" << selected_print_preset
-                            << ", edited_print_preset=" << edited_print_preset
-                            << ", effective_print_preset=" << current_print_preset
+                            << ", device_type=" << config.device_type << ", selected_print_preset=" << selected_print_preset
+                            << ", edited_print_preset=" << edited_print_preset << ", effective_print_preset=" << current_print_preset
                             << ", imported_print_preset=" << gfd_last_imported_cloud_process_preset
                             << ", filament_count=" << wxGetApp().preset_bundle->filament_presets.size();
 }
@@ -10470,22 +10296,32 @@ void Plater::priv::gfd_record_imported_cloud_config(const GFDCloudConfigInfo& co
 bool Plater::priv::gfd_has_active_imported_cloud_config() const
 {
     GFDCloudImportState state;
-    const bool has_active = gfd_get_active_imported_cloud_config(state);
-    const std::string current_printer_preset        = wxGetApp().preset_bundle != nullptr ? wxGetApp().preset_bundle->printers.get_selected_preset_name() : std::string();
-    const std::string current_selected_print_preset = wxGetApp().preset_bundle != nullptr ? gfd_normalize_cloud_process_name(wxGetApp().preset_bundle->prints.get_selected_preset_name()) : std::string();
-    const std::string current_edited_print_preset   = wxGetApp().preset_bundle != nullptr ? gfd_normalize_cloud_process_name(wxGetApp().preset_bundle->prints.get_edited_preset().name) : std::string();
-    const std::string current_print_preset          = wxGetApp().preset_bundle != nullptr ? gfd_current_cloud_process_name(wxGetApp().preset_bundle) : std::string();
-    const std::string current_device_type           = wxGetApp().preset_bundle != nullptr ? GFD::Config::current_device_type(wxGetApp().preset_bundle->printers.get_selected_preset().config) : std::string();
-    const std::string matched_record_key            = has_active ? gfd_cloud_process_config_key(current_print_preset) : std::string();
+    const bool          has_active                    = gfd_get_active_imported_cloud_config(state);
+    const std::string   current_printer_preset        = wxGetApp().preset_bundle != nullptr ?
+                                                            wxGetApp().preset_bundle->printers.get_selected_preset_name() :
+                                                            std::string();
+    const std::string   current_selected_print_preset = wxGetApp().preset_bundle != nullptr ?
+                                                            gfd_normalize_cloud_process_name(
+                                                              wxGetApp().preset_bundle->prints.get_selected_preset_name()) :
+                                                            std::string();
+    const std::string   current_edited_print_preset   = wxGetApp().preset_bundle != nullptr ?
+                                                            gfd_normalize_cloud_process_name(
+                                                            wxGetApp().preset_bundle->prints.get_edited_preset().name) :
+                                                            std::string();
+    const std::string   current_print_preset          = wxGetApp().preset_bundle != nullptr ?
+                                                            gfd_current_cloud_process_name(wxGetApp().preset_bundle) :
+                                                            std::string();
+    const std::string   current_device_type           = wxGetApp().preset_bundle != nullptr ?
+                                                            GFD::Config::current_device_type(
+                                                    wxGetApp().preset_bundle->printers.get_selected_preset().config) :
+                                                            std::string();
+    const std::string   matched_record_key            = has_active ? gfd_cloud_process_config_key(current_print_preset) : std::string();
 
     BOOST_LOG_TRIVIAL(info) << "GFD active imported cloud config state"
-                            << ", has_active=" << has_active
-                            << ", printer_preset=" << current_printer_preset
-                            << ", device_type=" << current_device_type
-                            << ", selected_print_preset=" << current_selected_print_preset
+                            << ", has_active=" << has_active << ", printer_preset=" << current_printer_preset
+                            << ", device_type=" << current_device_type << ", selected_print_preset=" << current_selected_print_preset
                             << ", edited_print_preset=" << current_edited_print_preset
-                            << ", effective_print_preset=" << current_print_preset
-                            << ", matched_record_key=" << matched_record_key
+                            << ", effective_print_preset=" << current_print_preset << ", matched_record_key=" << matched_record_key
                             << ", recorded_count=" << gfd_imported_cloud_configs.size();
     return has_active;
 }
@@ -10496,29 +10332,25 @@ bool Plater::priv::gfd_has_dirty_active_imported_cloud_config() const
         return false;
 
     GFDCloudImportState active_state;
-    PresetBundle& preset_bundle = *wxGetApp().preset_bundle;
-    const bool has_active       = gfd_get_active_imported_cloud_config(active_state);
-    const bool printer_dirty    = preset_bundle.printers.current_is_dirty();
-    const bool filament_dirty   = preset_bundle.filaments.current_is_dirty();
-    const bool process_dirty    = preset_bundle.prints.current_is_dirty();
+    PresetBundle&       preset_bundle  = *wxGetApp().preset_bundle;
+    const bool          has_active     = gfd_get_active_imported_cloud_config(active_state);
+    const bool          printer_dirty  = preset_bundle.printers.current_is_dirty();
+    const bool          filament_dirty = preset_bundle.filaments.current_is_dirty();
+    const bool          process_dirty  = preset_bundle.prints.current_is_dirty();
 
-    const std::vector<std::string> printer_dirty_options =
-        printer_dirty ? preset_bundle.printers.current_dirty_options(false) : std::vector<std::string>();
-    const std::vector<std::string> filament_dirty_options =
-        filament_dirty ? preset_bundle.filaments.current_dirty_options(false) : std::vector<std::string>();
-    const std::vector<std::string> process_dirty_options =
-        process_dirty ? preset_bundle.prints.current_dirty_options(false) : std::vector<std::string>();
-    const bool has_dirty = printer_dirty || filament_dirty || process_dirty;
+    const std::vector<std::string> printer_dirty_options  = printer_dirty ? preset_bundle.printers.current_dirty_options(false) :
+                                                                            std::vector<std::string>();
+    const std::vector<std::string> filament_dirty_options = filament_dirty ? preset_bundle.filaments.current_dirty_options(false) :
+                                                                             std::vector<std::string>();
+    const std::vector<std::string> process_dirty_options  = process_dirty ? preset_bundle.prints.current_dirty_options(false) :
+                                                                            std::vector<std::string>();
+    const bool                     has_dirty              = printer_dirty || filament_dirty || process_dirty;
 
     BOOST_LOG_TRIVIAL(info) << "GFD dirty imported cloud config state"
-                            << ", has_active=" << has_active
-                            << ", printer_dirty=" << printer_dirty
-                            << ", filament_dirty=" << filament_dirty
-                            << ", process_dirty=" << process_dirty
-                            << ", cloud_config_id=" << active_state.cloud_config_id
+                            << ", has_active=" << has_active << ", printer_dirty=" << printer_dirty << ", filament_dirty=" << filament_dirty
+                            << ", process_dirty=" << process_dirty << ", cloud_config_id=" << active_state.cloud_config_id
                             << ", cloud_config_name=" << active_state.cloud_config_name
-                            << ", printer_preset=" << active_state.printer_preset
-                            << ", print_preset=" << active_state.print_preset
+                            << ", printer_preset=" << active_state.printer_preset << ", print_preset=" << active_state.print_preset
                             << ", filament_preset_count=" << active_state.filament_presets.size()
                             << ", printer_dirty_option_count=" << printer_dirty_options.size()
                             << ", filament_dirty_option_count=" << filament_dirty_options.size()
@@ -10526,8 +10358,8 @@ bool Plater::priv::gfd_has_dirty_active_imported_cloud_config() const
                             << ", selected_printer_preset=" << preset_bundle.printers.get_selected_preset_name()
                             << ", edited_printer_preset=" << preset_bundle.printers.get_edited_preset().name
                             << ", selected_filament_preset=" << preset_bundle.filaments.get_selected_preset_name()
-                            << ", edited_filament_preset=" << preset_bundle.filaments.get_edited_preset().name
-                            << ", selected_print_preset=" << gfd_normalize_cloud_process_name(preset_bundle.prints.get_selected_preset_name())
+                            << ", edited_filament_preset=" << preset_bundle.filaments.get_edited_preset().name << ", selected_print_preset="
+                            << gfd_normalize_cloud_process_name(preset_bundle.prints.get_selected_preset_name())
                             << ", edited_print_preset=" << gfd_normalize_cloud_process_name(preset_bundle.prints.get_edited_preset().name);
 
     return has_active && has_dirty;
@@ -10539,37 +10371,34 @@ bool Plater::priv::gfd_get_active_imported_cloud_config(GFDCloudImportState& sta
         return false;
 
     const std::string current_print_preset = gfd_current_cloud_process_name(wxGetApp().preset_bundle);
-    const std::string current_device_type  = GFD::Config::current_device_type(wxGetApp().preset_bundle->printers.get_selected_preset().config);
-    if (current_print_preset.empty() || current_device_type.empty())
+    if (current_print_preset.empty())
         return false;
 
-    const auto matched = std::find_if(gfd_imported_cloud_configs.begin(), gfd_imported_cloud_configs.end(), [&](const GFDCloudImportState& existing) {
-        return !existing.device_type.empty() &&
-               existing.device_type == current_device_type &&
-               existing.printer_preset == wxGetApp().preset_bundle->printers.get_selected_preset_name() &&
-               existing.filament_presets == wxGetApp().preset_bundle->filament_presets &&
-               gfd_normalize_cloud_process_name(existing.print_preset) == current_print_preset;
-    });
+    const auto matched = std::find_if(gfd_imported_cloud_configs.begin(), gfd_imported_cloud_configs.end(),
+                                      [&](const GFDCloudImportState& existing) {
+                                          return existing.printer_preset == wxGetApp().preset_bundle->printers.get_selected_preset_name() &&
+                                                 existing.filament_presets == wxGetApp().preset_bundle->filament_presets &&
+                                                 gfd_normalize_cloud_process_name(existing.print_preset) == current_print_preset;
+                                      });
     if (matched != gfd_imported_cloud_configs.end()) {
         state = *matched;
         return true;
     }
 
     const nlohmann::json records = gfd_load_cloud_process_records();
-    const std::string key = gfd_cloud_process_config_key(current_print_preset);
+    const std::string    key     = gfd_cloud_process_config_key(current_print_preset);
     if (!records.contains(key) || !records[key].is_object())
         return false;
 
-    const nlohmann::json& item = records[key];
-    const std::string persisted_device_type = item.value("device_type", std::string());
-    if (persisted_device_type.empty() || persisted_device_type != current_device_type)
+    const nlohmann::json& item                  = records[key];
+    const std::string     persisted_device_type = item.value("device_type", std::string());
+    if (persisted_device_type.empty())
         return false;
 
-    const std::string persisted_printer = item.value("printer_preset", std::string());
-    const std::vector<std::string> persisted_filaments =
-        item.contains("filament_presets") && item["filament_presets"].is_array()
-            ? item["filament_presets"].get<std::vector<std::string>>()
-            : std::vector<std::string>();
+    const std::string              persisted_printer   = item.value("printer_preset", std::string());
+    const std::vector<std::string> persisted_filaments = item.contains("filament_presets") && item["filament_presets"].is_array() ?
+                                                             item["filament_presets"].get<std::vector<std::string>>() :
+                                                             std::vector<std::string>();
     if (persisted_printer != wxGetApp().preset_bundle->printers.get_selected_preset_name() ||
         persisted_filaments != wxGetApp().preset_bundle->filament_presets)
         return false;
@@ -10588,8 +10417,8 @@ bool Plater::priv::gfd_get_active_imported_cloud_config(GFDCloudImportState& sta
 
 fs::path Plater::priv::gfd_temp_gcode_path()
 {
-    fs::path default_output_file = background_process.output_filepath_for_project("");
-    default_output_file          = fs::path(Slic3r::fold_utf8_to_ascii(default_output_file.filename().string()));
+    fs::path default_output_file   = background_process.output_filepath_for_project("");
+    default_output_file            = fs::path(Slic3r::fold_utf8_to_ascii(default_output_file.filename().string()));
     const std::string default_stem = default_output_file.stem().string();
     if (default_output_file.empty() || default_stem.find('{') != std::string::npos || default_stem.find('}') != std::string::npos)
         default_output_file = fs::path("gfd_print.gcode");
@@ -10598,8 +10427,7 @@ fs::path Plater::priv::gfd_temp_gcode_path()
     fs::path output_path = fs::temp_directory_path() / default_output_file.filename();
     output_path          = gfd_make_unique_temp_file_path(output_path);
     BOOST_LOG_TRIVIAL(info) << "GFD temp G-code path resolved"
-                            << ", temp_dir=" << output_path.parent_path().string()
-                            << ", filename=" << output_path.filename().string()
+                            << ", temp_dir=" << output_path.parent_path().string() << ", filename=" << output_path.filename().string()
                             << ", full_path=" << output_path.string();
     return output_path;
 }
@@ -10609,8 +10437,7 @@ fs::path Plater::priv::gfd_temp_gcode_3mf_path()
     fs::path output_path = gfd_temp_gcode_path();
     output_path.replace_extension(".gcode.3mf");
     BOOST_LOG_TRIVIAL(info) << "GFD temp G-code 3MF path resolved"
-                            << ", temp_dir=" << output_path.parent_path().string()
-                            << ", filename=" << output_path.filename().string()
+                            << ", temp_dir=" << output_path.parent_path().string() << ", filename=" << output_path.filename().string()
                             << ", full_path=" << output_path.string();
     return output_path;
 }
@@ -10622,10 +10449,8 @@ Plater::priv::GFDPrintStartResult Plater::priv::start_gfd_print_export()
     const uint64_t                  submission_id      = gfd_print_submission_id;
     wxWindow* const                 dialog_parent      = print_dialog != nullptr ? static_cast<wxWindow*>(print_dialog) : q;
     BOOST_LOG_TRIVIAL(info) << "GFD start print export"
-                            << ", model_objects=" << model.objects.size()
-                            << ", current_plate=" << partplate_list.get_curr_plate_index()
-                            << ", device_type=" << gfd_current_device_type()
-                            << ", selected_devices=" << gfd_selected_devices.size();
+                            << ", model_objects=" << model.objects.size() << ", current_plate=" << partplate_list.get_curr_plate_index()
+                            << ", device_type=" << gfd_current_device_type() << ", selected_devices=" << gfd_selected_devices.size();
 
     PartPlate* current_plate = partplate_list.get_curr_plate();
     if (current_plate == nullptr) {
