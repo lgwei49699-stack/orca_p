@@ -5,6 +5,9 @@
 
 #include <iterator>
 #include <limits>
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
 
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Format/STL.hpp"
@@ -25,6 +28,41 @@ bool has_stl_atomic_artifacts(const boost::filesystem::path& directory)
             return true;
     }
     return false;
+}
+
+void append_stl_u32(std::string& data, uint32_t value)
+{
+    for (unsigned shift = 0; shift < 32; shift += 8)
+        data.push_back(char((value >> shift) & 0xff));
+}
+
+std::string zero_normal_binary_stl(const indexed_triangle_set& mesh, size_t count, size_t header_size, bool solid_header)
+{
+    std::string data = solid_header ? "solid still a binary STL" : "binary STL with zero normals";
+    data.resize(header_size, '\0');
+    append_stl_u32(data, uint32_t(count));
+    for (size_t face = 0; face < count; ++face) {
+        data.append(12, '\0');
+        for (int index : mesh.indices[face])
+            for (size_t axis = 0; axis < 3; ++axis) {
+                const float coordinate = mesh.vertices[index][axis];
+                uint32_t    bits;
+                static_assert(sizeof(bits) == sizeof(coordinate));
+                std::memcpy(&bits, &coordinate, sizeof(bits));
+                append_stl_u32(data, bits);
+            }
+        data.append(2, '\0');
+    }
+    return data;
+}
+
+void write_stl_test_file(const boost::filesystem::path& path, const std::string& data)
+{
+    boost::nowide::ofstream stream(path.string(), std::ios::binary);
+    REQUIRE(stream.is_open());
+    stream.write(data.data(), std::streamsize(data.size()));
+    stream.close();
+    REQUIRE_FALSE(stream.fail());
 }
 
 } // namespace
@@ -133,6 +171,86 @@ SCENARIO("STL import exposes a structured repair report", "[stl][repair]")
 
         REQUIRE(std::string(report.status()) == "partially_repaired");
     }
+}
+
+TEST_CASE("Binary STL import uses size and count instead of high bytes", "[stl][Import][Binary]")
+{
+    const size_t      count        = GENERATE(size_t(1), size_t(2), size_t(12));
+    const size_t      header_size  = GENERATE(size_t(80), size_t(128));
+    const bool        solid_header = GENERATE(false, true);
+    const auto        original     = make_cube(10., 10., 10.).its;
+    const std::string data         = zero_normal_binary_stl(original, count, header_size, solid_header);
+    REQUIRE(data.size() == header_size + 4 + count * 50);
+    // These bytes fooled the previous probe. One/two-facet files are also
+    // shorter than its unconditional 128-byte facet read.
+    REQUIRE(std::all_of(data.begin() + header_size + 4, data.end(), [](unsigned char c) { return c <= 127; }));
+    const auto path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orca-stl-binary-%%%%-%%%%.stl");
+    write_stl_test_file(path, data);
+
+    TriangleMesh     mesh;
+    MeshRepairReport report;
+    REQUIRE(mesh.ReadSTLFile(path.string().c_str(), false, nullptr, int(header_size), &report));
+    REQUIRE(mesh.its.indices.size() == count);
+    CHECK(report.load_succeeded);
+    CHECK_FALSE(report.attempted);
+    CHECK(report.original_facets == count);
+    for (size_t face = 0; face < count; ++face)
+        for (size_t corner = 0; corner < 3; ++corner)
+            CHECK(mesh.its.vertices[mesh.its.indices[face][corner]] == original.vertices[original.indices[face][corner]]);
+
+    // GUI and CLI both reach the same reader through load_stl(). Legacy repair
+    // remains optional and produces its existing structured report.
+    Model      model;
+    const bool repair = count == 12;
+    REQUIRE(load_stl(path.string().c_str(), &model, nullptr, nullptr, int(header_size), repair, &report));
+    CHECK(report.load_succeeded);
+    CHECK(report.enabled == repair);
+    CHECK(report.attempted == repair);
+    CHECK(model.objects.front()->volumes.front()->mesh().facets_count() == count);
+    CHECK(read_stl_test_file(path) == data);
+    CHECK(boost::filesystem::remove(path));
+}
+
+TEST_CASE("Binary STL invalid data and cancellation do not publish geometry", "[stl][Import][Binary]")
+{
+    auto      original = make_cube(10., 10., 10.).its;
+    const int failure  = GENERATE(0, 1, 2, 3, 4, 5);
+    if (failure == 0)
+        original.vertices.front().x() = std::numeric_limits<float>::quiet_NaN();
+    else if (failure == 1)
+        original.vertices.front().x() = std::numeric_limits<float>::infinity();
+    std::string data = zero_normal_binary_stl(original, 12, 80, false);
+    if (failure == 2)
+        data.pop_back();
+    else if (failure == 3)
+        std::fill(data.begin() + 80, data.begin() + 84, char(0xff)); // Never allocate from a bogus count.
+    else if (failure == 4)
+        data = std::string(84, '\0'); // Empty binary STL.
+    const auto path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orca-stl-invalid-%%%%-%%%%.stl");
+    write_stl_test_file(path, data);
+    Model               model;
+    auto*               object          = model.add_object();
+    auto*               volume          = object->add_volume(make_cube(1., 1., 1.));
+    const auto          mesh            = volume->mesh_ptr();
+    bool                callback_called = false;
+    ImportstlProgressFn progress;
+    if (failure == 5)
+        progress = [&](int current, int total, bool& cancel, std::string&, std::string&) {
+            CHECK(current == 0);
+            CHECK(total == 12);
+            callback_called = true;
+            cancel          = true;
+        };
+    MeshRepairReport report;
+    CHECK_FALSE(load_stl(path.string().c_str(), &model, nullptr, progress, 80, false, &report));
+    CHECK(callback_called == (failure == 5));
+    CHECK_FALSE(report.load_succeeded);
+    REQUIRE(model.objects.size() == 1);
+    CHECK(model.objects.front() == object);
+    REQUIRE(object->volumes.size() == 1);
+    CHECK(object->volumes.front()->mesh_ptr() == mesh);
+    CHECK(read_stl_test_file(path) == data);
+    CHECK(boost::filesystem::remove(path));
 }
 
 TEST_CASE("STL export rejects empty meshes and output symlinks", "[stl][CLI]")

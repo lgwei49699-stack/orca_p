@@ -7829,6 +7829,12 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     def->cli_params = "filename.obj";
     def->set_default_value(new ConfigOptionString("multicolor.obj"));
 
+    def          = this->add("check_model", coBool);
+    def->label   = L("Check model");
+    def->tooltip = L("Prepare and inspect one STL or OBJ model, writing structured results without slicing.");
+    def->cli     = "check-model";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def             = this->add("repair_model", coString);
     def->label      = L("Repair model");
     def->tooltip    = L("Repair imported model meshes before transforms and export.");
@@ -8369,7 +8375,7 @@ CLIMiscConfigDef::CLIMiscConfigDef()
 
     def          = this->add("repair_ignore_materials", coBool);
     def->label   = L("Ignore OBJ materials during repair");
-    def->tooltip = L("With --repair-model cgal, import OBJ geometry without reading MTL libraries, colors or UVs. "
+    def->tooltip = L("With --repair-model cgal or --check-model, import OBJ geometry without reading MTL libraries, colors or UVs. "
                      "Cannot be combined with material bindings, color grouping or multicolor OBJ export.");
     def->cli     = "repair-ignore-materials";
     def->set_default_value(new ConfigOptionBool(false));

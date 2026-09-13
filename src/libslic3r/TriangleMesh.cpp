@@ -17,8 +17,11 @@
 #include <libqhullcpp/QhullVertexSet.h>
 
 #include <cmath>
+#include <array>
+#include <cstring>
 #include <deque>
 #include <limits>
+#include <optional>
 #include <queue>
 #include <vector>
 #include <utility>
@@ -27,6 +30,7 @@
 
 #include <boost/log/trivial.hpp>
 #include <boost/nowide/cstdio.hpp>
+#include <boost/nowide/fstream.hpp>
 #include <boost/predef/other/endian.h>
 
 #include <Eigen/Core>
@@ -261,6 +265,94 @@ bool TriangleMesh::from_stl(stl_file &stl, bool repair, MeshRepairReport *repair
     return true;
 }
 
+// Prefer the binary STL size/count contract over ADMesh's high-bit heuristic.
+// Valid files may contain only low bytes in its probe (e.g. zero normals), or
+// have fewer than 128 bytes of facet data. Keep ASCII parsing and all subsequent
+// welding/optional import repair in the existing shared path. No source writes.
+// nullopt means the size/count contract did not identify a binary STL.
+static std::optional<bool> read_binary_stl(stl_file& stl, const char* path, const ImportstlProgressFn& progress, int header_length)
+{
+    if (path == nullptr)
+        return false;
+    boost::nowide::ifstream stream(path, std::ios::binary);
+    if (!stream)
+        return false;
+    header_length = std::max(header_length, int(LABEL_SIZE));
+    if (header_length == std::numeric_limits<int>::max())
+        return false; // reset_header() needs one extra byte for the terminator.
+    stream.seekg(0, std::ios::end);
+    const std::streamoff file_size   = stream.tellg();
+    const uint64_t       header_size = uint64_t(header_length) + 4;
+    if (file_size < 0)
+        return false;
+    if (uint64_t(file_size) < header_size)
+        return std::nullopt;
+
+    const auto read_u32 = [](const unsigned char* bytes) {
+        return uint32_t(bytes[0]) | (uint32_t(bytes[1]) << 8) | (uint32_t(bytes[2]) << 16) | (uint32_t(bytes[3]) << 24);
+    };
+    std::array<unsigned char, 4> count_bytes;
+    stream.seekg(header_length);
+    if (!stream.read(reinterpret_cast<char*>(count_bytes.data()), count_bytes.size()))
+        return false;
+    const uint32_t count = read_u32(count_bytes.data());
+    if (header_size + uint64_t(count) * SIZEOF_STL_FACET != uint64_t(file_size))
+        return std::nullopt;
+    if (count == 0 || count > uint32_t(std::numeric_limits<int>::max()))
+        return false; // ADMesh neighbor indices and progress totals use int.
+
+    stl.clear();
+    stl.stats.reset_header(header_length);
+    stream.seekg(0);
+    if (!stream.read(stl.stats.header.data(), header_length))
+        return false;
+    stream.seekg(std::streamoff(header_size));
+    stl.stats.type                = binary;
+    stl.stats.number_of_facets    = count;
+    stl.stats.original_num_facets = int(count);
+    stl_allocate(&stl);
+
+    bool           first = true;
+    std::string    model_id, country_code;
+    const uint32_t progress_step = count / 5 + 1;
+    for (uint32_t index = 0; index < count; ++index) {
+        if (progress && index % progress_step == 0) {
+            bool canceled = false;
+            progress(int(index), int(count), canceled, model_id, country_code);
+            if (canceled)
+                return false;
+        }
+        std::array<unsigned char, SIZEOF_STL_FACET> bytes;
+        if (!stream.read(reinterpret_cast<char*>(bytes.data()), bytes.size()))
+            return false;
+        const auto read_float = [&bytes, &read_u32](size_t offset) {
+            const uint32_t bits = read_u32(bytes.data() + offset);
+            float          value;
+            static_assert(sizeof(value) == sizeof(bits));
+            std::memcpy(&value, &bits, sizeof(value));
+            return value;
+        };
+        stl_facet facet;
+        for (size_t axis = 0; axis < 3; ++axis) {
+            facet.normal[axis] = read_float(4 * axis);
+            for (size_t corner = 0; corner < 3; ++corner)
+                facet.vertex[corner][axis] = read_float(12 + 12 * corner + 4 * axis);
+        }
+        // Normals are advisory; invalid vertices cannot describe a mesh.
+        if (!facet.normal.allFinite())
+            facet.normal.setZero();
+        for (const auto& vertex : facet.vertex)
+            if (!vertex.allFinite())
+                return false;
+        std::memcpy(facet.extra, bytes.data() + 48, 2);
+        stl.facet_start[index] = facet;
+        stl_facet_stats(&stl, facet, first);
+    }
+    stl.stats.size              = stl.stats.max - stl.stats.min;
+    stl.stats.bounding_diameter = stl.stats.size.norm();
+    return true;
+}
+
 bool TriangleMesh::ReadSTLFile(
     const char* input_file, bool repair, ImportstlProgressFn stlFn, int custom_header_length, MeshRepairReport* repair_report)
 {
@@ -269,8 +361,9 @@ bool TriangleMesh::ReadSTLFile(
         repair_report->enabled = repair;
     }
 
-    stl_file stl;
-    if (!stl_open(&stl, input_file, stlFn, custom_header_length))
+    stl_file   stl;
+    const auto binary_result = read_binary_stl(stl, input_file, stlFn, custom_header_length);
+    if (!(binary_result ? *binary_result : stl_open(&stl, input_file, stlFn, custom_header_length)))
         return false;
     return from_stl(stl, repair, repair_report);
 }

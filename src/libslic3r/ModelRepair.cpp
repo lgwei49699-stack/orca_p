@@ -8,8 +8,10 @@
 #include <array>
 #include <cmath>
 #include <exception>
+#include <iterator>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -190,6 +192,143 @@ bool has_only_safely_separable_components(const TriangleMesh& mesh, size_t& comp
         }
     }
     return true;
+}
+
+struct RepairGroup
+{
+    TriangleMesh        mesh;
+    std::vector<size_t> source_faces;
+};
+
+// Fallback for partial repair when not EVERY patch can be split individually.
+// Keep touching/overlapping bounds in transitive groups, including cavities.
+// Extract faces from the ORIGINAL indexed mesh: merging its_split() outputs
+// would duplicate shared vertices at nonmanifold edges inside a retained group.
+std::vector<RepairGroup> separated_repair_groups(const TriangleMesh& mesh)
+{
+    const auto                 neighbors = its_face_neighbors(mesh.its);
+    const size_t               unset     = std::numeric_limits<size_t>::max();
+    std::vector<size_t>        patch(mesh.its.indices.size(), unset), stack;
+    std::vector<BoundingBoxf3> bounds;
+    for (size_t seed = 0; seed < patch.size(); ++seed) {
+        if (patch[seed] != unset)
+            continue;
+        const size_t id = bounds.size();
+        bounds.emplace_back();
+        patch[seed] = id;
+        stack.push_back(seed);
+        while (!stack.empty()) {
+            const size_t face = stack.back();
+            stack.pop_back();
+            for (int vertex : mesh.its.indices[face])
+                bounds.back().merge(mesh.its.vertices[size_t(vertex)].cast<double>());
+            for (int adjacent : neighbors[face]) {
+                if (adjacent >= 0 && patch[size_t(adjacent)] == unset) {
+                    patch[size_t(adjacent)] = id;
+                    stack.push_back(size_t(adjacent));
+                }
+            }
+        }
+    }
+    if (bounds.size() <= 1)
+        return {};
+    std::vector<size_t> parent(bounds.size()), order(bounds.size());
+    std::iota(parent.begin(), parent.end(), 0);
+    std::iota(order.begin(), order.end(), 0);
+    const auto root = [&parent](size_t id) {
+        while (parent[id] != id) {
+            parent[id] = parent[parent[id]];
+            id         = parent[id];
+        }
+        return id;
+    };
+    std::sort(order.begin(), order.end(), [&bounds](size_t a, size_t b) { return bounds[a].min.x() < bounds[b].min.x(); });
+    size_t comparisons = 0;
+    for (size_t first = 0; first < order.size(); ++first) {
+        const auto& a = bounds[order[first]];
+        for (size_t second = first + 1; second < order.size(); ++second) {
+            const auto& b = bounds[order[second]];
+            if (a.max.x() < b.min.x())
+                break;
+            // Conservative fallback for pathological overlapping patch counts.
+            // This bound affects grouping only, never a mesh validity verdict.
+            if (++comparisons > 1000000)
+                return {};
+            if (!(a.max.y() < b.min.y() || b.max.y() < a.min.y() || a.max.z() < b.min.z() || b.max.z() < a.min.z()))
+                parent[root(order[second])] = root(order[first]);
+        }
+    }
+    std::vector<size_t> group(bounds.size(), unset);
+    size_t              group_count = 0;
+    for (size_t id = 0; id < bounds.size(); ++id) {
+        const size_t r = root(id);
+        if (group[r] == unset)
+            group[r] = group_count++;
+    }
+    if (group_count <= 1)
+        return {};
+    // Compact indices without copying the full source vertex array per group.
+    std::vector<indexed_triangle_set> extracted(group_count);
+    std::vector<std::vector<size_t>>  source_faces(group_count);
+    std::vector<size_t>               vertex_group(mesh.its.vertices.size(), unset);
+    std::vector<int>                  vertex_index(mesh.its.vertices.size(), -1);
+    for (size_t face = 0; face < patch.size(); ++face) {
+        const size_t id     = group[root(patch[face])];
+        auto&        target = extracted[id];
+        Vec3i32      indices;
+        for (size_t corner = 0; corner < 3; ++corner) {
+            const size_t vertex = size_t(mesh.its.indices[face][corner]);
+            if (vertex_group[vertex] == unset) {
+                vertex_group[vertex] = id;
+                vertex_index[vertex] = int(target.vertices.size());
+                target.vertices.push_back(mesh.its.vertices[vertex]);
+            }
+            // Shared vertices must have overlapping patch bounds, hence one group.
+            if (vertex_group[vertex] != id)
+                throw std::runtime_error("Repair grouping separated a shared vertex.");
+            indices[corner] = vertex_index[vertex];
+        }
+        target.indices.push_back(indices);
+        source_faces[id].push_back(face);
+    }
+    std::vector<RepairGroup> result;
+    result.reserve(group_count);
+    for (size_t id = 0; id < group_count; ++id) {
+        result.push_back({TriangleMesh(std::move(extracted[id])), std::move(source_faces[id])});
+        result.back().mesh.set_init_shift(Vec3d::Zero()); // No per-shell winding normalization.
+    }
+    return result;
+}
+
+// Group extraction only renumbers vertices/faces; corner order and coordinates
+// are unchanged. Copy each complete subdivision tree by provenance instead of
+// rasterizing painting geometrically twice (extraction, then CGAL repair).
+void copy_group_annotations(const ModelVolume& source, ModelVolume& target, const std::vector<size_t>& source_faces)
+{
+    const auto copy = [&source_faces](const FacetsAnnotation& from, FacetsAnnotation& to) {
+        const auto&                             data = from.get_data();
+        TriangleSelector::TriangleSplittingData copied;
+        for (size_t face = 0; face < source_faces.size(); ++face) {
+            const auto it = std::lower_bound(data.triangles_to_split.begin(), data.triangles_to_split.end(), int(source_faces[face]),
+                                             [](const auto& item, int index) { return item.triangle_idx < index; });
+            if (it == data.triangles_to_split.end() || it->triangle_idx != int(source_faces[face]))
+                continue;
+            const auto   next  = std::next(it);
+            const size_t begin = size_t(it->bitstream_start_idx);
+            const size_t end   = next == data.triangles_to_split.end() ? data.bitstream.size() : size_t(next->bitstream_start_idx);
+            if (begin >= end || end > data.bitstream.size() || (end - begin) % 4 != 0)
+                throw std::runtime_error("Repair failed: painted facet annotations could not be mapped onto the remaining model parts.");
+            const size_t start = copied.bitstream.size();
+            copied.triangles_to_split.emplace_back(int(face), int(start));
+            copied.bitstream.insert(copied.bitstream.end(), data.bitstream.begin() + begin, data.bitstream.begin() + end);
+            copied.update_used_states(start);
+        }
+        to.set_data(std::move(copied));
+    };
+    copy(source.supported_facets, target.supported_facets);
+    copy(source.seam_facets, target.seam_facets);
+    copy(source.mmu_segmentation_facets, target.mmu_segmentation_facets);
+    copy(source.fuzzy_skin_facets, target.fuzzy_skin_facets);
 }
 
 struct PaintedCoverage
@@ -579,15 +718,19 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
             return false;
         }
 
-        bool   split_volume            = false;
-        bool   remove_volume           = false;
-        bool   repair_volume           = false;
-        size_t disconnected_part_count = 1;
+        bool                     split_volume            = false;
+        bool                     remove_volume           = false;
+        bool                     repair_volume           = false;
+        size_t                   disconnected_part_count = 1;
+        std::vector<RepairGroup> repair_groups;
         try {
-            if (options.split_components && !mesh.its.indices.empty() && volume->is_splittable())
+            if (options.split_components && !mesh.its.indices.empty() && volume->is_splittable()) {
                 split_volume = has_only_safely_separable_components(mesh, disconnected_part_count);
-            remove_volume = options.remove_non_3d_parts && !split_volume && is_not_3dimensional_part(mesh);
-            if (!split_volume && !remove_volume && !mesh.its.indices.empty())
+                if (!split_volume && options.allow_partial)
+                    repair_groups = separated_repair_groups(mesh);
+            }
+            remove_volume = options.remove_non_3d_parts && !split_volume && repair_groups.empty() && is_not_3dimensional_part(mesh);
+            if (!split_volume && repair_groups.empty() && !remove_volume && !mesh.its.indices.empty())
                 repair_volume = mesh_requires_repair(mesh, stored_report.before_open_edges, options);
         } catch (const std::exception& exception) {
             stored_report.attempted = true;
@@ -610,7 +753,7 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
             return false;
         }
 
-        if (!split_volume && !remove_volume && !repair_volume) {
+        if (!split_volume && repair_groups.empty() && !remove_volume && !repair_volume) {
             ++report.skipped;
             volume_finished(stored_report);
             if (cancellation_requested())
@@ -645,6 +788,7 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
         bool                      changed                        = false;
         bool                      annotation_preservation_failed = false;
         std::vector<ModelVolume*> parts;
+        const bool                grouped_repair = !repair_groups.empty();
         try {
             size_t parts_count = 1;
             if (split_volume) {
@@ -658,12 +802,28 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
             }
             stored_report.split_parts = split_volume ? disconnected_part_count : parts_count;
 
-            const size_t available_parts = volume_index < object->volumes.size() ?
-                                               std::min(parts_count, object->volumes.size() - volume_index) :
-                                               0;
-            parts.reserve(available_parts);
-            for (size_t part_index = 0; part_index < available_parts; ++part_index)
-                parts.push_back(object->volumes[volume_index + part_index]);
+            if (grouped_repair) {
+                // Leave the original staging volume intact until a group makes
+                // real progress. No re-centering: retain its full transform and
+                // source-local geometry, including nested shell orientation.
+                parts.reserve(repair_groups.size());
+                for (auto& group : repair_groups) {
+                    auto* part   = object->add_volume(*volume, std::move(group.mesh), false);
+                    part->source = ModelVolume::Source();
+                    part->text_configuration.reset();
+                    if (source_painting)
+                        copy_group_annotations(*volume, *part, group.source_faces);
+                    parts.push_back(part);
+                }
+                stored_report.split_parts = parts.size();
+            } else {
+                const size_t available_parts = volume_index < object->volumes.size() ?
+                                                   std::min(parts_count, object->volumes.size() - volume_index) :
+                                                   0;
+                parts.reserve(available_parts);
+                for (size_t part_index = 0; part_index < available_parts; ++part_index)
+                    parts.push_back(object->volumes[volume_index + part_index]);
+            }
 
             if (options.remove_non_3d_parts) {
                 for (size_t part_offset = parts.size(); part_offset > 0; --part_offset) {
@@ -684,8 +844,10 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
             // Removing dust is useful only while this object still has a model
             // part. An empty repaired object is not a successful repair, even
             // if another object (or a modifier) remains elsewhere in the scene.
-            if (parts.empty() && std::none_of(object->volumes.begin(), object->volumes.end(),
-                                              [](const ModelVolume* part) { return part != nullptr && part->is_model_part(); }))
+            if (parts.empty() &&
+                std::none_of(object->volumes.begin(), object->volumes.end(), [volume, grouped_repair](const ModelVolume* part) {
+                    return part != nullptr && part->is_model_part() && (!grouped_repair || part != volume);
+                }))
                 throw std::runtime_error("Repair failed: basic cleanup removed all geometry.");
 
             bool source_painting_restored = true;
@@ -870,6 +1032,28 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
             }
             if (stored_report.unresolved_parts != 0 && options.preserve_annotations && annotation_preservation_failed)
                 throw std::runtime_error("Repair failed: painted facet annotations could not be preserved in a partial result.");
+            if (grouped_repair) {
+                if (changed) {
+                    // Groups occupy the original slot in stable order. Other
+                    // selected/unselected staging volumes keep their pointers and order.
+                    object->delete_volume(volume_index);
+                    for (size_t i = 0; i < parts.size(); ++i) {
+                        const auto it = std::find(object->volumes.begin(), object->volumes.end(), parts[i]);
+                        std::rotate(object->volumes.begin() + volume_index + i, it, it + 1);
+                    }
+                    ++report.split_volumes;
+                    report.created_parts += parts.size() > 1 ? parts.size() - 1 : 0;
+                } else {
+                    // Splitting alone must not turn repeated unresolved input
+                    // into an endless sequence of "partial repair" successes.
+                    for (auto* part : parts) {
+                        const auto it = std::find(object->volumes.begin(), object->volumes.end(), part);
+                        object->delete_volume(size_t(it - object->volumes.begin()));
+                    }
+                    parts = {volume};
+                }
+                object->invalidate_bounding_box();
+            }
         } catch (const std::exception& exception) {
             add_failure(report, stored_report, exception.what());
             volume_finished(stored_report);

@@ -419,7 +419,8 @@ public:
     ModelVolume*            add_volume(const TriangleMesh &mesh, bool modify_to_center_geometry = true);
     ModelVolume*            add_volume(TriangleMesh &&mesh, ModelVolumeType type = ModelVolumeType::MODEL_PART, bool modify_to_center_geometry = true);
     ModelVolume*            add_volume(const ModelVolume &volume, ModelVolumeType type = ModelVolumeType::INVALID);
-    ModelVolume*            add_volume(const ModelVolume &volume, TriangleMesh &&mesh);
+    // Disable re-centering when a replacement mesh already uses the source volume's local coordinates.
+    ModelVolume*            add_volume(const ModelVolume& volume, TriangleMesh&& mesh, bool modify_to_center_geometry = true);
     ModelVolume*            add_volume_with_shared_mesh(const ModelVolume &other, ModelVolumeType type = ModelVolumeType::MODEL_PART);
     void                    delete_volume(size_t idx);
     void                    clear_volumes();

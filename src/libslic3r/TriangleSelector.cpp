@@ -2342,9 +2342,12 @@ public:
         return false;
     }
 
-    bool is_facet_visible(int facet_idx, const std::vector<Vec3f>& face_normals) const override
+    bool is_facet_visible(int, const std::vector<Vec3f>&) const override
     {
-        return check_normal(face_normals[facet_idx], dir);
+        // remap_painting enumerates target facets through its AABB tree and
+        // checks plane distance and area overlap for each one. Do not let the
+        // interactive brush flood into neighbors that bypass those checks.
+        return false;
     }
 
     static bool check_normal(const Vec3f& facet_normal, const Vec3f& camera_direction)
@@ -2395,20 +2398,34 @@ TriangleSelector::TriangleSplittingData TriangleSelector::remap_painting(
     AABBTreeIndirect::Tree3f target_tree = AABBTreeIndirect::build_aabb_tree_over_indexed_triangle_set(target_mesh.its.vertices,
                                                                                                        target_mesh.its.indices);
 
-    auto triangles_overlap = [](const Vec3f& pa, const Vec3f& pb, const Vec3f& pc, const Vec3f& ta, const Vec3f& tb, const Vec3f& tc) {
-        if (is_point_inside_triangle(ta, pa, pb, pc) || is_point_inside_triangle(tb, pa, pb, pc) ||
-            is_point_inside_triangle(tc, pa, pb, pc) || is_point_inside_triangle(pa, ta, tb, tc) ||
-            is_point_inside_triangle(pb, ta, tb, tc) || is_point_inside_triangle(pc, ta, tb, tc))
-            return true;
-
-        const Vec3f               normal = (pb - pa).cross(pc - pa).cwiseAbs() + (tb - ta).cross(tc - ta).cwiseAbs();
-        const int                 axis   = normal.x() >= normal.y() && normal.x() >= normal.z() ? 0 : normal.y() >= normal.z() ? 1 : 2;
-        const std::pair<int, int> projection{(axis + 1) % 3, (axis + 2) % 3};
-        return segments_intersect_proj(pa, pb, ta, tb, projection) || segments_intersect_proj(pa, pb, tb, tc, projection) ||
-               segments_intersect_proj(pa, pb, tc, ta, projection) || segments_intersect_proj(pb, pc, ta, tb, projection) ||
-               segments_intersect_proj(pb, pc, tb, tc, projection) || segments_intersect_proj(pb, pc, tc, ta, projection) ||
-               segments_intersect_proj(pc, pa, ta, tb, projection) || segments_intersect_proj(pc, pa, tb, tc, projection) ||
-               segments_intersect_proj(pc, pa, tc, ta, projection);
+    auto triangles_overlap_area = [](const Vec3f& pa, const Vec3f& pb, const Vec3f& pc, const Vec3f& ta, const Vec3f& tb, const Vec3f& tc) {
+        // A shared edge/vertex has no painted area to transfer. An inclusive
+        // intersection test makes the partial brush paint a strip onto the
+        // unpainted neighbor, expanding it again on every subsequent repair.
+        // Test separating edges in the dominant 2D projection, in double
+        // precision and for either winding. No area cutoff: small positive
+        // overlaps from retriangulation still need remapping.
+        const Vec3d                normal = (pb.cast<double>() - pa.cast<double>()).cross(pc.cast<double>() - pa.cast<double>()).cwiseAbs();
+        const int                  axis   = normal.x() >= normal.y() && normal.x() >= normal.z() ? 0 : normal.y() >= normal.z() ? 1 : 2;
+        const auto                 project = [axis](const Vec3f& p) { return Vec2d(double(p((axis + 1) % 3)), double(p((axis + 2) % 3))); };
+        const std::array<Vec2d, 3> source{project(pa), project(pb), project(pc)};
+        const std::array<Vec2d, 3> target{project(ta), project(tb), project(tc)};
+        const auto                 separated = [](const std::array<Vec2d, 3>& a, const std::array<Vec2d, 3>& b) {
+            const auto   cross   = [](const Vec2d& u, const Vec2d& v) { return u.x() * v.y() - u.y() * v.x(); };
+            const double winding = cross(a[1] - a[0], a[2] - a[0]);
+            if (winding == 0.)
+                return true;
+            for (size_t edge = 0; edge < 3; ++edge) {
+                const Vec2d direction = a[(edge + 1) % 3] - a[edge];
+                if (std::all_of(b.begin(), b.end(), [&](const Vec2d& p) {
+                        const double side = cross(direction, p - a[edge]);
+                        return winding > 0. ? side <= 0. : side >= 0.;
+                    }))
+                    return true;
+            }
+            return false;
+        };
+        return !separated(source, target) && !separated(target, source);
     };
 
     TriangleSelector target_selector(target_mesh);
@@ -2462,7 +2479,7 @@ TriangleSelector::TriangleSplittingData TriangleSelector::remap_painting(
                                        const bool normals_parallel = TriangleCursor::check_normal(target_normal, -source_normal) ||
                                                                      TriangleCursor::check_normal(target_normal, source_normal);
                                        if (normals_parallel && plane_distance <= plane_tolerance &&
-                                           triangles_overlap(p0, p1, p2, t0, t1, t2))
+                                           triangles_overlap_area(p0, p1, p2, t0, t1, t2))
                                            target_selector.select_patch(face_idx, TriangleCursor::build_cursor(source_selector, triangle),
                                                                         triangle.get_state(), Transform3d::Identity(), true, 0.f, true);
                                        return true;

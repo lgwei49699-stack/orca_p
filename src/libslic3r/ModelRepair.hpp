@@ -168,6 +168,10 @@ struct ModelRepairOptions
     // shells stay together so cavity orientation is not destroyed. Empty and
     // planar parts may then be removed; thin solids are retained. Both
     // operations participate in the same transaction.
+    // Partial mode may also separate independent groups while retaining all
+    // touching/nested patches within each group. That fallback preserves winding
+    // and transforms and only retains the split when actual repair/cleanup changes
+    // are accepted; grouping alone is not progress on an unresolved model.
     bool split_components    = true;
     bool remove_non_3d_parts = true;
 };

@@ -35,6 +35,8 @@ OrcaSlicer 的 C++17 源码位于 `src/`，按功能模块和平台适配层拆�
 
 ### 模型修复专项测试：固定命令入口
 
+- 2026-09-13 新增独立 `--check-model` 工作流：受控基础清理 → 保存副本 → 七项检测及三项补充检查 → 可选既有 CGAL 部分修复 → 导出重读复检。正式协议与进度见 `doc/model-check-workflow.md`；新入口不替换普通导入/切片流程，共享 STL/修复/标注恢复修正仍影响既有调用方。新入口回归为 `python3 scripts/test_cli_model_check.py <新构建的 OrcaSlicer 路径>`，可选 `--demo-inspector <已有原生 demo 程序>` 对同一准备后 STL 做对比；不编译、不切片。新标签 `[ModelRepair][Inspection]` / `[ModelRepair][Preparation]` 已包含在完整专项。代码和脚本存在不代表本轮验证通过。
+
 - 基础修复验收夹具在 `tests/data/model_repair_acceptance/`，由 `scripts/generate_repair_fixtures.py` 确定性生成；`manifest.json` 记录预期结果，不能当成测试已经通过。只生成夹具不会构建或运行应用。
 - 新增聚焦标签为 `'[ModelRepair][Acceptance]'`，仍包含于下面的完整专项；涵盖修复后 50 层截面与健康模型对比、危险模型失败不改原件、薄实体保留、孤立涂色面的严格保色失败保护。截面测试不等同完整 G-code 切片验证。
 - CLI 几何/导出验收固定入口：`python3 scripts/test_cli_repair_acceptance.py <新构建的 OrcaSlicer 路径>`。脚本创建独立临时目录，保留原始输入哈希、命令、日志、结果 JSON，检查完全修复的输出重导入无需再次修复；不编译。部分修复输出另行断言仍有未解决项，不能套用完全修复的闭合/重导入通过标准。
@@ -47,6 +49,9 @@ OrcaSlicer 的 C++17 源码位于 `src/`，按功能模块和平台适配层拆�
 - 2026-09-10 部分修复策略：GUI 显式“修复模型”和 CLI `--repair-model cgal` 启用 `allow_partial`；核心 API 默认及切割工具内部仍严格。可保留独立基础清理（精确零面积面、同向重复面）及其他部件的有效修改，不采用 CGAL 检查失败的候选。非法数据、内存/工作线程异常、严格保色失败及取消仍中止当前事务。
 - 部分修复必须报告 `partially_repaired`、`unresolved` 计数、`mesh_validated=false` 和 `repair_validation.mesh=not_passed`；不能把 `success=true`、`failed=0` 或 CLI 退出码 0 当作网格完全合格。仅有未解决项、没有可保留修改时为 `unresolved`：仅导出任务非零退出；请求切片时允许尝试，但切片警告/冲突/导出门禁不放宽。
 - 新增聚焦标签 `'[ModelRepair][Partial]'` 已包含于完整专项。CLI 验收追加同一网格“重复面+非流形边”、部分输出再次检查及两种输入顺序的批处理用例；这些仍是合成夹具，不能冒充真实 Thingi10K 验证。真实样本与本轮进展见 `planning/repair/repair-test-models/mesh-inspector/REPAIR_PROGRESS.md`，未重新编译运行前不能复用旧日志作为新策略通过证明。
+- 2026-09-13 检测验收后修正：部分模式可将同一网格里的接触/嵌套 patch 保持同组，与空间分离的其他组分别修复；组内不拆共享顶点、不逐壳转正、不重新居中。只有实际修复/清理进展才保留分组。新增 `[ModelRepair][Partial][Split]` 回归；`scripts/test_cli_model_check.py` 覆盖两种输入顺序的 STL/OBJ 部分结果及再次修复的 `unresolved`，不放宽取消、异常和严格保色保护。需新构建验证，不复用 17:29 失败前的通过数字。
+- 2026-09-13 17:55 验收后补充：共享 STL 读取按长度/面数优先识别二进制，覆盖零法向量及短文件，不修改第三方 ADMesh；空间分组按源面编号精确复制四类标注，避免重复几何重映射，CGAL 修复后的保色门禁不变。新增 `[stl][Import][Binary]`，分组专项补细分标注/面积/位置断言，CLI 新工作流补两种顺序的双色 OBJ/MTL。均包含于原固定入口；必须重新构建后运行，不能把 17:55 的 80 项 CLI 通过当作补丁已验收。记录见 `doc/model-check-workflow.md`。
+- 2026-09-13 22:44 验收后补充：共享标注恢复只向有面积重叠且通过平面检查的目标面映射，不把共边/共点染色，也不沿画笔邻面传播绕过逐面门禁。新增 `[SavedPainting][Boundary]` 覆盖边界不扩色、反向面、坐标偏移、重复映射和重新三角化，已包含于原完整专项。保留部分修复的面积/位置断言；用户反馈的 1 个用例/12 个断言失败不是新修正已通过的证明，须重新构建并复跑 GUI/CLI 共用恢复路径及切割专项。
 - 修复后切片在 G-code 导出前后都检查警告；CRITICAL 警告或冲突令任务失败，并尝试移除本次刚生成的拒绝 G-code。删除失败会记录日志，调用方仍必须按非零返回码拒绝使用所有产物。普通不修复切片的原有警告策略不变。
 - 由用户执行编译和验证并提供日志。AI 修改代码、测试或本文档，不代表获得编译或运行测试的授权；默认仅做静态检查。
 - 不需要为每次修复修改构建页面的测试菜单。页面的 CTest 标签下拉框与 Catch2 标签不是一回事；不得直接把 `[ModelRepair]` 等当成 `ctest -L` 的标签。

@@ -1,5 +1,10 @@
 #include <catch2/catch.hpp>
 
+#include <algorithm>
+#include <array>
+#include <functional>
+#include <optional>
+
 #include <test_utils.hpp>
 
 #include <libslic3r/CutUtils.hpp>
@@ -9,6 +14,18 @@
 using namespace Slic3r;
 
 namespace {
+
+double painted_surface_area(const indexed_triangle_set& mesh)
+{
+    double area = 0.;
+    for (const auto& face : mesh.indices) {
+        const Vec3d a = mesh.vertices[face[0]].cast<double>();
+        const Vec3d b = mesh.vertices[face[1]].cast<double>();
+        const Vec3d c = mesh.vertices[face[2]].cast<double>();
+        area += 0.5 * (b - a).cross(c - a).norm();
+    }
+    return area;
+}
 
 ModelVolume* make_volume(Model& model, TriangleMesh mesh)
 {
@@ -136,6 +153,118 @@ TEST_CASE("SavedPainting does not leak onto a nearby opposite thin wall", "[Save
     target_selector.deserialize(remapped, false);
 
     CHECK(target_selector.num_facets(EnforcerBlockerType::ENFORCER) == 1);
+}
+
+TEST_CASE("SavedPainting does not expand across touching facets", "[SavedPainting][Boundary][Provenance]")
+{
+    const bool reversed       = GENERATE(false, true);
+    const bool merge_existing = GENERATE(false, true);
+    const int  axis           = GENERATE(0, 1, 2);
+    const auto state          = GENERATE(EnforcerBlockerType::ENFORCER, EnforcerBlockerType::BLOCKER, EnforcerBlockerType::Extruder3,
+                                         EnforcerBlockerType::Extruder16);
+    CAPTURE(reversed, merge_existing, axis, int(state));
+    const auto point = [axis](float u, float v) {
+        Vec3f p(20.f, 30.f, 40.f);
+        p((axis + 1) % 3) += u;
+        p((axis + 2) % 3) += v;
+        return p;
+    };
+    indexed_triangle_set source_its;
+    source_its.vertices = {point(0.f, 0.f), point(10.f, 0.f), point(0.f, 10.f)};
+    source_its.indices  = {Vec3i32(0, 1, 2)};
+    const TriangleMesh source_mesh(source_its);
+    TriangleSelector   source_selector(source_mesh);
+    source_selector.set_facet(0, state);
+    auto painting = source_selector.serialize();
+
+    indexed_triangle_set target_its = source_its;
+    target_its.vertices.insert(target_its.vertices.end(), {point(10.f, 10.f), point(-10.f, 0.f), point(0.f, -10.f)});
+    // The painted face is reindexed. Face 0 shares an entire edge; face 2
+    // shares only one vertex. Neither has any painted area in the source.
+    target_its.indices = {Vec3i32(1, 3, 2), Vec3i32(0, 1, 2), Vec3i32(0, 4, 5)};
+    if (reversed)
+        for (Vec3i32& face : target_its.indices)
+            std::swap(face(1), face(2));
+    const Vec3f shift(4.f, -8.f, 16.f);
+    for (Vec3f& p : target_its.vertices)
+        p -= shift;
+    Transform3d target_transform   = Transform3d::Identity();
+    target_transform.translation() = shift.cast<double>();
+
+    const TriangleMesh target_mesh(target_its);
+    TriangleSelector   existing_selector(target_mesh);
+    const auto         other_state = state == EnforcerBlockerType::BLOCKER ? EnforcerBlockerType::Extruder3 : EnforcerBlockerType::BLOCKER;
+    if (merge_existing)
+        existing_selector.set_facet(0, other_state);
+    const auto                                                                           existing = existing_selector.serialize();
+    std::optional<std::reference_wrapper<const TriangleSelector::TriangleSplittingData>> existing_ref;
+    if (merge_existing)
+        existing_ref = std::cref(existing);
+    existing_selector.set_facet(1, state);
+    const auto expected = existing_selector.serialize();
+
+    // Repeated repairs must not turn a boundary touch into an ever-growing
+    // strip, or overwrite a different color already present on the neighbor.
+    for (int round = 0; round < 3; ++round) {
+        CAPTURE(round);
+        painting = TriangleSelector::remap_painting(source_its, painting, target_its, target_transform, existing_ref);
+        CHECK(painting.triangles_to_split == expected.triangles_to_split);
+        CHECK(painting.bitstream == expected.bitstream);
+        TriangleSelector restored(target_mesh);
+        restored.deserialize(painting, false);
+        auto painted = restored.get_facets_strict(state);
+        REQUIRE(!painted.indices.empty());
+        // get_facets_strict keeps the selector's live vertices, including
+        // vertices used only by other states. Measure the selected surface,
+        // not that backing vertex pool. Compact only this extracted copy;
+        // no triangles are removed and no coordinates are changed.
+        its_compactify_vertices(painted);
+        CHECK(painted.vertices.size() == 3);
+        TriangleMesh painted_mesh(std::move(painted));
+        painted_mesh.translate(shift);
+        CHECK(painted_surface_area(painted_mesh.its) == Approx(50.).epsilon(1.e-6));
+        CHECK(bounding_box(painted_mesh.its).min.isApprox(bounding_box(source_mesh.its).min));
+        CHECK(bounding_box(painted_mesh.its).max.isApprox(bounding_box(source_mesh.its).max));
+        source_its       = target_its;
+        target_transform = Transform3d::Identity();
+    }
+}
+
+TEST_CASE("SavedPainting still transfers to coplanar retriangulated facets", "[SavedPainting][Boundary]")
+{
+    const bool reversed = GENERATE(false, true);
+    CAPTURE(reversed);
+    indexed_triangle_set source_its;
+    source_its.vertices = {Vec3f(0.f, 0.f, 0.f), Vec3f(10.f, 0.f, 0.f), Vec3f(0.f, 10.f, 0.f)};
+    source_its.indices  = {Vec3i32(0, 1, 2)};
+    const TriangleMesh source_mesh(source_its);
+    TriangleSelector   source_selector(source_mesh);
+    source_selector.set_facet(0, EnforcerBlockerType::ENFORCER);
+
+    // Four triangles occupy the original painted triangle. Use separate
+    // vertex indices so all four must be found without neighbor propagation.
+    const std::array<Vec3f, 6>   vertices{source_its.vertices[0], source_its.vertices[1], source_its.vertices[2],
+                                        Vec3f(5.f, 0.f, 0.f),   Vec3f(5.f, 5.f, 0.f),   Vec3f(0.f, 5.f, 0.f)};
+    const std::array<Vec3i32, 4> faces{Vec3i32(0, 3, 5), Vec3i32(3, 1, 4), Vec3i32(5, 4, 2), Vec3i32(3, 4, 5)};
+    indexed_triangle_set         target_its;
+    for (const Vec3i32& face : faces) {
+        const int offset = int(target_its.vertices.size());
+        for (int corner = 0; corner < 3; ++corner)
+            target_its.vertices.push_back(vertices[face(corner)]);
+        target_its.indices.emplace_back(offset, offset + (reversed ? 2 : 1), offset + (reversed ? 1 : 2));
+    }
+    const auto remapped = TriangleSelector::remap_painting(source_its, source_selector.serialize(), target_its, Transform3d::Identity(),
+                                                           std::nullopt);
+    const TriangleMesh target_mesh(target_its);
+    TriangleSelector   target_selector(target_mesh);
+    target_selector.deserialize(remapped, false);
+    CHECK(target_selector.num_facets(EnforcerBlockerType::ENFORCER) == 4);
+    auto painted = target_selector.get_facets_strict(EnforcerBlockerType::ENFORCER);
+    REQUIRE(!painted.indices.empty());
+    its_compactify_vertices(painted);
+    CHECK(painted_surface_area(painted) == Approx(50.).epsilon(1.e-6));
+    CHECK(bounding_box(painted).min.isApprox(bounding_box(source_its).min));
+    CHECK(bounding_box(painted).max.isApprox(bounding_box(source_its).max));
 }
 
 TEST_CASE("Splitting a volume remaps painting to displaced components", "[SavedPainting][ModelVolume]")

@@ -58,6 +58,7 @@
 #include "libslic3r/Model.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/ModelRepair.hpp"
+#include "libslic3r/ModelCheckWorkflow.hpp"
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Print.hpp"
@@ -140,6 +141,7 @@ std::map<int, std::string> cli_errors =
      {CLI_FILE_VERSION_NOT_SUPPORTED, "Unsupported 3MF version or required feature. Please update OrcaSlicer before opening this project."},
      {CLI_MODEL_REPAIR_ERROR, "Failed repairing the model."},
      {CLI_RESULT_WRITE_ERROR, "Failed writing the CLI result file."},
+     {CLI_MODEL_CHECK_ERROR, "Model checking did not complete."},
      {CLI_NO_SUITABLE_OBJECTS, "One of the plate is empty or has no object fully inside it. Please check that the 3mf contains no empty "
                                "plate in Orca Slicer before uploading."},
      {CLI_VALIDATE_ERROR,
@@ -216,6 +218,7 @@ typedef struct _sliced_info {
     bool                             repair_slice_requested{false};
     size_t                           repair_slices_completed{0};
     json                             model_transforms = nlohmann::json::array();
+    json                             model_checks     = nlohmann::json::array();
 }sliced_info_t;
 std::vector<PrintBase::SlicingStatus> g_slicing_warnings;
 
@@ -602,12 +605,21 @@ bool record_exit_reson(std::string                        outputdir,
         j["prepare_time"] = sliced_info.prepare_time;
         j["export_time"] = sliced_info.export_time;
         j["output_files"] = sliced_info.output_files;
+        if (!sliced_info.model_checks.empty())
+            j["model_checks"] = sliced_info.model_checks;
         if (sliced_info.cgal_repair_requested) {
-            const bool mesh_passed = !sliced_info.model_repairs.empty() &&
-                                     std::all_of(sliced_info.model_repairs.begin(), sliced_info.model_repairs.end(),
-                                                 [](const model_repair_info_t& info) {
-                                                     return info.engine == "cgal" && info.cgal_report.mesh_validated();
-                                                 });
+            bool mesh_passed = !sliced_info.model_repairs.empty() &&
+                               std::all_of(sliced_info.model_repairs.begin(), sliced_info.model_repairs.end(),
+                                           [](const model_repair_info_t& info) {
+                                               return info.engine == "cgal" && info.cgal_report.mesh_validated();
+                                           });
+            // In the check workflow, the published serialized whole-model
+            // inspection is stronger evidence than per-volume repair gates.
+            if (!sliced_info.model_checks.empty())
+                mesh_passed = code == 0 &&
+                              std::all_of(sliced_info.model_checks.begin(), sliced_info.model_checks.end(), [](const json& check) {
+                                  return check.value("check_complete", false) && check.value("mesh_status", "unknown") == "passed";
+                              });
             size_t unresolved_volumes = 0;
             for (const model_repair_info_t& info : sliced_info.model_repairs)
                 unresolved_volumes += info.cgal_report.unresolved;
@@ -1507,6 +1519,77 @@ int CLI::run(int argc, char **argv)
 
     // Validate before material catalog loading and before the no-action GUI branch.
     const bool cgal_repair_requested   = std::find(m_actions.begin(), m_actions.end(), "repair_model") != m_actions.end();
+    if (std::find(m_actions.begin(), m_actions.end(), "check_model") != m_actions.end()) {
+        ModelCheckWorkflowReport check_report;
+        int                      code = CLI_SUCCESS;
+        std::string              message;
+        try {
+            // This is a model-only entry point, before printer/material catalog
+            // loading, arrangement, bed transforms and the normal slice path.
+            const std::set<std::string> allowed_options{"check_model", "repair_model", "export_obj", "export_stl",
+                                                        "outputdir",   "debug",        "datadir",    "repair_ignore_materials"};
+            for (const auto& key : m_requested_options)
+                if (allowed_options.count(key) == 0)
+                    throw std::invalid_argument("--check-model does not accept this slicing/transform option: " + key);
+            if (m_input_files.size() != 1 || !m_transforms.empty())
+                throw std::invalid_argument("--check-model requires exactly one untransformed STL or OBJ input.");
+            if (std::any_of(m_model_cli_specs.begin(), m_model_cli_specs.end(), [](const ModelCliSpec& spec) {
+                    return spec.filament_group || spec.arrange_group || spec.position || spec.scale || spec.rotation || spec.support ||
+                           spec.process;
+                }))
+                throw std::invalid_argument("--check-model does not accept per-model slicing overrides.");
+            if (cgal_repair_requested && m_config.opt_string("repair_model") != "cgal")
+                throw std::invalid_argument("--check-model supports only --repair-model cgal.");
+            if (m_config.opt_bool("export_obj") && m_config.opt_bool("export_stl"))
+                throw std::invalid_argument("Choose one model check export format: OBJ or STL.");
+            ModelCheckWorkflowOptions options;
+            options.input_file       = boost::filesystem::absolute(m_input_files.front()).string();
+            options.output_directory = outfile_dir;
+            options.advanced_repair  = cgal_repair_requested;
+            options.ignore_materials = m_config.opt_bool("repair_ignore_materials");
+            options.export_format    = m_config.opt_bool("export_obj") ? "obj" : (m_config.opt_bool("export_stl") ? "stl" : "");
+            run_model_check_workflow(options, check_report);
+        } catch (const std::invalid_argument& error) {
+            code    = CLI_INVALID_PARAMS;
+            message = error.what();
+        } catch (const std::bad_alloc&) {
+            code    = CLI_OUT_OF_MEMORY;
+            message = "Insufficient memory while checking the model.";
+        } catch (const std::exception& error) {
+            code    = check_report.repair_attempted ? CLI_MODEL_REPAIR_ERROR : CLI_MODEL_CHECK_ERROR;
+            message = error.what();
+        } catch (...) {
+            code    = CLI_MODEL_CHECK_ERROR;
+            message = "Unexpected model check failure.";
+        }
+        if (check_report.check.empty())
+            check_report.check = {{"check_complete", false}, {"mesh_status", "unknown"}, {"next_action", "retry_check"}};
+        if (code != CLI_SUCCESS) {
+            check_report.check["operation_error"] = message;
+            check_report.check["operation_status"] = "failed";
+            if (check_report.check.contains("advanced_repair") && check_report.check["advanced_repair"].value("status", "") == "running") {
+                check_report.check["advanced_repair"]["status"]         = "failed";
+                check_report.check["advanced_repair"]["retained_stage"] = "prepared";
+            }
+            boost::nowide::cerr << message << std::endl;
+        }
+        sliced_info.cgal_repair_requested = cgal_repair_requested;
+        sliced_info.model_checks.push_back(check_report.check);
+        sliced_info.output_files = check_report.output_files;
+        if (check_report.repair_attempted) {
+            model_repair_info_t info;
+            info.input_file              = check_report.check.value("input_file", "");
+            info.engine                  = "cgal";
+            info.cgal_report             = std::move(check_report.repair);
+            info.input_materials_ignored = check_report.input_materials_ignored;
+            if (check_report.check.contains("final_output_files"))
+                info.output_files = check_report.check.at("final_output_files").get<std::vector<std::string>>();
+            sliced_info.model_repairs.push_back(std::move(info));
+        }
+        if (!record_exit_reson(outfile_dir, code, 0, message, sliced_info))
+            return CLI_RESULT_WRITE_ERROR;
+        return code;
+    }
     sliced_info.cgal_repair_requested = cgal_repair_requested;
     sliced_info.repair_slice_requested = cgal_repair_requested &&
         std::find(m_actions.begin(), m_actions.end(), "slice") != m_actions.end();
@@ -8393,6 +8476,7 @@ bool CLI::setup(int argc, char **argv)
     }
     if (!parse_model_cli_specs(argc, argv))
         return false;
+    m_requested_options = opt_order;
     // Parse actions and transform options.
     for (auto const &opt_key : opt_order) {
         if (cli_actions_config_def.has(opt_key)) {

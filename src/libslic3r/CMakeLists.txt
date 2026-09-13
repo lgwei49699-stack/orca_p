@@ -296,6 +296,10 @@ set(lisbslic3r_sources
     Model.hpp
     ModelRepair.cpp
     ModelRepair.hpp
+    ModelInspection.hpp
+    ModelPreparation.cpp
+    ModelCheckWorkflow.cpp
+    ModelCheckWorkflow.hpp
     MTUtils.hpp
     MultiMaterialSegmentation.cpp
     MultiMaterialSegmentation.hpp
@@ -503,6 +507,7 @@ add_library(libslic3r_cgal STATIC
     CutSurface.hpp CutSurface.cpp
     IntersectionPoints.hpp IntersectionPoints.cpp
     MeshBoolean.hpp MeshBoolean.cpp
+    ModelInspection.cpp
     TryCatchSignal.hpp TryCatchSignal.cpp
     Triangulation.hpp Triangulation.cpp
 )

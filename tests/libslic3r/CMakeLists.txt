@@ -17,6 +17,7 @@ add_executable(${_TEST_NAME}_tests
 	test_stl.cpp
 	test_meshboolean.cpp
 	test_model_repair.cpp
+	test_model_inspection.cpp
 	# test_marchingsquares.cpp
 	test_timeutils.cpp
 	test_voronoi.cpp

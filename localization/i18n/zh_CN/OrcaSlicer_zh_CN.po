@@ -18408,6 +18408,18 @@ msgstr ""
 #~ "extension."
 #~ msgstr "未知的文件格式。输入文件的扩展名必须为.stl、.obj 或 .amf（.xml）。"
 
+#: src/libslic3r/PrintConfig.cpp
+msgid "Check model"
+msgstr "检测模型"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "With --repair-model cgal or --check-model, import OBJ geometry without reading MTL libraries, colors or UVs. Cannot be combined with material bindings, color grouping or multicolor OBJ export."
+msgstr "配合 --repair-model cgal 或 --check-model 使用，仅导入 OBJ 几何，不读取 MTL 库、颜色或 UV。不能与材质绑定、颜色分组或多色 OBJ 导出参数组合使用。"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Prepare and inspect one STL or OBJ model, writing structured results without slicing."
+msgstr "对单个 STL 或 OBJ 模型执行受控清理和检测，输出结构化结果，不进行切片。"
+
 #~ msgid ""
 #~ "Improve shell precision by adjusting outer wall spacing. This also "
 #~ "improves layer consistency."

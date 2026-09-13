@@ -1624,11 +1624,12 @@ ModelVolume* ModelObject::add_volume(const ModelVolume &other, ModelVolumeType t
     return v;
 }
 
-ModelVolume* ModelObject::add_volume(const ModelVolume &other, TriangleMesh &&mesh)
+ModelVolume* ModelObject::add_volume(const ModelVolume& other, TriangleMesh&& mesh, bool modify_to_center_geometry)
 {
     ModelVolume* v = new ModelVolume(this, other, std::move(mesh));
     this->volumes.push_back(v);
-    v->center_geometry_after_creation();
+    if (modify_to_center_geometry)
+        v->center_geometry_after_creation();
     this->invalidate_bounding_box();
     // BBS: backup
     Slic3r::save_object_mesh(*this);
