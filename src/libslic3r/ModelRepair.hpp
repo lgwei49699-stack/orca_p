@@ -16,6 +16,8 @@ class TriangleMesh;
 enum class ModelRepairVolumeStatus {
     Skipped,
     Repaired,
+    PartiallyRepaired,
+    Unresolved,
     RolledBack,
     Failed,
 };
@@ -37,6 +39,8 @@ struct ModelRepairVolumeReport
     size_t                  repaired_parts        = 0;
     size_t                  split_parts           = 1;
     size_t                  removed_parts         = 0;
+    size_t                  basic_removed_faces   = 0;
+    size_t                  unresolved_parts      = 0;
     bool                    annotations_cleared   = false;
     bool                    annotations_preserved = false;
     std::string             message;
@@ -51,24 +55,28 @@ struct ModelRepairFailure
     std::string object_name;
     std::string volume_name;
     std::string message;
+    bool        recoverable = false;
 };
 
 struct ModelRepairReport
 {
-    bool   success       = false;
-    bool   attempted     = false;
-    bool   committed     = false;
-    bool   canceled      = false;
-    size_t objects       = 0;
-    size_t volumes       = 0;
-    size_t repaired      = 0;
-    size_t mesh_repaired = 0;
-    size_t skipped       = 0;
-    size_t failed        = 0;
-    size_t rolled_back   = 0;
-    size_t split_volumes = 0;
-    size_t created_parts = 0;
-    size_t removed_parts = 0;
+    bool   success             = false;
+    bool   attempted           = false;
+    bool   committed           = false;
+    bool   canceled            = false;
+    bool   completed           = false;
+    size_t objects             = 0;
+    size_t volumes             = 0;
+    size_t repaired            = 0;
+    size_t mesh_repaired       = 0;
+    size_t skipped             = 0;
+    size_t failed              = 0;
+    size_t rolled_back         = 0;
+    size_t split_volumes       = 0;
+    size_t created_parts       = 0;
+    size_t removed_parts       = 0;
+    size_t basic_removed_faces = 0;
+    size_t unresolved          = 0; // Selected volumes with remaining geometric problems.
 
     size_t before_facets     = 0;
     size_t after_facets      = 0;
@@ -80,6 +88,8 @@ struct ModelRepairReport
     std::vector<size_t>                  changed_object_indices;
 
     const char* status() const;
+    bool        can_continue() const { return completed && !canceled && failed == 0; }
+    bool        mesh_validated() const { return can_continue() && unresolved == 0; }
 };
 
 struct ModelRepairTarget
@@ -93,6 +103,14 @@ struct ModelRepairOptions
     // Empty means all MODEL_PART volumes. A target without volume_index means
     // all MODEL_PART volumes belonging to that object.
     std::vector<ModelRepairTarget> targets;
+
+    // Keep validated basic cleanup and other successfully repaired parts when
+    // CGAL rejects a geometric candidate. Invalid data, inspection/worker
+    // exceptions, annotation failures and cancellation remain fatal. Callers
+    // must distinguish partial success from mesh_validated(); no improvement
+    // returns false but can_continue() may permit a separate slicing attempt.
+    // Explicitly enabled by GUI/CLI; the core's default remains transactional.
+    bool allow_partial = false;
 
     // CGAL does not expose interruption inside a single repair call. These
     // callbacks are therefore observed between volumes and once more before
@@ -132,6 +150,10 @@ struct ModelRepairOptions
     // retain the task and must join every worker before returning.
     std::function<bool(const std::function<bool()>& task)> run_painting_validation;
 
+    // Optional synchronous worker for basic face filtering. The task only reads
+    // source geometry and writes a private TriangleMesh, never Model IDs/state.
+    std::function<void(const std::function<void()>& task)> run_mesh_preparation;
+
     // Permit topology-indexed annotations that cannot or should not be remapped
     // to be cleared. Geometry-only CLI repair enables this explicitly.
     bool allow_annotation_clearing = true;
@@ -143,9 +165,9 @@ struct ModelRepairOptions
 
     // Split disconnected shells that can be proven spatially separate into
     // individual volumes before repair. Nested, touching, or intersecting
-    // shells stay together so cavity orientation is not destroyed. Empty,
-    // planar, and vanishingly thin parts may then be removed. Both operations
-    // participate in the same transaction.
+    // shells stay together so cavity orientation is not destroyed. Empty and
+    // planar parts may then be removed; thin solids are retained. Both
+    // operations participate in the same transaction.
     bool split_components    = true;
     bool remove_non_3d_parts = true;
 };
@@ -157,8 +179,10 @@ struct ModelRepairOptions
 std::unique_ptr<Model> make_model_repair_staging_copy(const Model& model, const std::vector<ModelRepairTarget>& targets);
 
 // Repairs all selected MODEL_PART volumes. Splitting, non-3D cleanup and CGAL
-// repair are staged on a private model copy; if any volume fails or the user
-// cancels, neither geometry nor volume structure is committed to the model.
+// repair are staged on a private model copy; by default, if any volume fails or
+// the user cancels, neither geometry nor volume structure is committed.
+// With allow_partial, geometric rejection is recorded without discarding safe
+// changes. A true return may therefore mean partially_repaired, not mesh-valid.
 bool repair_model(Model& model, ModelRepairReport& report, const ModelRepairOptions& options = {});
 
 // Repairs an already isolated staging model without creating another Model

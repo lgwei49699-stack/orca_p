@@ -1,4 +1,5 @@
 #include "FixModelByCgal.hpp"
+#include "ModelRepairPolicy.hpp"
 
 #include "libslic3r/MeshBoolean.hpp"
 #include "libslic3r/Model.hpp"
@@ -115,7 +116,7 @@ bool stage_owned_model_repair_by_cgal_gui(std::shared_ptr<Model>                
                                           GUI::ProgressDialog&                  progress_dialog,
                                           const wxString&                       message_header,
                                           StagedModelRepair&                    staged_repair,
-                                          bool                                  keep_painting,
+                                          ModelRepairOptions                    options,
                                           bool                                  progress_initialized)
 {
     staged_repair = StagedModelRepair{};
@@ -132,14 +133,9 @@ bool stage_owned_model_repair_by_cgal_gui(std::shared_ptr<Model>                
     bool              cancel_requested = false;
     ModelRepairReport report;
 
-    ModelRepairOptions options;
-    options.targets = targets;
-    // Match the latest OrcaSlicer behavior: painting remapping is opt-in and
-    // experimental. Unsupported exterior annotations are cleared explicitly.
-    options.allow_annotation_clearing = true;
-    options.preserve_annotations      = keep_painting;
-    options.is_canceled               = [&cancel_requested]() { return cancel_requested; };
-    options.mesh_requires_repair      = [&](const TriangleMesh& source) {
+    options.targets              = targets;
+    options.is_canceled          = [&cancel_requested]() { return cancel_requested; };
+    options.mesh_requires_repair = [&](const TriangleMesh& source) {
         return inspect_mesh_on_worker(source, progress_dialog, message_header, cancel_requested);
     };
     options.repair_mesh_from_source = [&](const TriangleMesh& source, TriangleMesh& repaired, std::string& error) {
@@ -147,6 +143,14 @@ bool stage_owned_model_repair_by_cgal_gui(std::shared_ptr<Model>                
     };
     options.run_painting_validation = [&](const std::function<bool()>& validation) {
         return run_cgal_worker(validation, progress_dialog, message_header, cancel_requested);
+    };
+    options.run_mesh_preparation = [&](const std::function<void()>& preparation) {
+        run_cgal_worker(
+            [&]() {
+                preparation();
+                return true;
+            },
+            progress_dialog, message_header, cancel_requested);
     };
     options.on_progress = [&](size_t completed, size_t total, const ModelRepairVolumeReport& volume_report) {
         const int         percent = total == 0 ? 100 : std::min(static_cast<int>((completed * 100) / total), 99);
@@ -175,7 +179,12 @@ bool stage_owned_model_repair_by_cgal_gui(std::shared_ptr<Model>                
                             << ", status=" << staged_repair.report.status() << ", staging_changed=" << staged_repair.report.committed
                             << ", objects=" << staged_repair.report.objects << ", volumes=" << staged_repair.report.volumes
                             << ", repaired=" << staged_repair.report.repaired << ", skipped=" << staged_repair.report.skipped
-                            << ", failed=" << staged_repair.report.failed << ", facets=" << staged_repair.report.before_facets << "->"
+                            << ", unresolved=" << staged_repair.report.unresolved
+                            << ", basic_removed_faces=" << staged_repair.report.basic_removed_faces
+                            << ", failed=" << staged_repair.report.failed
+                            << ", preserve_annotations=" << options.preserve_annotations
+                            << ", allow_annotation_clearing=" << options.allow_annotation_clearing
+                            << ", facets=" << staged_repair.report.before_facets << "->"
                             << staged_repair.report.after_facets << ", open_edges=" << staged_repair.report.before_open_edges << "->"
                             << staged_repair.report.after_open_edges;
     for (const ModelRepairFailure& failure : staged_repair.report.failures)
@@ -195,8 +204,7 @@ bool stage_model_repair_by_cgal_gui(const Model&                          model,
                                     const std::vector<ModelRepairTarget>& targets,
                                     GUI::ProgressDialog&                  progress_dialog,
                                     const wxString&                       message_header,
-                                    StagedModelRepair&                    staged_repair,
-                                    bool                                  keep_painting)
+                                    StagedModelRepair&                    staged_repair)
 {
     staged_repair = StagedModelRepair{};
     // Let the user cancel before staging performs any object copies.
@@ -219,7 +227,7 @@ bool stage_model_repair_by_cgal_gui(const Model&                          model,
         return true;
     }
     return stage_owned_model_repair_by_cgal_gui(std::move(working_model), targets, progress_dialog, message_header, staged_repair,
-                                                keep_painting, true);
+                                                gui_model_repair_options(), true);
 }
 
 bool fix_model_with_cgal_gui(ModelObject&         model_object,
@@ -259,8 +267,14 @@ bool fix_model_with_cgal_gui(ModelObject&         model_object,
     const auto        log_result = [&staged_repair](const char* event) {
         BOOST_LOG_TRIVIAL(info) << "CGAL cut model repair: transaction=" << staged_repair.transaction_id << ", event=" << event;
     };
+    // Temporary cut results keep their existing opt-in painting behavior and
+    // all-or-nothing geometry policy; explicit GUI repair has a separate policy.
+    ModelRepairOptions options;
+    options.preserve_annotations      = keep_painting;
+    options.allow_annotation_clearing = true;
+    options.allow_partial             = false;
     if (!stage_owned_model_repair_by_cgal_gui(std::move(working_source), {target}, progress_dialog, message_header, staged_repair,
-                                              keep_painting, false)) {
+                                              std::move(options), false)) {
         log_result("canceled");
         return false;
     }

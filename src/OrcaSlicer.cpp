@@ -212,6 +212,9 @@ typedef struct _sliced_info {
     std::vector<std::string>         output_files;
     std::vector<model_repair_info_t> model_repairs;
     std::vector<obj_export_info_t>   obj_exports;
+    bool                             cgal_repair_requested{false};
+    bool                             repair_slice_requested{false};
+    size_t                           repair_slices_completed{0};
     json                             model_transforms = nlohmann::json::array();
 }sliced_info_t;
 std::vector<PrintBase::SlicingStatus> g_slicing_warnings;
@@ -599,6 +602,27 @@ bool record_exit_reson(std::string                        outputdir,
         j["prepare_time"] = sliced_info.prepare_time;
         j["export_time"] = sliced_info.export_time;
         j["output_files"] = sliced_info.output_files;
+        if (sliced_info.cgal_repair_requested) {
+            const bool mesh_passed = !sliced_info.model_repairs.empty() &&
+                                     std::all_of(sliced_info.model_repairs.begin(), sliced_info.model_repairs.end(),
+                                                 [](const model_repair_info_t& info) {
+                                                     return info.engine == "cgal" && info.cgal_report.mesh_validated();
+                                                 });
+            size_t unresolved_volumes = 0;
+            for (const model_repair_info_t& info : sliced_info.model_repairs)
+                unresolved_volumes += info.cgal_report.unresolved;
+            // This is evidence about this invocation, not a universal promise
+            // of printability or a replacement for inspecting the layer preview.
+            j["repair_validation"] = {{"mesh", mesh_passed ? "passed" : "not_passed"},
+                                      {"policy", "best_effort"},
+                                      {"unresolved_volumes", unresolved_volumes},
+                                      {"slicing",
+                                       !sliced_info.repair_slice_requested ?
+                                           "not_requested" :
+                                           (code != 0 ? "failed" :
+                                                        (sliced_info.repair_slices_completed > 0 ? "completed" : "not_completed"))},
+                                      {"completed_plates", sliced_info.repair_slices_completed}};
+        }
         if (!sliced_info.model_transforms.empty())
             j["model_transforms"] = sliced_info.model_transforms;
         j["obj_exports"] = json::array();
@@ -648,22 +672,27 @@ bool record_exit_reson(std::string                        outputdir,
                 repair_json["status"]           = report.status();
                 repair_json["success"]          = report.success;
                 repair_json["committed"]        = report.committed;
-                repair_json["before"]           = {{"facets", report.before_facets}, {"open_edges", report.before_open_edges}};
-                repair_json["repair_actions"]   = {{"objects", report.objects},
-                                                   {"volumes", report.volumes},
-                                                   {"repaired", report.repaired},
-                                                   {"mesh_repaired", report.mesh_repaired},
-                                                   {"skipped", report.skipped},
-                                                   {"failed", report.failed},
-                                                   {"rolled_back", report.rolled_back},
-                                                   {"split_volumes", report.split_volumes},
-                                                   {"created_parts", report.created_parts},
-                                                   {"removed_parts", report.removed_parts}};
-                repair_json["after"]            = {{"facets", report.after_facets},
-                                                   {"open_edges", report.after_open_edges},
-                                                   {"closed", report.success && report.after_facets > 0 && report.after_open_edges == 0}};
-                repair_json["volumes"]          = json::array();
-                repair_json["failures"]         = json::array();
+                repair_json["completed"]        = report.completed;
+                repair_json["can_continue"]     = report.can_continue();
+                repair_json["mesh_validated"]          = report.mesh_validated();
+                repair_json["before"]                  = {{"facets", report.before_facets}, {"open_edges", report.before_open_edges}};
+                repair_json["repair_actions"]          = {{"objects", report.objects},
+                                                          {"volumes", report.volumes},
+                                                          {"repaired", report.repaired},
+                                                          {"mesh_repaired", report.mesh_repaired},
+                                                          {"skipped", report.skipped},
+                                                          {"failed", report.failed},
+                                                          {"rolled_back", report.rolled_back},
+                                                          {"split_volumes", report.split_volumes},
+                                                          {"created_parts", report.created_parts},
+                                                          {"removed_parts", report.removed_parts},
+                                                          {"basic_removed_faces", report.basic_removed_faces},
+                                                          {"unresolved", report.unresolved}};
+                repair_json["after"]                   = {{"facets", report.after_facets},
+                                                          {"open_edges", report.after_open_edges},
+                                                          {"closed", report.can_continue() && report.after_facets > 0 && report.after_open_edges == 0}};
+                repair_json["volumes"]                 = json::array();
+                repair_json["failures"]                = json::array();
                 for (const ModelRepairVolumeReport& volume : report.volume_reports) {
                     repair_json["volumes"].push_back(
                         {{"object_index", volume.object_index},
@@ -677,6 +706,8 @@ bool record_exit_reson(std::string                        outputdir,
                          {"repaired_parts", volume.repaired_parts},
                          {"split_parts", volume.split_parts},
                          {"removed_parts", volume.removed_parts},
+                         {"basic_removed_faces", volume.basic_removed_faces},
+                         {"unresolved_parts", volume.unresolved_parts},
                          {"before", {{"facets", volume.before_facets}, {"open_edges", volume.before_open_edges}}},
                          {"after", {{"facets", volume.after_facets}, {"open_edges", volume.after_open_edges}}}});
                 }
@@ -685,7 +716,8 @@ bool record_exit_reson(std::string                        outputdir,
                                                        {"volume_index", failure.volume_index},
                                                        {"object_name", failure.object_name},
                                                        {"volume_name", failure.volume_name},
-                                                       {"message", failure.message}});
+                                                       {"message", failure.message},
+                                                       {"recoverable", failure.recoverable}});
                 }
             } else {
                 const MeshRepairReport& report  = repair_info.report;
@@ -707,7 +739,7 @@ bool record_exit_reson(std::string                        outputdir,
             }
             j["model_repairs"].push_back(std::move(repair_json));
         }
-        for (auto& iter: key_values)
+        for (auto& iter : key_values)
             j[iter.first] = iter.second;
 
         const std::string result_contents = j.dump(4) + "\n";
@@ -1475,9 +1507,21 @@ int CLI::run(int argc, char **argv)
 
     // Validate before material catalog loading and before the no-action GUI branch.
     const bool cgal_repair_requested   = std::find(m_actions.begin(), m_actions.end(), "repair_model") != m_actions.end();
+    sliced_info.cgal_repair_requested = cgal_repair_requested;
+    sliced_info.repair_slice_requested = cgal_repair_requested &&
+        std::find(m_actions.begin(), m_actions.end(), "slice") != m_actions.end();
+    if (sliced_info.repair_slice_requested &&
+        (m_config.opt_bool("no_check") || m_config.opt_bool("allow_newer_file") ||
+         std::find(m_actions.begin(), m_actions.end(), "load_slicedata") != m_actions.end())) {
+        const std::string message = "CGAL repair with slicing requires fresh slicing and validation; "
+                                    "do not combine it with --no-check, --allow-newer-file or --load-slicedata.";
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        flush_and_exit(CLI_INVALID_PARAMS);
+    }
     const bool repair_ignore_materials = m_config.opt_bool("repair_ignore_materials");
     const bool repair_preserve_colors  = cgal_repair_requested && !repair_ignore_materials &&
-                                        (m_config.opt_bool("export_obj") ||
+                                        (sliced_info.repair_slice_requested || m_config.opt_bool("export_obj") ||
                                          std::find(m_actions.begin(), m_actions.end(), "export_multicolor_obj") != m_actions.end());
     if (repair_ignore_materials) {
         std::string error_message;
@@ -1780,8 +1824,7 @@ int CLI::run(int argc, char **argv)
         }
         for (const std::string& input_file : m_input_files) {
             if (!boost::algorithm::iends_with(input_file, ".stl") && !boost::algorithm::iends_with(input_file, ".obj")) {
-                const std::string error_message = "--repair-model cgal currently supports STL and OBJ inputs; OBJ repair operates on "
-                                                  "geometry only and does not preserve material semantics. Unsupported input: " +
+                const std::string error_message = "--repair-model cgal currently supports STL and OBJ inputs. Unsupported input: " +
                                                   input_file;
                 boost::nowide::cerr << error_message << std::endl;
                 record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, error_message, sliced_info);
@@ -1942,8 +1985,8 @@ int CLI::run(int argc, char **argv)
     BOOST_LOG_TRIVIAL(info) << boost::format("plate_to_slice=%1%, normative_check=%2%, use_first_fila_as_default=%3%")%plate_to_slice %normative_check %use_first_fila_as_default;
     unsigned int input_index = 0;
     std::vector<std::string> loaded_model_sources;
-    if (!load_assemble_list.empty() && ((m_input_files.size() > 0) || (m_transforms.size() > 0)))
-    {
+    std::vector<bool>        loaded_model_materials_ignored;
+    if (!load_assemble_list.empty() && ((m_input_files.size() > 0) || (m_transforms.size() > 0))) {
         BOOST_LOG_TRIVIAL(error) << boost::format("load_assemble_list should not be used with input model files to load and should not be sued with transforms");
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
         flush_and_exit(CLI_INVALID_PARAMS);
@@ -1955,8 +1998,9 @@ int CLI::run(int argc, char **argv)
                 record_exit_reson(outfile_dir, CLI_FILE_NOTFOUND, 0, cli_errors[CLI_FILE_NOTFOUND], sliced_info);
                 flush_and_exit(CLI_FILE_NOTFOUND);
             }
-            Model model;
-            const bool collect_repair_report = !cgal_repair_requested &&
+            Model      model;
+            bool       input_materials_ignored = false;
+            const bool collect_repair_report   = !cgal_repair_requested &&
                                                (boost::algorithm::iends_with(file, ".stl") || boost::algorithm::iends_with(file, ".oltp"));
             model_repair_info_t model_repair_info;
             model_repair_info.input_file     = file;
@@ -1998,7 +2042,7 @@ int CLI::run(int argc, char **argv)
                                               &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice, nullptr,
                                               auto_repair_model, collect_repair_report ? &model_repair_info.report : nullptr,
                                               explicit_material_slots, arrange_by_color ? &detected_obj_color_group : nullptr,
-                                              repair_ignore_materials, repair_preserve_colors);
+                                              repair_ignore_materials, repair_preserve_colors, &input_materials_ignored);
                 if (arrange_grouping_enabled) {
                     const std::string explicit_group = input_index < m_model_cli_specs.size() &&
                                                                m_model_cli_specs[input_index].arrange_group.has_value() ?
@@ -2466,6 +2510,7 @@ int CLI::run(int argc, char **argv)
             }
             m_models.push_back(std::move(model));
             loaded_model_sources.push_back(file);
+            loaded_model_materials_ignored.push_back(input_materials_ignored);
             if (convert_textured_glb)
                 textured_glb_model_indices.push_back(m_models.size() - 1);
         }
@@ -2495,6 +2540,7 @@ int CLI::run(int argc, char **argv)
         model.add_default_instances();
         m_models.push_back(std::move(model));
         loaded_model_sources.emplace_back();
+        loaded_model_materials_ignored.push_back(false);
     }
 
     if (export_texture_obj_requested && (textured_glb_model_indices.size() != 1 || m_models.size() != 1)) {
@@ -4074,6 +4120,9 @@ int CLI::run(int argc, char **argv)
             boost::nowide::cerr << error_message << std::endl;
             flush_and_exit(CLI_INVALID_PARAMS);
         }
+        bool        any_repair_change = false;
+        bool        has_unresolved    = false;
+        std::string first_unresolved_error;
         for (size_t model_index = 0; model_index < m_models.size(); ++model_index) {
             model_repair_info_t repair_info;
             repair_info.engine      = repair_engine;
@@ -4082,14 +4131,20 @@ int CLI::run(int argc, char **argv)
                 repair_info.input_file = loaded_model_sources[model_index];
             else if (!m_models[model_index].objects.empty())
                 repair_info.input_file = m_models[model_index].objects.front()->input_file;
-            repair_info.input_materials_ignored = repair_ignore_materials && boost::algorithm::iends_with(repair_info.input_file, ".obj");
+            repair_info.input_materials_ignored = model_index < loaded_model_materials_ignored.size() &&
+                                                  loaded_model_materials_ignored[model_index];
+            // Missing MTL is a geometry-only fallback, unless the caller supplies
+            // explicit replacement filament bindings that must still be preserved.
+            const bool preserve_model_colors = repair_preserve_colors &&
+                                               (!repair_info.input_materials_ignored || has_model_filament_mapping);
 
             ModelRepairOptions repair_options;
-            repair_options.preserve_annotations      = repair_preserve_colors;
-            repair_options.allow_annotation_clearing = !repair_preserve_colors;
+            repair_options.allow_partial             = true;
+            repair_options.preserve_annotations      = preserve_model_colors;
+            repair_options.allow_annotation_clearing = !preserve_model_colors;
             // A strict color transaction must not discard a painted planar part
             // during cleanup before the annotation coverage check can see it.
-            repair_options.remove_non_3d_parts        = !repair_preserve_colors;
+            repair_options.remove_non_3d_parts        = !preserve_model_colors;
             const bool               repair_succeeded = repair_model(m_models[model_index], repair_info.cgal_report, repair_options);
             const ModelRepairReport& report           = repair_info.cgal_report;
             BOOST_LOG_TRIVIAL(info)
@@ -4098,40 +4153,63 @@ int CLI::run(int argc, char **argv)
                        repair_info.input_file % report.status() % report.committed % report.volumes % report.repaired %
                        report.mesh_repaired % report.split_volumes % report.removed_parts % report.skipped % report.before_facets %
                        report.after_facets % report.before_open_edges % report.after_open_edges;
+            BOOST_LOG_TRIVIAL(info) << "CGAL model repair validation: mesh_validated=" << report.mesh_validated()
+                                    << ", unresolved=" << report.unresolved << ", basic_removed_faces=" << report.basic_removed_faces;
 
             std::string repair_error = cli_errors[CLI_MODEL_REPAIR_ERROR];
             if (!report.failures.empty()) {
                 const ModelRepairFailure& failure = report.failures.front();
                 repair_error += " Object '" + failure.object_name + "', volume '" + failure.volume_name + "': " + failure.message;
             }
+            const bool repair_can_continue = report.can_continue();
+            any_repair_change              = any_repair_change || report.committed;
+            has_unresolved                 = has_unresolved || report.unresolved != 0;
+            if (report.unresolved != 0) {
+                if (first_unresolved_error.empty())
+                    first_unresolved_error = repair_error;
+                for (const ModelRepairFailure& issue : report.failures)
+                    BOOST_LOG_TRIVIAL(warning) << "CGAL unresolved geometry: input=" << repair_info.input_file
+                                               << ", object=" << issue.object_name << ", volume=" << issue.volume_name
+                                               << ", reason=" << issue.message;
+            }
             sliced_info.model_repairs.push_back(std::move(repair_info));
 
-            if (!repair_succeeded) {
+            if (!repair_succeeded && !repair_can_continue) {
                 BOOST_LOG_TRIVIAL(error) << repair_error;
                 record_exit_reson(outfile_dir, CLI_MODEL_REPAIR_ERROR, 0, repair_error, sliced_info);
                 flush_and_exit(CLI_MODEL_REPAIR_ERROR);
             }
         }
+        // Do not abort a batch just because an earlier file had no repairable
+        // changes. Any retained improvement is a partial repair success. With
+        // --slice, structurally usable unresolved input may still be sliced;
+        // the existing slicing/error/G-code gates remain mandatory.
+        if (has_unresolved && !any_repair_change && !sliced_info.repair_slice_requested) {
+            record_exit_reson(outfile_dir, CLI_MODEL_REPAIR_ERROR, 0, first_unresolved_error, sliced_info);
+            boost::nowide::cerr << first_unresolved_error << std::endl;
+            flush_and_exit(CLI_MODEL_REPAIR_ERROR);
+        }
+        if (has_unresolved)
+            BOOST_LOG_TRIVIAL(warning) << "Proceeding with unresolved geometry; partial repair is not full mesh validation. "
+                                          "Inspect repair_validation, slicing warnings and the layer preview.";
     }
 
-    //BBS: set default to ptFFF
+    // BBS: set default to ptFFF
     if (printer_technology == ptUnknown)
         printer_technology = ptFFF;
 
-    //BBS: merge these models into one
-    BOOST_LOG_TRIVIAL(info) << "total " << m_models.size() << " models, "<<orients_requirement.size()<<" objects"<<std::endl;
-    if (m_models.size() > 1)
-    {
+    // BBS: merge these models into one
+    BOOST_LOG_TRIVIAL(info) << "total " << m_models.size() << " models, " << orients_requirement.size() << " objects" << std::endl;
+    if (m_models.size() > 1) {
         BOOST_LOG_TRIVIAL(info) << "merge all the models into one\n";
         Model m;
         m.set_backup_path(m_models[0].get_backup_path());
         for (auto& model : m_models)
-            for (ModelObject* o : model.objects)
-            {
+            for (ModelObject* o : model.objects) {
                 ModelObject* new_object = m.add_object(*o);
-                //BOOST_LOG_TRIVIAL(info) << "object "<<o->name <<", id :" << o->id().id << "\n";
-                //orients_requirement.emplace(new_object->id().id, orients_requirement[o->id().id]);
-                //orients_requirement.erase(o->id().id);
+                // BOOST_LOG_TRIVIAL(info) << "object "<<o->name <<", id :" << o->id().id << "\n";
+                // orients_requirement.emplace(new_object->id().id, orients_requirement[o->id().id]);
+                // orients_requirement.erase(o->id().id);
             }
         m.add_default_instances();
         m_models.clear();
@@ -7080,6 +7158,8 @@ int CLI::run(int argc, char **argv)
                         }
                         else if (!warning.string.empty()) {
                             BOOST_LOG_TRIVIAL(warning) << "got warnings: "<< warning.string << std::endl;
+                            if (cgal_repair_requested)
+                                sliced_plate_info.warning_message = warning.string;
                         }
 
                         if (print->empty()) {
@@ -7162,6 +7242,14 @@ int CLI::run(int argc, char **argv)
                                     BOOST_LOG_TRIVIAL(info) << "print::process: first time_using_cache is " << time_using_cache << " secs.";
                                 }
                                 if (printer_technology == ptFFF) {
+                                    const auto print_objects = print_fff->objects();
+                                    if (cgal_repair_requested &&
+                                        std::none_of(print_objects.begin(), print_objects.end(),
+                                                     [](const PrintObject* object) { return object->layer_count() > 0; })) {
+                                        record_exit_reson(outfile_dir, CLI_SLICING_ERROR, index + 1,
+                                                          "Repaired mesh produced no printable layers.", sliced_info);
+                                        flush_and_exit(CLI_SLICING_ERROR);
+                                    }
                                     std::string conflict_result = print_fff->get_conflict_string();
                                     if (!conflict_result.empty()) {
                                        BOOST_LOG_TRIVIAL(error) << "plate "<< index+1<< ": found slicing result conflict!"<< std::endl;
@@ -7175,7 +7263,8 @@ int CLI::run(int argc, char **argv)
                                         for (unsigned int i = 0; i < g_slicing_warnings.size(); i++)
                                         {
                                             PrintBase::SlicingStatus& status = g_slicing_warnings[i];
-                                            if ((status.warning_step != -1) && (status.message_type != PrintStateBase::SlicingDefaultNotification))
+                                            if ((status.warning_step != -1) &&
+                                                (cgal_repair_requested || status.message_type != PrintStateBase::SlicingDefaultNotification))
                                             {
                                                 sliced_plate_info.warning_message = status.text;
 
@@ -7186,7 +7275,8 @@ int CLI::run(int argc, char **argv)
                                                     BOOST_LOG_TRIVIAL(warning) << boost::format("plate %1%: found slicing warnings: %2%, no_check=%3%")%(index+1) %status.text %no_check;
                                                     if (!no_check) {
                                                         //only following message will be reported under import mode
-                                                        if (status.message_type == PrintStateBase::SlicingEmptyGcodeLayers
+                                                        if (cgal_repair_requested
+                                                            || status.message_type == PrintStateBase::SlicingEmptyGcodeLayers
                                                             || status.message_type == PrintStateBase::SlicingGcodeOverlap)
                                                         {
                                                             sliced_info.sliced_plates.push_back(sliced_plate_info);
@@ -7213,6 +7303,33 @@ int CLI::run(int argc, char **argv)
                                     BOOST_LOG_TRIVIAL(info) << "process finished, will export gcode temporily to " << outfile << std::endl;
                                     temp_time = (long long)Slic3r::Utils::get_current_time_utc();
                                     outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true, true);
+                                    if (cgal_repair_requested) {
+                                        // Some diagnostics (notably empty extrusion layers) are
+                                        // emitted during G-code generation, after the earlier check.
+                                        std::string rejected_gcode = print_fff->get_conflict_string();
+                                        for (const PrintBase::SlicingStatus& status : g_slicing_warnings) {
+                                            if (status.warning_step == -1)
+                                                continue;
+                                            if (!status.text.empty())
+                                                sliced_plate_info.warning_message = status.text;
+                                            if (status.warning_level == PrintStateBase::WarningLevel::CRITICAL)
+                                                rejected_gcode = status.text.empty() ? "Critical G-code generation warning." : status.text;
+                                        }
+                                        g_slicing_warnings.clear();
+                                        if (!rejected_gcode.empty()) {
+                                            // This file was generated by this invocation and is not
+                                            // an accepted artifact. Do not leave a printable-looking
+                                            // result after reporting failure.
+                                            boost::system::error_code cleanup_error;
+                                            boost::filesystem::remove(outfile, cleanup_error);
+                                            if (cleanup_error)
+                                                BOOST_LOG_TRIVIAL(error) << "Could not remove rejected G-code: " << outfile
+                                                                        << ", " << cleanup_error.message();
+                                            sliced_info.sliced_plates.push_back(sliced_plate_info);
+                                            record_exit_reson(outfile_dir, CLI_SLICING_ERROR, index + 1, rejected_gcode, sliced_info);
+                                            flush_and_exit(CLI_SLICING_ERROR);
+                                        }
+                                    }
                                     time_using_cache = time_using_cache + ((long long)Slic3r::Utils::get_current_time_utc() - temp_time);
                                     BOOST_LOG_TRIVIAL(info) << "export_gcode finished: time_using_cache update to " << time_using_cache << " secs.";
 
@@ -7279,6 +7396,8 @@ int CLI::run(int argc, char **argv)
                                     }
                                 }
                                 sliced_info.sliced_plates.push_back(sliced_plate_info);
+                                if (cgal_repair_requested && printer_technology == ptFFF)
+                                    ++sliced_info.repair_slices_completed;
                             } catch (const Slic3r::SlicingErrors &ex) {
                                 BOOST_LOG_TRIVIAL(error) << "found slicing or export error for partplate " << index+1;
                                 for (const auto& err : ex.errors_) {

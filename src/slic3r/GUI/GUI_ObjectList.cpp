@@ -5728,10 +5728,8 @@ void ObjectList::fix_through_cgal()
     // Open a progress dialog.
     ProgressDialog    progress_dlg(_L("Repairing model object"), "", 100, find_toplevel_parent(plater),
                                    wxPD_AUTO_HIDE | wxPD_APP_MODAL | wxPD_CAN_ABORT, true);
-    const bool        keep_painting = wxGetApp().app_config->get_bool("keep_painting");
     StagedModelRepair staged_repair;
-    bool completed = stage_model_repair_by_cgal_gui(model, targets, progress_dlg, _L("Repairing model object") + ": ", staged_repair,
-                                                    keep_painting);
+    bool completed = stage_model_repair_by_cgal_gui(model, targets, progress_dlg, _L("Repairing model object") + ": ", staged_repair);
     const auto        log_repair_result = [&staged_repair](const char* event) {
         BOOST_LOG_TRIVIAL(info) << "CGAL GUI model repair: transaction=" << staged_repair.transaction_id << ", event=" << event;
     };
@@ -5758,7 +5756,10 @@ void ObjectList::fix_through_cgal()
 
     if (!staged_repair.report.success || staged_repair.model == nullptr) {
         log_repair_result("repair_failed");
-        wxString message = _L("Failed to repair following model object") + ":";
+        wxString message = (staged_repair.report.can_continue() && staged_repair.report.unresolved != 0 ?
+                                _L("No safe repair changes were found. Geometry problems remain") :
+                                _L("Failed to repair following model object")) +
+                           ":";
         if (staged_repair.report.failures.empty()) {
             message += "\n   - " + _L("Repair failed.");
         } else {
@@ -5977,12 +5978,14 @@ void ObjectList::fix_through_cgal()
     // tree. Explicitly synchronize the canvas and rebind the settings panel.
     selection_changed();
 
-    wxString message = _L_PLURAL("Following model object has been repaired", "Following model objects have been repaired",
-                                 staged_repair.report.changed_object_indices.size()) +
-                       ":";
+    wxString message = staged_repair.report.unresolved != 0 ?
+                           _L("Model repair partially completed. Safe changes were kept; some geometry problems remain.") :
+                           _L_PLURAL("Following model object has been repaired", "Following model objects have been repaired",
+                                     staged_repair.report.changed_object_indices.size());
+    message += staged_repair.report.unresolved != 0 ? "" : ":";
     std::vector<std::string> painting_cleared;
     for (const ModelRepairVolumeReport& volume_report : staged_repair.report.volume_reports) {
-        if (volume_report.result != ModelRepairVolumeStatus::Repaired)
+        if (volume_report.result != ModelRepairVolumeStatus::Repaired && volume_report.result != ModelRepairVolumeStatus::PartiallyRepaired)
             continue;
         const std::string name = volume_report.volume_name.empty() ? volume_report.object_name :
                                                                      volume_report.object_name + " / " + volume_report.volume_name;
@@ -5994,6 +5997,14 @@ void ObjectList::fix_through_cgal()
         message += "\n\n" + _L("Painted facet annotations were cleared during repair for:");
         for (const std::string& name : painting_cleared)
             message += "\n   - " + from_u8(name);
+    }
+    if (staged_repair.report.unresolved != 0) {
+        message += "\n\n" + _L("Unresolved geometry problems (rejected CGAL candidates were not applied):");
+        for (const ModelRepairFailure& issue : staged_repair.report.failures) {
+            const std::string name = issue.volume_name.empty() ? issue.object_name : issue.object_name + " / " + issue.volume_name;
+            message += "\n   - " + from_u8(name) + ": " + _L(issue.message);
+        }
+        message += "\n" + _L("Check the slicing result before printing. Partial repair does not mean the mesh is fully valid.");
     }
     notify(message);
 }

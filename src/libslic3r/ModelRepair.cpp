@@ -10,6 +10,7 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -36,6 +37,46 @@ bool has_valid_indices(const TriangleMesh& mesh)
         }
     }
     return true;
+}
+
+// A separately retainable baseline, not an intermediate CGAL candidate. Only
+// remove exact zero-area faces and coincident faces with the SAME winding.
+// Oppositely oriented interfaces, small faces and all vertex positions remain
+// untouched. This works with both indexed OBJ and exact-welded STL geometry.
+size_t prepare_basic_mesh(const TriangleMesh& source, TriangleMesh& result)
+{
+    using Corner = std::array<float, 3>;
+    std::set<std::array<Corner, 3>>          seen;
+    std::vector<stl_triangle_vertex_indices> faces;
+    faces.reserve(source.its.indices.size());
+    for (const auto& face : source.its.indices) {
+        const Vec3d a = source.its.vertices[face[0]].cast<double>();
+        const Vec3d b = source.its.vertices[face[1]].cast<double>();
+        const Vec3d c = source.its.vertices[face[2]].cast<double>();
+        if ((b - a).cross(c - a).squaredNorm() == 0.)
+            continue;
+        std::array<Corner, 3> key;
+        for (size_t i = 0; i < 3; ++i) {
+            const auto& vertex = source.its.vertices[face[i]];
+            key[i]             = {vertex.x(), vertex.y(), vertex.z()};
+        }
+        std::rotate(key.begin(), std::min_element(key.begin(), key.end()), key.end());
+        if (seen.insert(key).second)
+            faces.push_back(face);
+    }
+    const size_t removed = source.its.indices.size() - faces.size();
+    if (removed != 0) {
+        if (faces.empty()) {
+            result = TriangleMesh{};
+            return removed;
+        }
+        indexed_triangle_set cleaned;
+        cleaned.vertices = source.its.vertices;
+        cleaned.indices  = std::move(faces);
+        its_compactify_vertices(cleaned, true);
+        result = TriangleMesh(std::move(cleaned));
+    }
+    return removed;
 }
 
 // Only discard demonstrably degenerate geometry, not geometry that happens
@@ -311,10 +352,22 @@ void add_failure(ModelRepairReport& report, ModelRepairVolumeReport& volume_repo
     ++report.failed;
 }
 
+void add_unresolved(ModelRepairReport& report, ModelRepairVolumeReport& volume_report, const std::string& message)
+{
+    if (volume_report.unresolved_parts++ == 0)
+        ++report.unresolved;
+    if (!volume_report.message.empty())
+        volume_report.message += "\n";
+    volume_report.message += message;
+    report.failures.push_back(
+        {volume_report.object_index, volume_report.volume_index, volume_report.object_name, volume_report.volume_name, message, true});
+}
+
 void mark_rolled_back(ModelRepairReport& report)
 {
     for (ModelRepairVolumeReport& volume_report : report.volume_reports) {
-        if (volume_report.result != ModelRepairVolumeStatus::Repaired)
+        volume_report.basic_removed_faces = 0;
+        if (volume_report.result != ModelRepairVolumeStatus::Repaired && volume_report.result != ModelRepairVolumeStatus::PartiallyRepaired)
             continue;
         volume_report.result                = ModelRepairVolumeStatus::RolledBack;
         volume_report.after_facets          = volume_report.before_facets;
@@ -325,14 +378,17 @@ void mark_rolled_back(ModelRepairReport& report)
         ++report.rolled_back;
     }
 
-    report.repaired         = 0;
-    report.mesh_repaired    = 0;
-    report.split_volumes    = 0;
-    report.created_parts    = 0;
-    report.removed_parts    = 0;
-    report.committed        = false;
-    report.after_facets     = report.before_facets;
-    report.after_open_edges = report.before_open_edges;
+    report.repaired            = 0;
+    report.mesh_repaired       = 0;
+    report.split_volumes       = 0;
+    report.created_parts       = 0;
+    report.removed_parts       = 0;
+    report.basic_removed_faces = 0;
+    report.committed           = false;
+    report.completed           = false;
+    report.success             = false;
+    report.after_facets        = report.before_facets;
+    report.after_open_edges    = report.before_open_edges;
     report.changed_object_indices.clear();
 }
 
@@ -368,6 +424,8 @@ const char* model_repair_volume_status(ModelRepairVolumeStatus status)
     switch (status) {
     case ModelRepairVolumeStatus::Skipped: return "skipped";
     case ModelRepairVolumeStatus::Repaired: return "repaired";
+    case ModelRepairVolumeStatus::PartiallyRepaired: return "partially_repaired";
+    case ModelRepairVolumeStatus::Unresolved: return "unresolved";
     case ModelRepairVolumeStatus::RolledBack: return "rolled_back";
     case ModelRepairVolumeStatus::Failed: return "failed";
     }
@@ -378,6 +436,8 @@ const char* ModelRepairReport::status() const
 {
     if (canceled)
         return "canceled";
+    if (can_continue() && unresolved != 0)
+        return committed ? "partially_repaired" : "unresolved";
     if (!success)
         return "failed";
     if (committed)
@@ -436,6 +496,7 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
     report.after_open_edges = report.before_open_edges;
 
     if (targets.empty()) {
+        report.completed = true;
         report.success = true;
         return true;
     }
@@ -620,6 +681,13 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                 }
             }
 
+            // Removing dust is useful only while this object still has a model
+            // part. An empty repaired object is not a successful repair, even
+            // if another object (or a modifier) remains elsewhere in the scene.
+            if (parts.empty() && std::none_of(object->volumes.begin(), object->volumes.end(),
+                                              [](const ModelVolume* part) { return part != nullptr && part->is_model_part(); }))
+                throw std::runtime_error("Repair failed: basic cleanup removed all geometry.");
+
             bool source_painting_restored = true;
             if (source_painting) {
                 source_painting_restored = saved_painting_was_restored(*source_painting, parts, options);
@@ -669,15 +737,37 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     saved_painting = part->save_painting();
 
                 TriangleMesh repaired_mesh;
-                std::string  error;
-                bool         repair_succeeded = false;
-                if (options.repair_mesh_from_source) {
-                    repair_succeeded = options.repair_mesh_from_source(part_mesh, repaired_mesh, error);
+                TriangleMesh basic_mesh;
+                size_t       basic_removed = 0;
+                if (options.allow_partial) {
+                    const auto prepare = [&]() { basic_removed = prepare_basic_mesh(part_mesh, basic_mesh); };
+                    if (options.run_mesh_preparation)
+                        options.run_mesh_preparation(prepare);
+                    else
+                        prepare();
+                    if (cancellation_requested())
+                        return false;
+                    if (basic_removed != 0 && (basic_mesh.empty() || is_not_3dimensional_part(basic_mesh)))
+                        throw std::runtime_error("Repair failed: basic cleanup removed all geometry.");
+                }
+                const TriangleMesh& repair_source = basic_removed != 0 ? basic_mesh : part_mesh;
+                std::string         error;
+                bool                repair_succeeded = false;
+                bool                basic_fallback   = false;
+                const bool          basic_is_valid   = basic_removed != 0 &&
+                                            !mesh_requires_repair(basic_mesh, its_num_open_edges(basic_mesh.its), options);
+                if (cancellation_requested())
+                    return false;
+                if (basic_is_valid) {
+                    repaired_mesh    = std::move(basic_mesh);
+                    repair_succeeded = true;
+                } else if (options.repair_mesh_from_source) {
+                    repair_succeeded = options.repair_mesh_from_source(repair_source, repaired_mesh, error);
                 } else {
                     // Headless and legacy hooks retain their original
                     // synchronous semantics. GUI callers use the source-to-
                     // result hook above so this O(mesh) copy runs on a worker.
-                    repaired_mesh    = part_mesh;
+                    repaired_mesh    = repair_source;
                     repair_succeeded = options.repair_mesh ? options.repair_mesh(repaired_mesh, error) :
                                                              MeshBoolean::cgal::repair(repaired_mesh, nullptr, &error);
                 }
@@ -693,17 +783,29 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     volume_finished(stored_report);
                     return false;
                 }
-                if (!repair_succeeded)
-                    throw std::runtime_error(error.empty() ? "Repair failed." : error);
+                if (!repair_succeeded) {
+                    if (!options.allow_partial || is_not_3dimensional_part(repair_source))
+                        throw std::runtime_error(error.empty() ? "Repair failed." : error);
+                    add_unresolved(report, stored_report, error.empty() ? "Repair failed." : error);
+                    // Never retain the rejected candidate, even if a delegated
+                    // hook modified it before returning false.
+                    if (basic_removed == 0)
+                        continue;
+                    repaired_mesh  = std::move(basic_mesh);
+                    basic_fallback = true;
+                }
 
-                const size_t repaired_open_edges = its_num_open_edges(repaired_mesh.its);
                 if (repaired_mesh.its.vertices.empty() || repaired_mesh.its.indices.empty() || !has_valid_indices(repaired_mesh) ||
-                    !has_finite_vertices(repaired_mesh) || repaired_open_edges != 0)
+                    !has_finite_vertices(repaired_mesh))
+                    throw std::runtime_error("Repair failed: CGAL returned an invalid or open mesh.");
+                const size_t repaired_open_edges = its_num_open_edges(repaired_mesh.its);
+                if (!basic_fallback && repaired_open_edges != 0)
                     throw std::runtime_error("Repair failed: CGAL returned an invalid or open mesh.");
                 // Reuse the inspection hook for the post-repair gate. GUI
                 // callers run this full CGAL validation on their worker,
                 // while headless callers retain the direct implementation.
-                const bool repaired_mesh_requires_repair = mesh_requires_repair(repaired_mesh, repaired_open_edges, options);
+                const bool repaired_mesh_requires_repair = !basic_fallback &&
+                                                           mesh_requires_repair(repaired_mesh, repaired_open_edges, options);
                 if (cancellation_requested()) {
                     stored_report.result                = ModelRepairVolumeStatus::RolledBack;
                     stored_report.after_facets          = stored_report.before_facets;
@@ -731,8 +833,7 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     part->restore_painting(saved_painting);
                     bool repaired_painting_restored = true;
                     if (saved_painting) {
-                        repaired_painting_restored =
-                            saved_painting_was_restored(*saved_painting, std::vector<ModelVolume*>{part}, options);
+                        repaired_painting_restored = saved_painting_was_restored(*saved_painting, std::vector<ModelVolume*>{part}, options);
                         if (cancellation_requested()) {
                             stored_report.result                = ModelRepairVolumeStatus::RolledBack;
                             stored_report.after_facets          = stored_report.before_facets;
@@ -747,7 +848,7 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                         }
                     }
                     if (!repaired_painting_restored) {
-                        if (!options.allow_annotation_clearing)
+                        if (!options.allow_annotation_clearing || basic_fallback)
                             throw std::runtime_error(
                                 "Repair failed: painted facet annotations could not be mapped onto the repaired mesh.");
                         part->reset_extra_facets();
@@ -759,10 +860,16 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                 part->exterior_facets.reset();
                 part->set_new_unique_id();
 
-                ++stored_report.repaired_parts;
-                ++report.mesh_repaired;
+                stored_report.basic_removed_faces += basic_removed;
+                report.basic_removed_faces += basic_removed;
+                if (!basic_fallback) {
+                    ++stored_report.repaired_parts;
+                    ++report.mesh_repaired;
+                }
                 changed = true;
             }
+            if (stored_report.unresolved_parts != 0 && options.preserve_annotations && annotation_preservation_failed)
+                throw std::runtime_error("Repair failed: painted facet annotations could not be preserved in a partial result.");
         } catch (const std::exception& exception) {
             add_failure(report, stored_report, exception.what());
             volume_finished(stored_report);
@@ -783,7 +890,8 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
         }
 
         if (changed) {
-            stored_report.result = ModelRepairVolumeStatus::Repaired;
+            stored_report.result = stored_report.unresolved_parts == 0 ? ModelRepairVolumeStatus::Repaired :
+                                                                         ModelRepairVolumeStatus::PartiallyRepaired;
             if (parts.empty()) {
                 stored_report.annotations_cleared   = had_annotations;
                 stored_report.annotations_preserved = false;
@@ -799,6 +907,8 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
             report.after_facets += stored_report.after_facets;
             report.after_open_edges -= stored_report.before_open_edges;
             report.after_open_edges += stored_report.after_open_edges;
+        } else if (stored_report.unresolved_parts != 0) {
+            stored_report.result = ModelRepairVolumeStatus::Unresolved;
         } else {
             ++report.skipped;
         }
@@ -813,14 +923,16 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
             report.changed_object_indices.push_back(object_index);
 
     if (report.changed_object_indices.empty()) {
-        report.success = true;
-        return true;
+        report.completed = true;
+        report.success   = report.unresolved == 0;
+        return report.success;
     }
 
     if (cancellation_requested())
         return false;
 
     report.committed = true;
+    report.completed = true;
     report.success   = true;
     return true;
 }

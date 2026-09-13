@@ -17,6 +17,45 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 "X-Generator: Poedit 3.2.2\n"
 
+msgid "Model repair partially completed. Safe changes were kept; some geometry problems remain."
+msgstr "模型部分修复成功。已保留安全的修改，但仍有几何问题未解决。"
+
+msgid "Unresolved geometry problems (rejected CGAL candidates were not applied):"
+msgstr "尚未解决的几何问题（未采用失败的 CGAL 修复候选）："
+
+msgid "Check the slicing result before printing. Partial repair does not mean the mesh is fully valid."
+msgstr "打印前请检查切片结果。部分修复成功不代表网格已完全通过检查。"
+
+msgid "No safe repair changes were found. Geometry problems remain"
+msgstr "未获得可安全保留的修复修改，模型仍有几何问题"
+
+msgid "Repair failed: painted facet annotations could not be preserved in a partial result."
+msgstr "修复失败：部分修复结果无法保留原有的绘制特征。"
+
+msgid "Repair failed: painted facet annotations could not be mapped onto the repaired mesh."
+msgstr "修复失败：原有的颜色或其他绘制特征无法完整映射到修复后的网格。"
+
+msgid "Repair failed: painted facet annotations could not be mapped onto the remaining model parts."
+msgstr "修复失败：原有的颜色或其他绘制特征无法完整映射到保留的模型部件。"
+
+msgid "Repair cannot preserve exterior-facet annotations; allow annotation clearing or remove those annotations first."
+msgstr "修复无法保留外表面标记；请允许清除标记，或先移除这类标记。"
+
+msgid "Repair cannot preserve exterior-facet annotations."
+msgstr "修复无法保留外表面标记。"
+
+msgid "Repair failed: basic boundary cleanup produced invalid topology."
+msgstr "修复失败：基础边界清理后，候选网格连接关系不合法。"
+
+msgid "Repair failed: basic cleanup removed all geometry."
+msgstr "修复失败：基础清理后没有可用的实体几何。原模型未被替换。"
+
+msgid "Repair failed: repaired mesh still contains degenerate faces or non-manifold vertices."
+msgstr "修复失败：结果仍有退化面或非流形顶点。"
+
+msgid "Repair failed: polygon-soup cleanup exceeded the geometry-preservation limits."
+msgstr "修复失败：网格清理结果超出原有形状的允许变化范围。"
+
 msgid "Repair failed: polygon soup is still invalid after orientation and vertex splitting."
 msgstr "修复失败：统一面朝向并拆分顶点后，网格连接关系仍不合法。"
 
@@ -24,7 +63,7 @@ msgid "Repair failed: this model has complex intersecting surfaces that cannot b
 msgstr "修复失败：模型存在复杂的面相交，当前无法安全自动修复。请先在建模软件中处理。"
 
 msgid "Repair failed: vertex splitting left intersections or invalid topology that could not be safely repaired."
-msgstr "修复失败：拆分顶点后仍有相交或异常连接，无法安全修复。原模型未被替换。"
+msgstr "修复失败：拆分顶点后仍有相交或异常连接，无法安全修复。"
 
 msgid "Repair failed: vertex-split repair exceeded the geometry-preservation limits."
 msgstr "修复失败：拆分顶点后的修复结果改变了原有外形或连通部分，超出安全范围。"
@@ -6253,6 +6292,12 @@ msgstr "体积为零的对象已被移除"
 msgid "The volume of the object is zero"
 msgstr "对象的体积为零"
 
+msgid "Objects without triangle faces were removed."
+msgstr "已移除不含三角面的空对象。"
+
+msgid "Empty objects removed"
+msgstr "已移除空对象"
+
 #, c-format, boost-format
 msgid ""
 "The object from file %s is too small, and maybe in meters or inches.\n"
@@ -9421,12 +9466,16 @@ msgstr "网格变更后保留绘制特征"
 
 msgid ""
 "Attempt to keep painted features (color/seam/support/fuzzy etc.) after changing "
-"the object mesh (such as cut/reload from disk/simplify/fix etc.)\n"
-"Highly experimental! Slow and may create artifact."
+"the object mesh (such as cut/reload from disk/simplify etc.)\n"
+"Highly experimental! Slow and may create artifact.\n"
+"Repair model always preserves supported painted features regardless of this setting. "
+"If they cannot be preserved, repair fails without changing the selected model."
 msgstr ""
-"在更改对象网格（例如切割、从磁盘重新加载、简化或修复等）后尝试保留绘制特征（颜"
+"在更改对象网格（例如切割、从磁盘重新加载、简化等）后尝试保留绘制特征（颜"
 "色、接缝、支撑或绒毛等）。\n"
-"高度实验性功能！速度较慢且可能产生瑕疵。"
+"高度实验性功能！速度较慢且可能产生瑕疵。\n"
+"“修复模型”始终保留受支持的绘制特征，不受此设置影响。"
+"如果无法保留，修复将失败，所选模型不会被修改。"
 
 msgid "Loading repaired objects"
 msgstr "正在加载修复的对象。"
@@ -16088,6 +16137,12 @@ msgstr "加载对象：无法分析"
 
 msgid "load mtl in obj: failed to parse"
 msgstr "在obj中加载mtl：解析失败"
+
+msgid "OBJ material library is missing. Imported geometry only; original colors and textures were not preserved: %s"
+msgstr "缺少 OBJ 材质文件，已按纯几何导入，原颜色和纹理未保留：%s"
+
+msgid "The OBJ file contains a non-finite vertex coordinate."
+msgstr "OBJ 文件包含非有限数值的顶点坐标。"
 
 msgid "The file contains polygons with more than 4 vertices."
 msgstr "该文件包含顶点超过4个的多边形。"

@@ -5,15 +5,19 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iterator>
 #include <limits>
 #include <string>
+#include <utility>
 
 #include <libslic3r/Format/OBJ.hpp>
+#include <libslic3r/MeshBoolean.hpp>
 #include <libslic3r/Model.hpp>
 #include <libslic3r/ObjColorMapping.hpp>
 #include <libslic3r/TexturePainting.hpp>
 #include <libslic3r/TriangleMesh.hpp>
+#include <slic3r/Utils/ModelRepairPolicy.hpp>
 
 using namespace Slic3r;
 
@@ -211,6 +215,16 @@ struct ObjImportFixture
     {
         return load_obj((directory / "input.obj").string().c_str(), &mesh, info, message, geometry_only);
     }
+
+    Model read_model(bool                             strict_colors,
+                     bool*                            ignored        = nullptr,
+                     const std::vector<unsigned int>* slots          = nullptr,
+                     ObjImportColorFn                 color_callback = nullptr) const
+    {
+        return Model::read_from_file((directory / "input.obj").string(), nullptr, nullptr, LoadStrategy::AddDefaultInstances, nullptr,
+                                     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, color_callback, false, nullptr, slots,
+                                     nullptr, false, strict_colors, ignored);
+    }
 };
 
 } // namespace
@@ -322,6 +336,136 @@ TEST_CASE("Strict CLI color import rejects unsupported or unresolved source colo
     REQUIRE_THROWS(load(false, true));
     CHECK_NOTHROW(load(false, false)); // Existing import policy remains available outside repair color output.
     CHECK_NOTHROW(load(true, false));
+}
+
+TEST_CASE("Missing OBJ libraries drop all source appearance but retain geometry", "[OBJ][CLI][Import][MissingMTL]")
+{
+    ObjImportFixture fixture;
+    std::string      libraries;
+    SECTION("missing library") { libraries = "mtllib absent.mtl\n"; }
+    SECTION("usemtl without mtllib") {}
+    SECTION("one of multiple libraries is missing") { libraries = "mtllib palette.mtl\nmtllib absent.mtl\n"; }
+    SECTION("missing library is declared first") { libraries = "mtllib absent.mtl\nmtllib palette.mtl\n"; }
+    fixture.write("input.obj", libraries + "v 0 0 0 1 0 0\nv 1 0 0 1 0 0\nv 0 1 0 1 0 0\n"
+                                           "usemtl color\nf 1/99 2/99 3/99\n");
+    TriangleMesh mesh;
+    ObjInfo      info;
+    std::string  message;
+    REQUIRE(fixture.load(mesh, info, message));
+    CHECK(mesh.facets_count() == 1);
+    CHECK(info.missing_mtl);
+    CHECK(info.vertex_colors.empty());
+    CHECK(info.face_colors.empty());
+    CHECK(info.uvs.empty());
+    CHECK(info.pngs.empty());
+    CHECK(info.uv_map_pngs.empty());
+    CHECK_FALSE(info.has_uv_png);
+    // Names are not source colors: retain them for explicit --model-filaments.
+    REQUIRE(info.material_names.size() == 1);
+    CHECK(info.material_names.front() == "color");
+    REQUIRE(info.face_material_ids.size() == 1);
+    CHECK(info.face_material_ids.front() == 0);
+
+    bool ignored = false;
+    REQUIRE_NOTHROW(fixture.read_model(true, &ignored));
+    CHECK(ignored);
+
+    // A reused result must not leak fallback state into the next colored import.
+    fixture.obj("f 1 2 3\n");
+    REQUIRE(fixture.load(mesh, info, message));
+    CHECK_FALSE(info.missing_mtl);
+    CHECK(info.face_colors.size() == 1);
+}
+
+TEST_CASE("Missing OBJ libraries do not hide invalid geometry or malformed existing MTL", "[OBJ][CLI][Import][MissingMTL]")
+{
+    ObjImportFixture fixture;
+    std::string      vertices  = "v 0 0 0\nv 1 0 0\nv 0 1 0\n";
+    std::string      faces     = "f 1 2 3\n";
+    std::string      libraries = "mtllib absent.mtl\n";
+    SECTION("invalid geometry index") { faces = "f 1 2 99\n"; }
+    SECTION("non-finite coordinate") { vertices = "v nan 0 0\nv 1 0 0\nv 0 1 0\n"; }
+    SECTION("unsupported polygon") { faces = "f 1 2 3 1 2\n"; }
+    SECTION("existing malformed library")
+    {
+        libraries += "mtllib palette.mtl\n";
+        fixture.write("palette.mtl", std::string(70000, 'X'));
+    }
+    fixture.write("input.obj", libraries + vertices + "usemtl color\n" + faces);
+    TriangleMesh mesh;
+    ObjInfo      info;
+    std::string  message;
+    CHECK_FALSE(fixture.load(mesh, info, message));
+    CHECK_FALSE(message.empty());
+    CHECK_THROWS(fixture.read_model(true));
+}
+
+TEST_CASE("Missing OBJ library lookup never falls back to the working directory", "[OBJ][CLI][Import][MissingMTL]")
+{
+    ObjImportFixture fixture;
+    ObjImportFixture unrelated;
+    unrelated.write("absent.mtl", "newmtl color\nKd 0 1 0\n");
+    fixture.write("input.obj", "mtllib absent.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl color\nf 1 2 3\n");
+    ScopedCurrentPath current_path(unrelated.directory);
+    TriangleMesh      mesh;
+    ObjInfo           info;
+    std::string       message;
+    REQUIRE(fixture.load(mesh, info, message));
+    CHECK(info.missing_mtl);
+    CHECK(info.face_colors.empty());
+}
+
+TEST_CASE("Missing OBJ MTL works through GUI and CLI imports and CGAL hole repair", "[OBJ][CLI][GUIColor][ModelRepair][CGAL][MissingMTL]")
+{
+    ObjImportFixture fixture;
+    fixture.write("input.obj", "mtllib absent.mtl\nv 0 0 0\nv 10 0 0\nv 0 10 0\nv 0 0 10\n"
+                               "usemtl color\nf 1 3 2\nf 1 2 4\nf 1 4 3\n");
+    bool             callback_called = false;
+    ObjImportColorFn callback    = [&](std::vector<RGBA>&, bool, std::vector<unsigned char>&, unsigned char&) { callback_called = true; };
+    bool             gui_ignored = false, cli_ignored = false;
+    Model            gui_model = fixture.read_model(false, &gui_ignored, nullptr, callback);
+    Model            cli_model = fixture.read_model(true, &cli_ignored);
+    CHECK(gui_ignored);
+    CHECK(cli_ignored);
+    CHECK_FALSE(callback_called);
+    // Include the GUI's post-import cleanup, not just the OBJ loader. A zero
+    // signed volume used to delete this repairable open tetrahedron here.
+    REQUIRE(gui_model.objects.size() == 1);
+    CHECK(gui_model.objects.front()->get_object_stl_stats().volume == 0.0);
+    CHECK(gui_model.remove_empty_objects() == 0);
+    REQUIRE(gui_model.objects.size() == 1);
+    CHECK_FALSE(gui_model.looks_like_saved_in_meters());
+    CHECK_FALSE(gui_model.looks_like_imperial_units());
+    ModelRepairOptions cli_options;
+    cli_options.allow_partial = true;
+    ModelRepairReport gui_report, cli_report;
+    REQUIRE(repair_model(gui_model, gui_report, gui_model_repair_options()));
+    REQUIRE(repair_model(cli_model, cli_report, cli_options));
+    CHECK(gui_report.mesh_validated());
+    CHECK(cli_report.mesh_validated());
+    for (const Model* model : {&gui_model, &cli_model}) {
+        REQUIRE(model->objects.size() == 1);
+        REQUIRE(model->objects.front()->volumes.size() == 1);
+        const ModelVolume* volume = model->objects.front()->volumes.front();
+        CHECK(volume->mmu_segmentation_facets.empty());
+        CHECK(volume->mesh().facets_count() == 4);
+        CHECK(its_volume(volume->mesh().its) == Approx(1000. / 6.).margin(0.001));
+        CHECK_FALSE(MeshBoolean::cgal::requires_repair(volume->mesh()));
+    }
+}
+
+TEST_CASE("Missing MTL preserves explicit replacement filament bindings", "[OBJ][CLI][Import][MissingMTL]")
+{
+    ObjImportFixture fixture;
+    fixture.write("input.obj", "mtllib absent.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\n"
+                               "usemtl first\nf 1 3 2\nf 1 2 4\nusemtl second\nf 1 4 3\nf 2 3 4\n");
+    const std::vector<unsigned int> slots{1, 2};
+    bool                            ignored = false;
+    Model                           model   = fixture.read_model(true, &ignored, &slots);
+    CHECK(ignored);
+    REQUIRE(model.objects.size() == 1);
+    REQUIRE(model.objects.front()->volumes.size() == 1);
+    CHECK_FALSE(model.objects.front()->volumes.front()->mmu_segmentation_facets.empty());
 }
 
 TEST_CASE("Geometry-only OBJ export propagates file-open errors", "[OBJ][CLI]")
@@ -784,6 +928,229 @@ TEST_CASE("Multicolor OBJ combines base filament and MMU facet assignments", "[O
     boost::filesystem::remove(obj_path, error_code);
     CHECK_FALSE(error_code);
     boost::filesystem::remove(mtl_path, error_code);
+    CHECK_FALSE(error_code);
+}
+
+TEST_CASE("GUI repair preserves imported OBJ colors through staging and export", "[OBJ][GUIColor][ModelRepair][CGAL][Painting][HoleColor]")
+{
+    // Regression for 11-colored-missing-top.obj: the GUI reused green in slot
+    // 1, added red in slot 2, and represented red as the volume's base color.
+    // With keep_painting off, the old GUI repair erased all six green faces.
+    const std::vector<RGBA> colors{{0.f, 1.f, 0.f, 1.f}, {1.f, 0.f, 0.f, 1.f}};
+    TriangleMesh           input;
+    ObjInfo                input_info;
+    std::string            message;
+    const std::string fixture = std::string(TEST_DATA_DIR) + "/model_repair_acceptance/11-colored-missing-top.obj";
+    REQUIRE(load_obj(fixture.c_str(), &input, input_info, message));
+    REQUIRE(input.its.indices.size() == 10);
+    REQUIRE(input_info.face_colors.size() == 10);
+
+    Model        model;
+    ModelObject* object = model.add_object();
+    ModelVolume* volume = object->add_volume(std::move(input));
+    object->add_instance();
+    volume->config.set("extruder", 2);
+    TriangleSelector selector(volume->mesh());
+    size_t           green_faces = 0;
+    for (size_t i = 0; i < input_info.face_colors.size(); ++i) {
+        if (input_info.face_colors[i] == colors[0]) {
+            selector.set_facet(static_cast<int>(i), EnforcerBlockerType::Extruder1);
+            ++green_faces;
+        } else {
+            REQUIRE(input_info.face_colors[i] == colors[1]);
+        }
+    }
+    REQUIRE(green_faces == 6);
+    REQUIRE(volume->mmu_segmentation_facets.set(selector));
+    const auto source_mesh     = volume->mesh_ptr();
+    const auto source_painting = volume->mmu_segmentation_facets.get_data();
+
+    // Use the exact explicit-GUI policy, not hand-written preservation flags.
+    // Stage and move volume structures just as the GUI does before its refresh.
+    ModelRepairOptions options = gui_model_repair_options();
+    options.targets            = {{0, std::nullopt}};
+    REQUIRE(options.allow_partial);
+    REQUIRE(options.preserve_annotations);
+    REQUIRE_FALSE(options.allow_annotation_clearing);
+    auto              staged = make_model_repair_staging_copy(model, options.targets);
+    ModelRepairReport report;
+    REQUIRE(repair_staged_model(*staged, report, options));
+    REQUIRE(report.committed);
+    REQUIRE(report.mesh_validated());
+    REQUIRE(report.volume_reports.size() == 1);
+    CHECK(report.volume_reports.front().annotations_preserved);
+    CHECK_FALSE(report.volume_reports.front().annotations_cleared);
+    CHECK(volume->mesh_ptr() == source_mesh);
+    CHECK(volume->mmu_segmentation_facets.get_data() == source_painting);
+    auto prepared = model.prepare_move_object_volume_structures(*staged, report.changed_object_indices);
+    model.commit_move_object_volume_structures(std::move(prepared));
+    volume = model.objects.front()->volumes.front();
+    CHECK(volume->extruder_id() == 2);
+    CHECK_FALSE(volume->mmu_segmentation_facets.empty());
+
+    const auto directory = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orcaslicer-gui-repair-%%%%-%%%%");
+    REQUIRE(boost::filesystem::create_directory(directory));
+    const auto path = directory / "repaired.obj";
+    REQUIRE(store_multicolor_obj(path.string().c_str(), model, colors));
+    TriangleMesh exported;
+    ObjInfo      info;
+    REQUIRE(load_obj(path.string().c_str(), &exported, info, message));
+    REQUIRE(info.face_colors.size() == exported.its.indices.size());
+    CHECK(its_num_open_edges(exported.its) == 0);
+    CHECK_FALSE(MeshBoolean::cgal::requires_repair(exported));
+    CHECK(its_volume(exported.its) == Approx(1000.).margin(0.001));
+
+    // Compare coverage instead of facet counts, allowing valid retriangulation.
+    // The six green source faces cover 300 mm2; the new top uses base red.
+    double green_area = 0., red_area = 0., top_area = 0.;
+    for (size_t i = 0; i < exported.its.indices.size(); ++i) {
+        const auto&  face = exported.its.indices[i];
+        const Vec3f& a    = exported.its.vertices[face[0]];
+        const Vec3f& b    = exported.its.vertices[face[1]];
+        const Vec3f& c    = exported.its.vertices[face[2]];
+        const double area = 0.5 * (b - a).cross(c - a).norm();
+        if (info.face_colors[i] == colors[0])
+            green_area += area;
+        else {
+            REQUIRE(info.face_colors[i] == colors[1]);
+            red_area += area;
+        }
+        if (std::abs(a.z() - 10.f) < 1e-4f && std::abs(b.z() - 10.f) < 1e-4f && std::abs(c.z() - 10.f) < 1e-4f) {
+            CHECK(info.face_colors[i] == colors[1]);
+            top_area += area;
+        }
+    }
+    CHECK(green_area == Approx(300.).margin(0.001));
+    CHECK(red_area == Approx(300.).margin(0.001));
+    CHECK(top_area == Approx(100.).margin(0.001));
+
+    boost::system::error_code error_code;
+    boost::filesystem::remove_all(directory, error_code);
+    CHECK_FALSE(error_code);
+}
+
+TEST_CASE("Multicolor OBJ keeps a closed indexed mesh across painting seams", "[OBJ][CLI][MMU][Topology]")
+{
+    const bool subdivide = GENERATE(false, true);
+    const bool mirrored = GENERATE(false, true);
+    INFO(subdivide);
+    INFO(mirrored);
+    Model        model;
+    ModelObject* object = model.add_object();
+    ModelVolume* volume = object->add_volume(make_cube(10., 10., 10.));
+    volume->config.set("extruder", 1);
+    Transform3d transform   = Transform3d::Identity();
+    transform(0, 0)         = mirrored ? -1. : 1.;
+    transform.translation() = Vec3d(30., 20., 10.);
+    object->add_instance()->set_transformation(Geometry::Transformation(transform));
+
+    TriangleSelector selector(volume->mesh());
+    if (subdivide) {
+        // Split one original triangle along one side, with one green child.
+        // Its unsplit neighbor now has a T-joint. The strict exporter must
+        // subdivide that neighbor too, while retaining its red base color.
+        TriangleSelector::TriangleSplittingData data;
+        data.triangles_to_split.emplace_back(0, 0);
+        data.bitstream = {true, false, false, false, false, false, false, true, false, false, false, false};
+        data.update_used_states(0);
+        selector.deserialize(data, false);
+        REQUIRE(selector.get_facets(EnforcerBlockerType::NONE).indices.size() +
+                    selector.get_facets(EnforcerBlockerType::Extruder2).indices.size() ==
+                13);
+    } else {
+        selector.set_facet(0, EnforcerBlockerType::Extruder2);
+    }
+    REQUIRE(volume->mmu_segmentation_facets.set(selector));
+    const auto original_mesh     = volume->mesh_ptr();
+    const auto original_painting = volume->mmu_segmentation_facets.get_data();
+
+    const auto directory = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orcaslicer-color-seam-%%%%-%%%%");
+    REQUIRE(boost::filesystem::create_directory(directory));
+    const auto              path = directory / "model.obj";
+    const std::vector<RGBA> colors{{1.f, 0.f, 0.f, 1.f}, {0.f, 1.f, 0.f, 1.f}};
+    REQUIRE(store_multicolor_obj(path.string().c_str(), model, colors));
+    TriangleMesh exported;
+    ObjInfo      info;
+    std::string  message;
+    // Low-level loading does not run repair or merge vertices by position.
+    REQUIRE(load_obj(path.string().c_str(), &exported, info, message));
+    CHECK(exported.its.vertices.size() == (subdivide ? 9 : 8));
+    CHECK(exported.its.indices.size() == (subdivide ? 14 : 12));
+    CHECK(its_num_open_edges(exported.its) == 0);
+    CHECK_FALSE(MeshBoolean::cgal::requires_repair(exported));
+    CHECK(its_volume(exported.its) == Approx(1000.).margin(0.001));
+    CHECK((exported.bounding_box().center() - Vec3d(mirrored ? 25. : 35., 25., 15.)).norm() < 0.001);
+
+    REQUIRE(info.face_colors.size() == exported.its.indices.size());
+    double red_area = 0., green_area = 0.;
+    for (size_t i = 0; i < exported.its.indices.size(); ++i) {
+        const auto&  face     = exported.its.indices[i];
+        const auto&  vertices = exported.its.vertices;
+        const double area     = 0.5 * (vertices[face[1]] - vertices[face[0]]).cross(vertices[face[2]] - vertices[face[0]]).norm();
+        if (info.face_colors[i] == colors[0])
+            red_area += area;
+        else {
+            REQUIRE(info.face_colors[i] == colors[1]);
+            green_area += area;
+        }
+    }
+    CHECK(green_area == Approx(subdivide ? 25. : 50.).margin(0.001));
+    CHECK(red_area + green_area == Approx(600.).margin(0.001));
+    CHECK(volume->mesh_ptr() == original_mesh);
+    CHECK(volume->mmu_segmentation_facets.get_data() == original_painting);
+
+    boost::system::error_code error_code;
+    boost::filesystem::remove_all(directory, error_code);
+    CHECK_FALSE(error_code);
+}
+
+TEST_CASE("Multicolor OBJ does not weld independent geometry at coincident positions", "[OBJ][CLI][MMU][Topology]")
+{
+    const int arrangement = GENERATE(0, 1, 2, 3);
+    INFO(arrangement); // same volume, different volumes, different objects, instances
+    Model        model;
+    ModelObject* object = model.add_object();
+    TriangleMesh mesh   = make_cube(10., 10., 10.);
+    if (arrangement == 0) {
+        TriangleMesh second = mesh;
+        second.translate(10.f, 0.f, 0.f); // two shells touching along a face
+        mesh.merge(second);
+    }
+    ModelVolume*     volume = object->add_volume(std::move(mesh));
+    TriangleSelector selector(volume->mesh());
+    selector.set_facet(0, EnforcerBlockerType::Extruder2);
+    REQUIRE(volume->mmu_segmentation_facets.set(selector));
+    object->add_instance();
+    if (arrangement == 1)
+        object->add_volume(make_cube(10., 10., 10.));
+    else if (arrangement == 2) {
+        ModelObject* second = model.add_object();
+        second->add_volume(make_cube(10., 10., 10.));
+        second->add_instance();
+    } else if (arrangement == 3)
+        object->add_instance(); // coincident copies must still have different indices
+
+    const auto directory = boost::filesystem::temp_directory_path() /
+                           boost::filesystem::unique_path("orcaslicer-independent-colors-%%%%-%%%%");
+    REQUIRE(boost::filesystem::create_directory(directory));
+    const auto              path = directory / "model.obj";
+    const std::vector<RGBA> colors{{1.f, 0.f, 0.f, 1.f}, {0.f, 1.f, 0.f, 1.f}};
+    REQUIRE(store_multicolor_obj(path.string().c_str(), model, colors));
+    TriangleMesh exported;
+    ObjInfo      info;
+    std::string  message;
+    REQUIRE(load_obj(path.string().c_str(), &exported, info, message));
+    CHECK(exported.its.vertices.size() == 16);
+    CHECK(exported.its.indices.size() == 24);
+    CHECK(its_num_open_edges(exported.its) == 0);
+    const auto shells = its_split(exported.its);
+    REQUIRE(shells.size() == 2);
+    for (const auto& shell : shells)
+        CHECK(its_volume(shell) == Approx(1000.).margin(0.001));
+    // These deliberately touching/overlapping objects are not a claim of
+    // globally intersection-free geometry. The exporter must not merge them.
+    boost::system::error_code error_code;
+    boost::filesystem::remove_all(directory, error_code);
     CHECK_FALSE(error_code);
 }
 

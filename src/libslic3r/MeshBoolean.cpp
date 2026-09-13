@@ -8,7 +8,10 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
+#include <new>
 #include <optional>
+#include <stdexcept>
 
 #include <boost/next_prior.hpp>
 #include "boost/log/trivial.hpp"
@@ -474,6 +477,114 @@ ConnectedComponentVolumeMeasure measure_connected_component_volumes(_EpicMesh& s
     return {component_count, absolute_volume};
 }
 
+// Reuse Orca's nearby-edge matcher, but only on an already oriented manifold
+// component. Do not use the legacy shortest-edge tolerance unboundedly: it can
+// close intentional gaps. Independent components are never welded together.
+bool close_small_cracks(indexed_triangle_set& component)
+{
+    namespace PMP = CGAL::Polygon_mesh_processing;
+    if (its_num_open_edges(component) == 0 || component.indices.size() < 4 ||
+        component.indices.size() > size_t(std::numeric_limits<int>::max()))
+        return false;
+
+    stl_file stl;
+    stl.stats.type = inmemory;
+    stl.stats.number_of_facets = uint32_t(component.indices.size());
+    stl.facet_start.resize(component.indices.size());
+    stl.neighbors_start.resize(component.indices.size());
+    double shortest_edge = std::numeric_limits<double>::max();
+    for (size_t i = 0; i < component.indices.size(); ++i) {
+        stl_facet& facet = stl.facet_start[i];
+        facet.normal.setZero();
+        for (int corner = 0; corner < 3; ++corner) {
+            facet.vertex[corner] = component.vertices[component.indices[i][corner]];
+            shortest_edge = std::min(shortest_edge,
+                (component.vertices[component.indices[i][corner]].cast<double>() -
+                 component.vertices[component.indices[i][(corner + 1) % 3]].cast<double>()).norm());
+        }
+    }
+    stl_get_size(&stl);
+    const double diagonal = stl.stats.size.cast<double>().norm();
+    const float tolerance = float(std::min({diagonal * 1.e-5, shortest_edge * 1.e-3, 0.005}));
+    // ADMesh hashes coordinates into int32 grid cells, at half this tolerance
+    // on the first pass. Avoid overflow for extreme scale/aspect ratios.
+    if (!std::isfinite(diagonal) || !std::isfinite(tolerance) || tolerance <= 0.f ||
+        diagonal / (0.5 * tolerance) >= double(std::numeric_limits<int32_t>::max()) - 2.)
+        return false;
+
+    stl_check_facets_exact(&stl);
+    if (stl.stats.number_of_facets != component.indices.size())
+        return false;
+    stl_check_facets_nearby(&stl, tolerance * 0.5f);
+    stl_check_facets_nearby(&stl, tolerance);
+    if (stl.stats.edges_fixed == 0)
+        return false;
+
+    // Keep face provenance and cap the total displacement, not just each
+    // individual match. A chain of tiny matches must not move a vertex far.
+    for (size_t i = 0; i < component.indices.size(); ++i)
+        for (int corner = 0; corner < 3; ++corner)
+            if (!stl.facet_start[i].vertex[corner].allFinite() ||
+                (stl.facet_start[i].vertex[corner].cast<double>() -
+                 component.vertices[component.indices[i][corner]].cast<double>()).norm() > tolerance)
+                return false;
+
+    indexed_triangle_set candidate;
+    stl_generate_shared_vertices(&stl, candidate);
+    for (size_t i = 0; i < candidate.indices.size(); ++i)
+        for (int corner = 0; corner < 3; ++corner)
+            if ((candidate.vertices[candidate.indices[i][corner]].cast<double>() -
+                 component.vertices[component.indices[i][corner]].cast<double>()).norm() > tolerance)
+                return false;
+    _EpicMesh surface;
+    triangle_mesh_to_cgal(candidate.vertices, candidate.indices, surface);
+    // Only accept a completely closed candidate. Otherwise leave the original
+    // component for normal hole filling; do not conceal a bad snap with patches.
+    if (surface.num_faces() != component.indices.size() || !CGAL::is_valid_polygon_mesh(surface) ||
+        !CGAL::is_triangle_mesh(surface) || !CGAL::is_closed(surface))
+        return false;
+    std::vector<_EpicMesh::Face_index> degenerate;
+    std::vector<_EpicMesh::Halfedge_index> non_manifold;
+    PMP::degenerate_faces(surface, std::back_inserter(degenerate));
+    PMP::non_manifold_vertices(surface, std::back_inserter(non_manifold));
+    if (!degenerate.empty() || !non_manifold.empty() || PMP::does_self_intersect(surface))
+        return false;
+
+    BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=small_crack_closed, tolerance=" << tolerance
+                            << ", matched_edges=" << stl.stats.edges_fixed;
+    component = std::move(candidate);
+    return true;
+}
+
+void prepare_open_surface(_EpicMesh& surface)
+{
+    surface.collect_garbage();
+    std::vector<indexed_triangle_set> components = its_split(cgal_to_indexed_triangle_set(surface));
+    indexed_triangle_set prepared;
+    size_t removed_faces = 0;
+    bool changed = false;
+    for (indexed_triangle_set& component : components) {
+        // The legacy automatic cleanup discards facets with no edge neighbor.
+        // A single triangle cannot enclose printable volume. Never remove a
+        // component just because its area, thickness or volume is small.
+        if (component.indices.size() == 1) {
+            ++removed_faces;
+            changed = true;
+            continue;
+        }
+        changed = close_small_cracks(component) || changed;
+        its_merge(prepared, component);
+    }
+    if (changed) {
+        _EpicMesh candidate;
+        triangle_mesh_to_cgal(prepared.vertices, prepared.indices, candidate);
+        if (candidate.num_faces() != prepared.indices.size() || !CGAL::is_valid_polygon_mesh(candidate))
+            throw std::runtime_error(L("Repair failed: basic boundary cleanup produced invalid topology."));
+        surface = std::move(candidate);
+        BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=basic_boundary_cleanup, isolated_faces_removed=" << removed_faces;
+    }
+}
+
 } // namespace
 
 bool does_self_intersect(const TriangleMesh& mesh)
@@ -711,6 +822,8 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
                     }
                 }
             }
+        } catch (const std::bad_alloc&) {
+            throw; // Resource exhaustion is not a recoverable geometric rejection.
         } catch (const std::exception& exception) {
             direct_candidate_error = exception.what();
             BOOST_LOG_TRIVIAL(debug) << "CGAL closed-defect repair candidate rejected: " << exception.what();
@@ -818,6 +931,23 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
         }
 
         if (!CGAL::is_closed(cgal_mesh)) {
+            // Run basic boundary cleanup only on ordinary manifold candidates.
+            // Singular/split soups retain the existing conservative failure
+            // path; do not send them through another heuristic repair engine.
+            if (!soup_vertices_split && duplicated_non_manifold_vertices == 0) {
+                stage = "basic_boundary_cleanup";
+                prepare_open_surface(cgal_mesh);
+                if (cgal_mesh.is_empty() || cgal_mesh.num_faces() == 0)
+                    return fail(L("Repair failed: basic cleanup removed all geometry."));
+            }
+        }
+
+        if (!CGAL::is_closed(cgal_mesh)) {
+            // Also protect the existing surface of ordinary open inputs, not
+            // only vertex-split soups. Filling a hole may add area, not erase
+            // unrelated geometry or change the number of connected shells.
+            if (!fallback_fidelity_reference)
+                fallback_fidelity_reference = cgal_mesh;
             stage = "hole_filling";
             using halfedge_descriptor = boost::graph_traits<_EpicMesh>::halfedge_descriptor;
 
@@ -850,7 +980,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
             return fail("Repair failed: repaired mesh still self-intersects.");
         }
 
-        if (soup_vertices_split) {
+        {
             using face_descriptor     = boost::graph_traits<_EpicMesh>::face_descriptor;
             using halfedge_descriptor = boost::graph_traits<_EpicMesh>::halfedge_descriptor;
             std::vector<face_descriptor>     degenerate_faces;
@@ -858,7 +988,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
             PMP::degenerate_faces(cgal_mesh, std::back_inserter(degenerate_faces));
             PMP::non_manifold_vertices(cgal_mesh, std::back_inserter(non_manifold_vertices));
             if (!degenerate_faces.empty() || !non_manifold_vertices.empty())
-                return fail(L("Repair failed: vertex splitting left intersections or invalid topology that could not be safely repaired."));
+                return fail(L("Repair failed: repaired mesh still contains degenerate faces or non-manifold vertices."));
         }
 
         // does_bound_a_volume() accepts inward level-0 shells as the boundary
@@ -916,7 +1046,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
             if (!fidelity_valid) {
                 if (soup_vertices_split)
                     return fail(L("Repair failed: vertex-split repair exceeded the geometry-preservation limits."));
-                return fail("Repair failed: closed polygon-soup cleanup exceeded the geometry-preservation limits.");
+                return fail(L("Repair failed: polygon-soup cleanup exceeded the geometry-preservation limits."));
             }
         }
 
@@ -955,6 +1085,8 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
         if (repaired_errors != nullptr)
             *repaired_errors = repairs;
         return true;
+    } catch (const std::bad_alloc&) {
+        throw;
     } catch (const std::exception& exception) {
         return fail(exception.what());
     } catch (...) {

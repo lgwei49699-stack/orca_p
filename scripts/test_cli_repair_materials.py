@@ -30,13 +30,16 @@ def main():
     mtl.write_text("X" * 70000, encoding="utf-8")
     hashes = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in (source, mtl)}
 
-    def run(name, flags, inputs, success, materials_ignored=None, expected_error=None, obj_mode=None, changed=False):
+    def run(name, flags, inputs, success, materials_ignored=None, expected_error=None, obj_mode=None, changed=False,
+            expected_log_error=None):
         case = work / name
         case.mkdir()
         output = case / "output"
         data = case / "data"
         data.mkdir()
-        command = [str(binary), "--datadir", str(data), "--outputdir", str(output), *flags, *map(str, inputs)]
+        # Warning-level output is part of the missing-MTL notification checks;
+        # the normal CLI default only emits errors. This changes logging, not repair policy.
+        command = [str(binary), "--debug", "3", "--datadir", str(data), "--outputdir", str(output), *flags, *map(str, inputs)]
         (case / "command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")
         with (case / "run.log").open("wb") as log:
             result = subprocess.run(command, cwd=case, stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout)
@@ -45,6 +48,12 @@ def main():
         assert (report["return_code"] == 0) == success, (name, report)
         if expected_error is not None:
             assert expected_error in report["error_string"], (name, report)
+        if expected_log_error is not None:
+            # Import failures use the shared parse-error code/message in JSON;
+            # the loader's specific diagnostic is emitted separately in the log.
+            assert not success and report["return_code"] == -6, (name, report)
+            detail = (case / "run.log").read_text(encoding="utf-8", errors="replace")
+            assert expected_log_error in detail, (name, expected_log_error, detail)
         if obj_mode is not None:
             exports = report.get("obj_exports", [])
             assert exports and all(e["mode"] == obj_mode for e in exports), (name, report)
@@ -116,6 +125,45 @@ def main():
         colors = {tuple(map(float, line.split()[1:])) for line in mtl_text.splitlines() if line.startswith("Kd ")}
         assert {(1.0, 0.0, 0.0), (0.0, 1.0, 0.0)} <= colors
     run("auto-plain", automatic, [plain], True, False, obj_mode="geometry_only")
+
+    # Missing sidecars are an automatic geometry fallback, not an import failure.
+    # Include dangling UV indices: they must not block geometry-only import.
+    for name, libraries in (
+        ("missing-mtl", "mtllib absent.mtl\n"),
+        ("no-mtllib", ""),
+        ("partially-missing-mtl", "mtllib colors.mtl\nmtllib absent.mtl\n"),
+        ("partially-missing-mtl-reversed", "mtllib absent.mtl\nmtllib colors.mtl\n"),
+    ):
+        missing = work / (name + ".obj")
+        missing.write_text(libraries + tetra + "usemtl red\nf 1/99 3/99 2/99\nf 1/99 2/99 4/99\n"
+                                             "usemtl green\nf 1/99 4/99 3/99\n", encoding="utf-8")
+        hashes[missing] = hashlib.sha256(missing.read_bytes()).hexdigest()
+        paths = run("auto-" + name, automatic, [missing], True, True, obj_mode="geometry_only", changed=True)
+        assert all(p.suffix.lower() == ".obj" for p in paths)
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            assert not any(line.startswith(("mtllib ", "usemtl ", "vt ")) for line in text.splitlines())
+            assert not path.with_suffix(".mtl").exists()
+        log = (work / ("auto-" + name) / "run.log").read_text(encoding="utf-8", errors="replace")
+        assert "source colors and textures were ignored" in log
+        # Re-import no longer refers to an unavailable MTL, and needs no repair.
+        run("roundtrip-" + name, automatic, paths, True, False, obj_mode="geometry_only")
+        roundtrip = json.loads((work / ("roundtrip-" + name) / "output" / "result.json").read_text(encoding="utf-8"))
+        assert all(r["repair_actions"]["mesh_repaired"] == 0 for r in roundtrip["model_repairs"])
+        run("stl-" + name, ["--repair-model", "cgal", "--export-stl"], [missing], True, True, changed=True)
+
+    bad_geometry = work / "missing-mtl-invalid-geometry.obj"
+    bad_geometry.write_text("mtllib absent.mtl\n" + tetra + "usemtl red\nf 1 2 99\n", encoding="utf-8")
+    hashes[bad_geometry] = hashlib.sha256(bad_geometry.read_bytes()).hexdigest()
+    run("reject-missing-mtl-invalid-geometry", automatic, [bad_geometry], False,
+        expected_log_error="invalid vertex index")
+    unresolved_material = work / "unresolved-material.obj"
+    unresolved_material.write_text("mtllib colors.mtl\n" + tetra +
+                                   "usemtl undefined\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n", encoding="utf-8")
+    hashes[unresolved_material] = hashlib.sha256(unresolved_material.read_bytes()).hexdigest()
+    run("reject-existing-mtl-unresolved-material", automatic, [unresolved_material], False,
+        expected_log_error="a face material is missing or unresolved")
+
     run("reject-ambiguous-multiple-palettes", automatic, [colored, plain], False,
         expected_error="Automatic colored OBJ repair requires one input")
     run("explicit-multicolor-compatible", ["--repair-model", "cgal", "--export-multicolor-obj", "result.obj"],

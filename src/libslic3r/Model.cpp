@@ -27,6 +27,8 @@
 
 #include "SVG.hpp"
 #include <Eigen/Dense>
+#include <algorithm>
+#include <cmath>
 #include <functional>
 #include <stdexcept>
 #include "GCodeWriter.hpp"
@@ -346,10 +348,13 @@ Model Model::read_from_file(const std::string&               input_file,
                             const std::vector<unsigned int>* obj_material_extruder_ids,
                             std::string*                     obj_primary_color_group,
                             bool                             obj_geometry_only,
-                            bool                             obj_require_color_mapping)
+                            bool                             obj_require_color_mapping,
+                            bool*                            obj_materials_ignored)
 {
     Model model;
 
+    if (obj_materials_ignored != nullptr)
+        *obj_materials_ignored = false;
     if (obj_primary_color_group != nullptr)
         obj_primary_color_group->clear();
 
@@ -382,10 +387,12 @@ Model Model::read_from_file(const std::string&               input_file,
         if (obj_geometry_only && obj_material_extruder_ids != nullptr)
             throw Slic3r::RuntimeError("Geometry-only OBJ import cannot bind source materials to filaments.");
         result = load_obj(input_file.c_str(), &model, obj_info, message, nullptr, obj_geometry_only);
+        if (result && obj_materials_ignored != nullptr)
+            *obj_materials_ignored = obj_geometry_only || obj_info.missing_mtl;
         if (result && !obj_geometry_only) {
             // Automatic color-preserving CLI output must not silently turn unsupported
             // vertex/texture colors or unresolved materials into an unpainted model.
-            if (obj_require_color_mapping && obj_material_extruder_ids == nullptr && objFn == nullptr) {
+            if (obj_require_color_mapping && !obj_info.missing_mtl && obj_material_extruder_ids == nullptr && objFn == nullptr) {
                 if (!obj_info.vertex_colors.empty() || obj_info.has_uv_png)
                     throw Slic3r::RuntimeError("Repair OBJ export currently preserves MTL face colors, not vertex colors or textures. "
                                                "Use --repair-ignore-materials only if geometry-only output is intended.");
@@ -1138,13 +1145,22 @@ void Model::convert_multipart_object(unsigned int max_extruders)
 
 static constexpr const double volume_threshold_inches = 8.0; // 9 = 2*2*2;
 
+static bool object_has_small_positive_volume(const ModelObject& object, double threshold)
+{
+    // A zero/canceling signed volume does not describe the size of an open or
+    // inconsistently oriented mesh. Do not suggest (or selectively apply) unit
+    // conversion to such an object while it awaits explicit model repair.
+    const double volume = object.get_object_stl_stats().volume;
+    return std::isfinite(volume) && volume > 0.0 && volume < threshold;
+}
+
 bool Model::looks_like_imperial_units() const
 {
     if (this->objects.size() == 0)
         return false;
 
     for (ModelObject* obj : this->objects)
-        if (obj->get_object_stl_stats().volume < volume_threshold_inches) {
+        if (object_has_small_positive_volume(*obj, volume_threshold_inches)) {
             if (!obj->is_cut())
                 return true;
             bool all_cut_parts_look_like_imperial_units = true;
@@ -1167,7 +1183,7 @@ void Model::convert_from_imperial_units(bool only_small_volumes)
 {
     static constexpr const float in_to_mm = 25.4f;
     for (ModelObject* obj : this->objects)
-        if (! only_small_volumes || obj->get_object_stl_stats().volume < volume_threshold_inches) {
+        if (! only_small_volumes || object_has_small_positive_volume(*obj, volume_threshold_inches)) {
             obj->scale_mesh_after_creation(in_to_mm);
             for (ModelVolume* v : obj->volumes) {
                 assert(! v->source.is_converted_from_meters);
@@ -1191,7 +1207,7 @@ bool Model::looks_like_saved_in_meters() const
         return false;
 
     for (ModelObject* obj : this->objects)
-        if (obj->get_object_stl_stats().volume < volume_threshold_meters)
+        if (object_has_small_positive_volume(*obj, volume_threshold_meters))
             return true;
 
     return false;
@@ -1201,7 +1217,7 @@ void Model::convert_from_meters(bool only_small_volumes)
 {
     static constexpr const double m_to_mm = 1000;
     for (ModelObject* obj : this->objects)
-        if (! only_small_volumes || obj->get_object_stl_stats().volume < volume_threshold_meters) {
+        if (! only_small_volumes || object_has_small_positive_volume(*obj, volume_threshold_meters)) {
             obj->scale_mesh_after_creation(m_to_mm);
             for (ModelVolume* v : obj->volumes) {
                 assert(! v->source.is_converted_from_inches);
@@ -1218,16 +1234,15 @@ void Model::convert_from_meters(bool only_small_volumes)
     }
 }
 
-static constexpr const double zero_volume = 0.0000000001;
-
-int Model::removed_objects_with_zero_volume()
+int Model::remove_empty_objects()
 {
-    if (objects.size() == 0)
-        return 0;
-
     int removed = 0;
     for (int i = int(objects.size()) - 1; i >= 0; i--)
-        if (objects[i]->get_object_stl_stats().volume < zero_volume) {
+        // Keep all nonempty geometry for inspection/repair, including open
+        // shells, planar surfaces and very thin solids. Their signed volume
+        // is not a safe import-time deletion criterion.
+        if (std::all_of(objects[i]->volumes.begin(), objects[i]->volumes.end(),
+                        [](const ModelVolume* volume) { return volume->mesh().empty(); })) {
             delete_object(size_t(i));
             removed++;
         }

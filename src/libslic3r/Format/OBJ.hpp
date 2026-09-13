@@ -21,6 +21,9 @@ struct ObjInfo {
     // local material index for every triangulated face.
     std::vector<std::string>   material_names;
     std::vector<unsigned int>  face_material_ids;
+    // Missing mtllib files (or usemtl without a library) disable source colors/UVs
+    // for the whole OBJ. Material names/IDs remain available for explicit CLI bindings.
+    bool                                 missing_mtl{false};
     bool              is_single_mtl{false};
     std::vector<std::array<Vec2f,3>> uvs;
     std::string        obj_dircetory;
@@ -40,7 +43,8 @@ struct GeneralExtruderConfig
     float                                       color_match_tolerance = 0.01f; 
 };
 // Geometry-only import does not open MTL libraries or import colors/UV/material assignments.
-// Default import remains material-aware for GUI and existing callers.
+// Default import is material-aware, but missing MTL libraries fall back to geometry
+// without source colors/UVs. Existing but invalid libraries still fail to parse.
 extern bool load_obj(const char* path, TriangleMesh* mesh, ObjInfo& vertex_colors, std::string& message, bool geometry_only = false);
 extern bool load_obj(const char*  path,
                      Model*       model,

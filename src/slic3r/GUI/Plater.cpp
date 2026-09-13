@@ -5658,7 +5658,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         },
                         linear, angle, split_compound);
                 } else {
-                    model = Slic3r::Model::read_from_file(
+                    bool obj_materials_ignored = false;
+                    model                      = Slic3r::Model::read_from_file(
                         path.string(), nullptr, nullptr, strategy, &plate_data, &project_presets, &is_xxx, &file_version, nullptr,
                         [this, &dlg, real_filename, &progress_percent, &file_percent, INPUT_FILES_RATIO, total_files, i, &designer_model_id,
                          &designer_country_code](int current, int total, bool& cancel, std::string& mode_id, std::string& code) {
@@ -5675,7 +5676,13 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             cont             = dlg.Update(progress_percent, msg);
                             cancel           = !cont;
                         },
-                        nullptr, 0, obj_color_fun);
+                        nullptr, 0, obj_color_fun, true, nullptr, nullptr, nullptr, false, false, &obj_materials_ignored);
+                    if (obj_materials_ignored)
+                        notification_manager->push_notification(NotificationType::CustomNotification,
+                                                                NotificationManager::NotificationLevel::RegularNotificationLevel,
+                                                                format(_L("OBJ material library is missing. Imported geometry only; "
+                                                                          "original colors and textures were not preserved: %s"),
+                                                                       path.filename().string()));
                 }
 
                 if (designer_model_id.empty() && boost::algorithm::iends_with(path.string(), ".stl")) {
@@ -5743,8 +5750,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
             // BBS: add load_old_project logic
             if ((!is_project_file) && (!load_old_project)) {
                 // if (!is_project_file) {
-                if (int deleted_objects = model.removed_objects_with_zero_volume(); deleted_objects > 0) {
-                    MessageDialog(q, _L("Objects with zero volume removed"), _L("The volume of the object is zero"),
+                if (int deleted_objects = model.remove_empty_objects(); deleted_objects > 0) {
+                    MessageDialog(q, _L("Objects without triangle faces were removed."), _L("Empty objects removed"),
                                   wxICON_INFORMATION | wxOK)
                         .ShowModal();
                 }

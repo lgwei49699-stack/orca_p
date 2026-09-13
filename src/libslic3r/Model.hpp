@@ -1642,9 +1642,11 @@ public:
                                 double                                                  angle_defletion,
                                 bool                                                    is_split_compound);
 
-    //BBS: add part plate related logic
-    // BBS: backup
-    //BBS: is_xxx is used for is_bbs_3mf when loading 3mf, is used for is_inches when loading amf
+    // BBS: add part plate related logic
+    //  BBS: backup
+    // BBS: is_xxx is used for is_bbs_3mf when loading 3mf, is used for is_inches when loading amf
+    //  obj_materials_ignored reports explicit geometry-only import or automatic
+    //  missing-MTL fallback. Optional output is reset for every input, including STL.
     static Model read_from_file(const std::string&               input_file,
                                 DynamicPrintConfig*              config                    = nullptr,
                                 ConfigSubstitutionContext*       config_substitutions      = nullptr,
@@ -1663,7 +1665,8 @@ public:
                                 const std::vector<unsigned int>* obj_material_extruder_ids = nullptr,
                                 std::string*                     obj_primary_color_group   = nullptr,
                                 bool                             obj_geometry_only         = false,
-                                bool                             obj_require_color_mapping = false);
+                                bool                             obj_require_color_mapping = false,
+                                bool*                            obj_materials_ignored     = nullptr);
     // BBS
     static bool obj_import_vertex_color_deal(const std::vector<unsigned char>& vertex_filament_ids,
                                              const unsigned char&              first_extruder_id,
@@ -1744,7 +1747,9 @@ public:
     void          convert_from_imperial_units(bool only_small_volumes);
     bool          looks_like_saved_in_meters() const;
     void          convert_from_meters(bool only_small_volumes);
-    int           removed_objects_with_zero_volume();
+    // Remove only objects with no triangle faces in any volume. Nonempty
+    // zero-volume geometry must remain available for explicit model repair.
+    int remove_empty_objects();
 
     // Ensures that the min z of the model is not negative
     void 		  adjust_min_z();

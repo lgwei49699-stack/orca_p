@@ -1404,7 +1404,9 @@ wxWindow* PreferencesDialog::create_general_page()
     auto item_keep_painting = create_item_checkbox(
         _L("Keep painted feature after mesh change"), page,
         _L("Attempt to keep painted features (color/seam/support/fuzzy etc.) after changing the object mesh (such as cut/reload from disk/"
-           "simplify/fix etc.)\nHighly experimental! Slow and may create artifact."),
+           "simplify etc.)\nHighly experimental! Slow and may create artifact.\n"
+           "Repair model always preserves supported painted features regardless of this setting. "
+           "If they cannot be preserved, repair fails without changing the selected model."),
         50, "keep_painting");
 
     sizer_page->Add(title_general_settings, 0, wxEXPAND, 0);
