@@ -671,10 +671,14 @@ MeshErrorsInfo ObjectList::get_mesh_errors_info(const int obj_idx, const int vol
         tooltip += auto_repaired_info + "\n";
     }
     if (!stats.manifold()) {
-        remaining_info = format_wxstr(_L_PLURAL("Error: %1$d non-manifold edge.", "Error: %1$d non-manifold edges.", stats.open_edges), stats.open_edges);
+        remaining_info = format_wxstr(_L_PLURAL("Error: %1$d unpaired mesh edge.", "Error: %1$d unpaired mesh edges.", stats.open_edges),
+                                      stats.open_edges);
 
         tooltip += _L("Remaining errors") + ":\n";
-        tooltip += "\t" + format_wxstr(_L_PLURAL("%1$d non-manifold edge", "%1$d non-manifold edges", stats.open_edges), stats.open_edges) + "\n";
+        tooltip += "\t" +
+                   format_wxstr(_L_PLURAL("%1$d unpaired mesh edge", "%1$d unpaired mesh edges", stats.open_edges), stats.open_edges) +
+                   "\n";
+        tooltip += _L("Edge-pairing check only; this is not a complete mesh validation.") + "\n";
     }
 
     if (sidebar_info) {
@@ -5999,7 +6003,7 @@ void ObjectList::fix_through_cgal()
             message += "\n   - " + from_u8(name);
     }
     if (staged_repair.report.unresolved != 0) {
-        message += "\n\n" + _L("Unresolved geometry problems (rejected CGAL candidates were not applied):");
+        message += "\n\n" + _L("Unresolved geometry problems in the retained model:");
         for (const ModelRepairFailure& issue : staged_repair.report.failures) {
             const std::string name = issue.volume_name.empty() ? issue.object_name : issue.object_name + " / " + issue.volume_name;
             message += "\n   - " + from_u8(name) + ": " + _L(issue.message);

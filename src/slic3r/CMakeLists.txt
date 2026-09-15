@@ -557,6 +557,7 @@ set(SLIC3R_GUI_SOURCES
     Utils/minilzo_extension.hpp
     Utils/MKS.cpp
     Utils/MKS.hpp
+    Utils/ModelExportPolicy.hpp
     Utils/NetworkAgent.cpp
     Utils/NetworkAgent.hpp
     Utils/Obico.cpp

@@ -12,12 +12,14 @@
 #include <utility>
 
 #include <libslic3r/Format/OBJ.hpp>
+#include <libslic3r/Format/STL.hpp>
 #include <libslic3r/MeshBoolean.hpp>
 #include <libslic3r/Model.hpp>
 #include <libslic3r/ObjColorMapping.hpp>
 #include <libslic3r/TexturePainting.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 #include <slic3r/Utils/ModelRepairPolicy.hpp>
+#include <slic3r/Utils/ModelExportPolicy.hpp>
 
 using namespace Slic3r;
 
@@ -1172,4 +1174,168 @@ TEST_CASE("Multicolor OBJ refuses to replace directories", "[OBJ][CLI]")
     boost::system::error_code error_code;
     boost::filesystem::remove(obj_path, error_code);
     CHECK_FALSE(error_code);
+}
+
+namespace {
+
+// Compare absolute face coordinates and winding, allowing only float IO/transform
+// rounding. No recentering, best-fit rotation or coordinate welding in this check.
+void check_export_faces(const TriangleMesh& actual, const TriangleMesh& expected)
+{
+    REQUIRE(actual.its.indices.size() == expected.its.indices.size());
+    std::vector<bool> matched(expected.its.indices.size(), false);
+    for (const auto& face : actual.its.indices) {
+        bool found = false;
+        for (size_t i = 0; i < expected.its.indices.size() && !found; ++i) {
+            if (matched[i])
+                continue;
+            const auto& reference = expected.its.indices[i];
+            for (int start = 0; start < 3 && !found; ++start) {
+                bool same = true;
+                for (int corner = 0; corner < 3; ++corner)
+                    same &=
+                        (actual.its.vertices[face[corner]] - expected.its.vertices[reference[(corner + start) % 3]]).cwiseAbs().maxCoeff() <
+                        0.0001f;
+                if (same)
+                    found = matched[i] = true;
+            }
+        }
+        REQUIRE(found);
+    }
+}
+
+enum class ExportSelection { SingleObject, CombinedObjects, AllInstances, OneInstance };
+
+} // namespace
+
+TEST_CASE("GUI model export retains legacy STL origin rules", "[OBJ][Export][Coordinates]")
+{
+    Model        model;
+    ModelObject* object        = model.add_object();
+    object->origin_translation = Vec3d(-15., -5., -4.);
+    object->add_instance();
+    CHECK(gui_model_export_offset(*object, GuiModelExportMode::SingleObject).isApprox(Vec3d(15., 5., 4.)));
+    CHECK(gui_model_export_offset(*object, GuiModelExportMode::CombinedObjects).isZero());
+    CHECK(gui_model_export_offset(*object, GuiModelExportMode::SeparateObjects).isApprox(Vec3d(15., 5., 4.)));
+    object->add_instance();
+    CHECK(gui_model_export_offset(*object, GuiModelExportMode::SingleObject).isZero());
+    CHECK(gui_model_export_offset(*object, GuiModelExportMode::CombinedObjects).isZero());
+    CHECK(gui_model_export_offset(*object, GuiModelExportMode::SeparateObjects).isApprox(Vec3d(15., 5., 4.)));
+}
+
+TEST_CASE("GUI OBJ snapshots match STL absolute coordinates without changing the scene", "[OBJ][Export][Coordinates][GUIColor]")
+{
+    const auto   selection = GENERATE(ExportSelection::SingleObject, ExportSelection::CombinedObjects, ExportSelection::AllInstances,
+                                      ExportSelection::OneInstance);
+    const bool   colored   = GENERATE(false, true);
+    const double rotation  = GENERATE(0., 0.5 * PI, 0.37);
+    CAPTURE(static_cast<int>(selection), colored, rotation);
+    ObjImportFixture files;
+    Model            model;
+    ModelObject*     first = model.add_object();
+    ModelVolume*     body  = first->add_volume(make_cube(30., 10., 12.));
+    body->set_offset(Vec3d(0., 0., -2.));
+    body->config.set("extruder", 1);
+    ModelVolume* part = first->add_volume(make_cube(5., 4., 3.));
+    part->set_offset(Vec3d(40., 2., 5.));
+    part->set_rotation(Vec3d(0., 0., 0.23));
+    part->config.set("extruder", 2);
+    if (colored) {
+        TriangleSelector selector(body->mesh());
+        selector.set_facet(0, EnforcerBlockerType::Extruder2);
+        REQUIRE(body->mmu_segmentation_facets.set(selector));
+    }
+    first->center_around_origin();
+    auto* instance = first->add_instance();
+    instance->set_rotation(Vec3d(rotation, 0., 0.));
+    instance->set_scaling_factor(Vec3d(1.5, 0.75, 2.));
+    instance->set_offset(Vec3d(110., 95., 22.));
+    if (selection == ExportSelection::AllInstances || selection == ExportSelection::OneInstance) {
+        auto* other = first->add_instance(*instance);
+        other->set_offset(Vec3d(180., 145., 32.));
+    }
+    if (selection == ExportSelection::CombinedObjects) {
+        auto* other  = model.add_object();
+        auto* volume = other->add_volume(make_cube(7., 8., 9.));
+        volume->set_offset(Vec3d(-35., -20., 6.));
+        volume->config.set("extruder", 1);
+        other->center_around_origin();
+        other->add_instance()->set_offset(Vec3d(40., 30., 11.));
+    }
+    const Model        original(model);
+    const TriangleMesh original_scene = model.mesh();
+
+    // Independent oracle: legacy GUI STL applies volume + instance transforms,
+    // then subtracts origin_translation only for a single-object/single-instance export.
+    TriangleMesh expected;
+    for (const ModelObject* object : model.objects) {
+        for (size_t i = 0; i < object->instances.size(); ++i) {
+            if (selection == ExportSelection::OneInstance && i != 1)
+                continue;
+            for (const ModelVolume* volume : object->volumes) {
+                TriangleMesh mesh(volume->mesh());
+                mesh.transform(volume->get_matrix(), true);
+                mesh.transform(object->instances[i]->get_matrix(), true);
+                if (selection == ExportSelection::SingleObject)
+                    mesh.translate(-object->origin_translation.cast<float>());
+                expected.merge(mesh);
+            }
+        }
+    }
+    const auto stl_path = files.directory / "reference.stl";
+    REQUIRE(store_stl(stl_path.string().c_str(), &expected, true));
+    TriangleMesh stl;
+    REQUIRE(stl.ReadSTLFile(stl_path.string().c_str(), false));
+    check_export_faces(stl, expected);
+
+    const auto mode = selection == ExportSelection::SingleObject || selection == ExportSelection::AllInstances ?
+                          GuiModelExportMode::SingleObject :
+                          GuiModelExportMode::CombinedObjects;
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        CAPTURE(repeat);
+        Model snapshot;
+        for (const ModelObject* source : model.objects) {
+            auto* object = snapshot.add_object(*source);
+            object->translate_instances(gui_model_export_offset(*source, mode));
+            if (selection == ExportSelection::OneInstance)
+                object->delete_instance(0);
+        }
+        const auto path = files.directory / ("export-" + std::to_string(repeat) + ".obj");
+        if (colored) {
+            REQUIRE(store_multicolor_obj(path.string().c_str(), snapshot, {{1.f, 0.f, 0.f, 1.f}, {0.f, 1.f, 0.f, 1.f}}));
+            const auto contents = read_text_file(path);
+            CHECK(contents.find("usemtl filament_1") != std::string::npos);
+            CHECK(contents.find("usemtl filament_2") != std::string::npos);
+        } else {
+            REQUIRE(store_obj(path.string().c_str(), &snapshot));
+        }
+        TriangleMesh obj;
+        ObjInfo      info;
+        std::string  message;
+        REQUIRE(load_obj(path.string().c_str(), &obj, info, message, !colored));
+        if (colored)
+            REQUIRE(info.face_colors.size() == obj.its.indices.size());
+        check_export_faces(obj, stl);
+    }
+    check_export_faces(model.mesh(), original_scene);
+    for (size_t i = 0; i < model.objects.size(); ++i) {
+        const auto* object = model.objects[i];
+        const auto* before = original.objects[i];
+        CHECK(object->origin_translation.isApprox(before->origin_translation));
+        REQUIRE(object->instances.size() == before->instances.size());
+        for (size_t j = 0; j < object->instances.size(); ++j)
+            CHECK(object->instances[j]->get_matrix().matrix().isApprox(before->instances[j]->get_matrix().matrix()));
+        for (size_t j = 0; j < object->volumes.size(); ++j) {
+            CHECK(object->volumes[j]->get_matrix().matrix().isApprox(before->volumes[j]->get_matrix().matrix()));
+            CHECK(object->volumes[j]->mmu_segmentation_facets.get_data() == before->volumes[j]->mmu_segmentation_facets.get_data());
+        }
+    }
+    // The GUI policy is opt-in: direct/CLI OBJ export still uses scene coordinates.
+    const auto cli_path = files.directory / "direct.obj";
+    REQUIRE(store_obj(cli_path.string().c_str(), &model));
+    TriangleMesh direct;
+    ObjInfo      info;
+    std::string  message;
+    REQUIRE(load_obj(cli_path.string().c_str(), &direct, info, message, true));
+    check_export_faces(direct, original_scene);
 }

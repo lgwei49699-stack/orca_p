@@ -141,6 +141,19 @@ bool stage_owned_model_repair_by_cgal_gui(std::shared_ptr<Model>                
     options.repair_mesh_from_source = [&](const TriangleMesh& source, TriangleMesh& repaired, std::string& error) {
         return repair_mesh_on_worker(source, repaired, error, progress_dialog, message_header, cancel_requested);
     };
+    options.repair_mesh_with_partial = [&](const TriangleMesh& source, TriangleMesh& repaired, std::string& error) {
+        MeshRepairOutcome outcome = MeshRepairOutcome::Rejected;
+        run_cgal_worker(
+            [&]() {
+                TriangleMesh candidate = source;
+                outcome                = MeshBoolean::cgal::repair_with_partial(candidate, &error);
+                if (outcome != MeshRepairOutcome::Rejected)
+                    repaired = std::move(candidate);
+                return outcome != MeshRepairOutcome::Rejected;
+            },
+            progress_dialog, message_header, cancel_requested);
+        return outcome;
+    };
     options.run_painting_validation = [&](const std::function<bool()>& validation) {
         return run_cgal_worker(validation, progress_dialog, message_header, cancel_requested);
     };

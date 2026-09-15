@@ -5,6 +5,7 @@
 #include <exception>
 
 #include <libslic3r/TriangleMesh.hpp>
+#include "MeshRepairOutcome.hpp"
 #include <Eigen/Geometry>
 
 namespace Slic3r {
@@ -80,6 +81,16 @@ bool empty(const CGALMesh &mesh);
 // Repair a mesh using CGAL. Returns true on success. Optionally returns the
 // low-level repair counters and a human-readable error.
 bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors = nullptr, std::string* error = nullptr);
+
+// Explicit partial mode, shared by GUI and CLI. Geometric rejection may retain
+// a verified checkpoint; exceptions propagate and do not publish a checkpoint.
+// The strict repair() API above and its callers keep their existing semantics.
+MeshRepairOutcome repair_with_partial(TriangleMesh& mesh, std::string* error = nullptr);
+
+// Read-only validation of actual float geometry, including progress, unchanged
+// residual intersection pairs/boundaries and geometry-fidelity limits. False
+// means unproven/rejected, not necessarily a damaged mesh. Exceptions propagate.
+bool is_safe_partial_repair(const TriangleMesh& source, const TriangleMesh& candidate);
 }
 
 namespace mcut {

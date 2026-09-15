@@ -122,6 +122,7 @@
 #include "../Utils/PresetUpdater.hpp"
 #include "../Utils/Process.hpp"
 #include "../Utils/GFDConfig.hpp"
+#include "../Utils/ModelExportPolicy.hpp"
 #include "RemovableDriveManager.hpp"
 #include "InstanceCheck.hpp"
 #include "NotificationManager.hpp"
@@ -16447,6 +16448,9 @@ void Plater::export_obj()
         Model snapshot;
         bool  has_geometry = false;
         bool  has_painting = false;
+        // Match the context-menu "Export as one STL" (selection_only), not
+        // the main-menu "Export all objects as one STL" scene export.
+        const auto export_mode = selection.is_single_full_object() ? GuiModelExportMode::SingleObject : GuiModelExportMode::CombinedObjects;
         // The older STL helper only returns multiple full objects; get_content()
         // also covers a single object and subsets of an object's instances.
         for (const auto& entry : selection.get_content()) {
@@ -16463,6 +16467,9 @@ void Plater::export_obj()
                 }
             }
             ModelObject* object = snapshot.add_object(*source);
+            // Match STL's origin compensation in world space, only on the snapshot.
+            // Use the original instance count, not the count left after filtering.
+            object->translate_instances(gui_model_export_offset(*source, export_mode));
             for (size_t i = object->instances.size(); i-- > 0;)
                 if (entry.second.count(int(i)) == 0)
                     object->delete_instance(i);
@@ -16784,8 +16791,7 @@ void Plater::export_stl(bool extended, bool selection_only, bool multi_stls)
                 mesh.transform(volume->get_volume_transformation().get_matrix(), true);
             }
 
-            if (model_object->instances.size() == 1)
-                mesh.translate(-model_object->origin_translation.cast<float>());
+            mesh.translate(gui_model_export_offset(*model_object, GuiModelExportMode::SingleObject).cast<float>());
         } else if (selection.is_multiple_full_object() && !multi_stls) {
             const std::set<std::pair<int, int>>& instances_idxs = p->get_selection().get_selected_object_instances();
             for (const std::pair<int, int>& i : instances_idxs) {
@@ -16798,7 +16804,7 @@ void Plater::export_stl(bool extended, bool selection_only, bool multi_stls)
             for (const std::pair<int, int>& i : instances_idxs) {
                 ModelObject* object = p->model.objects[i.first];
                 auto         mesh   = mesh_to_export(*object, i.second);
-                mesh.translate(-object->origin_translation.cast<float>());
+                mesh.translate(gui_model_export_offset(*object, GuiModelExportMode::SeparateObjects).cast<float>());
 
                 const std::string output_path = get_save_file(path_u8, object->name);
                 if (!Slic3r::store_stl(output_path.c_str(), &mesh, true))
@@ -16815,7 +16821,7 @@ void Plater::export_stl(bool extended, bool selection_only, bool multi_stls)
         std::vector<std::string> failed_paths;
         for (const ModelObject* o : p->model.objects) {
             auto mesh = mesh_to_export(*o, -1);
-            mesh.translate(-o->origin_translation.cast<float>());
+            mesh.translate(gui_model_export_offset(*o, GuiModelExportMode::SeparateObjects).cast<float>());
             const std::string output_path = get_save_file(path_u8, o->name);
             if (!Slic3r::store_stl(output_path.c_str(), &mesh, true))
                 failed_paths.emplace_back(output_path);

@@ -23,6 +23,12 @@ msgstr "模型部分修复成功。已保留安全的修改，但仍有几何问
 msgid "Unresolved geometry problems (rejected CGAL candidates were not applied):"
 msgstr "尚未解决的几何问题（未采用失败的 CGAL 修复候选）："
 
+msgid "Unresolved geometry problems in the retained model:"
+msgstr "当前保留模型中尚未解决的几何问题："
+
+msgid "Repair retained verified progress, but geometry problems remain."
+msgstr "已保留通过校验的修复成果，但仍有几何问题未解决。"
+
 msgid "Check the slicing result before printing. Partial repair does not mean the mesh is fully valid."
 msgstr "打印前请检查切片结果。部分修复成功不代表网格已完全通过检查。"
 
@@ -18417,8 +18423,24 @@ msgid "With --repair-model cgal or --check-model, import OBJ geometry without re
 msgstr "配合 --repair-model cgal 或 --check-model 使用，仅导入 OBJ 几何，不读取 MTL 库、颜色或 UV。不能与材质绑定、颜色分组或多色 OBJ 导出参数组合使用。"
 
 #: src/libslic3r/PrintConfig.cpp
-msgid "Prepare and inspect one STL or OBJ model, writing structured results without slicing."
-msgstr "对单个 STL 或 OBJ 模型执行受控清理和检测，输出结构化结果，不进行切片。"
+msgid "Import one STL or OBJ using Orca's native import preparation, then inspect it without slicing. STL import includes automatic repair."
+msgstr "按 Orca 原生导入流程准备单个 STL 或 OBJ，再进行检测，不切片。STL 导入包含自动修复。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+#, c-format, boost-format
+msgid "Error: %1$d unpaired mesh edge."
+msgid_plural "Error: %1$d unpaired mesh edges."
+msgstr[0] "错误：%1$d 条网格未配对边。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+#, c-format, boost-format
+msgid "%1$d unpaired mesh edge"
+msgid_plural "%1$d unpaired mesh edges"
+msgstr[0] "%1$d 条网格未配对边"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "Edge-pairing check only; this is not a complete mesh validation."
+msgstr "此处仅检查三角面边的配对关系，不代表网格已通过完整检测。"
 
 #~ msgid ""
 #~ "Improve shell precision by adjusting outer wall spacing. This also "

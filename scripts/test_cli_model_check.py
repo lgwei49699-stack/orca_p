@@ -62,16 +62,22 @@ def main():
     def run(label, source, *options, success=True):
         output = evidence / label
         output.mkdir()
+        source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
         command = [str(binary), "--check-model", "--outputdir", str(output), *options, str(source)]
         (output / "command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")
         with (output / "process.log").open("w", encoding="utf-8") as log:
             process = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout, check=False)
         result = json.loads((output / "result.json").read_text(encoding="utf-8"))
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == source_hash, (label, "Input changed")
         assert (process.returncode == 0) == success, (label, process.returncode, result)
         assert (result["return_code"] == 0) == success, (label, result)
         check = result["model_checks"][0]
         assert check["operation_status"] == ("completed" if success else "failed"), check
         assert isinstance(check["check_complete"], bool)
+        if check.get("basic_repair"):
+            policy = "orca_stl_import_v1" if source.suffix.lower() == ".stl" else "orca_obj_import_v1"
+            assert check["basic_repair"]["policy"] == policy, (label, check)
+            assert check["basic_repair"]["status"] == "completed", (label, check)
         for artifact in result["output_files"]:
             assert Path(artifact).is_file(), (label, artifact)
             assert Path(artifact).stat().st_size > 0, (label, artifact)
@@ -81,17 +87,37 @@ def main():
     try:
         for extension in ("stl", "obj"):
             for stem, status in (("00-healthy-cube", "passed"), ("01-missing-top", "needs_repair"),
-                                 ("04-duplicate-face", "passed"), ("05-degenerate-face", "passed"),
+                                 ("04-duplicate-face", "needs_repair"), ("05-degenerate-face", "needs_repair"),
                                  ("08-intersecting-shells", "needs_repair"), ("09-nonmanifold-edge", "needs_repair")):
                 check, _ = run(f"{stem}-{extension}", fixtures / f"{stem}.{extension}")
-                assert check["mesh_status"] == status, check
+                assert check["schema_version"] == 2
+                policy = "orca_stl_import_v1" if extension == "stl" else "orca_obj_import_v1"
+                assert check["basic_repair"]["policy"] == policy
+                # Native STL import may repair these defects, unlike OBJ.
+                # C++ workflow tests compare against load_stl(repair=true);
+                # raw serialized-artifact inspection is covered in C++ and
+                # by the optional demo comparison below.
+                if extension == "obj" or stem not in ("04-duplicate-face", "05-degenerate-face"):
+                    assert check["mesh_status"] == status, check
                 assert len(check["inspection"]["issues"]) == 7
                 assert check["slicing"] == "not_requested"
                 assert check["advanced_repair"]["status"] == "not_requested"
-                if stem == "04-duplicate-face":
-                    assert check["basic_repair"]["same_winding_duplicate_faces_removed"] == 1
-                if stem == "05-degenerate-face":
-                    assert check["basic_repair"]["zero_area_faces_removed"] == 2
+                if extension == "obj" and stem == "04-duplicate-face":
+                    assert check["inspection"]["issues"]["duplicate"]["count"] == 1
+                if extension == "obj" and stem == "05-degenerate-face":
+                    assert check["inspection"]["issues"]["degenerate"]["count"] == 2
+                if extension == "stl":
+                    # Acceptance fixtures are deterministic ASCII STL files.
+                    count = sum(line.strip().startswith("facet normal ") for line in (fixtures / f"{stem}.stl").read_text().splitlines())
+                    assert check["basic_repair"]["facets_before"] == count
+                    assert check["basic_repair"]["facets_after"] == check["inspection"]["triangle_count"]
+                repeated, _ = run(f"{stem}-{extension}-reimport", Path(check["working_model"]))
+                # A new task always imports again, even when given a working
+                # model. Do not confuse it with same-task read-only validation.
+                if extension == "obj":
+                    assert repeated["inspection"] == check["inspection"]
+                else:
+                    assert repeated["basic_repair"]["facets_before"] == check["inspection"]["triangle_count"]
                 if demo and extension == "stl":
                     command = [str(demo), check["working_model"]]
                     comparison = subprocess.run(command, capture_output=True, text=True, timeout=args.timeout, check=False)
@@ -141,17 +167,21 @@ def main():
         assert not check["advanced_repair"]["committed"]
         assert result["model_repairs"][0]["can_continue"]
         assert check["working_model"] == check["prepared_model"]
-        # Basic progress must survive an unsupported advanced attempt.
+        # Native OBJ import does not independently remove duplicates. Retainable
+        # cleanup belongs to the advanced transaction, not the prepared model.
         duplicate_bad = evidence / "duplicate-nonmanifold.obj"
         bad_text = (fixtures / "09-nonmanifold-edge.obj").read_text()
         first_face = next(line for line in bad_text.splitlines() if line.startswith("f "))
         duplicate_bad.write_text(bad_text + "\n" + first_face + "\n", encoding="utf-8")
-        check, _ = run("keep-basic-progress", duplicate_bad, "--repair-model", "cgal", success=False)
-        assert check["basic_repair"]["same_winding_duplicate_faces_removed"] == 1
-        assert check["working_model"] == check["prepared_model"]
+        check, result = run("keep-basic-progress", duplicate_bad, "--repair-model", "cgal")
+        assert not check["basic_repair"]["changed"]
+        assert check["before_advanced"]["issues"]["duplicate"]["count"] == 1
+        assert result["model_repairs"][0]["repair_actions"]["basic_removed_faces"] == 1
+        assert check["working_model"] != check["prepared_model"]
         assert check["inspection"]["issues"]["duplicate"]["count"] == 0
         assert check["inspection"]["issues"]["nonmanifold_edge"]["count"] > 0
-        assert check["advanced_repair"]["status"] == "unresolved"
+        assert check["advanced_repair"]["status"] == "partially_repaired"
+        assert result["repair_validation"]["mesh"] == "not_passed"
         run("reject-slice", fixtures / "00-healthy-cube.stl", "--slice", "0", success=False)
         run("reject-legacy-repair", fixtures / "00-healthy-cube.stl", "--auto-repair-model", "1", success=False)
 
@@ -193,13 +223,54 @@ def main():
                                         b"".join(struct.pack("<12fH", 0., 0., 0.,
                                                             *(v for index in f for v in vertices[index - 1]), 0) for f in faces))
                 original_hash = hashlib.sha256(partial.read_bytes()).hexdigest()
-                check, result = run(label, partial, "--repair-model", "cgal")
-                assert check["advanced_repair"]["status"] == "partially_repaired"
-                assert check["working_model"] != check["prepared_model"]
-                before, after = check["before_advanced"]["issues"], check["inspection"]["issues"]
-                assert before["boundary"]["count"] == 4 and after["boundary"]["count"] == 0
-                assert after["nonmanifold_edge"]["count"] == before["nonmanifold_edge"]["count"] == 1
-                assert after["nonmanifold_vertex"]["count"] == before["nonmanifold_vertex"]["count"] == 2
+                # Native STL repair may alter the non-manifold fixture before
+                # CGAL. Assert against the actual imported baseline, never
+                # bypass import to force STL to retain the OBJ topology.
+                baseline, _ = run(label + "-import", partial)
+                before = baseline["inspection"]["issues"]
+                assert all(issue["complete"] for issue in before.values()), (label, before)
+                assert before["boundary"]["count"] in (0, 4), (label, before)
+                for issue in ("degenerate", "duplicate", "orientation", "self_intersection"):
+                    assert before[issue]["count"] == 0, (label, issue, before[issue])
+                has_hole = before["boundary"]["count"] == 4
+                unresolved = any(before[issue]["count"] > 0 for issue in ("nonmanifold_edge", "nonmanifold_vertex"))
+                if extension == "obj":
+                    # OBJ still exercises retained progress, in both input
+                    # orders and with/without color. Do not weaken this case.
+                    assert has_hole
+                    assert before["nonmanifold_edge"]["count"] == 1
+                    assert before["nonmanifold_vertex"]["count"] == 2
+                check, result = run(label, partial, "--repair-model", "cgal", success=has_hole or not unresolved)
+                assert check["before_advanced"] == baseline["inspection"]
+                after = check["inspection"]["issues"]
+                assert all(issue["complete"] for issue in after.values()), (label, after)
+                assert after["boundary"]["count"] == 0
+                for issue in before:
+                    if issue != "boundary":
+                        assert after[issue]["count"] == before[issue]["count"], (label, issue)
+                if has_hole:
+                    assert check["working_model"] != check["prepared_model"]
+                    assert check["advanced_repair"]["committed"]
+                    assert check["advanced_repair"]["retained_stage"] == "advanced"
+                    assert check["advanced_repair"]["status"] == ("partially_repaired" if unresolved else "repaired")
+                else:
+                    # ADMesh already closed the repairable component. The
+                    # remaining unsupported component cannot fabricate an
+                    # advanced commit (or justify a successful repair exit).
+                    assert check["inspection"] == baseline["inspection"]
+                    assert check["working_model"] == check["prepared_model"]
+                    assert not check["advanced_repair"].get("committed", False)
+                    assert check["advanced_repair"]["status"] == ("unresolved" if unresolved else "not_needed")
+                    if unresolved:
+                        assert result["return_code"] == -25
+                        assert check["advanced_repair"]["engine_status"] == "unresolved"
+                        assert check["advanced_repair"]["retained_stage"] == "prepared"
+                        repair = result["model_repairs"][0]
+                        assert repair["can_continue"] and not repair["committed"]
+                        actions = repair["repair_actions"]
+                        assert actions["unresolved"] > 0 and actions["failed"] == 0
+                        for action in ("repaired", "mesh_repaired", "basic_removed_faces", "removed_parts", "rolled_back"):
+                            assert actions[action] == 0, (label, action, actions)
                 if variant == "colored-obj":
                     assert not check["input_materials_ignored"]
                     assert any(path.endswith(".mtl") for path in check["final_output_files"])
@@ -211,18 +282,23 @@ def main():
                     assert all(after_areas[color] + 1.e-3 >= area for color, area in before_areas.items())
                     assert math.isclose(sum(after_areas.values()) - sum(before_areas.values()), 100., abs_tol=1.e-3)
                 else:
-                    assert check["inspection"]["triangle_count"] == 20
-                assert result["repair_validation"]["mesh"] == "not_passed"
-                assert not result["model_repairs"][0]["mesh_validated"]
+                    assert check["inspection"]["triangle_count"] == check["before_advanced"]["triangle_count"] + (2 if has_hole else 0)
+                assert result["repair_validation"]["mesh"] == ("not_passed" if unresolved else "passed")
+                if has_hole or unresolved:
+                    assert result["model_repairs"][0]["mesh_validated"] == (not unresolved)
                 working = Path(check["working_model"])
-                check, _ = run(label + "-recheck", working)
-                assert check["mesh_status"] == "needs_repair" and not check["basic_repair"]["changed"]
-                # The serialized OBJ/STL is merged back to one volume. Grouping
-                # that same unchanged result again must not claim more progress.
-                repeated, _ = run(label + "-retry", working, "--repair-model", "cgal", success=False)
-                assert repeated["advanced_repair"]["status"] == "unresolved"
+                recheck, _ = run(label + "-recheck", working)
+                if extension == "obj":
+                    assert recheck["inspection"] == check["inspection"]
+                    assert not recheck["basic_repair"]["changed"]
+                # Each retry imports again. Only defects that survive that
+                # import count as unresolved; regrouping is not repair progress.
+                needs_repair = recheck["mesh_status"] != "passed"
+                repeated, _ = run(label + "-retry", working, "--repair-model", "cgal", success=not needs_repair)
+                assert repeated["before_advanced"] == recheck["inspection"]
+                assert repeated["advanced_repair"]["status"] == ("unresolved" if needs_repair else "not_needed")
                 assert repeated["working_model"] == repeated["prepared_model"]
-                assert not repeated["advanced_repair"]["committed"]
+                assert not repeated["advanced_repair"].get("committed", False)
                 assert hashlib.sha256(partial.read_bytes()).hexdigest() == original_hash
                 if material_hash is not None:
                     assert hashlib.sha256(material.read_bytes()).hexdigest() == material_hash

@@ -1,9 +1,11 @@
 #include "ModelRepair.hpp"
 
 #include "AABBTreeIndirect.hpp"
+#include "I18N.hpp"
 #include "MeshBoolean.hpp"
 #include "Model.hpp"
 
+#include <boost/log/trivial.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -76,14 +78,28 @@ size_t prepare_basic_mesh(const TriangleMesh& source, TriangleMesh& result)
         cleaned.vertices = source.its.vertices;
         cleaned.indices  = std::move(faces);
         its_compactify_vertices(cleaned, true);
-        result = TriangleMesh(std::move(cleaned));
+        TriangleMesh candidate(std::move(cleaned));
+        const size_t before_open_edges = its_num_open_edges(source.its);
+        const size_t after_open_edges  = its_num_open_edges(candidate.its);
+        if (after_open_edges > before_open_edges) {
+            // A collinear triangle may close an indexed edge fan. Deleting it
+            // alone opens that fan and prevents CGAL's closed-mesh topology
+            // repair from seeing the original connectivity. Let CGAL repair
+            // the original source instead; on failure retain the unchanged
+            // part, not this independently cleaned but now-open baseline.
+            BOOST_LOG_TRIVIAL(info) << "Model repair: event=basic_cleanup_deferred, reason=would_open_connections, faces="
+                                    << source.facets_count() << "->" << candidate.facets_count() << ", open_edges=" << before_open_edges
+                                    << "->" << after_open_edges;
+            return 0;
+        }
+        result = std::move(candidate);
     }
     return removed;
 }
 
-// Only discard demonstrably degenerate geometry, not geometry that happens
-// to be small in volume-local coordinates. The same mesh may have differently
-// scaled instances; no dimensional tolerance here may delete their shared solid.
+// Structural guard for basic candidates and partial-failure handling. A small
+// solid is still 3D: do not reuse the optional size-based removal policy below
+// to reject repair candidates or change the transaction's failure semantics.
 bool is_not_3dimensional_part(const TriangleMesh& mesh)
 {
     if (mesh.its.indices.empty())
@@ -122,6 +138,54 @@ bool is_not_3dimensional_part(const TriangleMesh& mesh)
             return false;
     // A numerically ambiguous near-plane is retained for CGAL validation.
     // Safe failure is preferable to silently deleting a thin but valid solid.
+    return true;
+}
+
+// Use OrcaSlicer 2.4.2's source-local cleanup thresholds, not nozzle/layer limits
+// or instance-scaled sizes. Volume cutoffs require a proven bounded solid:
+// signed sums for open, inconsistently wound or intersecting surfaces may cancel.
+// Kept separate from structural validation: callers may disable removal for
+// strict color preservation, and object-emptying protection remains in place.
+bool is_discardable_repair_part(const TriangleMesh& mesh, const ModelRepairOptions& options)
+{
+    if (mesh.its.indices.empty())
+        return true;
+    {
+        indexed_triangle_set tmp = mesh.its;
+        its_remove_degenerate_faces(tmp, true);
+        if (tmp.indices.empty())
+            return true;
+    }
+
+    const Vec3d      size                   = mesh.bounding_box().size();
+    const double     min_dim                = std::min(size.x(), std::min(size.y(), size.z()));
+    const double     max_dim                = std::max(size.x(), std::max(size.y(), size.z()));
+    constexpr double min_relative_thickness = 1e-6;
+    constexpr double min_volume_ratio       = 1e-6;
+    if (min_dim <= EPSILON || min_dim / max_dim <= min_relative_thickness)
+        return true;
+    const double volume      = std::abs(its_volume(mesh.its));
+    const double bbox_volume = size.x() * size.y() * size.z();
+    if (!std::isfinite(volume) || !(volume <= EPSILON || (bbox_volume > 0.0 && volume / bbox_volume <= min_volume_ratio)))
+        return false;
+
+    // Diagnose only volume-based deletion candidates. Ignore unused vertices
+    // in this read-only surface check, but retain the original bbox policy.
+    // Do not remove faces here: that could hide invalid topology from CGAL.
+    bool       bounded_volume = false;
+    const auto validate       = [&]() {
+        indexed_triangle_set surface = mesh.its;
+        its_compactify_vertices(surface, true);
+        bounded_volume = !MeshBoolean::cgal::requires_repair(TriangleMesh(std::move(surface)));
+    };
+    if (options.run_mesh_preparation)
+        options.run_mesh_preparation(validate);
+    else
+        validate();
+    if (!bounded_volume) {
+        BOOST_LOG_TRIVIAL(info) << "Model repair: event=volume_cleanup_deferred, reason=unproven_bounded_volume";
+        return false;
+    }
     return true;
 }
 
@@ -729,7 +793,12 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                 if (!split_volume && options.allow_partial)
                     repair_groups = separated_repair_groups(mesh);
             }
-            remove_volume = options.remove_non_3d_parts && !split_volume && repair_groups.empty() && is_not_3dimensional_part(mesh);
+            remove_volume = options.remove_non_3d_parts && !split_volume && repair_groups.empty() &&
+                            is_discardable_repair_part(mesh, options);
+            if (cancellation_requested()) {
+                volume_finished(stored_report);
+                return false;
+            }
             if (!split_volume && repair_groups.empty() && !remove_volume && !mesh.its.indices.empty())
                 repair_volume = mesh_requires_repair(mesh, stored_report.before_open_edges, options);
         } catch (const std::exception& exception) {
@@ -827,8 +896,13 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
 
             if (options.remove_non_3d_parts) {
                 for (size_t part_offset = parts.size(); part_offset > 0; --part_offset) {
-                    ModelVolume* part = parts[part_offset - 1];
-                    if (!is_not_3dimensional_part(part->mesh()))
+                    ModelVolume* part        = parts[part_offset - 1];
+                    const bool   discardable = is_discardable_repair_part(part->mesh(), options);
+                    if (cancellation_requested()) {
+                        volume_finished(stored_report);
+                        return false;
+                    }
+                    if (!discardable)
                         continue;
                     const auto part_it = std::find(object->volumes.begin(), object->volumes.end(), part);
                     if (part_it == object->volumes.end())
@@ -916,6 +990,7 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                 std::string         error;
                 bool                repair_succeeded = false;
                 bool                basic_fallback   = false;
+                bool                partial_candidate = false;
                 const bool          basic_is_valid   = basic_removed != 0 &&
                                             !mesh_requires_repair(basic_mesh, its_num_open_edges(basic_mesh.its), options);
                 if (cancellation_requested())
@@ -923,6 +998,10 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                 if (basic_is_valid) {
                     repaired_mesh    = std::move(basic_mesh);
                     repair_succeeded = true;
+                } else if (options.allow_partial && options.repair_mesh_with_partial) {
+                    const auto outcome = options.repair_mesh_with_partial(repair_source, repaired_mesh, error);
+                    repair_succeeded   = outcome != MeshRepairOutcome::Rejected;
+                    partial_candidate  = outcome == MeshRepairOutcome::PartiallyRepaired;
                 } else if (options.repair_mesh_from_source) {
                     repair_succeeded = options.repair_mesh_from_source(repair_source, repaired_mesh, error);
                 } else {
@@ -930,8 +1009,15 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     // synchronous semantics. GUI callers use the source-to-
                     // result hook above so this O(mesh) copy runs on a worker.
                     repaired_mesh    = repair_source;
-                    repair_succeeded = options.repair_mesh ? options.repair_mesh(repaired_mesh, error) :
-                                                             MeshBoolean::cgal::repair(repaired_mesh, nullptr, &error);
+                    if (options.repair_mesh) {
+                        repair_succeeded = options.repair_mesh(repaired_mesh, error);
+                    } else if (options.allow_partial) {
+                        const auto outcome = MeshBoolean::cgal::repair_with_partial(repaired_mesh, &error);
+                        repair_succeeded   = outcome != MeshRepairOutcome::Rejected;
+                        partial_candidate  = outcome == MeshRepairOutcome::PartiallyRepaired;
+                    } else {
+                        repair_succeeded = MeshBoolean::cgal::repair(repaired_mesh, nullptr, &error);
+                    }
                 }
                 if (cancellation_requested()) {
                     stored_report.result                = ModelRepairVolumeStatus::RolledBack;
@@ -945,6 +1031,42 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     volume_finished(stored_report);
                     return false;
                 }
+                if (repair_succeeded) {
+                    // Illegal data remains a transaction failure, not a
+                    // recoverable geometric rejection, even in partial mode.
+                    if (repaired_mesh.its.vertices.empty() || repaired_mesh.its.indices.empty() || !has_valid_indices(repaired_mesh) ||
+                        !has_finite_vertices(repaired_mesh))
+                        throw std::runtime_error("Repair failed: CGAL returned an invalid or open mesh.");
+                    const size_t open_edges   = its_num_open_edges(repaired_mesh.its);
+                    const bool   needs_repair = mesh_requires_repair(repaired_mesh, open_edges, options);
+                    if (cancellation_requested())
+                        return false;
+                    if (partial_candidate || open_edges != 0 || needs_repair) {
+                        bool retainable = false;
+                        if (options.allow_partial) {
+                            const auto validate = [&]() {
+                                retainable = MeshBoolean::cgal::is_safe_partial_repair(repair_source, repaired_mesh);
+                            };
+                            if (options.run_mesh_preparation)
+                                options.run_mesh_preparation(validate);
+                            else
+                                validate();
+                        }
+                        if (cancellation_requested())
+                            return false;
+                        if (!retainable) {
+                            repair_succeeded = false;
+                            error            = open_edges != 0 ? "Repair failed: CGAL returned an invalid or open mesh." :
+                                                                 "Repair failed: repaired mesh did not pass full topology, self-intersection, and "
+                                                                 "orientation validation.";
+                            BOOST_LOG_TRIVIAL(warning) << "Model repair: event=candidate_rejected, reason=" << error;
+                        } else {
+                            partial_candidate = true;
+                            if (error.empty())
+                                error = L("Repair retained verified progress, but geometry problems remain.");
+                        }
+                    }
+                }
                 if (!repair_succeeded) {
                     if (!options.allow_partial || is_not_3dimensional_part(repair_source))
                         throw std::runtime_error(error.empty() ? "Repair failed." : error);
@@ -955,19 +1077,13 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                         continue;
                     repaired_mesh  = std::move(basic_mesh);
                     basic_fallback = true;
+                } else if (partial_candidate) {
+                    add_unresolved(report, stored_report, error);
                 }
 
                 if (repaired_mesh.its.vertices.empty() || repaired_mesh.its.indices.empty() || !has_valid_indices(repaired_mesh) ||
                     !has_finite_vertices(repaired_mesh))
                     throw std::runtime_error("Repair failed: CGAL returned an invalid or open mesh.");
-                const size_t repaired_open_edges = its_num_open_edges(repaired_mesh.its);
-                if (!basic_fallback && repaired_open_edges != 0)
-                    throw std::runtime_error("Repair failed: CGAL returned an invalid or open mesh.");
-                // Reuse the inspection hook for the post-repair gate. GUI
-                // callers run this full CGAL validation on their worker,
-                // while headless callers retain the direct implementation.
-                const bool repaired_mesh_requires_repair = !basic_fallback &&
-                                                           mesh_requires_repair(repaired_mesh, repaired_open_edges, options);
                 if (cancellation_requested()) {
                     stored_report.result                = ModelRepairVolumeStatus::RolledBack;
                     stored_report.after_facets          = stored_report.before_facets;
@@ -980,10 +1096,6 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     volume_finished(stored_report);
                     return false;
                 }
-                if (repaired_mesh_requires_repair)
-                    throw std::runtime_error(
-                        "Repair failed: repaired mesh did not pass full topology, self-intersection, and orientation validation.");
-
                 // CGAL edits vertices in the current volume-local coordinate
                 // system. Keeping the import shift would apply it twice while
                 // remapping SavedPainting.

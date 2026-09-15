@@ -2,10 +2,148 @@
 #include <test_utils.hpp>
 #include <libslic3r/Model.hpp>
 #include <libslic3r/ModelInspection.hpp>
+#include <libslic3r/ModelCheckWorkflow.hpp>
+#include <libslic3r/Format/STL.hpp>
+#include <libslic3r/Format/OBJ.hpp>
 #include <libslic3r/TriangleMesh.hpp>
+#include <boost/filesystem.hpp>
+#include <fstream>
+#include <iterator>
 #include <limits>
 
 using namespace Slic3r;
+
+namespace {
+struct InspectionTempDirectory
+{
+    boost::filesystem::path path = boost::filesystem::temp_directory_path() /
+                                   boost::filesystem::unique_path("orca-inspection-%%%%-%%%%-%%%%");
+    InspectionTempDirectory() { boost::filesystem::create_directory(path); }
+    ~InspectionTempDirectory()
+    {
+        boost::system::error_code ignored;
+        boost::filesystem::remove_all(path, ignored);
+    }
+};
+
+std::string inspection_file_bytes(const std::string& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+} // namespace
+
+TEST_CASE("Every workflow task uses native STL import even for an existing working model", "[ModelRepair][Inspection][stl]")
+{
+    InspectionTempDirectory temp;
+    // A name is not proof that an input has already been prepared.
+    const auto input = (temp.path / "prepared.stl").string();
+    auto       mesh  = make_cube(10., 10., 10.);
+    std::swap(mesh.its.indices.front()[1], mesh.its.indices.front()[2]);
+    mesh.its.indices.emplace_back(0, 0, 1);
+    REQUIRE(store_stl(input.c_str(), &mesh, true));
+    const auto       original_bytes = inspection_file_bytes(input);
+    Model            native;
+    MeshRepairReport import_report;
+    REQUIRE(load_stl(input.c_str(), &native, nullptr, nullptr, 80, true, &import_report));
+    REQUIRE(import_report.changed());
+    native.add_default_instances(); // Match Model::read_from_file's workflow strategy.
+    const auto expected = inspect_model_mesh(native.mesh());
+
+    ModelCheckWorkflowOptions options;
+    options.input_file       = input;
+    options.output_directory = temp.path.string();
+    ModelCheckWorkflowReport report;
+    run_model_check_workflow(options, report);
+    CHECK(report.check["schema_version"] == 2);
+    CHECK(report.check["basic_repair"]["policy"] == "orca_stl_import_v1");
+    CHECK(report.check["basic_repair"]["status"] == "completed");
+    CHECK(report.check["basic_repair"]["changed"] == import_report.changed());
+    CHECK(report.check["basic_repair"]["facets_before"] == 13);
+    CHECK(report.check["inspection"]["triangle_count"] == expected["triangle_count"]);
+    for (auto it = expected["issues"].begin(); it != expected["issues"].end(); ++it) {
+        CHECK(report.check["inspection"]["issues"][it.key()]["count"] == it.value()["count"]);
+        CHECK(report.check["inspection"]["issues"][it.key()]["complete"] == it.value()["complete"]);
+    }
+    options.input_file             = report.check["working_model"].get<std::string>();
+    const auto       working_bytes = inspection_file_bytes(options.input_file);
+    Model            repeated_native;
+    MeshRepairReport repeated_import;
+    REQUIRE(load_stl(options.input_file.c_str(), &repeated_native, nullptr, nullptr, 80, true, &repeated_import));
+    repeated_native.add_default_instances();
+    const auto repeated_expected = inspect_model_mesh(repeated_native.mesh());
+    run_model_check_workflow(options, report);
+    CHECK(report.check["basic_repair"]["policy"] == "orca_stl_import_v1");
+    CHECK(report.check["basic_repair"]["status"] == "completed");
+    CHECK(report.check["basic_repair"]["changed"] == repeated_import.changed());
+    CHECK(report.check["inspection"] == repeated_expected);
+    CHECK(inspection_file_bytes(options.input_file) == working_bytes);
+    CHECK(inspection_file_bytes(input) == original_bytes);
+}
+
+TEST_CASE("Internal STL export reinspection is read-only but a new task runs native import", "[ModelRepair][Inspection][stl][OBJ]")
+{
+    InspectionTempDirectory temp;
+    const auto              input = (temp.path / "source.obj").string();
+    auto                    mesh  = make_cube(10., 10., 10.);
+    std::swap(mesh.its.indices.front()[1], mesh.its.indices.front()[2]);
+    mesh.its.indices.emplace_back(0, 0, 1);
+    REQUIRE(store_obj(input.c_str(), &mesh));
+    const auto                original_bytes = inspection_file_bytes(input);
+    ModelCheckWorkflowOptions options;
+    options.input_file       = input;
+    options.output_directory = temp.path.string();
+    options.export_format    = "stl";
+    ModelCheckWorkflowReport report;
+    run_model_check_workflow(options, report);
+    CHECK(report.check["basic_repair"]["policy"] == "orca_obj_import_v1");
+    CHECK(report.check["inspection"]["issues"]["degenerate"]["count"] == 1);
+    CHECK(report.check["inspection"]["issues"]["orientation"]["count"] == 3);
+    CHECK(report.check["inspection"]["triangle_count"] == 13);
+    const auto exported       = report.check["working_model"].get<std::string>();
+    const auto exported_bytes = inspection_file_bytes(exported);
+    Model      raw_export;
+    REQUIRE(load_stl(exported.c_str(), &raw_export, nullptr, nullptr, 80, false));
+    raw_export.add_default_instances();
+    CHECK(report.check["inspection"] == inspect_model_mesh(raw_export.mesh()));
+
+    Model            native;
+    MeshRepairReport import_report;
+    REQUIRE(load_stl(exported.c_str(), &native, nullptr, nullptr, 80, true, &import_report));
+    REQUIRE(import_report.changed());
+    native.add_default_instances();
+    options.input_file = exported;
+    options.export_format.clear();
+    run_model_check_workflow(options, report);
+    CHECK(report.check["basic_repair"]["policy"] == "orca_stl_import_v1");
+    CHECK(report.check["basic_repair"]["status"] == "completed");
+    CHECK(report.check["basic_repair"]["changed"] == import_report.changed());
+    CHECK(report.check["inspection"] == inspect_model_mesh(native.mesh()));
+    CHECK(inspection_file_bytes(exported) == exported_bytes);
+    CHECK(inspection_file_bytes(input) == original_bytes);
+}
+
+TEST_CASE("Workflow keeps native OBJ geometry instead of applying standalone face cleanup", "[ModelRepair][Inspection][OBJ]")
+{
+    InspectionTempDirectory temp;
+    const auto              input = (temp.path / "source.obj").string();
+    auto                    mesh  = make_cube(10., 10., 10.);
+    mesh.its.indices.push_back(mesh.its.indices.front());
+    mesh.its.indices.emplace_back(0, 0, 1);
+    REQUIRE(store_obj(input.c_str(), &mesh));
+    const auto                original_bytes = inspection_file_bytes(input);
+    ModelCheckWorkflowOptions options;
+    options.input_file       = input;
+    options.output_directory = temp.path.string();
+    ModelCheckWorkflowReport report;
+    run_model_check_workflow(options, report);
+    CHECK(report.check["basic_repair"]["policy"] == "orca_obj_import_v1");
+    CHECK(report.check["basic_repair"]["changed"] == false);
+    CHECK(report.check["inspection"]["triangle_count"] == 14);
+    CHECK(report.check["inspection"]["issues"]["degenerate"]["count"] == 1);
+    CHECK(report.check["inspection"]["issues"]["duplicate"]["count"] == 1);
+    CHECK(inspection_file_bytes(input) == original_bytes);
+}
 
 TEST_CASE("Inspection reports seven checks without editing a healthy mesh", "[ModelRepair][Inspection]")
 {

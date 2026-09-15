@@ -18,11 +18,17 @@ namespace {
 namespace fs = boost::filesystem;
 using json   = nlohmann::json;
 
-Model load_working_model(const std::string& path, DynamicPrintConfig& config, bool ignore, bool& ignored)
+Model load_working_model(const std::string&  path,
+                         DynamicPrintConfig& config,
+                         bool                ignore,
+                         bool&               ignored,
+                         bool                repair_stl    = false,
+                         MeshRepairReport*   import_report = nullptr)
 {
-    // The legacy STL repair path is deliberately disabled for BOTH formats.
+    // Each task runs native import once. Internal baseline/export reinspection
+    // reads the artifact without another repair, regardless of its filename.
     return Model::read_from_file(path, &config, nullptr, LoadStrategy::AddDefaultInstances, nullptr, nullptr, nullptr, nullptr, nullptr,
-                                 nullptr, nullptr, 0, nullptr, false, nullptr, nullptr, nullptr, ignore, !ignore, &ignored);
+                                 nullptr, nullptr, 0, nullptr, repair_stl, import_report, nullptr, nullptr, ignore, !ignore, &ignored);
 }
 
 std::vector<RGBA> model_colors(const DynamicPrintConfig& config)
@@ -92,7 +98,7 @@ void publish_check(ModelCheckWorkflowReport& report, const json& inspection, con
 void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelCheckWorkflowReport& report)
 {
     report                    = {};
-    report.check              = {{"schema_version", 1},
+    report.check              = {{"schema_version", 2},
                                  {"input_file", options.input_file},
                                  {"check_complete", false},
                                  {"mesh_status", "unknown"},
@@ -113,12 +119,29 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
     if (fs::file_size(options.input_file) > 64 * 1024 * 1024)
         throw std::runtime_error("Model check input exceeds the 64 MiB limit.");
     DynamicPrintConfig config;
-    Model              model = load_working_model(options.input_file, config, options.ignore_materials, report.input_materials_ignored);
+    MeshRepairReport   import_report;
+    const bool         repair_stl = source_format == ".stl";
+    Model model = load_working_model(options.input_file, config, options.ignore_materials, report.input_materials_ignored, repair_stl,
+                                     &import_report);
     report.check["input_materials_ignored"] = report.input_materials_ignored;
     const auto triangle_count               = model.mesh().its.indices.size();
     if (triangle_count == 0 || triangle_count > ModelInspectionOptions{}.max_triangles)
         throw std::runtime_error("Model check requires 1 to 1,000,000 decoded triangles.");
-    report.check["basic_repair"] = prepare_model_for_inspection(model);
+    // Match ordinary Orca source import instead of independently deleting
+    // zero-area records: even a zero-area triangle can participate in paired
+    // edge topology. OBJ keeps its native import/material handling, not ADMesh.
+    report.check["basic_repair"] = {{"policy", repair_stl ? "orca_stl_import_v1" : "orca_obj_import_v1"},
+                                    {"status", "completed"},
+                                    {"changed", repair_stl && import_report.changed()},
+                                    {"facets_after", triangle_count}};
+    if (repair_stl) {
+        report.check["basic_repair"]["facets_before"]               = import_report.original_facets;
+        report.check["basic_repair"]["edges_fixed"]                 = import_report.edges_fixed;
+        report.check["basic_repair"]["degenerate_facets_removed"]   = import_report.degenerate_facets_removed;
+        report.check["basic_repair"]["disconnected_facets_removed"] = import_report.disconnected_facets_removed;
+        report.check["basic_repair"]["facets_reversed"]             = import_report.facets_reversed;
+        report.check["basic_repair"]["normals_fixed"]               = import_report.normals_fixed;
+    }
 
     const fs::path parent = fs::absolute(options.output_directory.empty() ? "." : options.output_directory);
     fs::create_directories(parent);

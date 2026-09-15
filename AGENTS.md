@@ -35,9 +35,17 @@ OrcaSlicer 的 C++17 源码位于 `src/`，按功能模块和平台适配层拆�
 
 ### 模型修复专项测试：固定命令入口
 
-- 2026-09-13 新增独立 `--check-model` 工作流：受控基础清理 → 保存副本 → 七项检测及三项补充检查 → 可选既有 CGAL 部分修复 → 导出重读复检。正式协议与进度见 `doc/model-check-workflow.md`；新入口不替换普通导入/切片流程，共享 STL/修复/标注恢复修正仍影响既有调用方。新入口回归为 `python3 scripts/test_cli_model_check.py <新构建的 OrcaSlicer 路径>`，可选 `--demo-inspector <已有原生 demo 程序>` 对同一准备后 STL 做对比；不编译、不切片。新标签 `[ModelRepair][Inspection]` / `[ModelRepair][Preparation]` 已包含在完整专项。代码和脚本存在不代表本轮验证通过。
+- 2026-09-15 当前验收状态：macOS arm64 / Release 构建通过；固定完整修复专项 169 用例／12,521 断言通过（含 GUI 导出坐标专项 2 用例／4,932 断言），CLI 检测 60 项、材质 30 项、修复导出 50 项及验收工具 7 项通过。原生 GUI 同部件部分修复、单对象／旋转缩放／多对象合并的右键 STL 与 OBJ 导出对照通过。下面 9 月 14 日记录中的“待验证／未编译”描述保留当时状态，已由此次对应范围的验证覆盖，不代表当前仍未验收；完整证据见 `doc/model-check-workflow.md` 第 7 节。阶段性入库不等同完整 CTest、真实大模型全集、旧版 macOS 兼容性或切片／打印验收；后续源码修改仍须重新验证，不能复用本次结果。
+
+- 2026-09-14 22:10 构建验证后修正（待重新构建）：`is_discardable_repair_part()` 保留 2.4.2 数值阈值，但体积／体积比删除只用于共享 CGAL 只读检查确认的有界实体；开口、朝向抵消、自交等不按零有符号体积删除。原尺寸阈值、删空／保色／异常保护不变。回退夹具编辑索引后重建 TriangleMesh 并检查分支执行次数；CLI 检测按原生导入后的基线区分有补洞进展与 unresolved，OBJ 部分修复及颜色断言不放宽。此前完整专项 163 通过／2 失败、CLI 几何 50 通过不能当作本补丁通过证明；详情见 `doc/model-check-workflow.md` 第 7 节。本次未编译、未运行测试，仍用既有固定入口。
+
+- 2026-09-14 同部件部分成果保留（本轮待新构建验证）：GUI/CLI 显式部分模式共用 `repair_with_partial()` / `is_safe_partial_repair()`，严格 `repair()` 和核心默认不变，不新增 CLI 参数。可保留缝合／补洞／闭合自交处理的已验证检查点；要求有效、无退化／非流形的前后曲面，残留相交对与边界段按坐标／绕序为原集合的子集且至少一项减少，并保持既有几何限制；20,000 对截断不批准。复杂拆点 soup 不开放实验性路径。普通候选外层几何复检失败仅拒绝该候选；非法数据、删空、异常、取消、严格保色及 GUI 场景变化仍整笔不提交。新回归在 `test_meshboolean.cpp`、`test_model_repair.cpp` 的既有专项标签内；本轮仅静态检查，不能复用旧日志宣称通过。细节和边界见 `doc/model-check-workflow.md` 第 5 节。
+
+- 2026-09-14 更新独立 `--check-model` 工作流（待新构建验证）：每次输入固定按 Orca 原生导入准备（STL 开启 ADMesh；OBJ 保持原生导入／材质规则），不再独立预删面，然后保存副本 → 七项检测及三项补充检查 → 可选 CGAL 部分修复 → 导出只读校验。同一次任务内部校验不再修复；working_model 作为新任务输入仍执行原生导入，不提供跳过参数，不靠文件名识别阶段。model_checks[].schema_version=2，basic_repair 改为导入统计，inspection 协议仍为 1。正式说明见 `doc/model-check-workflow.md`；新入口不替换普通导入/切片流程。回归入口仍是 `python3 scripts/test_cli_model_check.py <新构建的 OrcaSlicer 路径>`，可选 `--demo-inspector <已有原生 demo 程序>` 对同一工作 STL 做比较；不编译、不切片。新增测试仍使用 `[ModelRepair][Inspection]` / `[ModelRepair][Preparation]` / `[ModelRepair][Partial]`，已在完整专项中。GUI/CLI 共享高级修复将增加未配对边的预删面推迟到 CGAL 原拓扑修复，失败不单独保留这批删面；其他有效修改继续保留。代码和脚本存在不代表本轮验证通过。
 
 - 基础修复验收夹具在 `tests/data/model_repair_acceptance/`，由 `scripts/generate_repair_fixtures.py` 确定性生成；`manifest.json` 记录预期结果，不能当成测试已经通过。只生成夹具不会构建或运行应用。
+- 2026-09-14 用户确认薄小部件清理对齐 2.4.2：启用 `remove_non_3d_parts` 时，局部包围盒最小尺寸或绝对体积 ≤ EPSILON（1e-4）、最小／最大尺寸比或体积／包围盒体积比 ≤ 1e-6 的部件进入删除流程；其中体积类条件须先证明有界实体，未证明的异常表面留给修复，不按零体积删除。不使用实例／volume 缩放。只调整部件清理策略，不替换结构性退化判定或 CGAL 候选门禁，不放宽原有严格保色禁删分支。删空对象、静默丢色仍中止事务，其他有效部分成果仍可保留。低于阈值的旧缩放保留用例改为验证清理关闭／删空保护；常规 0.001 mm 薄片夹具仍保留。新增阈值／保色／部分清理用例在 `[ModelRepair][Scale]` 等既有标签内，须新构建验证。
+- 2026-09-14 STL 导出：部分结果允许保留零面积面，ASCII／二进制写入器不得以此判为写入失败或偷偷删面；零面积写零法向，其他有限 float 顶点用 double 中间量生成法向。空网格、非有限坐标、非法索引、二进制面数超限仍拒绝，原子替换／符号链接保护不变。可导出不等于已完全修复；回归在 `test_stl.cpp` 的 `[stl][CLI][validation]` 和 `test_model_repair.cpp` 的 `[ModelRepair][Partial][Preparation]`，已纳入完整专项，须新构建验证。
 - 新增聚焦标签为 `'[ModelRepair][Acceptance]'`，仍包含于下面的完整专项；涵盖修复后 50 层截面与健康模型对比、危险模型失败不改原件、薄实体保留、孤立涂色面的严格保色失败保护。截面测试不等同完整 G-code 切片验证。
 - CLI 几何/导出验收固定入口：`python3 scripts/test_cli_repair_acceptance.py <新构建的 OrcaSlicer 路径>`。脚本创建独立临时目录，保留原始输入哈希、命令、日志、结果 JSON，检查完全修复的输出重导入无需再次修复；不编译。部分修复输出另行断言仍有未解决项，不能套用完全修复的闭合/重导入通过标准。
 - 验收脚本还直接检查 OBJ 文件索引边的闭合和朝向，不通过坐标焊接掩盖色区接缝；这不替代 CGAL 自交/非流形顶点检查。单平面负例必须在修复阶段失败且不提交，不能以导入或导出失败冒充修复保护通过。

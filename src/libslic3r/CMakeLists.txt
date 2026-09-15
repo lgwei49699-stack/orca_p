@@ -296,6 +296,7 @@ set(lisbslic3r_sources
     Model.hpp
     ModelRepair.cpp
     ModelRepair.hpp
+    MeshRepairOutcome.hpp
     ModelInspection.hpp
     ModelPreparation.cpp
     ModelCheckWorkflow.cpp

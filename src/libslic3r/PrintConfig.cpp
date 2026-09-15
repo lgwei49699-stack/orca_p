@@ -7831,7 +7831,8 @@ CLIActionsConfigDef::CLIActionsConfigDef()
 
     def          = this->add("check_model", coBool);
     def->label   = L("Check model");
-    def->tooltip = L("Prepare and inspect one STL or OBJ model, writing structured results without slicing.");
+    def->tooltip = L("Import one STL or OBJ using Orca's native import preparation, then inspect it without slicing. STL import includes "
+                     "automatic repair.");
     def->cli     = "check-model";
     def->set_default_value(new ConfigOptionBool(false));
 

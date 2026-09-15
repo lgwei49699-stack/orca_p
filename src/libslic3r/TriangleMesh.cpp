@@ -1740,23 +1740,22 @@ static bool its_is_valid_for_stl_export(const std::vector<stl_triangle_vertex_in
                                         const std::vector<stl_vertex>&                  vertices,
                                         bool                                            binary)
 {
-    if ((binary && indices.size() > std::numeric_limits<uint32_t>::max()) || !its_has_finite_vertices_and_valid_indices(indices, vertices))
-        return false;
-    for (const stl_triangle_vertex_indices& face : indices) {
-        const Vec3f edge_a = vertices[size_t(face[1])] - vertices[size_t(face[0])];
-        const Vec3f edge_b = vertices[size_t(face[2])] - vertices[size_t(face[0])];
-        if (!edge_a.allFinite() || !edge_b.allFinite())
-            return false;
-        const Vec3f cross_product = edge_a.cross(edge_b);
-        if (!cross_product.allFinite())
-            return false;
-        const float squared_norm = cross_product.squaredNorm();
-        if (!std::isfinite(squared_norm) || squared_norm <= std::numeric_limits<float>::min())
-            return false;
-        if (!cross_product.normalized().allFinite())
-            return false;
-    }
-    return true;
+    // Export serializes the retained model; it is not a repair/printability
+    // gate. In particular, partial repairs may retain zero-area edge caps.
+    return (!binary || indices.size() <= std::numeric_limits<uint32_t>::max()) &&
+           its_has_finite_vertices_and_valid_indices(indices, vertices);
+}
+
+static Vec3f stl_export_normal(const stl_vertex& a, const stl_vertex& b, const stl_vertex& c)
+{
+    // Preconditions: finite float vertices, checked before opening the file.
+    // Double intermediates cover their differences, cross products and squared
+    // norms without float overflow/underflow, including very thin triangles.
+    const Vec3d  cross_product = (b.cast<double>() - a.cast<double>()).cross(c.cast<double>() - a.cast<double>());
+    const double length        = cross_product.norm();
+    if (length == 0.)
+        return Vec3f::Zero(); // Keep the facet, but never normalize a zero vector.
+    return (cross_product / length).cast<float>();
 }
 
 bool its_write_stl_ascii(const char*                                     file,
@@ -1780,8 +1779,8 @@ bool its_write_stl_ascii(const char*                                     file,
     for (const stl_triangle_vertex_indices& face : indices) {
         if (!success)
             break;
-        Vec3f vertex[3] = { vertices[face(0)], vertices[face(1)], vertices[face(2)] };
-        Vec3f normal    = (vertex[1] - vertex[0]).cross(vertex[2] - vertex[0]).normalized();
+        Vec3f vertex[3] = {vertices[face(0)], vertices[face(1)], vertices[face(2)]};
+        Vec3f normal    = stl_export_normal(vertex[0], vertex[1], vertex[2]);
         success         = std::fprintf(fp, "  facet normal % .8E % .8E % .8E\n", normal(0), normal(1), normal(2)) >= 0 &&
                   std::fprintf(fp, "    outer loop\n") >= 0 &&
                   std::fprintf(fp, "      vertex % .8E % .8E % .8E\n", vertex[0](0), vertex[0](1), vertex[0](2)) >= 0 &&
@@ -1841,7 +1840,7 @@ bool its_write_stl_binary(const char*                                     file,
         f.vertex[0] = vertices[face(0)];
         f.vertex[1] = vertices[face(1)];
         f.vertex[2] = vertices[face(2)];
-        f.normal    = (f.vertex[1] - f.vertex[0]).cross(f.vertex[2] - f.vertex[0]).normalized();
+        f.normal    = stl_export_normal(f.vertex[0], f.vertex[1], f.vertex[2]);
         big_endian_reverse_quads(reinterpret_cast<char*>(&f), 48);
         success = std::fwrite(&f, 50, 1, fp) == 1;
     }

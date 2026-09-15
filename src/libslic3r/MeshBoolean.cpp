@@ -6,11 +6,14 @@
 #undef PI
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iterator>
 #include <limits>
 #include <new>
 #include <optional>
+#include <map>
+#include <set>
 #include <stdexcept>
 
 #include <boost/next_prior.hpp>
@@ -670,7 +673,158 @@ bool does_bound_a_volume(const CGALMesh& mesh) { return CGAL::is_closed(mesh.m) 
 
 bool empty(const CGALMesh& mesh) { return mesh.m.is_empty(); }
 
-bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string* error)
+namespace {
+
+using RepairPointKey        = std::array<double, 3>;
+using RepairFaceKey         = std::array<RepairPointKey, 3>;
+using RepairEdgeKey         = std::array<RepairPointKey, 2>;
+using RepairIntersectionKey = std::array<RepairFaceKey, 2>;
+
+RepairPointKey repair_point_key(const _EpicMesh::Point& p) { return {double(p.x()), double(p.y()), double(p.z())}; }
+
+RepairFaceKey repair_face_key(const _EpicMesh& surface, _EpicMesh::Face_index face)
+{
+    const auto    h   = surface.halfedge(face);
+    RepairFaceKey key = {repair_point_key(surface.point(target(h, surface))),
+                         repair_point_key(surface.point(target(next(h, surface), surface))),
+                         repair_point_key(surface.point(target(prev(h, surface), surface)))};
+    // Ignore vertex/face numbering, but retain winding.
+    std::rotate(key.begin(), std::min_element(key.begin(), key.end()), key.end());
+    return key;
+}
+
+bool partial_repair_surface(const TriangleMesh& mesh, _EpicMesh& surface)
+{
+    if (mesh.empty() || mesh.its.vertices.empty())
+        return false;
+    for (const auto& point : mesh.its.vertices)
+        if (!point.allFinite())
+            return false;
+    for (const auto& face : mesh.its.indices)
+        for (int i = 0; i < 3; ++i)
+            if (face[i] < 0 || size_t(face[i]) >= mesh.its.vertices.size())
+                return false;
+    auto compacted = mesh.its;
+    its_compactify_vertices(compacted, true);
+    triangle_mesh_to_cgal(compacted.vertices, compacted.indices, surface);
+    if (surface.is_empty() || surface.num_faces() != compacted.indices.size() || !CGAL::is_valid_polygon_mesh(surface) ||
+        !CGAL::is_triangle_mesh(surface))
+        return false;
+    std::vector<_EpicMesh::Face_index>     degenerate;
+    std::vector<_EpicMesh::Halfedge_index> non_manifold;
+    CGALProc::degenerate_faces(surface, std::back_inserter(degenerate));
+    CGALProc::non_manifold_vertices(surface, std::back_inserter(non_manifold));
+    // Partial mode is not permission to run predicates on an invalid graph or
+    // to accept singular/split soups. Those still use the strict repair path.
+    return degenerate.empty() && non_manifold.empty();
+}
+
+std::set<RepairEdgeKey> repair_boundary_keys(const _EpicMesh& surface)
+{
+    std::set<RepairEdgeKey> keys;
+    for (const auto h : surface.halfedges())
+        if (CGAL::is_border(h, surface))
+            keys.insert({repair_point_key(surface.point(source(h, surface))), repair_point_key(surface.point(target(h, surface)))});
+    return keys;
+}
+
+bool repair_intersection_keys(const _EpicMesh& surface, std::set<RepairIntersectionKey>& keys)
+{
+    constexpr unsigned                                                   limit = 20000;
+    std::vector<std::pair<_EpicMesh::Face_index, _EpicMesh::Face_index>> pairs;
+    CGALProc::self_intersections<CGAL::Sequential_tag>(surface, std::back_inserter(pairs), CGALParams::maximum_number(limit + 1));
+    // Incomplete evidence cannot authorize a partial result.
+    if (pairs.size() > limit)
+        return false;
+    for (const auto& pair : pairs) {
+        RepairIntersectionKey key = {repair_face_key(surface, pair.first), repair_face_key(surface, pair.second)};
+        std::sort(key.begin(), key.end());
+        keys.insert(key);
+    }
+    return true;
+}
+
+} // namespace
+
+bool is_safe_partial_repair(const TriangleMesh& source, const TriangleMesh& candidate)
+{
+    namespace PMP = CGAL::Polygon_mesh_processing;
+    _EpicMesh before, after;
+    if (!partial_repair_surface(source, before) || !partial_repair_surface(candidate, after))
+        return false;
+
+    const auto before_boundaries = repair_boundary_keys(before);
+    const auto after_boundaries  = repair_boundary_keys(after);
+    if (!std::includes(before_boundaries.begin(), before_boundaries.end(), after_boundaries.begin(), after_boundaries.end()))
+        return false;
+    std::set<RepairIntersectionKey> before_intersections, after_intersections;
+    if (!repair_intersection_keys(before, before_intersections) || !repair_intersection_keys(after, after_intersections) ||
+        !std::includes(before_intersections.begin(), before_intersections.end(), after_intersections.begin(), after_intersections.end()))
+        return false;
+    if (after_boundaries.size() == before_boundaries.size() && after_intersections.size() == before_intersections.size())
+        return false;
+
+    // A lower pair count alone is insufficient. All remaining intersections
+    // and boundary segments must be unchanged source geometry. Also prohibit
+    // flipping an otherwise unchanged face while retaining residual defects.
+    std::map<RepairFaceKey, RepairFaceKey> source_winding;
+    for (const auto face : before.faces()) {
+        const auto oriented = repair_face_key(before, face);
+        auto       key      = oriented;
+        std::sort(key.begin(), key.end());
+        if (!source_winding.emplace(key, oriented).second)
+            return false;
+    }
+    for (const auto face : after.faces()) {
+        const auto oriented = repair_face_key(after, face);
+        auto       key      = oriented;
+        std::sort(key.begin(), key.end());
+        const auto it = source_winding.find(key);
+        if (it != source_winding.end() && it->second != oriented)
+            return false;
+    }
+
+    const auto before_measure = measure_connected_component_volumes(before, "f:partial_before");
+    const auto after_measure  = measure_connected_component_volumes(after, "f:partial_after");
+    if (before_measure.component_count != after_measure.component_count)
+        return false;
+    const auto   a        = PMP::bbox(before);
+    const auto   b        = PMP::bbox(after);
+    const double diagonal = std::hypot(a.xmax() - a.xmin(), a.ymax() - a.ymin(), a.zmax() - a.zmin());
+    const double limit    = std::clamp(diagonal * 1.e-4, 0.005, 0.05);
+    if (std::abs(a.xmin() - b.xmin()) > limit || std::abs(a.xmax() - b.xmax()) > limit || std::abs(a.ymin() - b.ymin()) > limit ||
+        std::abs(a.ymax() - b.ymax()) > limit || std::abs(a.zmin() - b.zmin()) > limit || std::abs(a.zmax() - b.zmax()) > limit)
+        return false;
+    const double before_area = double(PMP::area(before));
+    const double after_area  = double(PMP::area(after));
+    if (!std::isfinite(before_area) || !std::isfinite(after_area) || before_area <= 0. || after_area <= 0.)
+        return false;
+    if (before_boundaries.empty()) {
+        // Match the existing closed-surface fidelity limits. These signed-sum
+        // volume measures are only change guards, not physical volume claims
+        // for a self-intersecting source.
+        if (std::abs(after_area - before_area) / before_area > 2.e-3 || !std::isfinite(before_measure.absolute_volume) ||
+            !std::isfinite(after_measure.absolute_volume) ||
+            std::abs(after_measure.absolute_volume - before_measure.absolute_volume) / std::max(before_measure.absolute_volume, 1.e-9) >
+                1.e-3)
+            return false;
+    } else if (after_area < before_area * (1. - 2.e-3)) {
+        return false;
+    }
+    // An open input may gain hole patches; its existing surface must survive.
+    const double error_bound = std::max(1.e-5, limit * 0.01);
+    const double distance    = before_boundaries.empty() ?
+                                   PMP::bounded_error_symmetric_Hausdorff_distance<CGAL::Sequential_tag>(before, after, error_bound) :
+                                   PMP::bounded_error_Hausdorff_distance<CGAL::Sequential_tag>(before, after, error_bound);
+    const bool   accepted    = std::isfinite(distance) && distance + error_bound <= limit;
+    BOOST_LOG_TRIVIAL(debug) << "CGAL partial repair: event=progress_checked, accepted=" << accepted
+                             << ", boundaries=" << before_boundaries.size() << "->" << after_boundaries.size()
+                             << ", intersections=" << before_intersections.size() << "->" << after_intersections.size()
+                             << ", hausdorff=" << distance << "/" << limit;
+    return accepted;
+}
+
+static bool repair_impl(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string* error, TriangleMesh* partial_result)
 {
     namespace PMP = CGAL::Polygon_mesh_processing;
 
@@ -678,38 +832,66 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
         error->clear();
     if (repaired_errors != nullptr)
         repaired_errors->clear();
+    if (partial_result != nullptr)
+        *partial_result = TriangleMesh{};
 
     const char* stage = "input_validation";
-    const auto  fail  = [error, &stage](const std::string& message) {
+    const auto  fail  = [error, &stage, partial_result](const std::string& message, bool invalid_data = false) {
         BOOST_LOG_TRIVIAL(warning) << "CGAL repair: event=failed, stage=" << stage << ", reason=" << message;
         if (error != nullptr)
             *error = message;
+        if (invalid_data && partial_result != nullptr)
+            throw std::runtime_error(message);
         return false;
     };
 
     if (mesh.its.vertices.empty() || mesh.its.indices.empty())
-        return fail("Repair failed: mesh is empty.");
+        return fail("Repair failed: mesh is empty.", true);
 
     for (const stl_vertex& vertex : mesh.its.vertices)
         if (!vertex.allFinite())
-            return fail("Repair failed: mesh contains non-finite vertices.");
+            return fail("Repair failed: mesh contains non-finite vertices.", true);
 
     for (const stl_triangle_vertex_indices& face : mesh.its.indices) {
         for (size_t i = 0; i < 3; ++i) {
             const int vertex_index = face[i];
             if (vertex_index < 0 || size_t(vertex_index) >= mesh.its.vertices.size())
-                return fail("Repair failed: mesh contains an invalid vertex index.");
+                return fail("Repair failed: mesh contains an invalid vertex index.", true);
         }
     }
 
     try {
+        bool       partial_checkpoints_allowed = true;
+        const auto checkpoint                  = [&](const _EpicMesh& surface, const char* checkpoint_stage) {
+            if (partial_result == nullptr || !partial_checkpoints_allowed || surface.is_empty() || !CGAL::is_valid_polygon_mesh(surface) ||
+                !CGAL::is_triangle_mesh(surface))
+                return;
+            // Validate the float representation that ModelVolume/STL/OBJ will
+            // actually use, not just CGAL's double-coordinate intermediate.
+            _EpicMesh compact = surface;
+            compact.collect_garbage();
+            for (const auto vertex : compact.vertices()) {
+                const auto p = repair_point_key(compact.point(vertex));
+                for (const auto coordinate : p)
+                    if (!std::isfinite(coordinate) || std::abs(coordinate) > double(std::numeric_limits<float>::max()))
+                        throw std::runtime_error("Repair failed: converted mesh contains non-finite vertices.");
+            }
+            TriangleMesh candidate(cgal_to_indexed_triangle_set(compact));
+            if (!is_safe_partial_repair(mesh, candidate) ||
+                (!partial_result->empty() && !is_safe_partial_repair(*partial_result, candidate)))
+                return;
+            *partial_result = std::move(candidate);
+            BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=partial_checkpoint, stage=" << checkpoint_stage
+                                    << ", faces=" << mesh.facets_count() << "->" << partial_result->facets_count()
+                                    << ", open_edges=" << its_num_open_edges(mesh.its) << "->" << its_num_open_edges(partial_result->its);
+        };
         BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=started, vertices=" << mesh.its.vertices.size()
                                 << ", faces=" << mesh.its.indices.size();
         stage                          = "closed_candidate";
         indexed_triangle_set compacted = mesh.its;
         its_compactify_vertices(compacted, true);
         if (compacted.vertices.empty() || compacted.indices.empty())
-            return fail("Repair failed: mesh cleanup removed all geometry.");
+            return fail("Repair failed: mesh cleanup removed all geometry.", true);
 
         const bool               input_had_no_open_edges = its_num_open_edges(compacted) == 0;
         _EpicMesh                cgal_mesh;
@@ -768,6 +950,8 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
                     }
                     closed_candidate.collect_garbage();
 
+                    checkpoint(closed_candidate, "closed_defect_repair");
+
                     remaining_degenerate_faces.clear();
                     PMP::degenerate_faces(closed_candidate, std::back_inserter(remaining_degenerate_faces));
                     std::vector<halfedge_descriptor> non_manifold_vertices;
@@ -825,9 +1009,13 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
         } catch (const std::bad_alloc&) {
             throw; // Resource exhaustion is not a recoverable geometric rejection.
         } catch (const std::exception& exception) {
+            if (partial_result != nullptr)
+                throw; // Partial checkpoints never survive an engine exception.
             direct_candidate_error = exception.what();
             BOOST_LOG_TRIVIAL(debug) << "CGAL closed-defect repair candidate rejected: " << exception.what();
         } catch (...) {
+            if (partial_result != nullptr)
+                throw;
             direct_candidate_error = "unknown CGAL error";
             BOOST_LOG_TRIVIAL(debug) << "CGAL closed-defect repair candidate rejected by an unknown error.";
         }
@@ -858,7 +1046,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
                                   cleaned.indices.end());
             its_compactify_vertices(cleaned, true);
             if (cleaned.vertices.empty() || cleaned.indices.empty())
-                return fail("Repair failed: mesh cleanup removed all geometry.");
+                return fail("Repair failed: mesh cleanup removed all geometry.", true);
 
             std::vector<_EpicMesh::Point>         points;
             std::vector<std::vector<std::size_t>> polygons;
@@ -874,7 +1062,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
 
             PMP::repair_polygon_soup(points, polygons);
             if (points.empty() || polygons.empty())
-                return fail("Repair failed: polygon soup cleanup removed all geometry.");
+                return fail("Repair failed: polygon soup cleanup removed all geometry.", true);
 
             // false means that CGAL duplicated singular vertices, not that the
             // modified soup cannot be converted. Such a candidate still needs
@@ -882,6 +1070,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
             const size_t points_before_orientation = points.size();
             stage                                  = "soup_orientation";
             soup_vertices_split                    = !PMP::orient_polygon_soup(points, polygons);
+            partial_checkpoints_allowed            = !soup_vertices_split;
             BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=soup_oriented, split_vertices=" << points.size() - points_before_orientation
                                     << ", faces=" << polygons.size();
             if (!PMP::is_polygon_soup_a_polygon_mesh(polygons))
@@ -915,12 +1104,13 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
             return fail("Repair failed: mesh still contains degenerate faces after cleanup.");
         PMP::remove_isolated_vertices(cgal_mesh);
         const size_t duplicated_non_manifold_vertices = PMP::duplicate_non_manifold_vertices(cgal_mesh);
+        partial_checkpoints_allowed                   = partial_checkpoints_allowed && duplicated_non_manifold_vertices == 0;
         cgal_mesh.collect_garbage();
         BOOST_LOG_TRIVIAL(debug) << "CGAL repair cleanup: duplicated_non_manifold_vertices=" << duplicated_non_manifold_vertices
                                  << ", faces=" << cgal_mesh.num_faces() << ", closed=" << CGAL::is_closed(cgal_mesh);
 
         if (cgal_mesh.is_empty() || cgal_mesh.num_faces() == 0)
-            return fail("Repair failed: mesh cleanup removed all geometry.");
+            return fail("Repair failed: mesh cleanup removed all geometry.", true);
 
         if (!CGAL::is_closed(cgal_mesh)) {
             stage = "border_stitching";
@@ -928,6 +1118,7 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
             cgal_mesh.collect_garbage();
             BOOST_LOG_TRIVIAL(debug) << "CGAL repair border stitching: stitched=" << stitched_borders << ", faces=" << cgal_mesh.num_faces()
                                      << ", closed=" << CGAL::is_closed(cgal_mesh);
+            checkpoint(cgal_mesh, "border_stitching");
         }
 
         if (!CGAL::is_closed(cgal_mesh)) {
@@ -938,7 +1129,8 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
                 stage = "basic_boundary_cleanup";
                 prepare_open_surface(cgal_mesh);
                 if (cgal_mesh.is_empty() || cgal_mesh.num_faces() == 0)
-                    return fail(L("Repair failed: basic cleanup removed all geometry."));
+                    return fail(L("Repair failed: basic cleanup removed all geometry."), true);
+                checkpoint(cgal_mesh, "basic_boundary_cleanup");
             }
         }
 
@@ -954,13 +1146,19 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
             std::vector<halfedge_descriptor> borders;
             PMP::extract_boundary_cycles(cgal_mesh, std::back_inserter(borders));
 
-            for (halfedge_descriptor border : borders)
-                PMP::triangulate_and_refine_hole(cgal_mesh, border);
+            for (size_t i = 0; i < borders.size(); ++i) {
+                PMP::triangulate_and_refine_hole(cgal_mesh, borders[i]);
+                // Bound whole-surface inspections on meshes with many holes:
+                // early checkpoints, then exponentially spaced and final ones.
+                const size_t completed = i + 1;
+                if (completed == borders.size() || (completed & (completed - 1)) == 0)
+                    checkpoint(cgal_mesh, "hole_filling");
+            }
         }
 
         stage = "topology_validation";
         if (cgal_mesh.is_empty() || cgal_mesh.num_faces() == 0)
-            return fail("Repair failed: repaired mesh is empty.");
+            return fail("Repair failed: repaired mesh is empty.", true);
         if (!CGAL::is_valid_polygon_mesh(cgal_mesh))
             return fail("Repair failed: repaired mesh is not a valid polygon mesh.");
         if (!CGAL::is_triangle_mesh(cgal_mesh))
@@ -1063,15 +1261,15 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
         for (const _EpicMesh::Vertex_index vertex : cgal_mesh.vertices()) {
             const _EpicMesh::Point& point = cgal_mesh.point(vertex);
             if (!std::isfinite(double(point.x())) || !std::isfinite(double(point.y())) || !std::isfinite(double(point.z())))
-                return fail("Repair failed: repaired mesh contains non-finite vertices.");
+                return fail("Repair failed: repaired mesh contains non-finite vertices.", true);
         }
 
         indexed_triangle_set repaired = cgal_to_indexed_triangle_set(cgal_mesh);
         if (repaired.vertices.empty() || repaired.indices.empty())
-            return fail("Repair failed: repaired mesh is empty after conversion.");
+            return fail("Repair failed: repaired mesh is empty after conversion.", true);
         for (const stl_vertex& vertex : repaired.vertices)
             if (!vertex.allFinite())
-                return fail("Repair failed: converted mesh contains non-finite vertices.");
+                return fail("Repair failed: converted mesh contains non-finite vertices.", true);
         if (its_num_open_edges(repaired) != 0)
             return fail("Repair failed: converted mesh is not closed.");
 
@@ -1088,10 +1286,32 @@ bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string
     } catch (const std::bad_alloc&) {
         throw;
     } catch (const std::exception& exception) {
+        if (partial_result != nullptr)
+            throw;
         return fail(exception.what());
     } catch (...) {
+        if (partial_result != nullptr)
+            throw;
         return fail("Repair failed with an unknown CGAL error.");
     }
+}
+
+bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string* error)
+{
+    return repair_impl(mesh, repaired_errors, error, nullptr);
+}
+
+MeshRepairOutcome repair_with_partial(TriangleMesh& mesh, std::string* error)
+{
+    TriangleMesh checkpoint;
+    if (repair_impl(mesh, nullptr, error, &checkpoint))
+        return MeshRepairOutcome::Repaired;
+    if (checkpoint.empty())
+        return MeshRepairOutcome::Rejected;
+    mesh = std::move(checkpoint);
+    // Keep the failed final-stage diagnostic; callers mark this as unresolved,
+    // not as a completely repaired mesh. No additional CLI switch is needed.
+    return MeshRepairOutcome::PartiallyRepaired;
 }
 
 CGALMeshPtr clone(const CGALMesh& m) { return CGALMeshPtr{new CGALMesh{m}}; }
