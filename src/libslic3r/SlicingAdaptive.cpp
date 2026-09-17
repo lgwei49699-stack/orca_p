@@ -67,33 +67,38 @@ static inline float layer_height_from_slope(const SlicingAdaptive::FaceZ &face, 
 //    return float(max_surface_deviation * face.n_sin);
 }
 
-void SlicingAdaptive::clear()
+void SlicingAdaptive::clear() { m_faces.clear(); }
+
+void SlicingAdaptive::prepare(const ModelObject& object)
 {
-	m_faces.clear();
+    assert(!object.instances.empty());
+    this->prepare(object, *object.instances.front());
 }
 
-void SlicingAdaptive::prepare(const ModelObject &object)
+void SlicingAdaptive::prepare(const ModelObject& object, const ModelInstance& representative_instance)
+{
+    this->prepare(object, representative_instance.get_matrix());
+}
+
+void SlicingAdaptive::prepare(const ModelObject& object, const Transform3d& representative_transform)
 {
     this->clear();
 
-    TriangleMesh		 mesh			= object.raw_mesh();
-    const ModelInstance &first_instance = *object.instances.front();
-    mesh.transform(first_instance.get_matrix(), first_instance.is_left_handed());
+    TriangleMesh mesh = object.raw_mesh();
+    mesh.transform(representative_transform, representative_transform.linear().determinant() < 0.0);
 
     // 1) Collect faces from mesh.
     m_faces.reserve(mesh.facets_count());
-	for (stl_triangle_vertex_indices face : mesh.its.indices) {
-		stl_vertex vertex[3] = { mesh.its.vertices[face[0]], mesh.its.vertices[face[1]], mesh.its.vertices[face[2]] };
-		stl_vertex n         = face_normal_normalized(vertex);
-		std::pair<float, float> face_z_span {
-			std::min(std::min(vertex[0].z(), vertex[1].z()), vertex[2].z()),
-			std::max(std::max(vertex[0].z(), vertex[1].z()), vertex[2].z())
-		};
-		m_faces.emplace_back(FaceZ({ face_z_span, std::abs(n.z()), std::sqrt(n.x() * n.x() + n.y() * n.y()) }));
+    for (stl_triangle_vertex_indices face : mesh.its.indices) {
+        stl_vertex              vertex[3] = {mesh.its.vertices[face[0]], mesh.its.vertices[face[1]], mesh.its.vertices[face[2]]};
+        stl_vertex              n         = face_normal_normalized(vertex);
+        std::pair<float, float> face_z_span{std::min(std::min(vertex[0].z(), vertex[1].z()), vertex[2].z()),
+                                            std::max(std::max(vertex[0].z(), vertex[1].z()), vertex[2].z())};
+        m_faces.emplace_back(FaceZ({face_z_span, std::abs(n.z()), std::sqrt(n.x() * n.x() + n.y() * n.y())}));
     }
 
-	// 2) Sort faces lexicographically by their Z span.
-	std::sort(m_faces.begin(), m_faces.end(), [](const FaceZ &f1, const FaceZ &f2) { return f1.z_span < f2.z_span; });
+    // 2) Sort faces lexicographically by their Z span.
+    std::sort(m_faces.begin(), m_faces.end(), [](const FaceZ &f1, const FaceZ &f2) { return f1.z_span < f2.z_span; });
 }
 
 // current_facet is in/out parameter, rememebers the index of the last face of m_faces visited, 
@@ -202,15 +207,16 @@ float SlicingAdaptive::horizontal_facet_distance(float z)
         std::pair<float, float> zspan = m_faces[i].z_span;
         // facet's minimum is higher than max forward distance -> end loop
 		if (zspan.first > z + m_slicing_params.max_layer_height)
-			break;
-		// min_z == max_z -> horizontal facet
-		if (zspan.first > z && zspan.first == zspan.second)
-			return zspan.first - z;
-	}
-	
-	// objects maximum?
-	return (z + (float)m_slicing_params.max_layer_height > (float)m_slicing_params.object_print_z_height()) ? 
-		std::max((float)m_slicing_params.object_print_z_height() - z, 0.f) : (float)m_slicing_params.max_layer_height;
+            break;
+        // min_z == max_z -> horizontal facet
+        if (zspan.first > z && zspan.first == zspan.second)
+            return zspan.first - z;
+    }
+
+    // objects maximum?
+    const float object_height = float(m_slicing_params.object_print_z_uncompensated_height());
+    return (z + float(m_slicing_params.max_layer_height) > object_height) ? std::max(object_height - z, 0.f) :
+                                                                            float(m_slicing_params.max_layer_height);
 }
 
 }; // namespace Slic3r

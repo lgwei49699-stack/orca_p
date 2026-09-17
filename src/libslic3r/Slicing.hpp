@@ -14,12 +14,12 @@
 #include "Point.hpp"
 #include "Support/RaftPlan.hpp"
 
-namespace Slic3r
-{
+namespace Slic3r {
 
 class PrintConfig;
 class PrintObjectConfig;
 class ModelConfig;
+class ModelInstance;
 class ModelObject;
 class DynamicPrintConfig;
 
@@ -213,18 +213,29 @@ inline bool equal_layering(const SlicingParameters &sp1, const SlicingParameters
 typedef std::pair<coordf_t,coordf_t> t_layer_height_range;
 typedef std::map<t_layer_height_range, ModelConfig> t_layer_config_ranges;
 
-std::vector<coordf_t> layer_height_profile_from_ranges(
-    const SlicingParameters     &slicing_params,
-    const t_layer_config_ranges &layer_config_ranges);
+std::vector<coordf_t> layer_height_profile_from_ranges(const SlicingParameters&     slicing_params,
+                                                       const t_layer_config_ranges& layer_config_ranges);
 
-std::vector<double> layer_height_profile_adaptive(
-    const SlicingParameters& slicing_params,
-    const ModelObject& object, float quality_factor);
+std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slicing_params, const ModelObject& object, float quality_factor);
+
+// Generate an adaptive profile using an explicitly selected representative
+// instance or transform. A layer height profile belongs to a ModelObject, so a
+// caller handling objects with multiple instances must choose which instance
+// geometry defines that shared profile.
+std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slicing_params,
+                                                  const ModelObject&       object,
+                                                  const ModelInstance&     representative_instance,
+                                                  float                    quality_factor);
+
+std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slicing_params,
+                                                  const ModelObject&       object,
+                                                  const Transform3d&       representative_transform,
+                                                  float                    quality_factor);
 
 struct HeightProfileSmoothingParams
 {
     unsigned int radius;
-    bool keep_min;
+    bool         keep_min;
 
     HeightProfileSmoothingParams() : radius(5), keep_min(false) {}
     HeightProfileSmoothingParams(unsigned int radius, bool keep_min) : radius(radius), keep_min(keep_min) {}

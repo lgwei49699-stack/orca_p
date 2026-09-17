@@ -8278,6 +8278,43 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli_params = "\"filament1.json;filament2.json;...\"";
     def->set_default_value(new ConfigOptionStrings());
 
+    def = this->add("variable_layer_height_mode", coString);
+    def->label = L("Variable Layer Height Mode");
+    def->tooltip = L("Control variable layer height profiles in CLI slicing: preserve keeps an existing profile, adaptive replaces it with an automatically generated profile, and reset removes it.");
+    def->cli = "variable-layer-height-mode";
+    def->cli_params = "preserve|adaptive|reset";
+    def->set_default_value(new ConfigOptionString("preserve"));
+
+    def = this->add("variable_layer_height_quality_speed", coFloat);
+    def->label = L("Variable Layer Height Quality / Speed");
+    def->tooltip = L("Adaptive layer height preference from 0 (quality) to 1 (speed).");
+    def->cli = "variable-layer-height-quality-speed";
+    def->cli_params = "0..1";
+    def->min = 0.0;
+    def->max = 1.0;
+    def->set_default_value(new ConfigOptionFloat(0.5));
+
+    def = this->add("variable_layer_height_smooth", coBool);
+    def->label = L("Smooth Variable Layer Height");
+    def->tooltip = L("Smooth the automatically generated variable layer height profile.");
+    def->cli = "variable-layer-height-smooth";
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("variable_layer_height_smoothing_radius", coInt);
+    def->label = L("Variable Layer Height Smoothing Radius");
+    def->tooltip = L("Smoothing radius for an automatically generated variable layer height profile.");
+    def->cli = "variable-layer-height-smoothing-radius";
+    def->cli_params = "1..10";
+    def->min = 1;
+    def->max = 10;
+    def->set_default_value(new ConfigOptionInt(5));
+
+    def = this->add("variable_layer_height_keep_min", coBool);
+    def->label = L("Keep Minimum Variable Layer Height");
+    def->tooltip = L("Preserve local minimum layer heights while smoothing the automatically generated profile.");
+    def->cli = "variable-layer-height-keep-min";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("texture_color_count", coInt);
     def->label = L("Texture Color Count");
     def->tooltip = L("Target color count used when converting GLB/GLTF textures. 0 detects the count automatically.");

@@ -22,10 +22,13 @@
 #include <nlohmann/json.hpp>
 
 #include <wx/choice.h>
+#include <wx/clipbrd.h>
+#include <wx/dataobj.h>
 #include <wx/dcmemory.h>
 #include <wx/gauge.h>
 #include <wx/imaglist.h>
 #include <wx/listctrl.h>
+#include <wx/menu.h>
 #include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
@@ -394,7 +397,31 @@ void GFDDeviceSelectionDialog::bind_events()
         if (!m_suppress_filter_events)
             refresh_table(true);
     });
-    m_device_list->Bind(wxEVT_LIST_ITEM_ACTIVATED, [this](wxListEvent& event) { toggle_row_checked(event.GetIndex()); });
+    m_device_list->Bind(wxEVT_LIST_ITEM_ACTIVATED, [this](wxListEvent& event) {
+        long column = event.GetColumn();
+        if (column < 0) {
+            int flags = 0;
+            m_device_list->HitTest(event.GetPoint(), flags, &column);
+        }
+
+        if (column == 1 && copy_row_mac(event.GetIndex()))
+            return;
+
+        toggle_row_checked(event.GetIndex());
+    });
+    m_device_list->Bind(wxEVT_LIST_ITEM_RIGHT_CLICK, [this](wxListEvent& event) {
+        const long row = event.GetIndex();
+        if (row < 0 || row >= m_device_list->GetItemCount() || m_device_list->GetItemText(row, 1).empty()) {
+            event.Skip();
+            return;
+        }
+
+        wxMenu menu;
+        menu.Append(wxID_COPY, _L("复制 MAC 地址"));
+        menu.Bind(
+            wxEVT_MENU, [this, row](wxCommandEvent&) { copy_row_mac(row); }, wxID_COPY);
+        m_device_list->PopupMenu(&menu, event.GetPoint());
+    });
     m_device_list->Bind(wxEVT_LIST_ITEM_SELECTED, [this](wxListEvent&) { update_confirm_button_state(); });
     m_device_list->Bind(wxEVT_LIST_ITEM_CHECKED, [this](wxListEvent&) { update_confirm_button_state(); });
     m_device_list->Bind(wxEVT_LIST_ITEM_UNCHECKED, [this](wxListEvent&) { update_confirm_button_state(); });
@@ -559,7 +586,7 @@ void GFDDeviceSelectionDialog::apply_device_response(bool keep_current_filters, 
     refresh_table(true, false);
 
     if (m_device_list != nullptr && m_device_list->GetItemCount() > 0)
-        set_tip_message(format_wxstr(_L("已加载 %1% 台设备，可勾选、选中后确认，或双击行快速选择。"), m_device_list->GetItemCount()));
+        set_tip_message(format_wxstr(_L("已加载 %1% 台设备；双击 MAC 可直接复制，右键设备可选择复制 MAC。"), m_device_list->GetItemCount()));
     else
         set_tip_message(_L("未查询到设备，可调整筛选条件后点击查找重试。"));
     set_loading_state(false);
@@ -820,6 +847,34 @@ void GFDDeviceSelectionDialog::toggle_row_checked(long row)
                             << ", row=" << row
                             << ", checked=" << m_device_list->IsItemChecked(row);
     update_confirm_button_state();
+}
+
+bool GFDDeviceSelectionDialog::copy_row_mac(long row)
+{
+    if (m_device_list == nullptr || row < 0 || row >= m_device_list->GetItemCount())
+        return false;
+
+    const wxString mac = m_device_list->GetItemText(row, 1);
+    if (mac.empty())
+        return false;
+
+    if (!wxTheClipboard->Open()) {
+        set_tip_message(_L("无法访问剪贴板，请稍后重试。"), true);
+        return false;
+    }
+
+    const bool copied = wxTheClipboard->SetData(new wxTextDataObject(mac));
+    if (copied)
+        wxTheClipboard->Flush();
+    wxTheClipboard->Close();
+
+    if (!copied) {
+        set_tip_message(_L("复制 MAC 地址失败，请稍后重试。"), true);
+        return false;
+    }
+
+    set_tip_message(format_wxstr(_L("MAC 地址已复制：%1%"), mac));
+    return true;
 }
 
 void GFDDeviceSelectionDialog::sync_checked_keys_from_table()

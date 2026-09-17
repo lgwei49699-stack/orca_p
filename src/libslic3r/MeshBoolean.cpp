@@ -45,6 +45,7 @@
 #include <CGAL/Polygon_mesh_processing/triangulate_hole.h>
 #include <CGAL/boost/graph/helpers.h>
 #include <CGAL/boost/graph/Euler_operations.h>
+#include <CGAL/version.h>
 // BBS: for segment
 #include <CGAL/mesh_segmentation.h>
 #include <CGAL/property_map.h>
@@ -350,8 +351,12 @@ void segment(CGALMesh& src, std::vector<CGALMesh>& dst, double smoothing_alpha =
         CGAL::Polygon_mesh_processing::extract_boundary_cycles(out, std::back_inserter(border_cycles));
         for (halfedge_descriptor h : border_cycles) {
             std::vector<face_descriptor> patch_facets;
+#if defined(_WIN32) && CGAL_VERSION_NR < 1060000000
+            CGAL::Polygon_mesh_processing::triangulate_hole(out, h, std::back_inserter(patch_facets));
+#else
             CGAL::Polygon_mesh_processing::triangulate_hole(out, h,
                                                             CGAL::parameters::face_output_iterator(std::back_inserter(patch_facets)));
+#endif
         }
 
         // if (id > 2) {
@@ -1070,6 +1075,14 @@ static bool repair_impl(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors,
 
                     bool self_intersections_repaired = true;
                     if (PMP::does_self_intersect(closed_candidate)) {
+#if defined(_WIN32) && CGAL_VERSION_NR < 1060000000
+                        self_intersections_repaired = PMP::experimental::remove_self_intersections(closed_candidate,
+                                                                                                   PMP::parameters::preserve_genus(true)
+                                                                                                       .apply_per_connected_component(true)
+                                                                                                       .number_of_iterations(7)
+                                                                                                       .polyhedral_envelope_epsilon(
+                                                                                                           hausdorff_limit));
+#else
                         self_intersections_repaired = PMP::experimental::remove_self_intersections(closed_candidate,
                                                                                                    PMP::parameters::preserve_genus(true)
                                                                                                        .apply_per_connected_component(true)
@@ -1077,6 +1090,7 @@ static bool repair_impl(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors,
                                                                                                        .use_smoothing(false)
                                                                                                        .polyhedral_envelope_epsilon(
                                                                                                            hausdorff_limit));
+#endif
                     }
                     closed_candidate.collect_garbage();
 
@@ -1281,7 +1295,15 @@ static bool repair_impl(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors,
             PMP::extract_boundary_cycles(cgal_mesh, std::back_inserter(borders));
 
             for (size_t i = 0; i < borders.size(); ++i) {
+#if defined(_WIN32) && CGAL_VERSION_NR < 1060000000
+                using face_descriptor   = boost::graph_traits<_EpicMesh>::face_descriptor;
+                using vertex_descriptor = boost::graph_traits<_EpicMesh>::vertex_descriptor;
+                std::vector<face_descriptor>   patch_faces;
+                std::vector<vertex_descriptor> patch_vertices;
+                PMP::triangulate_and_refine_hole(cgal_mesh, borders[i], std::back_inserter(patch_faces), std::back_inserter(patch_vertices));
+#else
                 PMP::triangulate_and_refine_hole(cgal_mesh, borders[i]);
+#endif
                 // Bound whole-surface inspections on meshes with many holes:
                 // early checkpoints, then exponentially spaced and final ones.
                 const size_t completed = i + 1;
