@@ -593,6 +593,15 @@ bool record_exit_reson(std::string                        outputdir,
     const std::string result_file = result_path.string();
 
     try {
+        if (!sliced_info.model_checks.empty()) {
+            // Model-only business response: no slicing totals, per-volume
+            // engine records, repeated inspections or sampled coordinates.
+            const auto result = model_check_business_result(sliced_info.model_checks, code, error_message);
+            if (!write_cli_result_atomically(result_path, result.dump(2) + "\n"))
+                return false;
+            BOOST_LOG_TRIVIAL(info) << "Saved model check result to " << result_file;
+            return true;
+        }
         json j;
         //record the headers
         if (sliced_info.downward_machines.size() > 0)
@@ -605,21 +614,12 @@ bool record_exit_reson(std::string                        outputdir,
         j["prepare_time"] = sliced_info.prepare_time;
         j["export_time"] = sliced_info.export_time;
         j["output_files"] = sliced_info.output_files;
-        if (!sliced_info.model_checks.empty())
-            j["model_checks"] = sliced_info.model_checks;
         if (sliced_info.cgal_repair_requested) {
             bool mesh_passed = !sliced_info.model_repairs.empty() &&
                                std::all_of(sliced_info.model_repairs.begin(), sliced_info.model_repairs.end(),
                                            [](const model_repair_info_t& info) {
                                                return info.engine == "cgal" && info.cgal_report.mesh_validated();
                                            });
-            // In the check workflow, the published serialized whole-model
-            // inspection is stronger evidence than per-volume repair gates.
-            if (!sliced_info.model_checks.empty())
-                mesh_passed = code == 0 &&
-                              std::all_of(sliced_info.model_checks.begin(), sliced_info.model_checks.end(), [](const json& check) {
-                                  return check.value("check_complete", false) && check.value("mesh_status", "unknown") == "passed";
-                              });
             size_t unresolved_volumes = 0;
             for (const model_repair_info_t& info : sliced_info.model_repairs)
                 unresolved_volumes += info.cgal_report.unresolved;
@@ -1563,7 +1563,12 @@ int CLI::run(int argc, char **argv)
             message = "Unexpected model check failure.";
         }
         if (check_report.check.empty())
-            check_report.check = {{"check_complete", false}, {"mesh_status", "unknown"}, {"next_action", "retry_check"}};
+            check_report.check = {{"check_complete", false},
+                                  {"mesh_status", "unknown"},
+                                  {"next_action", "retry_check"},
+                                  {"advanced_repair",
+                                   {{"requested", cgal_repair_requested},
+                                    {"status", cgal_repair_requested ? "not_started" : "not_requested"}}}};
         if (code != CLI_SUCCESS) {
             check_report.check["operation_error"] = message;
             check_report.check["operation_status"] = "failed";
@@ -1573,19 +1578,11 @@ int CLI::run(int argc, char **argv)
             }
             boost::nowide::cerr << message << std::endl;
         }
-        sliced_info.cgal_repair_requested = cgal_repair_requested;
-        sliced_info.model_checks.push_back(check_report.check);
-        sliced_info.output_files = check_report.output_files;
-        if (check_report.repair_attempted) {
-            model_repair_info_t info;
-            info.input_file              = check_report.check.value("input_file", "");
-            info.engine                  = "cgal";
-            info.cgal_report             = std::move(check_report.repair);
-            info.input_materials_ignored = check_report.input_materials_ignored;
-            if (check_report.check.contains("final_output_files"))
-                info.output_files = check_report.check.at("final_output_files").get<std::vector<std::string>>();
-            sliced_info.model_repairs.push_back(std::move(info));
-        }
+        // Preserve one actionable engine reason, not the whole per-volume
+        // diagnostic tree. Remaining issue counts describe the retained model.
+        if (!check_report.repair.failures.empty())
+            check_report.check["repair_message"] = check_report.repair.failures.front().message;
+        sliced_info.model_checks.push_back(std::move(check_report.check));
         if (!record_exit_reson(outfile_dir, code, 0, message, sliced_info))
             return CLI_RESULT_WRITE_ERROR;
         return code;

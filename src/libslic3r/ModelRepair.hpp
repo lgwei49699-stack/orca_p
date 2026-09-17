@@ -110,8 +110,9 @@ struct ModelRepairOptions
     // a part, and other successfully repaired parts on geometric rejection.
     // Invalid data, inspection/worker exceptions, annotation failures and
     // cancellation remain fatal.
-    // A cleanup that opens connections is deferred to CGAL on the original
-    // topology and cannot be retained by itself after CGAL fails. Callers
+    // Deletion that opens connections is not retained. Isolated collinear caps
+    // may instead form an independently certified, surface-preserving topology
+    // baseline, retained on later geometric rejection but never exceptions. Callers
     // must distinguish partial success from mesh_validated(); no improvement
     // returns false but can_continue() may permit a separate slicing attempt.
     // Explicitly enabled by GUI/CLI; the core's default remains transactional.
@@ -161,8 +162,9 @@ struct ModelRepairOptions
     // retain the task and must join every worker before returning.
     std::function<bool(const std::function<bool()>& task)> run_painting_validation;
 
-    // Optional synchronous worker for basic face filtering and read-only
-    // volume-cleanup / partial-candidate validation. Never touches Model IDs/state.
+    // Optional synchronous worker for basic face filtering, certified topology
+    // preparation and read-only volume-cleanup / partial-candidate validation.
+    // Only private mesh copies are modified; never touches Model IDs/state.
     std::function<void(const std::function<void()>& task)> run_mesh_preparation;
 
     // Permit topology-indexed annotations that cannot or should not be remapped

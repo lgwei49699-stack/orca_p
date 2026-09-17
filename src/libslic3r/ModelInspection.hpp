@@ -18,7 +18,8 @@ struct ModelInspectionOptions
     std::size_t detail_limit         = 200;
 };
 
-// Seven geometry checks and three supplemental checks, on the supplied mesh.
+// Seven geometry checks and two public supplemental checks, on the supplied mesh.
+// Legacy whole-shell orientation metadata does not affect the task conclusion.
 // Exact coordinate canonicalization is diagnostic only; it never edits the mesh.
 // Throws on invalid input/resource failures. An incomplete check is never a pass.
 nlohmann::json inspect_model_mesh(const TriangleMesh& mesh, const ModelInspectionOptions& options = {});

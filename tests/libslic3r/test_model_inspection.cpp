@@ -172,7 +172,8 @@ TEST_CASE("Open edges are counted on nondegenerate triangles, not as holes", "[M
     REQUIRE(result["basic_checks_complete"] == true);
     REQUIRE(result["mesh_status"] == "needs_repair");
     REQUIRE(result["component_analysis"]["expected_orientation_unknown"] == 1);
-    REQUIRE(result["check_complete"] == false);
+    REQUIRE(result["component_analysis"]["containment_complete"] == true);
+    REQUIRE(result["check_complete"] == true); // Unknown shell direction does not make the remaining checks incomplete.
 }
 
 TEST_CASE("Local winding conflict is distinct from whole-shell orientation", "[ModelRepair][Inspection]")
@@ -184,6 +185,8 @@ TEST_CASE("Local winding conflict is distinct from whole-shell orientation", "[M
     REQUIRE(result["issues"]["orientation"]["count"] == 3);
     REQUIRE(result["issues"]["boundary"]["count"] == 0);
     REQUIRE(result["component_analysis"]["actual_orientation_known"] == 0);
+    REQUIRE(result["mesh_status"] == "needs_repair");
+    REQUIRE(result["next_action"] == "advanced_repair");
 }
 
 TEST_CASE("A degenerate record is not a second surface at an open edge", "[ModelRepair][Inspection]")
@@ -309,7 +312,7 @@ TEST_CASE("Inspection distinguishes point contacts from edge-connected component
     REQUIRE(result["mesh_status"] == "needs_repair");
 }
 
-TEST_CASE("Whole shell orientation is a separate design convention", "[ModelRepair][Inspection]")
+TEST_CASE("Whole shell direction no longer affects the public inspection conclusion", "[ModelRepair][Inspection]")
 {
     auto mesh = make_cube(10., 10., 10.);
     mesh.flip_triangles();
@@ -317,8 +320,16 @@ TEST_CASE("Whole shell orientation is a separate design convention", "[ModelRepa
     REQUIRE(result["issues"]["orientation"]["count"] == 0);
     REQUIRE(result["component_analysis"]["actual_orientation_known"] == 1);
     REQUIRE(result["component_analysis"]["orientation_suspect_count"] == 1);
-    REQUIRE(result["mesh_status"] == "needs_review");
-    REQUIRE(result["next_action"] == "review_structure");
+    REQUIRE(result["check_complete"] == true);
+    REQUIRE(result["mesh_status"] == "passed");
+    REQUIRE(result["next_action"] == "none");
+    const nlohmann::json check    = {{"inspection", result},
+                                     {"mesh_status", result["mesh_status"]},
+                                     {"check_complete", result["check_complete"]},
+                                     {"next_action", result["next_action"]}};
+    const auto           business = model_check_business_result(nlohmann::json::array({check}), 0, "");
+    REQUIRE_FALSE(business["model_checks"][0].contains("supplementary"));
+    CHECK(business["model_checks"][0]["mesh_status"] == "passed");
 }
 
 TEST_CASE("Nested cavity and small separate part are not automatically errors", "[ModelRepair][Inspection]")
@@ -384,4 +395,204 @@ TEST_CASE("Limits and detail sampling cannot turn an incomplete inspection into 
         REQUIRE_THROWS(inspect_model_mesh(mesh));
         REQUIRE_THROWS(inspect_model_mesh(TriangleMesh{}));
     }
+}
+
+TEST_CASE("Business check JSON is bounded and omits artifact paths", "[ModelRepair][Inspection][JSON]")
+{
+    using nlohmann::json;
+    const auto inspection = inspect_model_mesh(make_cube(10., 10., 10.));
+    json       check      = {{"inspection", inspection},
+                             {"before_advanced", inspection},
+                             {"input_file", "/source.obj"},
+                             {"working_model", "/prepared.obj"},
+                             {"prepared_output_files", {"/prepared.obj", "/prepared.mtl"}},
+                             {"mesh_status", "passed"},
+                             {"check_complete", true},
+                             {"next_action", "none"},
+                             {"advanced_repair", {{"status", "not_requested"}}}};
+    const auto original   = check;
+    const auto result     = model_check_business_result(json::array({check}), 0, "");
+    REQUIRE(result.size() == 3);
+    CHECK(result.at("return_code") == 0);
+    CHECK(result.at("error_string") == "");
+    CHECK_FALSE(result.contains("output_files"));
+    CHECK(result.dump().find("/prepared") == std::string::npos);
+    CHECK(result.dump().find("/source") == std::string::npos);
+    REQUIRE(result.at("model_checks").size() == 1);
+    const auto& summary = result.at("model_checks").front();
+    REQUIRE(summary.size() == 6);
+    CHECK(summary.at("schema_version") == 4);
+    CHECK(summary.at("mesh_status") == "passed");
+    CHECK(summary.at("check_complete") == true);
+    CHECK(summary.at("input_materials_ignored") == false);
+    CHECK(summary.at("repair_status") == "not_requested");
+    REQUIRE(summary.at("issues").size() == 7);
+    for (auto it = inspection.at("issues").begin(); it != inspection.at("issues").end(); ++it) {
+        const json expected = {{"count", it.value().at("count")}, {"complete", it.value().at("complete")}};
+        CHECK(summary.at("issues").at(it.key()) == expected);
+    }
+    for (const char* removed : {"input_file", "working_model", "next_action", "repair_message", "supplementary", "issues_before_repair"})
+        CHECK_FALSE(summary.contains(removed));
+    CHECK(check == original);
+
+    SECTION("Internal sampled geometry never increases the public payload")
+    {
+        check["inspection"]["issues"]["boundary"]["faces"]           = std::vector<int>(10000, 1);
+        check["basic_repair"]                                        = {{"facets_before", 12345}};
+        check["after_advanced"]                                      = check["inspection"];
+        check["repair_message"]                                      = std::string(10000, 'x');
+        check["before_advanced"]["issues"]["boundary"]["count"]      = 999;
+        check["inspection"]["component_analysis"]["component_count"] = 999;
+        CHECK(model_check_business_result(json::array({check}), 0, "") == result);
+    }
+    SECTION("Changing internal artifact paths does not alter the business response")
+    {
+        check["prepared_output_files"] = {"/prepared.mtl", "/prepared.obj", "/prepared.mtl"};
+        check["working_model"]         = "/another.obj";
+        check["final_output_files"]    = {"/another.obj", "/another.mtl"};
+        CHECK(model_check_business_result(json::array({check}), 0, "") == result);
+    }
+    SECTION("Published final color model exposes repair status without artifact paths")
+    {
+        check["working_model"]             = "/result.obj";
+        check["final_output_files"]        = {"/result.obj", "/result.mtl"};
+        check["advanced_repair"]["status"] = "repaired";
+        const auto repaired                = model_check_business_result(json::array({check}), 0, "");
+        CHECK_FALSE(repaired.contains("output_files"));
+        CHECK(repaired.dump().find("/result") == std::string::npos);
+        CHECK(repaired.at("model_checks").front().at("repair_status") == "repaired");
+        CHECK(repaired.at("model_checks").front().at("issues") == summary.at("issues"));
+        CHECK_FALSE(repaired.at("model_checks").front().contains("issues_before_repair"));
+    }
+    SECTION("Explicit format conversion without repair has no fabricated progress")
+    {
+        check["working_model"]      = "/result.stl";
+        check["final_output_files"] = {"/result.stl"};
+        const auto converted        = model_check_business_result(json::array({check}), 0, "");
+        CHECK(converted == result);
+        CHECK_FALSE(converted.at("model_checks").front().contains("issues_before_repair"));
+    }
+    SECTION("Healthy repair request does not repeat the unchanged inspection")
+    {
+        check["advanced_repair"]["status"] = "not_needed";
+        const auto unchanged               = model_check_business_result(json::array({check}), 0, "");
+        CHECK_FALSE(unchanged.at("model_checks").front().contains("issues_before_repair"));
+        CHECK_FALSE(unchanged.contains("output_files"));
+    }
+    SECTION("Omitting structural details does not convert an incomplete check into a pass")
+    {
+        TriangleMesh separate = make_cube(10., 10., 10.);
+        TriangleMesh second   = make_cube(10., 10., 10.);
+        second.translate(30., 0., 0.);
+        separate.merge(second);
+        ModelInspectionOptions options;
+        options.max_solid_components = 1;
+        check["inspection"]          = inspect_model_mesh(separate, options);
+        check["mesh_status"]         = check["inspection"].at("mesh_status");
+        check["check_complete"]      = check["inspection"].at("check_complete");
+        const auto  incomplete       = model_check_business_result(json::array({check}), 0, "");
+        const auto& current          = incomplete.at("model_checks").front();
+        CHECK(current.at("mesh_status") == "unknown");
+        CHECK(current.at("check_complete") == false);
+        for (const auto& issue : current.at("issues")) {
+            CHECK(issue.at("count") == 0);
+            CHECK(issue.at("complete") == true);
+        }
+        CHECK_FALSE(current.contains("supplementary"));
+    }
+}
+
+TEST_CASE("Business JSON distinguishes retained progress from complete or failed repair", "[ModelRepair][Inspection][JSON]")
+{
+    using nlohmann::json;
+    auto before                                         = inspect_model_mesh(make_cube(10., 10., 10.));
+    before["issues"]["self_intersection"]["count"]      = 200;
+    auto after                                          = before;
+    after["issues"]["self_intersection"]["count"]       = 10;
+    after["issues"]["self_intersection"]["complete"]    = false;
+    after["component_analysis"]["containment_complete"] = false;
+    after["component_analysis"]["orientation_complete"] = false;
+    json check                                          = {{"inspection", after},
+                                                           {"before_advanced", before},
+                                                           {"working_model", "/result.stl"},
+                                                           {"prepared_output_files", {"/prepared.stl"}},
+                                                           {"final_output_files", {"/result.stl"}},
+                                                           {"mesh_status", "needs_repair"},
+                                                           {"check_complete", false},
+                                                           {"next_action", "advanced_repair"},
+                                                           {"repair_message", "Residual intersections"},
+                                                           {"input_materials_ignored", true},
+                                                           {"advanced_repair", {{"status", "partially_repaired"}}}};
+    SECTION("Partial success preserves lower bounds and unknown containment")
+    {
+        const auto  result  = model_check_business_result(json::array({check}), 0, "");
+        const auto& summary = result.at("model_checks").front();
+        CHECK_FALSE(summary.contains("issues_before_repair"));
+        CHECK(summary.at("issues").at("self_intersection").at("count") == 10);
+        CHECK(summary.at("issues").at("self_intersection").at("complete") == false);
+        CHECK_FALSE(summary.contains("supplementary"));
+        CHECK(summary.at("check_complete") == false);
+        CHECK(summary.at("mesh_status") == "needs_repair");
+        CHECK(summary.at("repair_status") == "partially_repaired");
+        CHECK_FALSE(summary.contains("repair_message"));
+        CHECK(summary.at("input_materials_ignored") == true);
+        CHECK_FALSE(result.contains("output_files"));
+    }
+    SECTION("Failed export keeps the baseline and never exposes an unpublished candidate")
+    {
+        check["inspection"]    = before;
+        check["working_model"] = "/prepared.stl";
+        check.erase("final_output_files"); // Candidate publication did not happen.
+        check["advanced_repair"] = {{"status", "failed"}, {"committed", true}};
+        check["operation_error"] = "Export validation failed";
+        const auto result        = model_check_business_result(json::array({check}), -25, "Export validation failed");
+        CHECK(result.at("return_code") == -25);
+        CHECK(result.at("error_string") == "Export validation failed");
+        CHECK_FALSE(result.contains("output_files"));
+        const auto& summary = result.at("model_checks").front();
+        CHECK(summary.at("repair_status") == "failed");
+        for (auto it = before.at("issues").begin(); it != before.at("issues").end(); ++it) {
+            CHECK(summary.at("issues").at(it.key()).at("count") == it.value().at("count"));
+            CHECK(summary.at("issues").at(it.key()).at("complete") == it.value().at("complete"));
+        }
+    }
+    SECTION("No retained improvement is unresolved, not partial success")
+    {
+        check["inspection"]    = before;
+        check["working_model"] = "/prepared.stl";
+        check.erase("final_output_files");
+        check["advanced_repair"]["status"] = "unresolved";
+        const auto result                  = model_check_business_result(json::array({check}), -25, "No retainable change");
+        CHECK(result.at("return_code") == -25);
+        CHECK(result.at("model_checks").front().at("repair_status") == "unresolved");
+        for (auto it = before.at("issues").begin(); it != before.at("issues").end(); ++it) {
+            const auto& current = result.at("model_checks").front().at("issues").at(it.key());
+            CHECK(current.at("count") == it.value().at("count"));
+            CHECK(current.at("complete") == it.value().at("complete"));
+        }
+        CHECK_FALSE(result.contains("output_files"));
+    }
+}
+
+TEST_CASE("Business JSON never substitutes zero findings for an inspection that did not run", "[ModelRepair][Inspection][JSON]")
+{
+    using nlohmann::json;
+    json        check   = {{"inspection", nullptr}, {"advanced_repair", {{"status", "not_started"}}}};
+    const auto  result  = model_check_business_result(json::array({check}), -27, "Invalid model");
+    const auto& summary = result.at("model_checks").front();
+    CHECK(result.at("return_code") == -27);
+    CHECK(result.at("error_string") == "Invalid model");
+    CHECK_FALSE(result.contains("output_files"));
+    CHECK_FALSE(summary.contains("working_model"));
+    CHECK(summary.at("issues").is_null());
+    CHECK_FALSE(summary.contains("supplementary"));
+    CHECK(summary.at("mesh_status") == "unknown");
+    CHECK(summary.at("check_complete") == false);
+    CHECK_FALSE(summary.contains("next_action"));
+    CHECK(summary.at("repair_status") == "not_started");
+    CHECK_FALSE(summary.contains("issues_before_repair"));
+    check["prepared_output_files"] = {"/unpublished.stl"};
+    CHECK(model_check_business_result(json::array({check}), -27, "Invalid model") == result);
+    check["working_model"] = "/different.stl";
+    CHECK(model_check_business_result(json::array({check}), -27, "Invalid model") == result);
 }

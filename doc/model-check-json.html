@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>模型检测与修复 · JSON 返回字段说明</title>
+  <style>
+    :root { color-scheme: light; --ink:#21342f; --muted:#596d65; --line:#d9e2dc; --paper:#f5f7f3; --teal:#196b59; --tint:#edf5f0; --amber:#815011; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:82px; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+    a { color:var(--teal); text-underline-offset:4px; }
+    button,select { font:inherit; }
+    button { cursor:pointer; }
+    :focus-visible { outline:3px solid #569986; outline-offset:4px; }
+    .wrap { max-width:1200px; margin:auto; padding:0 32px; }
+    header { padding:48px 0 26px; }
+    .eyebrow { display:flex; flex-wrap:wrap; align-items:center; gap:12px; font-size:12px; letter-spacing:.12em; font-weight:650; color:var(--teal); }
+    .version { border:1px solid #adc7b9; border-radius:5px; padding:1px 8px; letter-spacing:0; }
+    h1 { font-size:38px; line-height:1.3; letter-spacing:-1px; margin:16px 0 14px; }
+    h2 { font-size:24px; line-height:1.4; margin:0 0 10px; }
+    h3 { font-size:17px; margin:0 0 8px; }
+    p { margin:8px 0 14px; }
+    .muted { color:var(--muted); }
+    .scope { max-width:900px; }
+    .notice { background:#fff6e8; color:#624717; border-left:3px solid #c99742; padding:12px 16px; font-size:14px; }
+    nav { position:sticky; top:0; z-index:2; background:rgba(245,247,243,.97); border-block:1px solid var(--line); }
+    nav .wrap { display:flex; gap:26px; flex-wrap:wrap; padding-top:12px; padding-bottom:12px; }
+    nav a { font-size:14px; text-decoration:none; color:var(--ink); }
+    nav a:hover { color:var(--teal); text-decoration:underline; }
+    main { padding-top:34px; }
+    section { margin-bottom:44px; }
+    .section-head { display:flex; gap:14px; align-items:baseline; margin-bottom:16px; }
+    .section-no { color:var(--teal); font:13px ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .section-head h2 { margin:0; }
+    code { font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--tint); padding:2px 5px; border-radius:3px; overflow-wrap:anywhere; }
+    .example { background:white; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+    .example-toolbar { padding:18px 22px; display:flex; gap:16px; align-items:center; justify-content:space-between; flex-wrap:wrap; border-bottom:1px solid var(--line); }
+    label { font-weight:600; }
+    select { max-width:100%; min-height:42px; background:white; color:var(--ink); border:1px solid #b9c9be; border-radius:6px; padding:6px 36px 6px 12px; }
+    .example-body { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(290px,.8fr); }
+    .code-panel { background:#182d27; color:#dcece4; min-width:0; }
+    .code-header { display:flex; justify-content:space-between; gap:12px; align-items:center; padding:12px 22px; border-bottom:1px solid #354b43; font-size:12px; }
+    .copy { color:inherit; background:transparent; border:1px solid #6b8377; border-radius:5px; padding:4px 12px; }
+    pre { margin:0; padding:20px 22px 24px; white-space:pre-wrap; overflow-wrap:anywhere; tab-size:2; }
+    pre code { background:none; padding:0; color:inherit; font-size:12px; line-height:1.8; }
+    .interpretation { padding:24px; }
+    .interpretation h3 { font-size:22px; margin:0 0 16px; }
+    .pill { display:inline-block; padding:3px 9px; border-radius:4px; font-size:12px; font-weight:650; background:var(--tint); color:var(--teal); margin-bottom:12px; }
+    .pill.warn { background:#fff1d9; color:var(--amber); }
+    .pill.bad { background:#fbe9e5; color:#a03624; }
+    .reading { margin:0; }
+    .reading dt { color:var(--muted); font-size:13px; margin-top:16px; }
+    .reading dd { margin:4px 0 16px; }
+    .source-note { border-top:1px solid var(--line); margin-top:20px; padding-top:14px; font-size:13px; color:var(--muted); }
+    .table-wrap { overflow-x:auto; background:white; border:1px solid var(--line); border-radius:10px; }
+    table { width:100%; border-collapse:collapse; text-align:left; }
+    th { background:#eef2ed; font-size:13px; color:#4e665b; font-weight:600; }
+    th,td { padding:15px 18px; vertical-align:top; border-bottom:1px solid var(--line); }
+    tr:last-child td { border-bottom:0; }
+    td:first-child { width:230px; }
+    td .caption { display:block; color:var(--muted); font-size:12px; margin-top:5px; }
+    .type { font-size:12px; color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .two-col { display:grid; grid-template-columns:1fr 1fr; gap:22px; }
+    .plain-note { padding:15px 18px; border-left:3px solid #72a18b; background:var(--tint); margin:16px 0; }
+    .rule { font:14px/1.9 ui-monospace,SFMono-Regular,Menlo,monospace; padding:18px 22px; background:#182d27; color:#dcf0e6; border-radius:8px; overflow-wrap:anywhere; }
+    .rules { padding-left:23px; }
+    .rules li { padding:6px 0; }
+    .removed { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+    details { background:white; padding:18px 22px; border:1px solid var(--line); border-radius:10px; }
+    summary { cursor:pointer; font-weight:600; }
+    footer { padding:22px 0 36px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+    .footer-row { display:flex; gap:14px; justify-content:space-between; flex-wrap:wrap; }
+    @media(max-width:850px) {
+      .wrap { padding-inline:20px; }
+      h1 { font-size:30px; }
+      .example-body,.two-col { grid-template-columns:1fr; }
+      td:first-child { width:190px; }
+      nav .wrap { gap:10px 20px; }
+    }
+    @media(max-width:540px) {
+      .wrap { padding-inline:16px; }
+      header { padding-top:28px; }
+      h1 { font-size:27px; }
+      h2 { font-size:21px; }
+      .example-toolbar { padding:15px; }
+      .example-toolbar select { width:100%; }
+      .interpretation { padding:20px; }
+      th,td { padding:12px 10px; font-size:14px; }
+      td:first-child { width:36%; }
+      code { font-size:12px; }
+      pre { padding:16px; }
+    }
+    @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+    @media print {
+      body { background:white; }
+      nav,.copy { display:none; }
+      .wrap { max-width:none; padding:0; }
+      header { padding-top:0; }
+      .example-body { grid-template-columns:1fr 1fr; }
+      .code-panel,.rule { background:#f1f3f1; color:#162d22; }
+      th,td { padding:9px; }
+      tr { break-inside:avoid; }
+      h2,h3 { break-after:avoid; }
+      .table-wrap { overflow:visible; }
+    }
+  </style>
+</head>
+<body>
+  <header class="wrap">
+    <div class="eyebrow">ORCASLICER · 接口核对 <span class="version">JSON v4</span> <span>2026.09.16</span></div>
+    <h1>模型检测与修复<br>返回字段说明</h1>
+    <p class="scope muted">只解释业务需要读取的字段：任务是否完成、还有什么问题，以及高级修复的结果。顶层 3 个字段，模型摘要 6 个字段，不返回模型文件路径。</p>
+    <div class="notice">适用于 <code>--check-model</code> 和 <code>--check-model --repair-model cgal</code>。单独 <code>--repair-model cgal</code> 仍使用旧修复格式。此页依据当前源码整理；v4 应用尚待新构建验证，示例不代表本轮实测。</div>
+  </header>
+  <nav aria-label="文档目录"><div class="wrap">
+    <a href="#example">结果示例</a><a href="#root-fields">顶层字段</a><a href="#check-fields">模型摘要</a><a href="#issues">七项问题</a><a href="#statuses">状态取值</a><a href="#rules">业务判断</a>
+  </div></nav>
+  <main class="wrap">
+    <section id="example" aria-labelledby="example-title">
+      <div class="section-head"><span class="section-no">01</span><h2 id="example-title">先看一份结果</h2></div>
+      <p class="muted">切换场景，对照左侧 JSON 和右侧业务含义。仅检查和“检查＋修复”的返回结构一致，区别只在字段值。</p>
+      <div class="example">
+        <div class="example-toolbar">
+          <label for="scenario">典型场景</label>
+          <select id="scenario">
+            <option value="partial">部分修复 · 仍有 56 对自交</option>
+            <option value="clean">仅检测 · 当前检查通过</option>
+            <option value="found">仅检测 · 发现开放边</option>
+            <option value="repaired">高级修复 · 复检通过</option>
+            <option value="unknown">七项均为 0 · 整体仍无法完整判定</option>
+            <option value="unresolved">高级修复 · 无可保留进展</option>
+            <option value="failed">高级修复失败 · 保留基础副本</option>
+            <option value="invalid">导入失败 · 没有检测结果</option>
+          </select>
+        </div>
+        <div class="example-body">
+          <div class="code-panel"><div class="code-header"><span>result.json · 格式示例</span><button type="button" id="copy" class="copy">复制 JSON</button></div><pre><code id="json-example"></code></pre></div>
+          <div class="interpretation" aria-live="polite" aria-atomic="true">
+            <span id="outcome" class="pill warn"></span>
+            <h3 id="example-heading"></h3>
+            <dl class="reading"><dt>任务返回码怎么读</dt><dd id="task-reading"></dd><dt>修复结果怎么读</dt><dd id="repair-reading"></dd><dt>模型成果</dt><dd id="file-reading"></dd><dt>这份结果不能说明什么</dt><dd id="caution-reading"></dd></dl>
+            <p id="source-note" class="source-note"></p>
+          </div>
+        </div>
+      </div>
+      <noscript><p class="notice">请启用 JavaScript 查看可切换的 JSON 示例。下面的字段说明不依赖脚本，仍可直接阅读。</p></noscript>
+    </section>
+
+    <section id="root-fields" aria-labelledby="root-title">
+      <div class="section-head"><span class="section-no">02</span><h2 id="root-title">顶层 3 个字段</h2></div>
+      <div class="table-wrap"><table><thead><tr><th scope="col">字段 / 类型</th><th scope="col">含义与使用方式</th></tr></thead><tbody>
+        <tr><td><code>return_code</code><span class="caption type">integer</span></td><td>本次任务的结果码。<strong>0 = 任务正常返回，不等于模型没有问题。</strong>非 0 表示参数、导入、导出、检测或高级修复等阶段失败，或高级修复没有可保留进展。例：<code>-25</code> 可用于高级修复失败／无进展，<code>-27</code> 是检测失败码；不要只靠某一个码推断全部原因。</td></tr>
+        <tr><td><code>error_string</code><span class="caption type">string</span></td><td>任务错误说明。正常返回时为 <code>""</code>；失败时用于显示或排查。它是文字，不是稳定枚举，<strong>不要匹配英文句子决定业务分支</strong>。部分修复也可能为空，因为任务已正常保留成果。</td></tr>
+        <tr><td><code>model_checks</code><span class="caption type">object[]</span></td><td>模型检测摘要数组，当前一次处理一个模型，固定一个元素。业务读取 <code>model_checks[0]</code>。其中问题数量对应当前保留模型；检测未取得时 <code>issues = null</code>。</td></tr>
+      </tbody></table></div>
+    </section>
+
+    <section id="check-fields" aria-labelledby="check-title">
+      <div class="section-head"><span class="section-no">03</span><h2 id="check-title">模型摘要 6 个字段</h2></div>
+      <p class="muted">以下字段全部位于 <code>model_checks[0]</code>。除 <code>issues</code> 可以为 null 外，均按表中类型返回。</p>
+      <div class="table-wrap"><table><thead><tr><th scope="col">字段 / 类型</th><th scope="col">含义与使用方式</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code><span class="caption type">integer</span></td><td>返回数据的格式版本，当前为 <code>4</code>。不是 Orca 或 CGAL 版本。用于选择解析规则；之前已经生成的 v3 JSON 不会被自动改成 v4。</td></tr>
+        <tr><td><code>mesh_status</code><span class="caption type">string · 3 个取值</span></td><td><strong>当前模型的检测结论。</strong><code>passed</code> 当前检查范围通过；<code>needs_repair</code> 至少一项基础几何问题已确认；<code>unknown</code> 未确认基础异常，但也无法完整判定。它描述模型，不描述进程是否成功。</td></tr>
+        <tr><td><code>check_complete</code><span class="caption type">boolean</span></td><td><strong>整套检查是否完整。</strong>包括七项和内部部件／包含关系判断。<code>true</code> 不等于没有异常；<code>false</code> 不等于还在运行。即使七项各自均为 <code>complete: true</code>，内部判断未完成时这里仍为 false；精简字段不取消内部安全检查。</td></tr>
+        <tr><td><code>input_materials_ignored</code><span class="caption type">boolean</span></td><td>成功导入时，是否按纯几何忽略源材质。缺少 MTL 自动降级或显式忽略材质时可为 <code>true</code>，界面可提示“源材质已忽略”。<code>false</code> 不是“保色验收通过”，也不保证 UV／贴图往返；导入失败时不能据此判断保色结果。</td></tr>
+        <tr><td><code>repair_status</code><span class="caption type">string · 7 个取值</span></td><td><strong>本次 CGAL 高级修复的状态。</strong>区分未请求、未开始、无需修复、完整修复、部分修复、无进展和失败。它不记录 STL 导入时是否已执行 ADMesh 自动修复。完整取值见下面的状态表。</td></tr>
+        <tr><td><code>issues</code><span class="caption type">object | null</span></td><td>当前七项几何问题，每项都有 <code>count</code> 与 <code>complete</code>。取得结果时七项都返回，即使数量为 0；根本没有取得检测时为 <code>null</code>，不能把 null 当成“七项均为 0”。不再返回修复前对照、部件详情或面／边坐标。</td></tr>
+      </tbody></table></div>
+    </section>
+
+    <section id="issues" aria-labelledby="issues-title">
+      <div class="section-head"><span class="section-no">04</span><h2 id="issues-title">七项问题：数量到底在数什么</h2></div>
+      <div class="two-col">
+        <div class="plain-note"><h3><code>count</code> · 非负整数</h3>已确认的数量。不同项的单位不同，是边、顶点、面、组或相交对；不要相加当成“独立缺陷总数”。</div>
+        <div class="plain-note"><h3><code>complete</code> · 布尔值</h3>当前这一项是否查完整。false 时 count 只是下界，应显示“至少 N”；<strong>0 + false 不是没有问题。</strong></div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th scope="col">issues 下的键</th><th scope="col">中文含义 / 计数口径</th></tr></thead><tbody>
+        <tr><td><code>boundary</code></td><td><strong>开放边</strong>：仅被一个非退化面使用的几何边数。一个洞可能有多条边，4 条开放边不等于 4 个洞。</td></tr>
+        <tr><td><code>nonmanifold_edge</code></td><td><strong>非流形边</strong>：被三个及以上非退化面使用的边数。</td></tr>
+        <tr><td><code>nonmanifold_vertex</code></td><td><strong>非流形顶点</strong>：顶点周围的面连接不构成单一路径或单一环的顶点数，例如仅共点连接的异常结构。</td></tr>
+        <tr><td><code>self_intersection</code></td><td><strong>自相交对</strong>：相交的三角形对数。56 对不等于 56 个独立区域，也不能直接换算成 56 个洞。</td></tr>
+        <tr><td><code>degenerate</code></td><td><strong>退化面</strong>：当前检测口径为精确零面积的三角面数，不是所有“很小／很细”的面。</td></tr>
+        <tr><td><code>duplicate</code></td><td><strong>重复面组</strong>：不区分绕序的重合面分组数。三个相同三角面属于一组，不是三组或三对。</td></tr>
+        <tr><td><code>orientation</code></td><td><strong>局部朝向冲突</strong>：恰有两个非退化面沿公共边方向相同的边数。不是已经移除的“整体壳体朝向”检测。</td></tr>
+      </tbody></table></div>
+      <p class="muted">路径示例：<code>model_checks[0].issues.self_intersection.count</code>。这些数字描述当前模型，不是本次修好了多少。</p>
+    </section>
+
+    <section id="statuses" aria-labelledby="statuses-title">
+      <div class="section-head"><span class="section-no">05</span><h2 id="statuses-title">高级修复状态：完整取值</h2></div>
+      <div class="table-wrap"><table><thead><tr><th scope="col">repair_status</th><th scope="col">可以怎样理解 / 展示</th></tr></thead><tbody>
+        <tr><td><code>not_requested</code></td><td>未请求 CGAL 高级修复。<strong>不代表没有自动修复</strong>：本检测入口对 STL 的原生导入仍会执行 ADMesh。</td></tr>
+        <tr><td><code>not_started</code></td><td>请求了 CGAL，但参数、导入或检测等提前失败，还没进入高级修复。</td></tr>
+        <tr><td><code>not_needed</code></td><td>请求了 CGAL，但原生导入后的检查已通过，无需再执行高级修复。</td></tr>
+        <tr><td><code>repaired</code></td><td>高级修复成果已导出，并且复检通过。可显示“已修复，当前检查通过”，不承诺切片／打印通过。</td></tr>
+        <tr><td><code>partially_repaired</code></td><td>已保存有效修改，但仍有异常或未完成判断。可显示“部分修复，仍需处理／确认”，<strong>不能显示“全部修复成功”</strong>。</td></tr>
+        <tr><td><code>unresolved</code></td><td>高级修复没有可保留进展，任务返回非零。保留原生导入后的基础副本；不是“做了有效修改但未修完”。</td></tr>
+        <tr><td><code>failed</code></td><td>高级处理、导出或重读复检失败，任务返回非零。有已发布基础副本时仍可保留，但失败候选不作为当前成果发布。</td></tr>
+      </tbody></table></div>
+    </section>
+
+    <section id="rules" aria-labelledby="rules-title">
+      <div class="section-head"><span class="section-no">06</span><h2 id="rules-title">业务接入：按这三个层次判断</h2></div>
+      <ol class="rules">
+        <li><strong>任务：</strong>看 <code>return_code</code> 和 <code>error_string</code>。正常返回只是拿到了结果。</li>
+        <li><strong>模型：</strong>看 <code>mesh_status</code>、<code>check_complete</code> 和 <code>issues</code>。已确认的问题可以展示；未查完整不能按零问题处理。</li>
+        <li><strong>修复：</strong>看 <code>repair_status</code>。部分修复有成果，失败也可能有基础副本，两者必须区分。模型仍正常导出，但这个 JSON 不再提供文件路径或下载清单。</li>
+      </ol>
+      <p>只有同时满足以下条件，才显示“当前检查通过”：</p>
+      <div class="rule">return_code === 0<br>&amp;&amp; model_checks[0].mesh_status === "passed"<br>&amp;&amp; model_checks[0].check_complete === true</div>
+      <p class="muted">通过只覆盖当前网格检查，不等于已经完成切片、逐层预览或实物打印验证。</p>
+      <details>
+        <summary>v3 → v4：这次删了什么？</summary>
+        <div class="removed"><code>output_files</code><code>input_file</code><code>working_model</code><code>next_action</code><code>repair_message</code><code>supplementary</code><code>issues_before_repair</code></div>
+        <p>不再返回模型文件路径、建议动作、底层修复消息、部件摘要或修复前数量。文件管理与本检测摘要分开，本页不约定新的文件获取接口。</p>
+        <p>内部检测、前后比较、修复安全门禁仍保留。本页只说明业务摘要，不会关闭检查、修改模型，也不会运行修复。历史 JSON 不改写。</p>
+      </details>
+    </section>
+  </main>
+  <footer><div class="wrap footer-row"><span>本地离线说明页 · 无网络请求 · 不执行模型检测或修复</span><a href="model-check-workflow.md">完整流程与字段文档 ↗</a></div></footer>
+  <script>
+    (() => {
+      "use strict";
+      const issueKeys = ["boundary", "nonmanifold_edge", "nonmanifold_vertex", "self_intersection", "degenerate", "duplicate", "orientation"];
+      const makeIssues = (counts = {}) => Object.fromEntries(issueKeys.map(key => [key, {count:counts[key] || 0, complete:true}]));
+      const makeResult = (overrides = {}, code = 0, error = "") => ({
+        return_code:code, error_string:error,
+        model_checks:[{schema_version:4, mesh_status:"passed", check_complete:true, input_materials_ignored:false, repair_status:"not_requested", issues:makeIssues(), ...overrides}]
+      });
+      const examples = {
+        partial: {
+          result:makeResult({mesh_status:"needs_repair", check_complete:false, repair_status:"partially_repaired", issues:makeIssues({self_intersection:56})}),
+          badge:"部分修复，不是全部通过", tone:"warn", heading:"成果已保留，仍有自交",
+          task:"return_code = 0：任务正常返回。error_string 为空并不表示模型没有问题。",
+          repair:"partially_repaired：有可保留修改；当前仍检测到 56 对自交。check_complete = false：整套检查未能完整判定。",
+          file:"有效的部分修复成果仍会保留并导出；本摘要不返回模型路径。",
+          caution:"七项的 complete 都为 true，仍不能推导整体 check_complete 为 true。这里内部包含关系检查没有完成。",
+          note:"依据你提供的 cli-20260916-114809-6e9989df 结果中的数量与状态，按当前 v4 字段展示。原文件是 v3，未被改写；这不是新构建的实测结果。"
+        },
+        clean: {
+          result:makeResult(), badge:"当前检查通过", tone:"", heading:"没有确认的残留问题",
+          task:"return_code = 0：本次检测正常返回。", repair:"not_requested：这次没有请求 CGAL；STL 导入自动修复不由这个字段记录。",
+          file:"原生导入后仍保存工作副本，不保证与源文件字节或几何完全相同；本摘要不返回路径。",
+          caution:"passed + check_complete = true 只表示当前检查范围通过，不保证实际打印成功。"
+        },
+        found: {
+          result:makeResult({mesh_status:"needs_repair", check_complete:false, issues:makeIssues({boundary:4})}), badge:"检测完成，发现问题", tone:"warn", heading:"4 条开放边，不是 4 个洞",
+          task:"仅检测发现问题仍可返回 0；业务应读取 mesh_status，而不是只看任务成功标记。",
+          repair:"not_requested：尚未请求 CGAL。可由调用方决定是否发起高级修复，不保证可修。",
+          file:"当前文件是 prepared.stl。它是被检测的工作副本，还不是高级修复成果。",
+          caution:"开放边计数完整，但开放曲面的内部包含判断可能无法完成，所以整体检查仍可不完整。"
+        },
+        repaired: {
+          result:makeResult({repair_status:"repaired"}), badge:"已修复，复检通过", tone:"", heading:"当前七项均为 0",
+          task:"return_code = 0，且 mesh_status = passed、check_complete = true，满足当前检查通过的展示条件。",
+          repair:"repaired：高级修复成果已经导出并完成复检。",
+          file:"已导出并保留修复成果。本摘要只报告状态与问题，不承担文件下载清单的作用。",
+          caution:"没有执行切片或打印验证。repaired 也不代表模型所有设计意图均正确。"
+        },
+        unknown: {
+          result:makeResult({mesh_status:"unknown", check_complete:false}), badge:"无法完整判定", tone:"warn", heading:"七个 0 也不一定通过",
+          task:"return_code = 0：程序正常给出了不完整的检测结论，不是后台还在等待。",
+          repair:"not_requested：没有请求高级修复。当前未确认基础几何异常，但不能宣称模型通过。",
+          file:"已保留 prepared.stl，可以下载供进一步检查。",
+          caution:"例如内部包含关系检查受上限或前提条件限制；未展示的内部检查仍计入 check_complete。"
+        },
+        unresolved: {
+          result:makeResult({mesh_status:"needs_repair", check_complete:false, repair_status:"unresolved", issues:makeIssues({nonmanifold_edge:1, nonmanifold_vertex:2})}, -25, "No retainable repair progress (example)."),
+          badge:"无可保留进展", tone:"warn", heading:"不是部分修复成功",
+          task:"return_code 非 0；error_string 是说明性错误消息，不应按句子内容写业务判断。",
+          repair:"unresolved：这次高级修复没有可保留修改；与 partially_repaired 有本质区别。",
+          file:"仍可保留 prepared.stl。它是本次原生导入的基础副本，不是高级修复成功产物。",
+          caution:"磁盘上存在文件不会把失败任务变成成功；也不能说这里的问题已经修复。"
+        },
+        failed: {
+          result:makeResult({mesh_status:"needs_repair", check_complete:false, repair_status:"failed", issues:makeIssues({boundary:4})}, -25, "Export validation failed (example)."),
+          badge:"修复任务失败", tone:"bad", heading:"当前文件仍是基础副本",
+          task:"return_code 非 0，错误示例表示导出校验失败。此句是示例，不是稳定错误码。",
+          repair:"failed：没有发布本次高级成果；issues 描述此前保留模型，不描述被拒绝的候选。",
+          file:"内部保留此前的基础副本；即使磁盘上有候选文件，也不能仅凭它存在就当作修复成果。",
+          caution:"不能把候选在内存里一度修好了，等同于最终文件已成功保存并验收。"
+        },
+        invalid: {
+          result:makeResult({mesh_status:"unknown", check_complete:false, repair_status:"not_started", issues:null}, -27, "Invalid model (example)."),
+          badge:"没有取得检测结果", tone:"bad", heading:"null 不等于零问题",
+          task:"return_code 非 0：输入／检测前置阶段失败。示例使用检测失败码 -27。",
+          repair:"not_started：本例请求了 CGAL，但还没有进入高级修复。",
+          file:"本例在导入阶段失败，没有可用的模型成果。JSON 不返回路径字段。",
+          caution:"issues = null 必须显示未取得检测结果，不能补成七个 count = 0。"
+        }
+      };
+      const byId = id => document.getElementById(id);
+      const pretty = result => {
+        // Keep each count/complete pair on one line for side-by-side review.
+        return JSON.stringify(result, null, 2).replace(/\{\n\s+"count": (\d+),\n\s+"complete": (true|false)\n\s+\}/g, '{"count": $1, "complete": $2}');
+      };
+      const render = () => {
+        const entry = examples[byId("scenario").value];
+        byId("json-example").textContent = pretty(entry.result);
+        byId("outcome").textContent = entry.badge;
+        byId("outcome").className = "pill " + entry.tone;
+        byId("example-heading").textContent = entry.heading;
+        for (const key of ["task", "repair", "file", "caution"]) byId(key + "-reading").textContent = entry[key];
+        byId("source-note").textContent = entry.note || "说明性场景，用于核对字段含义；不是新增模型运行记录。内部算法与文件内容不受本页切换影响。";
+        byId("copy").textContent = "复制 JSON";
+      };
+      byId("scenario").addEventListener("change", render);
+      byId("copy").addEventListener("click", async () => {
+        const button = byId("copy");
+        try {
+          await navigator.clipboard.writeText(byId("json-example").textContent);
+          button.textContent = "已复制";
+        } catch (_) {
+          const range = document.createRange();
+          range.selectNodeContents(byId("json-example"));
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          button.textContent = "已选中，请复制";
+        }
+      });
+      render();
+    })();
+  </script>
+</body>
+</html>

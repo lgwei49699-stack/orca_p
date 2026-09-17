@@ -35,6 +35,18 @@ OrcaSlicer 的 C++17 源码位于 `src/`，按功能模块和平台适配层拆�
 
 ### 模型修复专项测试：固定命令入口
 
+- 2026-09-17 入库前证据核对：v4 已有用户构建及实际 CLI 运行记录，不再仅是待构建状态。`planning/build/macos-build-arm64-20260916-165319-477418.log` 包含 macOS arm64 / Release 的 ModelCheckWorkflow、CLI 和检测测试编译，以及应用／libslic3r_tests 链接完成。`planning/debug/runs/cli-20260917-164729-9c5bb039/result.json` 与 `cli-20260917-164901-a3ca78ea/result.json` 均为顶层三字段、摘要六字段的 v4；真实模型检测／组合修复分别为 not_requested／partially_repaired，开放边 3→0、退化面 1→0、自交计数 60→56，仍未完全修复。未找到此次 v4 完整专项及整套 CLI 回归的新通过记录；9 月 15 日 178 用例／73 项记录仅覆盖当时版本，不能代替 v4 回归。此次提交前仅核对既有日志、更新文档并做静态检查，未重新编译／运行测试。下面“待验证”条目保留历史状态，最新证据以本条和 `doc/model-check-workflow.md` 第 7 节为准；Blender／压薄工具翻译不纳入本次 Orca 提交。
+
+- 2026-09-16 检测业务摘要 v4（待新构建验证）：`--check-model`（含组合 CGAL）顶层仅 return_code／error_string／model_checks；摘要仅 schema_version／mesh_status／check_complete／input_materials_ignored／repair_status／issues 六字段。按用户确认删除 output_files 文件路径，也不输出输入路径、working_model、next_action、repair_message、supplementary 或修复前摘要。仅精简输出，内部文件导出、两项结构检查、整体完整性、修复／回退／保色门禁与普通切片／单独修复协议不变；历史 JSON 不改写。更新 `[ModelRepair][Inspection][JSON]` 和既有 CLI 检测脚本（修复前基线独立获取，产物只在测试独占目录内校验，不把路径混回响应），维护台本地兼容 v4。本轮仅静态检查，未编译／未运行测试；下面 178 用例／73 项 CLI 不能当作 v4 已通过的证明。字段及迁移见 `doc/model-check-workflow.md` 第 2、7 节。
+
+- 2026-09-15 23:50 最新验收：测试坐标基准修正后，用户授权重编译 `build/arm64` / Release 的 `libslic3r_tests` 成功；聚焦 1 用例／786 断言、固定完整修复专项 **178 用例／13,611 断言**全部通过，退出码 0。修正仅在测试：局部涂色区域排除未引用顶点，整模型导出按应用变换后的坐标精确比较，保留面积／位置及原网格／矩阵不变断言；生产修复与导出不变。此前 207 是 JUnit 展开记录数，不是独立用例总数，统计以 Catch2 的 178 为准。23:17 同版应用的 CLI 检测 73 项、材质 30 项、导出 50 项及工具 7 项已通过，真实模型开放边 3→0、退化面 1→0、自交计数 60→56（再次 45），仍为部分修复。本条覆盖下面同日“待验证”的对应 C++／CLI 范围，旧数字及历史 GUI 记录不作为新 GUI 验收。新日志 `planning/repair/cap-coordinate-validation-20260915-2QL12a/`；关联真实模型／CLI 证据 `planning/repair/cap-validation-20260915-Du2nKj/`，详见 `doc/model-check-workflow.md` 第 7 节。未重打包 GUI、未切片／打印、未验证完整 CTest／旧 macOS、未提交。
+
+- 2026-09-15 共线退化连接准备基线（待新构建验证）：显式 GUI／CLI 部分修复共用 `repair_degenerate_edge_caps()`，只翻转闭合流形图中可证明保持原表面的孤立共线 cap；复用原 float 顶点和绕序，复杂簇／已有对角线等不支持条件不放行，相交查询截断不批准。独立基线可在后续普通几何拒绝时保留，内部 changed 与净删面数分开；异常、取消、非法输出、严格保色、核心严格默认及通用部分门禁不变。新增回归仍在 `[ModelRepair][Partial][Preparation]` 等固定过滤器及 `scripts/test_cli_model_check.py`，不新增命令参数或业务 JSON 字段。本轮未编译／未运行测试，详情见 `doc/model-check-workflow.md` 第 5.1.1、7 节。
+
+- 2026-09-15 取消整体壳体朝向公开检测项（待新构建验证）：业务 supplementary 仅保留 components／internal_components，demo 和维护台删除方向条目；其未知／奇偶壳层约定不再影响 check_complete、mesh_status、next_action。局部朝向冲突仍属七项，CGAL 修复内部安全校验与旧底层诊断数据保留；包含关系等其他未完成判断仍不得伪报通过。未入库 v3 以当前字段文档为准。更新 `[ModelRepair][Inspection]`、`[ModelRepair][Inspection][JSON]` 和 CLI／demo 用例；本轮未编译／未运行测试。
+
+- 2026-09-15 业务 JSON 精简（待新构建验证）：`--check-model`（含组合 CGAL）对外 `model_checks[].schema_version=3`，仅输出任务结果／当前文件组、七项 count+complete、三项补充摘要、修复状态与可选修复前数量。检查未取得时为 null，不完整的 0 不作无问题；不混出历史副本或未发布候选。检测／修复算法、内部详细报告和普通切片／修复 JSON 不变，不新增参数。字段与迁移见 `doc/model-check-workflow.md` 第 2 节；新增 `[ModelRepair][Inspection][JSON]` 与更新 CLI 检测脚本仍用固定入口。本轮未编译／未运行测试，下面旧版本通过数字不能证明本次协议修改通过。
+
 - 2026-09-15 当前验收状态：macOS arm64 / Release 构建通过；固定完整修复专项 169 用例／12,521 断言通过（含 GUI 导出坐标专项 2 用例／4,932 断言），CLI 检测 60 项、材质 30 项、修复导出 50 项及验收工具 7 项通过。原生 GUI 同部件部分修复、单对象／旋转缩放／多对象合并的右键 STL 与 OBJ 导出对照通过。下面 9 月 14 日记录中的“待验证／未编译”描述保留当时状态，已由此次对应范围的验证覆盖，不代表当前仍未验收；完整证据见 `doc/model-check-workflow.md` 第 7 节。阶段性入库不等同完整 CTest、真实大模型全集、旧版 macOS 兼容性或切片／打印验收；后续源码修改仍须重新验证，不能复用本次结果。
 
 - 2026-09-14 22:10 构建验证后修正（待重新构建）：`is_discardable_repair_part()` 保留 2.4.2 数值阈值，但体积／体积比删除只用于共享 CGAL 只读检查确认的有界实体；开口、朝向抵消、自交等不按零有符号体积删除。原尺寸阈值、删空／保色／异常保护不变。回退夹具编辑索引后重建 TriangleMesh 并检查分支执行次数；CLI 检测按原生导入后的基线区分有补洞进展与 unresolved，OBJ 部分修复及颜色断言不放宽。此前完整专项 163 通过／2 失败、CLI 几何 50 通过不能当作本补丁通过证明；详情见 `doc/model-check-workflow.md` 第 7 节。本次未编译、未运行测试，仍用既有固定入口。

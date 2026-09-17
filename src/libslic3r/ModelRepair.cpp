@@ -47,7 +47,7 @@ bool has_valid_indices(const TriangleMesh& mesh)
 // remove exact zero-area faces and coincident faces with the SAME winding.
 // Oppositely oriented interfaces, small faces and all vertex positions remain
 // untouched. This works with both indexed OBJ and exact-welded STL geometry.
-size_t prepare_basic_mesh(const TriangleMesh& source, TriangleMesh& result)
+size_t remove_basic_faces(const TriangleMesh& source, TriangleMesh& result)
 {
     using Corner = std::array<float, 3>;
     std::set<std::array<Corner, 3>>          seen;
@@ -83,10 +83,9 @@ size_t prepare_basic_mesh(const TriangleMesh& source, TriangleMesh& result)
         const size_t after_open_edges  = its_num_open_edges(candidate.its);
         if (after_open_edges > before_open_edges) {
             // A collinear triangle may close an indexed edge fan. Deleting it
-            // alone opens that fan and prevents CGAL's closed-mesh topology
-            // repair from seeing the original connectivity. Let CGAL repair
-            // the original source instead; on failure retain the unchanged
-            // part, not this independently cleaned but now-open baseline.
+            // alone opens that fan. Defer this batch to the independently
+            // validated topology preparation below, or the original CGAL
+            // repair path for unsupported cases. Never retain deletion alone.
             BOOST_LOG_TRIVIAL(info) << "Model repair: event=basic_cleanup_deferred, reason=would_open_connections, faces="
                                     << source.facets_count() << "->" << candidate.facets_count() << ", open_edges=" << before_open_edges
                                     << "->" << after_open_edges;
@@ -95,6 +94,25 @@ size_t prepare_basic_mesh(const TriangleMesh& source, TriangleMesh& result)
         result = std::move(candidate);
     }
     return removed;
+}
+
+struct BasicMeshPreparation
+{
+    size_t removed_faces      = 0;
+    size_t repaired_edge_caps = 0;
+    bool   changed() const { return removed_faces != 0 || repaired_edge_caps != 0; }
+};
+
+BasicMeshPreparation prepare_basic_mesh(const TriangleMesh& source, TriangleMesh& result)
+{
+    BasicMeshPreparation preparation;
+    preparation.removed_faces    = remove_basic_faces(source, result);
+    const TriangleMesh& baseline = preparation.removed_faces != 0 ? result : source;
+    TriangleMesh        normalized;
+    preparation.repaired_edge_caps = MeshBoolean::cgal::repair_degenerate_edge_caps(baseline, normalized);
+    if (preparation.repaired_edge_caps != 0)
+        result = std::move(normalized);
+    return preparation;
 }
 
 // Structural guard for basic candidates and partial-failure handling. A small
@@ -974,24 +992,24 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
 
                 TriangleMesh repaired_mesh;
                 TriangleMesh basic_mesh;
-                size_t       basic_removed = 0;
+                BasicMeshPreparation preparation;
                 if (options.allow_partial) {
-                    const auto prepare = [&]() { basic_removed = prepare_basic_mesh(part_mesh, basic_mesh); };
+                    const auto prepare = [&]() { preparation = prepare_basic_mesh(part_mesh, basic_mesh); };
                     if (options.run_mesh_preparation)
                         options.run_mesh_preparation(prepare);
                     else
                         prepare();
                     if (cancellation_requested())
                         return false;
-                    if (basic_removed != 0 && (basic_mesh.empty() || is_not_3dimensional_part(basic_mesh)))
+                    if (preparation.changed() && (basic_mesh.empty() || is_not_3dimensional_part(basic_mesh)))
                         throw std::runtime_error("Repair failed: basic cleanup removed all geometry.");
                 }
-                const TriangleMesh& repair_source = basic_removed != 0 ? basic_mesh : part_mesh;
+                const TriangleMesh& repair_source = preparation.changed() ? basic_mesh : part_mesh;
                 std::string         error;
                 bool                repair_succeeded = false;
                 bool                basic_fallback   = false;
                 bool                partial_candidate = false;
-                const bool          basic_is_valid   = basic_removed != 0 &&
+                const bool          basic_is_valid    = preparation.changed() &&
                                             !mesh_requires_repair(basic_mesh, its_num_open_edges(basic_mesh.its), options);
                 if (cancellation_requested())
                     return false;
@@ -1073,10 +1091,12 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     add_unresolved(report, stored_report, error.empty() ? "Repair failed." : error);
                     // Never retain the rejected candidate, even if a delegated
                     // hook modified it before returning false.
-                    if (basic_removed == 0)
+                    if (!preparation.changed())
                         continue;
                     repaired_mesh  = std::move(basic_mesh);
                     basic_fallback = true;
+                    BOOST_LOG_TRIVIAL(info) << "Model repair: event=preparation_retained, removed_faces=" << preparation.removed_faces
+                                            << ", repaired_edge_caps=" << preparation.repaired_edge_caps << ", reason=" << error;
                 } else if (partial_candidate) {
                     add_unresolved(report, stored_report, error);
                 }
@@ -1134,8 +1154,12 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                 part->exterior_facets.reset();
                 part->set_new_unique_id();
 
-                stored_report.basic_removed_faces += basic_removed;
-                report.basic_removed_faces += basic_removed;
+                // A diagonal flip repairs a zero-area record without reducing
+                // the face count. Track that progress separately from deletions
+                // internally; the public report already carries before/after
+                // inspection and partial status, so no new JSON field is needed.
+                stored_report.basic_removed_faces += preparation.removed_faces;
+                report.basic_removed_faces += preparation.removed_faces;
                 if (!basic_fallback) {
                     ++stored_report.repaired_parts;
                     ++report.mesh_repaired;

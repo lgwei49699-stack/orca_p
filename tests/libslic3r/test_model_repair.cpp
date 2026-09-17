@@ -19,6 +19,7 @@
 #include <libslic3r/Format/STL.hpp>
 #include <libslic3r/Model.hpp>
 #include <libslic3r/ModelRepair.hpp>
+#include <libslic3r/ModelInspection.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 #include <libslic3r/TriangleMeshSlicer.hpp>
 #include <slic3r/Utils/ModelRepairPolicy.hpp>
@@ -35,19 +36,54 @@ TriangleMesh cube_with_open_side()
     return TriangleMesh(std::move(mesh.its));
 }
 
-TriangleMesh cube_with_degenerate_edge_cap()
+TriangleMesh with_degenerate_edge_cap(TriangleMesh mesh, size_t face_index = 0)
 {
-    auto        its      = make_cube(10., 10., 10.).its;
-    const auto  face     = its.indices.front();
+    auto        its      = std::move(mesh.its);
+    const auto  face     = its.indices[face_index];
     const int   midpoint = int(its.vertices.size());
     const Vec3f point    = (its.vertices[face[0]] + its.vertices[face[1]]) * 0.5f;
     its.vertices.push_back(point);
     // Same cube surface, but the unsplit adjacent face still uses (a,b).
     // The collinear (a,b,midpoint) record pairs all three sides of this T-junction.
-    its.indices.front() = Vec3i32(face[0], midpoint, face[2]);
+    its.indices[face_index] = Vec3i32(face[0], midpoint, face[2]);
     its.indices.emplace_back(midpoint, face[1], face[2]);
     its.indices.emplace_back(face[0], face[1], midpoint);
     return TriangleMesh(std::move(its));
+}
+
+TriangleMesh cube_with_degenerate_edge_cap() { return with_degenerate_edge_cap(make_cube(10., 10., 10.)); }
+
+TriangleMesh cube_with_unsupported_edge_cap()
+{
+    auto its = cube_with_degenerate_edge_cap().its;
+    // Coincident endpoints create adjacent degenerate faces after welding.
+    // This is not the isolated three-distinct-point cap accepted by preparation.
+    its.vertices.back() = its.vertices[its.indices.back()[0]];
+    return TriangleMesh(std::move(its));
+}
+
+TriangleMesh intersecting_tube_with_edge_cap()
+{
+    indexed_triangle_set tube;
+    for (int ring = 0; ring < 4; ++ring) {
+        const float x = float(ring * 10);
+        tube.vertices.emplace_back(x, 0.f, 0.f);
+        tube.vertices.emplace_back(x, 10.f, 0.f);
+        tube.vertices.emplace_back(x, 10.f, 10.f);
+        tube.vertices.emplace_back(x, 0.f, 10.f);
+    }
+    tube.vertices[6] = Vec3f(5.f, 5.f, -2.f); // Same folded tube as the partial CGAL regression.
+    tube.indices     = {Vec3i32(0, 2, 1), Vec3i32(0, 3, 2)};
+    for (int ring = 0; ring < 3; ++ring)
+        for (int corner = 0; corner < 4; ++corner) {
+            const int a = ring * 4 + corner, b = ring * 4 + (corner + 1) % 4;
+            tube.indices.emplace_back(a, b, b + 4);
+            tube.indices.emplace_back(a, b + 4, a + 4);
+        }
+    tube.indices.emplace_back(12, 13, 14);
+    tube.indices.emplace_back(12, 14, 15);
+    const size_t cap_face = tube.indices.size() - 1; // Far from the folded corner.
+    return with_degenerate_edge_cap(TriangleMesh(std::move(tube)), cap_face);
 }
 
 TriangleMesh open_tetrahedron_at_origin()
@@ -2420,10 +2456,10 @@ TEST_CASE("Basic cleanup alone is fully validated and does not call advanced rep
     CHECK(model.objects.front()->volumes.front()->mesh().facets_count() == 12);
 }
 
-TEST_CASE("Partial repair preserves degenerate edge topology until CGAL accepts a candidate", "[ModelRepair][Partial][Preparation]")
+TEST_CASE("Unsupported degenerate edge topology is not independently deleted", "[ModelRepair][Partial][Preparation]")
 {
     const bool source_hook = GENERATE(false, true);
-    auto       input       = cube_with_degenerate_edge_cap();
+    auto       input       = cube_with_unsupported_edge_cap();
     REQUIRE(its_num_open_edges(input.its) == 0);
     auto removed_cap = input.its;
     removed_cap.indices.pop_back();
@@ -2469,7 +2505,7 @@ TEST_CASE("Deferred degenerate cleanup does not discard another part's repair", 
     for (size_t i = 0; i < 2; ++i) {
         auto* object = model.add_object();
         object->add_instance();
-        object->add_volume((i == 0) == bad_first ? cube_with_degenerate_edge_cap() : cube_with_open_side());
+        object->add_volume((i == 0) == bad_first ? cube_with_unsupported_edge_cap() : cube_with_open_side());
     }
     const size_t       bad_index = bad_first ? 0 : 1;
     const auto         original  = model.objects[bad_index]->volumes.front()->mesh_ptr();
@@ -2530,6 +2566,309 @@ TEST_CASE("CGAL can repair an original closed degenerate edge cap in partial mod
     CHECK_FALSE(MeshBoolean::cgal::requires_repair(mesh));
     CHECK(its_volume(mesh.its) == Approx(1000.).epsilon(1.e-5));
     CHECK(mesh.bounding_box().size().isApprox(Vec3d(10., 10., 10.)));
+}
+
+TEST_CASE("Exact cap preparation preserves the surface and is idempotent", "[ModelRepair][Partial][Preparation][MeshBoolean]")
+{
+    const int  sample       = GENERATE(0, 1, 2);
+    const bool intersecting = sample == 1;
+    auto       source       = intersecting ? intersecting_tube_with_edge_cap() : cube_with_degenerate_edge_cap();
+    if (sample == 2) {
+        // Exact float-scale geometry around the user's far-from-origin cap.
+        indexed_triangle_set tetra;
+        tetra.vertices = {Vec3f(644.5202026367188f, 670.7578125f, 0.f), Vec3f(644.5203247070312f, 670.758056640625f, 0.f),
+                          Vec3f(644.977783203125f, 671.5363159179688f, 0.f),
+                          Vec3f(644.5281372070312f, 670.6104736328125f, 0.172515869140625f)};
+        tetra.indices  = {Vec3i32(0, 1, 2), Vec3i32(1, 0, 3), Vec3i32(2, 1, 3), Vec3i32(0, 2, 3)};
+        source         = with_degenerate_edge_cap(TriangleMesh(std::move(tetra)), 1);
+    }
+    const auto original = source.its;
+    const auto before   = inspect_model_mesh(source);
+    REQUIRE(before["issues"]["boundary"]["count"] == 3);
+    REQUIRE(before["issues"]["degenerate"]["count"] == 1);
+    REQUIRE(its_split(source.its).size() == 1);
+    TriangleMesh result;
+    REQUIRE(MeshBoolean::cgal::repair_degenerate_edge_caps(source, result) == 1);
+    const auto after = inspect_model_mesh(result);
+    CHECK(after["issues"]["boundary"]["count"] == 0);
+    CHECK(after["issues"]["degenerate"]["count"] == 0);
+    CHECK(after["issues"]["nonmanifold_edge"]["count"] == 0);
+    CHECK(after["issues"]["nonmanifold_vertex"]["count"] == 0);
+    CHECK(after["issues"]["duplicate"]["count"] == 0);
+    CHECK(after["issues"]["orientation"]["count"] == 0);
+    CHECK(after["component_analysis"]["component_count"] == before["component_analysis"]["component_count"]);
+    CHECK(result.facets_count() == source.facets_count());
+    // Compare with double intermediates and a common nearby origin. The legacy
+    // float volume helper is not a reliable oracle for tiny, far-offset caps.
+    const Vec3d origin  = source.its.vertices.front().cast<double>();
+    const auto  measure = [&](const TriangleMesh& mesh) {
+        double area = 0., volume = 0.;
+        for (const auto& face : mesh.its.indices) {
+            const Vec3d a = mesh.its.vertices[face[0]].cast<double>() - origin;
+            const Vec3d b = mesh.its.vertices[face[1]].cast<double>() - origin;
+            const Vec3d c = mesh.its.vertices[face[2]].cast<double>() - origin;
+            area += 0.5 * (b - a).cross(c - a).norm();
+            volume += a.dot(b.cross(c)) / 6.;
+        }
+        return std::make_pair(area, volume);
+    };
+    const auto before_measure = measure(source), after_measure = measure(result);
+    CHECK(after_measure.first == Approx(before_measure.first).epsilon(1.e-10).margin(1.e-13));
+    CHECK(after_measure.second == Approx(before_measure.second).epsilon(1.e-10).margin(1.e-13));
+    CHECK(result.bounding_box().size().isApprox(source.bounding_box().size()));
+    for (const auto& v : result.its.vertices)
+        CHECK(std::any_of(original.vertices.begin(), original.vertices.end(), [&](const auto& p) { return p == v; }));
+    if (intersecting) {
+        CHECK(after["issues"]["self_intersection"]["count"].get<size_t>() > 0);
+        CHECK(after["mesh_status"] == "needs_repair");
+    } else {
+        CHECK(after["mesh_status"] == "passed");
+    }
+    TriangleMesh untouched = make_cube(2., 2., 2.);
+    const auto   marker    = untouched.its;
+    CHECK(MeshBoolean::cgal::repair_degenerate_edge_caps(result, untouched) == 0);
+    CHECK(untouched.its.vertices == marker.vertices);
+    CHECK(untouched.its.indices == marker.indices);
+    CHECK(source.its.vertices == original.vertices);
+    CHECK(source.its.indices == original.indices);
+}
+
+TEST_CASE("Topology preparation does not accept unsupported or malformed caps", "[ModelRepair][Partial][Preparation][MeshBoolean]")
+{
+    auto source = cube_with_degenerate_edge_cap();
+    SECTION("not exactly collinear")
+    {
+        const auto cap = source.its.indices.back();
+        for (int axis = 0; axis < 3; ++axis)
+            if (source.its.vertices[cap[0]][axis] == source.its.vertices[cap[1]][axis]) {
+                source.its.vertices.back()[axis] += 0.0001f;
+                break;
+            }
+    }
+    SECTION("coincident points") { source = cube_with_unsupported_edge_cap(); }
+    SECTION("existing opposite diagonal")
+    {
+        indexed_triangle_set tetra;
+        tetra.vertices = {Vec3f(0, 0, 0), Vec3f(5, 0, 0), Vec3f(10, 0, 0), Vec3f(0, 10, 0)};
+        tetra.indices  = {Vec3i32(0, 2, 1), Vec3i32(2, 0, 3), Vec3i32(0, 1, 3), Vec3i32(1, 2, 3)};
+        source         = TriangleMesh(std::move(tetra));
+    }
+    SECTION("connected degenerate cluster")
+    {
+        auto         its  = source.its;
+        const size_t last = its.indices.size() - 1;
+        const auto   cap  = its.indices[last];
+        its.indices[last] = Vec3i32(cap[1], cap[2], cap[0]);
+        source            = with_degenerate_edge_cap(TriangleMesh(std::move(its)), last);
+    }
+    SECTION("open graph") { source.its.indices.erase(source.its.indices.begin() + 2); }
+    SECTION("invalid index") { source.its.indices.front()[0] = int(source.its.vertices.size()); }
+    SECTION("non finite coordinate") { source.its.vertices.front().x() = std::numeric_limits<float>::infinity(); }
+    TriangleMesh result = make_cube(2., 2., 2.);
+    const auto   marker = result.its;
+    CHECK(MeshBoolean::cgal::repair_degenerate_edge_caps(source, result) == 0);
+    CHECK(result.its.vertices == marker.vertices);
+    CHECK(result.its.indices == marker.indices);
+}
+
+TEST_CASE("Topology preparation cannot approve an intersection-truncated baseline", "[ModelRepair][Partial][Preparation][MeshBoolean]")
+{
+    auto source = cube_with_degenerate_edge_cap();
+    for (int i = 1; i <= 100; ++i) {
+        auto box = make_cube(10., 10., 10.);
+        box.translate(0.011f * i, 0.017f * i, 0.023f * i);
+        source.merge(box);
+    }
+    ModelInspectionOptions options;
+    options.detail_limit = 0;
+    const auto before    = inspect_model_mesh(source, options);
+    REQUIRE(before["issues"]["self_intersection"]["complete"] == false);
+    TriangleMesh result = make_cube(2., 2., 2.);
+    const auto   marker = result.its;
+    CHECK(MeshBoolean::cgal::repair_degenerate_edge_caps(source, result) == 0);
+    CHECK(result.its.vertices == marker.vertices);
+    CHECK(result.its.indices == marker.indices);
+}
+
+TEST_CASE("Verified cap baseline survives later rejection in every shared repair hook", "[ModelRepair][Partial][Preparation]")
+{
+    const int  hook            = GENERATE(0, 1, 2);
+    Model      model           = make_model(intersecting_tube_with_edge_cap());
+    auto*      object          = model.objects.front();
+    auto*      volume          = object->volumes.front();
+    const auto source          = volume->mesh_ptr();
+    const auto source_its      = source->its;
+    const auto volume_matrix   = volume->get_matrix();
+    const auto instance_matrix = object->instances.front()->get_matrix();
+    const auto world_bounds    = model.mesh().bounding_box();
+    paint_facet(volume->mmu_segmentation_facets, *source, 26, EnforcerBlockerType::Extruder3);
+    // add_volume() centers the mesh and stores its position in the volume
+    // transform. Compare painting in that same local frame, not fixture space.
+    auto source_painted = volume->mmu_segmentation_facets.get_facets_strict(*volume, EnforcerBlockerType::Extruder3);
+    REQUIRE_FALSE(source_painted.indices.empty());
+    // The selector also returns unused mesh vertices. Bounds must cover only
+    // the selected faces, not the unpainted remainder of the model.
+    its_compactify_vertices(source_painted);
+    const auto source_painted_bounds = bounding_box(source_painted);
+    REQUIRE(source_painted_bounds.min.x() == source_painted_bounds.max.x());
+    auto options                = gui_model_repair_options(); // Same shared policy as explicit GUI repair.
+    options.split_components    = false;
+    options.remove_non_3d_parts = false;
+    size_t     attempts         = 0;
+    const auto reject           = [&](const TriangleMesh& input, TriangleMesh& candidate, std::string& error) {
+        ++attempts;
+        const auto check = inspect_model_mesh(input);
+        CHECK(check["issues"]["degenerate"]["count"] == 0);
+        CHECK(check["issues"]["boundary"]["count"] == 0);
+        REQUIRE(check["issues"]["self_intersection"]["count"].get<size_t>() > 0);
+        candidate = make_cube(99., 99., 99.); // Rejected output must never leak.
+        error     = "Injected later self-intersection repair rejection.";
+        return false;
+    };
+    if (hook == 0)
+        options.repair_mesh = [&](TriangleMesh& candidate, std::string& error) { return reject(candidate, candidate, error); };
+    else if (hook == 1)
+        options.repair_mesh_from_source = reject;
+    else
+        options.repair_mesh_with_partial = [&](const TriangleMesh& input, TriangleMesh& candidate, std::string& error) {
+            reject(input, candidate, error);
+            return MeshRepairOutcome::Rejected;
+        };
+    ModelRepairReport report;
+    REQUIRE(repair_model(model, report, options));
+    REQUIRE(attempts == 1);
+    CHECK(report.committed);
+    CHECK(report.can_continue());
+    CHECK_FALSE(report.mesh_validated());
+    CHECK(report.status() == std::string("partially_repaired"));
+    CHECK(report.basic_removed_faces == 0); // The flip is progress despite unchanged face count.
+    const auto& retained = model.objects.front()->volumes.front()->mesh();
+    const auto  check    = inspect_model_mesh(retained);
+    CHECK(check["issues"]["degenerate"]["count"] == 0);
+    CHECK(check["issues"]["boundary"]["count"] == 0);
+    CHECK(check["issues"]["self_intersection"]["count"].get<size_t>() > 0);
+    CHECK(retained.facets_count() == source->facets_count());
+    CHECK(retained.bounding_box().size().isApprox(source->bounding_box().size()));
+    CHECK(retained.bounding_box().min == source->bounding_box().min);
+    CHECK(retained.bounding_box().max == source->bounding_box().max);
+    CHECK(source->its.vertices == source_its.vertices);
+    CHECK(source->its.indices == source_its.indices);
+    auto* retained_volume = model.objects.front()->volumes.front();
+    CHECK(retained_volume->get_matrix().matrix().isApprox(volume_matrix.matrix(), 0.));
+    CHECK(object->instances.front()->get_matrix().matrix().isApprox(instance_matrix.matrix(), 0.));
+    auto painted = retained_volume->mmu_segmentation_facets.get_facets_strict(*retained_volume, EnforcerBlockerType::Extruder3);
+    REQUIRE_FALSE(painted.indices.empty());
+    its_compactify_vertices(painted);
+    CHECK(bounding_box(painted).min == source_painted_bounds.min);
+    CHECK(bounding_box(painted).max == source_painted_bounds.max);
+    double painted_area = 0.;
+    for (const auto& face : painted.indices) {
+        const Vec3d a = painted.vertices[face[0]].cast<double>();
+        const Vec3d b = painted.vertices[face[1]].cast<double>();
+        const Vec3d c = painted.vertices[face[2]].cast<double>();
+        CHECK(a.x() == source_painted_bounds.min.x());
+        CHECK(b.x() == source_painted_bounds.min.x());
+        CHECK(c.x() == source_painted_bounds.min.x());
+        painted_area += 0.5 * (b - a).cross(c - a).norm();
+    }
+    CHECK(painted_area == Approx(50.).margin(1.e-5)); // The flipped neighbor keeps its color without spreading it.
+    CHECK_FALSE(report.volume_reports.front().annotations_cleared);
+    // store_stl(Model*) exports all volume/instance transforms, not the local
+    // volume mesh. Keep exact per-corner comparisons in the exported frame.
+    const auto exported_mesh = model.mesh();
+    CHECK(exported_mesh.bounding_box().min == world_bounds.min);
+    CHECK(exported_mesh.bounding_box().max == world_bounds.max);
+    REQUIRE(exported_mesh.facets_count() == retained.facets_count());
+    for (const bool binary : {false, true}) {
+        const auto path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orca-cap-baseline-%%%%-%%%%.stl");
+        REQUIRE(store_stl(path.string().c_str(), &model, binary));
+        TriangleMesh reloaded;
+        REQUIRE(reloaded.ReadSTLFile(path.string().c_str(), false));
+        const auto recheck = inspect_model_mesh(reloaded);
+        for (auto issue = check["issues"].begin(); issue != check["issues"].end(); ++issue) {
+            CHECK(recheck["issues"][issue.key()]["count"] == issue.value()["count"]);
+            CHECK(recheck["issues"][issue.key()]["complete"] == issue.value()["complete"]);
+        }
+        REQUIRE(reloaded.facets_count() == exported_mesh.facets_count());
+        for (size_t face = 0; face < exported_mesh.facets_count(); ++face)
+            for (int corner = 0; corner < 3; ++corner)
+                CHECK(reloaded.its.vertices[reloaded.its.indices[face][corner]] ==
+                      exported_mesh.its.vertices[exported_mesh.its.indices[face][corner]]);
+        CHECK(boost::filesystem::remove(path));
+    }
+    // Repeating the same rejected repair must not invent another normalization.
+    const auto        previous = model.objects.front()->volumes.front()->mesh_ptr();
+    ModelRepairReport repeated;
+    CHECK_FALSE(repair_model(model, repeated, options));
+    CHECK(repeated.status() == std::string("unresolved"));
+    CHECK_FALSE(repeated.committed);
+    CHECK(attempts == 2);
+    CHECK(model.objects.front()->volumes.front()->mesh_ptr() == previous);
+}
+
+TEST_CASE("Validated preparation does not survive a fatal later transaction", "[ModelRepair][Partial][Preparation]")
+{
+    Model      model    = make_model(intersecting_tube_with_edge_cap());
+    const auto original = model.objects.front()->volumes.front()->mesh_ptr();
+    auto*      volume   = model.objects.front()->volumes.front();
+    paint_facet(volume->mmu_segmentation_facets, *original, 26, EnforcerBlockerType::Extruder3);
+    const auto original_painting = volume->mmu_segmentation_facets.get_data();
+    auto       options           = gui_model_repair_options();
+    options.split_components     = false;
+    options.remove_non_3d_parts  = false;
+
+    enum class Failure { Exception, InvalidOutput, Cancel, Painting };
+    Failure failure     = Failure::Exception;
+    bool    canceled    = false;
+    size_t  attempts    = 0;
+    options.is_canceled = [&] { return canceled; };
+    SECTION("worker exception") { failure = Failure::Exception; }
+    SECTION("illegal candidate") { failure = Failure::InvalidOutput; }
+    SECTION("cancellation") { failure = Failure::Cancel; }
+    SECTION("strict painting failure") { failure = Failure::Painting; }
+    options.run_painting_validation = [&](const std::function<bool()>& task) {
+        return failure == Failure::Painting && attempts != 0 ? false : task();
+    };
+    options.repair_mesh = [&](TriangleMesh& candidate, std::string&) -> bool {
+        ++attempts;
+        CHECK(inspect_model_mesh(candidate)["issues"]["degenerate"]["count"] == 0);
+        if (failure == Failure::Exception)
+            throw std::runtime_error("Injected worker exception after normalization.");
+        if (failure == Failure::Painting)
+            return false; // Safe baseline reaches the existing strict painting gate.
+        if (failure == Failure::Cancel)
+            canceled = true;
+        else
+            candidate.its.indices.front()[0] = int(candidate.its.vertices.size());
+        return true;
+    };
+    ModelRepairReport report;
+    CHECK_FALSE(repair_model(model, report, options));
+    CHECK(attempts == 1);
+    CHECK_FALSE(report.committed);
+    CHECK_FALSE(report.can_continue());
+    CHECK(model.objects.front()->volumes.front()->mesh_ptr() == original);
+    CHECK(volume->mmu_segmentation_facets.get_data() == original_painting);
+}
+
+TEST_CASE("Strict repair does not silently enable a partial topology baseline", "[ModelRepair][Preparation]")
+{
+    Model              model    = make_model(intersecting_tube_with_edge_cap());
+    const auto         original = model.objects.front()->volumes.front()->mesh_ptr();
+    ModelRepairOptions options;
+    options.split_components    = false;
+    options.remove_non_3d_parts = false;
+    size_t attempts             = 0;
+    options.repair_mesh         = [&](TriangleMesh& candidate, std::string&) {
+        ++attempts;
+        CHECK(inspect_model_mesh(candidate)["issues"]["degenerate"]["count"] == 1);
+        return false;
+    };
+    ModelRepairReport report;
+    CHECK_FALSE(repair_model(model, report, options));
+    CHECK(attempts == 1);
+    CHECK_FALSE(report.committed);
+    CHECK(model.objects.front()->volumes.front()->mesh_ptr() == original);
 }
 
 TEST_CASE("Partial mode keeps invalid input and worker exceptions fatal", "[ModelRepair][Partial]")

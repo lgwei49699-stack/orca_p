@@ -29,6 +29,12 @@ struct ModelCheckWorkflowReport
 // the last published working model. Advanced repair without a retainable change
 // reports unresolved, not a successful repair. Never overwrites the input.
 void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelCheckWorkflowReport& report);
+
+// Public schema v4: expose current status and seven issue counts only, without
+// historical/structural details or artifact path fields. The internal report
+// retains artifact paths; this projection does not change model export.
+// Ordinary repair/slicing JSON and the internal inspection schema are unchanged.
+nlohmann::json model_check_business_result(const nlohmann::json& checks, int return_code, const std::string& error);
 } // namespace Slic3r
 
 #endif

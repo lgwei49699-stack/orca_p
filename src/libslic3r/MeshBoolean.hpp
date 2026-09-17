@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <exception>
+#include <cstddef>
 
 #include <libslic3r/TriangleMesh.hpp>
 #include "MeshRepairOutcome.hpp"
@@ -91,6 +92,14 @@ MeshRepairOutcome repair_with_partial(TriangleMesh& mesh, std::string* error = n
 // residual intersection pairs/boundaries and geometry-fidelity limits. False
 // means unproven/rejected, not necessarily a damaged mesh. Exceptions propagate.
 bool is_safe_partial_repair(const TriangleMesh& source, const TriangleMesh& candidate);
+
+// Independently retainable preparation for explicit partial repair. Only flip
+// isolated, exactly collinear edge caps in a closed manifold graph: the middle
+// vertex is strictly inside the opposite edge, so the two new triangles exactly
+// partition its nondegenerate neighbor with the original winding and positions.
+// Returns repaired cap count (NOT a net face-count reduction). Zero leaves
+// result untouched. Unsupported geometry is deferred; exceptions propagate.
+std::size_t repair_degenerate_edge_caps(const TriangleMesh& source, TriangleMesh& result);
 }
 
 namespace mcut {

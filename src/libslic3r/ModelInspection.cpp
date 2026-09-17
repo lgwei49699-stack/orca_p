@@ -663,11 +663,14 @@ nlohmann::json inspect_model_mesh(const TriangleMesh& source, const ModelInspect
     supplemental["orientation_suspect_count"]     = suspect;
     supplemental["orientation_complete"]          = expected_unknown == 0;
     report["component_analysis"]                  = std::move(supplemental);
-    const bool complete = basic_complete && components.containment_complete && components.size_complete && expected_unknown == 0;
+    // Keep orientation metadata for internal/legacy diagnostic readers, but
+    // whole-shell direction is no longer a user-facing check or task gate.
+    // Local winding conflicts remain one of the seven geometry checks.
+    const bool complete             = basic_complete && components.containment_complete && components.size_complete;
     report["basic_checks_complete"] = basic_complete;
     report["check_complete"]        = complete;
-    report["mesh_status"]           = has_issues ? "needs_repair" : (!complete ? "unknown" : (suspect ? "needs_review" : "passed"));
-    report["next_action"]           = has_issues ? "advanced_repair" : (!complete || suspect ? "review_structure" : "none");
+    report["mesh_status"]           = has_issues ? "needs_repair" : (!complete ? "unknown" : "passed");
+    report["next_action"]           = has_issues ? "advanced_repair" : (!complete ? "review_structure" : "none");
     report["printability_verified"] = false;
     return report;
 }

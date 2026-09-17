@@ -30,6 +30,7 @@
 #include <CGAL/Exact_integer.h>
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/Cartesian_converter.h>
+#include <CGAL/Kernel/global_functions_3.h>
 #include <CGAL/Polygon_mesh_processing/border.h>
 #include <CGAL/Polygon_mesh_processing/orient_polygon_soup.h>
 #include <CGAL/Polygon_mesh_processing/repair.h>
@@ -43,6 +44,7 @@
 #include <CGAL/Polygon_mesh_processing/shape_predicates.h>
 #include <CGAL/Polygon_mesh_processing/triangulate_hole.h>
 #include <CGAL/boost/graph/helpers.h>
+#include <CGAL/boost/graph/Euler_operations.h>
 // BBS: for segment
 #include <CGAL/mesh_segmentation.h>
 #include <CGAL/property_map.h>
@@ -824,6 +826,131 @@ bool is_safe_partial_repair(const TriangleMesh& source, const TriangleMesh& cand
     return accepted;
 }
 
+size_t repair_degenerate_edge_caps(const TriangleMesh& source, TriangleMesh& result)
+{
+    namespace PMP  = CGAL::Polygon_mesh_processing;
+    using Face     = _EpicMesh::Face_index;
+    using Halfedge = _EpicMesh::Halfedge_index;
+    if (source.empty() || source.its.vertices.empty())
+        return 0;
+    for (const auto& vertex : source.its.vertices)
+        if (!vertex.allFinite())
+            return 0;
+    bool has_degenerate_face = false;
+    for (const auto& face : source.its.indices) {
+        for (int corner = 0; corner < 3; ++corner)
+            if (face[corner] < 0 || size_t(face[corner]) >= source.its.vertices.size())
+                return 0;
+        if (!has_degenerate_face) {
+            const auto point = [&](int corner) {
+                const auto& v = source.its.vertices[face[corner]];
+                return EpicKernel::Point_3(v.x(), v.y(), v.z());
+            };
+            has_degenerate_face = CGAL::collinear(point(0), point(1), point(2));
+        }
+    }
+    if (!has_degenerate_face)
+        return 0;
+
+    // This is a new private baseline, never the mutated output of a failed
+    // repair hook. Use the same exact coordinate welding as the existing CGAL
+    // path, and reject conversions that silently dropped or split any faces.
+    auto compacted = source.its;
+    its_compactify_vertices(compacted, true);
+    _EpicMesh surface;
+    triangle_mesh_to_cgal(compacted.vertices, compacted.indices, surface);
+    if (surface.is_empty() || surface.num_faces() != compacted.indices.size() || !CGAL::is_valid_polygon_mesh(surface) ||
+        !CGAL::is_triangle_mesh(surface) || !CGAL::is_closed(surface))
+        return 0;
+    std::vector<Halfedge> non_manifold;
+    PMP::non_manifold_vertices(surface, std::back_inserter(non_manifold));
+    if (!non_manifold.empty())
+        return 0;
+    std::vector<Face> degenerate;
+    PMP::degenerate_faces(surface, std::back_inserter(degenerate));
+    if (degenerate.empty())
+        return 0;
+
+    const auto intersections_complete = [](const _EpicMesh& mesh) {
+        // CGAL also emits (f,f) records for degenerate faces. Counting those
+        // toward this bound is conservative; a truncated query never approves
+        // a new retained baseline. Do not require old intersections to be zero.
+        constexpr unsigned                 limit = 20000;
+        std::vector<std::pair<Face, Face>> pairs;
+        PMP::self_intersections<CGAL::Sequential_tag>(mesh, std::back_inserter(pairs), CGALParams::maximum_number(limit + 1));
+        return pairs.size() <= limit;
+    };
+    size_t repaired = 0;
+    for (const Face face : degenerate) {
+        if (!PMP::is_degenerate_triangle_face(face, surface))
+            continue;
+        bool isolated = true;
+        for (const Halfedge h : halfedges_around_face(halfedge(face, surface), surface))
+            if (PMP::is_degenerate_triangle_face(CGAL::face(opposite(h, surface), surface), surface)) {
+                isolated = false;
+                break;
+            }
+        if (!isolated)
+            continue; // No normalization of connected degenerate clusters.
+
+        for (const Halfedge h : halfedges_around_face(halfedge(face, surface), surface)) {
+            const auto  a  = CGAL::source(h, surface);
+            const auto  c  = target(h, surface);
+            const auto  b  = target(next(h, surface), surface);
+            const auto& pa = surface.point(a);
+            const auto& pb = surface.point(b);
+            const auto& pc = surface.point(c);
+            if (pa == pb || pb == pc || pa == pc || !CGAL::collinear(pa, pb, pc) ||
+                !CGAL::collinear_are_strictly_ordered_along_line(pa, pb, pc))
+                continue;
+            const auto d = target(next(opposite(h, surface), surface), surface);
+            if (halfedge(b, d, surface).second)
+                continue; // Euler flip would introduce an existing diagonal.
+
+            if (repaired == 0 && !intersections_complete(surface)) {
+                BOOST_LOG_TRIVIAL(info) << "Model repair: event=topology_preparation_deferred, reason=intersection_limit";
+                return 0;
+            }
+            // Exact certificate for this operation: b lies strictly on a-c;
+            // the opposite face a-c-d is nondegenerate. Flipping a-c to b-d
+            // replaces the zero-area cap and a-c-d by its two oriented pieces.
+            // No points move, no positive-area surface disappears or appears,
+            // and the manifold graph/component structure is unchanged. Hence
+            // existing self-intersections may remain but cannot spread to a
+            // new geometric region. This is NOT permission for arbitrary CGAL
+            // cleanup, vertex collapse, remeshing or a lower pair count alone.
+            CGAL::Euler::flip_edge(h, surface);
+            ++repaired;
+            break; // The face cycle changed; do not advance its old iterator.
+        }
+    }
+    if (repaired == 0)
+        return 0;
+    if (!CGAL::is_valid_polygon_mesh(surface) || !CGAL::is_triangle_mesh(surface) || !CGAL::is_closed(surface))
+        throw std::runtime_error(L("Repair failed: basic boundary cleanup produced invalid topology."));
+    std::vector<Face> remaining;
+    PMP::degenerate_faces(surface, std::back_inserter(remaining));
+    non_manifold.clear();
+    PMP::non_manifold_vertices(surface, std::back_inserter(non_manifold));
+    if (!non_manifold.empty() || remaining.size() + repaired != degenerate.size())
+        throw std::runtime_error(L("Repair failed: basic boundary cleanup produced invalid topology."));
+    if (!intersections_complete(surface)) {
+        BOOST_LOG_TRIVIAL(info) << "Model repair: event=topology_preparation_deferred, reason=intersection_limit_after";
+        return 0;
+    }
+
+    // Flips allocate/remove no vertices or faces. Round-tripping therefore
+    // reuses precisely the source float coordinates, not constructed doubles.
+    TriangleMesh candidate(cgal_to_indexed_triangle_set(surface));
+    if (candidate.facets_count() != source.facets_count() || its_num_open_edges(candidate.its) != 0)
+        throw std::runtime_error(L("Repair failed: basic boundary cleanup produced invalid topology."));
+    result = std::move(candidate);
+    BOOST_LOG_TRIVIAL(info) << "Model repair: event=topology_preparation_validated, degenerate_caps=" << repaired
+                            << ", remaining_degenerate=" << remaining.size() << ", faces=" << source.facets_count() << "->"
+                            << result.facets_count() << ", moved_vertices=0";
+    return repaired;
+}
+
 static bool repair_impl(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string* error, TriangleMesh* partial_result)
 {
     namespace PMP = CGAL::Polygon_mesh_processing;
@@ -912,7 +1039,10 @@ static bool repair_impl(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors,
                                       CGAL::is_valid_polygon_mesh(closed_candidate) && CGAL::is_triangle_mesh(closed_candidate) &&
                                       CGAL::is_closed(closed_candidate);
 
-            if (direct_closed_candidate && PMP::remove_degenerate_faces(closed_candidate)) {
+            const bool closed_cleanup_complete = direct_closed_candidate && PMP::remove_degenerate_faces(closed_candidate);
+            if (direct_closed_candidate)
+                BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=closed_degenerate_cleanup, completed=" << closed_cleanup_complete;
+            if (closed_cleanup_complete) {
                 PMP::remove_isolated_vertices(closed_candidate);
                 closed_candidate.collect_garbage();
 
@@ -961,6 +1091,10 @@ static bool repair_impl(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors,
                                           non_manifold_vertices.empty() && CGAL::is_valid_polygon_mesh(closed_candidate) &&
                                           CGAL::is_triangle_mesh(closed_candidate) && CGAL::is_closed(closed_candidate) &&
                                           !PMP::does_self_intersect(closed_candidate);
+                    BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=closed_topology_checked, accepted=" << topology_valid
+                                            << ", self_repair_completed=" << self_intersections_repaired
+                                            << ", remaining_degenerate=" << remaining_degenerate_faces.size()
+                                            << ", non_manifold_vertices=" << non_manifold_vertices.size();
                     if (topology_valid) {
                         PMP::orient_to_bound_a_volume(closed_candidate);
                         topology_valid = PMP::does_bound_a_volume(closed_candidate);
@@ -994,7 +1128,7 @@ static bool repair_impl(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors,
                                                     volume_delta <= 1.e-3 && area_delta <= 2.e-3 &&
                                                     hausdorff_distance + hausdorff_error_bound <= hausdorff_limit;
 
-                        BOOST_LOG_TRIVIAL(debug)
+                        BOOST_LOG_TRIVIAL(info)
                             << "CGAL closed-defect repair: accepted=" << fidelity_valid << ", components=" << reference_components << "->"
                             << repaired_components << ", volume_delta=" << volume_delta << ", area_delta=" << area_delta
                             << ", hausdorff=" << hausdorff_distance << "/" << hausdorff_limit << ", faces=" << compacted.indices.size()

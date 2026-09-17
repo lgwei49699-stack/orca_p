@@ -8,6 +8,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/nowide/fstream.hpp>
+#include <array>
 #include <iomanip>
 #include <limits>
 #include <locale>
@@ -93,7 +94,45 @@ void publish_check(ModelCheckWorkflowReport& report, const json& inspection, con
     report.check["mesh_status"]    = inspection.at("mesh_status");
     report.check["next_action"]    = inspection.at("next_action");
 }
+
+json business_issue_counts(const json& inspection)
+{
+    if (!inspection.is_object())
+        return nullptr; // Not inspected is different from seven zero counts.
+    constexpr std::array<const char*, 7> keys{"boundary",   "nonmanifold_edge", "nonmanifold_vertex", "self_intersection",
+                                              "degenerate", "duplicate",        "orientation"};
+    json                                 counts = json::object();
+    for (const char* key : keys) {
+        const auto& issue = inspection.at("issues").at(key);
+        // Incomplete counts are lower bounds, never a clean-model conclusion.
+        counts[key] = {{"count", issue.at("count")}, {"complete", issue.at("complete")}};
+    }
+    return counts;
+}
+
 } // namespace
+
+json model_check_business_result(const json& checks, int return_code, const std::string& error)
+{
+    json       result        = {{"return_code", return_code}, {"error_string", error}, {"model_checks", json::array()}};
+    const json no_inspection = nullptr;
+    const json no_repair     = json::object();
+    for (const auto& check : checks) {
+        const auto& inspection = check.contains("inspection") ? check.at("inspection") : no_inspection;
+        const auto& advanced   = check.contains("advanced_repair") ? check.at("advanced_repair") : no_repair;
+        const auto  status     = advanced.value("status", "not_requested");
+        json        summary    = {{"schema_version", 4},
+                                  {"mesh_status", check.value("mesh_status", "unknown")},
+                                  {"check_complete", check.value("check_complete", false)},
+                                  {"input_materials_ignored", check.value("input_materials_ignored", false)},
+                                  {"repair_status", status},
+                                  {"issues", business_issue_counts(inspection)}};
+        // Presentation-only reduction: aggregate completeness still includes
+        // internal structural checks. Do not turn unknown findings into a pass.
+        result["model_checks"].push_back(std::move(summary));
+    }
+    return result;
+}
 
 void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelCheckWorkflowReport& report)
 {
