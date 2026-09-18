@@ -10521,16 +10521,16 @@ Plater::priv::GFDPrintStartResult Plater::priv::start_gfd_print_export()
         if (gfd_print_use_3mf_file) {
             const fs::path output_path = gfd_temp_gcode_3mf_path();
             gfd_print_owned_temporary_file = std::make_shared<GFDOwnedTemporaryPrintFile>(output_path);
-            SaveStrategy strategy = SaveStrategy::Silence | SaveStrategy::SkipModel | SaveStrategy::WithGcode | SaveStrategy::SkipAuxiliary;
-#if !BBL_RELEASE_TO_PUBLIC
-            if (wxGetApp().app_config->get("iot_environment") == ENV_PRE_HOST)
-                strategy = SaveStrategy::Silence | SaveStrategy::SplitModel | SaveStrategy::WithGcode;
-#endif
+            // Match "Export plate sliced file": use the concrete plate index, not PLATE_CURRENT_IDX,
+            // which store_to_3mf_structure treats as including every plate's sliced result.
+            const int          export_plate_idx = partplate_list.get_curr_plate_index();
+            const SaveStrategy strategy         = SaveStrategy::Silence | SaveStrategy::SplitModel | SaveStrategy::WithGcode |
+                                          SaveStrategy::SkipModel;
             int last_stage   = -1;
             int last_current = -1;
             if (gfd_is_current_print_submission(print_dialog, print_dialog_alive, submission_id))
                 print_dialog->update_print_progress(_L("正在导出 3MF 打印文件，请稍候..."));
-            const int export_result = q->export_3mf(output_path, strategy, PLATE_CURRENT_IDX,
+            const int export_result = q->export_3mf(output_path, strategy, export_plate_idx,
                                                     [this, print_dialog, print_dialog_alive, submission_id, &last_stage,
                                                      &last_current](int stage, int current, int total, bool&) {
                                                         if (!gfd_is_current_print_submission(print_dialog, print_dialog_alive,
@@ -10562,9 +10562,8 @@ Plater::priv::GFDPrintStartResult Plater::priv::start_gfd_print_export()
             last_output_dir_path  = output_path.parent_path().string();
 
             BOOST_LOG_TRIVIAL(info) << "GFD temporary 3MF export finished"
-                                    << ", output_path=" << gfd_print_gcode_path
-                                    << ", output_dir=" << last_output_dir_path
-                                    << ", device_type=" << gfd_print_device_type
+                                    << ", output_path=" << gfd_print_gcode_path << ", export_plate_idx=" << export_plate_idx
+                                    << ", output_dir=" << last_output_dir_path << ", device_type=" << gfd_print_device_type
                                     << ", selected_devices=" << gfd_selected_devices.size();
             const bool submitted = gfd_start_print_submission(gfd_selected_devices, gfd_print_gcode_path);
             return submitted ? GFDPrintStartResult::Pending : GFDPrintStartResult::Failed;
