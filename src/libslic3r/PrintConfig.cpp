@@ -4313,9 +4313,7 @@ void PrintConfigDef::init_fff_params()
     add_cura_raft_int("raft_base_wall_count", L("Raft base wall count"),
                       L("Number of contours around the linear Base pattern."), L("walls"), 0, 100, 4, comAdvanced);
     add_cura_raft_float("raft_base_margin", L("Raft base margin"),
-                        L("Additional XY margin around the model footprint for the Base phase. With normal support, it must be at least "
-                          "0.5 mm larger than the Raft Top margin."),
-                        "mm", 0.0, 100.0, 3.0, comAdvanced);
+                        L("Additional XY margin around the model footprint for the Raft Base phase."), "mm", 0.0, 100.0, 3.0, comAdvanced);
 
     add_cura_raft_auto_float("raft_interface_layer_height", L("Raft middle thickness"),
                              L("Thickness of each Middle layer. Zero automatically derives it from the nozzle and normal-layer "

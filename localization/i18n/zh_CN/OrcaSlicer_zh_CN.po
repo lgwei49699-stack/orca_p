@@ -17,6 +17,9 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 "X-Generator: Poedit 3.2.2\n"
 
+msgid "The raft has no printable area on the bed. Move the object or check the printer's printable area."
+msgstr "筏层在打印平台内没有可打印区域。请移动模型或检查打印机的可打印区域设置。"
+
 msgid "Model repair partially completed. Safe changes were kept; some geometry problems remain."
 msgstr "模型部分修复成功。已保留安全的修改，但仍有几何问题未解决。"
 
@@ -9902,9 +9905,9 @@ msgid "Raft line spacing must be zero for Auto or at least 0.0125 mm."
 msgstr "筏层线距设为零时表示自动计算；显式线距必须至少为 0.0125 mm。"
 
 msgid ""
-"For normal support, Raft Base margin must be at least 0.5 mm larger than "
-"Raft Top margin."
-msgstr "使用普通支撑时，筏层基底外扩量必须至少比筏层顶部外扩量大 0.5 mm。"
+"Raft Base margin is too small. With the current raft settings, it must be at least 0.5 mm larger than "
+"the Raft Top margin."
+msgstr "筏层基底外扩量过小。当前设置要求它至少比筏层顶部外扩量大 0.5 mm。"
 
 msgid ""
 "Cura-style raft cannot use the current tool when printer nozzles have "
@@ -13494,12 +13497,8 @@ msgstr "墙层"
 msgid "Raft base margin"
 msgstr "筏层基底外扩量"
 
-msgid ""
-"Additional XY margin around the model footprint for the Base phase. With "
-"normal support, it must be at least 0.5 mm larger than the Raft Top margin."
-msgstr ""
-"基底阶段在模型投影轮廓周围增加的 XY 外扩距离。使用普通支撑时，该值必须至少比"
-"筏层顶部外扩量大 0.5 mm。"
+msgid "Additional XY margin around the model footprint for the Raft Base phase."
+msgstr "筏层基底阶段在模型投影轮廓周围增加的 XY 外扩距离。"
 
 msgid "Raft middle thickness"
 msgstr "筏层中间厚度"

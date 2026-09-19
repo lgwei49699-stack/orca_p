@@ -18,6 +18,7 @@
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Slicing.hpp"
 #include "libslic3r/Support/RaftPlan.hpp"
+#include "libslic3r/Support/SupportCommon.hpp"
 #include "libslic3r/Support/SupportParameters.hpp"
 #include "libslic3r/Utils.hpp"
 
@@ -25,6 +26,286 @@
 
 using namespace Slic3r::Test;
 using namespace Slic3r;
+
+namespace {
+DynamicPrintConfig raft_bed_test_config()
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {100., 0.}, {100., 100.}, {0., 100.}}));
+    config.set_key_value("bed_exclude_area", new ConfigOptionPoints());
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalAuto));
+    config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(smsGrid));
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btNoBrim));
+    config.set("skirt_loops", 0);
+    config.set("enable_support", false);
+    config.set("before_layer_change_gcode", std::string("G92 E0"));
+    config.set("layer_height", 0.2);
+    config.set("initial_layer_print_height", 0.3);
+    config.set("raft_layers", 3);
+    config.set("raft_base_layers", 1);
+    config.set("raft_interface_layers", 1);
+    config.set("raft_surface_layers", 1);
+    config.set("raft_base_margin", 3.);
+    config.set("raft_interface_margin", 2.5);
+    config.set("raft_surface_margin", 2.);
+    config.set("raft_base_line_width", 1.);
+    config.set("raft_base_line_spacing", 2.);
+    config.set("raft_interface_line_width", 0.6);
+    config.set("raft_interface_line_spacing", 0.8);
+    config.set("raft_surface_line_width", 0.5);
+    config.set("raft_surface_line_spacing", 0.4);
+    config.set("raft_first_layer_expansion", 3.);
+    config.set("raft_expansion", 2.);
+    return config;
+}
+
+ModelObject* add_raft_bed_test_cube(Model& model, double size, const Vec3d& offset)
+{
+    ModelObject* object = model.add_object();
+    object->name        = "raft bed boundary cube";
+    object->add_volume(make_cube(size, size, 0.8));
+    object->add_instance()->set_offset(offset);
+    object->ensure_on_bed();
+    return object;
+}
+
+void process_raft_bed_test(Print& print, Model& model, const DynamicPrintConfig& config)
+{
+    for (ModelObject* object : model.objects)
+        print.auto_assign_extruders(object);
+    print.apply(model, config);
+    const StringObjectException validation = print.validate();
+    INFO("validation error: " << validation.string << "; key: " << validation.opt_key);
+    REQUIRE(validation.string.empty());
+    print.set_status_silent();
+    print.process();
+}
+
+// Check the deposited footprint, not just the path vertices or raft polygons.
+void require_raft_inside_bed(const Print& print)
+{
+    const Polygons bed         = diff(Polygons{Polygon(get_bed_shape(print.config()))}, get_bed_excluded_area(print.config()));
+    const Vec3d    origin      = print.get_plate_origin();
+    const Point    plate_shift = Point::new_scale(origin.x(), origin.y());
+    for (const PrintObject* object : print.objects()) {
+        size_t raft_layers = 0;
+        for (const SupportLayer* layer : object->support_layers()) {
+            if (layer->print_z > object->slicing_parameters().raft_contact_top_z + EPSILON)
+                continue;
+            ++raft_layers;
+            INFO("raft layer z=" << layer->print_z);
+            REQUIRE(layer->has_extrusions());
+            const Polygons footprint = layer->support_fills.polygons_covered_by_width();
+            REQUIRE_FALSE(footprint.empty());
+            for (const PrintInstance& instance : object->instances()) {
+                Polygons placed = footprint;
+                for (Polygon& polygon : placed)
+                    polygon.translate(instance.shift - plate_shift);
+                // Allow only polygon integer rounding, not a hidden bed margin.
+                REQUIRE(diff(placed, offset(bed, scaled<float>(0.0001))).empty());
+            }
+        }
+        REQUIRE(raft_layers == object->slicing_parameters().raft_layers());
+    }
+}
+
+double raft_volume(const PrintObject& object)
+{
+    double volume = 0.;
+    for (const SupportLayer* layer : object.support_layers())
+        if (layer->print_z <= object.slicing_parameters().raft_contact_top_z + EPSILON)
+            volume += layer->support_fills.total_volume();
+    return volume;
+}
+} // namespace
+
+TEST_CASE("Raft extrusion stays on a 100 mm bed around a 98 mm object", "[SupportMaterial][Raft][BedBoundary]")
+{
+    const auto mode  = GENERATE(RaftMode::Legacy, RaftMode::CuraV1);
+    const auto style = GENERATE(smsGrid, smsSnug, smsTreeOrganic, smsTreeSlim, smsTreeStrong, smsTreeHybrid);
+    const int  walls = GENERATE(0, 2);
+    INFO("mode=" << int(mode) << ", style=" << int(style) << ", walls=" << walls);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(mode));
+    config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(style));
+    config.set_key_value("support_type",
+                         new ConfigOptionEnum<SupportType>(style == smsGrid || style == smsSnug ? stNormalAuto : stTreeAuto));
+    config.set("raft_base_wall_count", walls);
+    config.set("raft_interface_wall_count", walls);
+    config.set("raft_surface_wall_count", walls);
+
+    Model model;
+    add_raft_bed_test_cube(model, 98., Vec3d(1., 1., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    require_raft_inside_bed(print);
+    // Clipping the raft must neither resize nor relocate the model.
+    const BoundingBoxf3 model_box = model.objects.front()->instance_bounding_box(0);
+    REQUIRE(model_box.min.x() == Approx(1.));
+    REQUIRE(model_box.max.x() == Approx(99.));
+    REQUIRE(model_box.size().y() == Approx(98.));
+}
+
+TEST_CASE("Raft clipping respects curved beds and excluded regions on another plate", "[SupportMaterial][Raft][BedBoundary]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("enable_arc_fitting", GENERATE(false, true));
+    const Vec3d origin(150., -120., 0.);
+    double      size = 20.;
+    Vec3d       offset(45., 40., 0.);
+    SECTION("an interior excluded region is kept as a hole")
+    {
+        config.set_key_value("bed_exclude_area", new ConfigOptionPoints({{66., 35.}, {74., 35.}, {74., 65.}, {66., 65.}}));
+    }
+    SECTION("a circular bed clips the corners of the expanded raft")
+    {
+        Pointfs circle;
+        for (size_t i = 0; i < 64; ++i) {
+            const double angle = 2. * PI * double(i) / 64.;
+            circle.emplace_back(50. + 50. * std::cos(angle), 50. + 50. * std::sin(angle));
+        }
+        config.set_key_value("printable_area", new ConfigOptionPoints(circle));
+        config.set("raft_base_margin", 20.);
+        config.set("raft_interface_margin", 19.);
+        config.set("raft_surface_margin", 18.);
+        size   = 40.;
+        offset = Vec3d(30., 30., 0.);
+    }
+    Model model;
+    add_raft_bed_test_cube(model, size, origin + offset);
+    Print print;
+    print.set_plate_origin(origin);
+    process_raft_bed_test(print, model, config);
+    require_raft_inside_bed(print);
+}
+
+TEST_CASE("Moving an object and changing the bed regenerates its raft", "[SupportMaterial][Raft][BedBoundary]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    Model              model;
+    ModelObject*       model_object = add_raft_bed_test_cube(model, 20., Vec3d(40., 40., 0.));
+    Print              print;
+    process_raft_bed_test(print, model, config);
+    const double center_volume = raft_volume(*print.objects().front());
+    REQUIRE(center_volume > 0.);
+    for (const Vec3d& position :
+         {Vec3d(1., 40., 0.), Vec3d(79., 40., 0.), Vec3d(40., 1., 0.), Vec3d(40., 79., 0.), Vec3d(1., 1., 0.), Vec3d(79., 79., 0.)}) {
+        model_object->instances.front()->set_offset(position);
+        model_object->invalidate_bounding_box();
+        print.apply(model, config);
+        REQUIRE_FALSE(print.is_step_done(posSupportMaterial));
+        print.process();
+        require_raft_inside_bed(print);
+        REQUIRE(raft_volume(*print.objects().front()) < center_volume);
+    }
+    model_object->instances.front()->set_offset(Vec3d(40., 40., 0.));
+    model_object->invalidate_bounding_box();
+    process_raft_bed_test(print, model, config);
+    REQUIRE(raft_volume(*print.objects().front()) == Approx(center_volume));
+
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {61., 0.}, {61., 100.}, {0., 100.}}));
+    print.apply(model, config);
+    REQUIRE_FALSE(print.is_step_done(posSupportMaterial));
+    print.process();
+    require_raft_inside_bed(print);
+    REQUIRE(raft_volume(*print.objects().front()) < center_volume);
+
+    const Vec3d origin(150., 120., 0.);
+    print.set_plate_origin(origin);
+    REQUIRE_FALSE(print.is_step_done(posSupportMaterial));
+    model_object->instances.front()->set_offset(origin + Vec3d(40., 40., 0.));
+    model_object->invalidate_bounding_box();
+    process_raft_bed_test(print, model, config);
+    require_raft_inside_bed(print);
+
+    config.set_key_value("bed_exclude_area", new ConfigOptionPoints({{30., 30.}, {39., 30.}, {39., 70.}, {30., 70.}}));
+    print.apply(model, config);
+    REQUIRE_FALSE(print.is_step_done(posSupportMaterial));
+    // Cached model layers must not bypass raft regeneration.
+    print.process(nullptr, true);
+    require_raft_inside_bed(print);
+}
+
+TEST_CASE("Raft clipping accounts for every instance and separately placed mesh copies", "[SupportMaterial][Raft][BedBoundary]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    Model              model;
+    ModelObject*       object = add_raft_bed_test_cube(model, 20., Vec3d(1., 40., 0.));
+    SECTION("instances at opposite bed edges share only printable toolpaths")
+    {
+        object->add_instance()->set_offset(Vec3d(79., 40., 0.));
+        Print print;
+        process_raft_bed_test(print, model, config);
+        REQUIRE(print.objects().size() == 1);
+        REQUIRE(print.objects().front()->instances().size() == 2);
+        require_raft_inside_bed(print);
+    }
+    SECTION("a centered copy must retain its full raft")
+    {
+        ModelObject* copy = model.add_object(*object);
+        REQUIRE(copy->volumes.front()->mesh_ptr() == object->volumes.front()->mesh_ptr());
+        copy->instances.front()->set_offset(Vec3d(40., 40., 0.));
+        copy->invalidate_bounding_box();
+        Print print;
+        process_raft_bed_test(print, model, config);
+        REQUIRE(print.objects().size() == 2);
+        require_raft_inside_bed(print);
+        for (const PrintObject* printed : print.objects())
+            REQUIRE(printed->get_shared_object() == nullptr);
+        REQUIRE(raft_volume(*print.objects().front()) < raft_volume(*print.objects().back()));
+    }
+}
+
+TEST_CASE("A raft entirely outside the bed reports an error", "[SupportMaterial][Raft][BedBoundary]")
+{
+    const auto         style  = GENERATE(smsGrid, smsTreeSlim);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(style));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(style == smsGrid ? stNormalAuto : stTreeAuto));
+    Model model;
+    add_raft_bed_test_cube(model, 20., Vec3d(40., 40., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    // Exercise clipping's own failure instead of passing a model-placement error
+    // from Print::validate() off as successful boundary protection.
+    print.set_plate_origin(Vec3d(1000., 0., 0.));
+    // apply() refreshes invalid slicing parameters through the public workflow.
+    print.apply(model, config);
+    REQUIRE_THROWS_WITH(print.process(), Catch::Contains("The raft has no printable area on the bed."));
+}
+
+TEST_CASE("Tree support without a raft keeps its existing generation path", "[SupportMaterial][Raft][BedBoundary]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    config.set("raft_layers", 0);
+    config.set("enable_support", true);
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTreeAuto));
+    config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(smsTreeSlim));
+    config.set("support_threshold_angle", 60);
+    Model        model;
+    ModelObject* object = model.add_object();
+    TriangleMesh tilted = make_cube(20., 20., 20.);
+    tilted.rotate_x(float(Geometry::deg2rad(30.)));
+    object->add_volume(std::move(tilted));
+    object->add_instance()->set_offset(Vec3d(40., 40., 0.));
+    object->ensure_on_bed();
+    Print print;
+    process_raft_bed_test(print, model, config);
+    PrintObject& printed = *print.get_object(size_t(0));
+    REQUIRE_FALSE(printed.has_raft());
+    REQUIRE_FALSE(printed.support_layers().empty());
+    double volume = 0.;
+    for (const SupportLayer* layer : printed.support_layers())
+        volume += layer->support_fills.total_volume();
+    REQUIRE(volume > 0.);
+    clip_raft_toolpaths_to_bed(printed);
+    double unchanged_volume = 0.;
+    for (const SupportLayer* layer : printed.support_layers())
+        unchanged_volume += layer->support_fills.total_volume();
+    REQUIRE(unchanged_volume == volume);
+}
 
 TEST_CASE("SupportMaterial: Three raft layers created", "[SupportMaterial]")
 {

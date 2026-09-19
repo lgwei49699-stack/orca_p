@@ -956,7 +956,7 @@ public:
     const ToolOrdering&         get_tool_ordering() const { return m_wipe_tower_data.tool_ordering; }
 
     //BBS: plate's origin related functions
-    void set_plate_origin(Vec3d origin) { m_origin = origin; }
+    void        set_plate_origin(Vec3d origin);
     const Vec3d get_plate_origin() const { return m_origin; }
     //BBS: export gcode from previous gcode file from 3mf
     void set_gcode_file_ready();
@@ -1066,7 +1066,7 @@ private:
     bool                                    m_support_used {false};
 
     //BBS: plate's origin
-    Vec3d   m_origin;
+    Vec3d m_origin{Vec3d::Zero()};
     //BBS: modified_count
     int     m_modified_count {0};
     //BBS

@@ -12,6 +12,17 @@ namespace Slic3r {
 class PrintObject;
 class SupportLayer;
 
+// Printable bed (including excluded regions) in the centered PrintObject coordinates.
+// Instances share toolpaths, so the area must be printable for every instance.
+Polygons raft_printable_area(const PrintObject& object);
+
+// Clip a physical raft phase, reporting an error if it is completely removed.
+ExPolygons clip_raft_areas_to_bed(const ExPolygons& areas, const Polygons& bed);
+
+// Keep the full extrusion width of raft paths inside the bed. Called after support
+// generation, before path simplification; ordinary support layers are not trimmed.
+void clip_raft_toolpaths_to_bed(PrintObject& object);
+
 // Remove bridges from support contact areas.
 // To be called if PrintObjectConfig::dont_support_bridges.
 void remove_bridges_from_contacts(

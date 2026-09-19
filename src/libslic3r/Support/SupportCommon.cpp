@@ -7,9 +7,11 @@
 #include "../MutablePolygon.hpp"
 #include "../Geometry.hpp"
 #include "../Point.hpp"
+#include "../I18N.hpp"
 #include "clipper/clipper_z.hpp"
 
 #include <cmath>
+#include <map>
 #include <boost/container/static_vector.hpp>
 #include <boost/log/trivial.hpp>
 
@@ -33,6 +35,121 @@
 #include <cassert>
 
 namespace Slic3r {
+
+Polygons raft_printable_area(const PrintObject& object)
+{
+    const Print&   print       = *object.print();
+    const Polygons bed         = diff(Polygons{Polygon(get_bed_shape(print.config()))}, get_bed_excluded_area(print.config()));
+    const Vec3d    origin      = print.get_plate_origin();
+    const Point    plate_shift = Point::new_scale(origin.x(), origin.y());
+    Polygons       printable;
+    bool           first = true;
+    for (const PrintInstance& instance : object.instances()) {
+        Polygons instance_bed = bed;
+        for (Polygon& polygon : instance_bed)
+            polygon.translate(plate_shift - instance.shift);
+        printable = first ? std::move(instance_bed) : intersection(printable, instance_bed);
+        first     = false;
+    }
+    return printable;
+}
+
+static void throw_empty_raft()
+{
+    throw SlicingError(_u8L("The raft has no printable area on the bed. Move the object or check the printer's printable area."));
+}
+
+ExPolygons clip_raft_areas_to_bed(const ExPolygons& areas, const Polygons& bed)
+{
+    ExPolygons clipped = intersection_ex(areas, bed);
+    if (!areas.empty() && clipped.empty())
+        throw_empty_raft();
+    return clipped;
+}
+
+// Preserve collection ordering and all flow/role attributes. Only split a loop
+// when it actually crosses the boundary; an uncut loop keeps its loop semantics.
+static bool clip_raft_collection(ExtrusionEntityCollection& collection, const Polygons& bed, std::map<float, ExPolygons>& centerline_bounds)
+{
+    bool       changed    = false;
+    const auto bounds_for = [&](const ExtrusionPath& path) -> const ExPolygons& {
+        auto it = centerline_bounds.find(path.width);
+        if (it == centerline_bounds.end()) {
+            // One micron covers integer clipping / G-code coordinate rounding.
+            const double inset = scale_(0.5 * double(path.width) + 0.001);
+            it                 = centerline_bounds.emplace(path.width, offset_ex(bed, -inset)).first;
+        }
+        return it->second;
+    };
+    for (ExtrusionEntity*& entity : collection.entities) {
+        if (auto* nested = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
+            changed |= clip_raft_collection(*nested, bed, centerline_bounds);
+            continue;
+        }
+        std::vector<const ExtrusionPath*> paths;
+        if (const auto* path = dynamic_cast<const ExtrusionPath*>(entity))
+            paths.push_back(path);
+        else if (const auto* loop = dynamic_cast<const ExtrusionLoop*>(entity)) {
+            for (const ExtrusionPath& path : loop->paths)
+                paths.push_back(&path);
+        } else if (const auto* multipath = dynamic_cast<const ExtrusionMultiPath*>(entity)) {
+            for (const ExtrusionPath& path : multipath->paths)
+                paths.push_back(&path);
+        } else
+            throw RuntimeError("Unexpected raft extrusion type during bed clipping.");
+
+        const bool outside = std::any_of(paths.begin(), paths.end(), [&](const ExtrusionPath* path) {
+            return !diff_pl(Polylines{path->polyline}, bounds_for(*path)).empty();
+        });
+        if (!outside)
+            continue;
+
+        auto clipped     = std::make_unique<ExtrusionEntityCollection>();
+        clipped->no_sort = true;
+        for (const ExtrusionPath* path : paths)
+            for (Polyline& line : intersection_pl(Polylines{path->polyline}, bounds_for(*path)))
+                if (line.points.size() >= 2 && line.length() > SCALED_EPSILON)
+                    clipped->append(ExtrusionPath(std::move(line), *path));
+        delete entity;
+        entity  = clipped.release();
+        changed = true;
+    }
+    collection.entities.erase(std::remove_if(collection.entities.begin(), collection.entities.end(),
+                                             [](ExtrusionEntity* entity) {
+                                                 const auto* nested = dynamic_cast<const ExtrusionEntityCollection*>(entity);
+                                                 if (nested != nullptr && nested->empty()) {
+                                                     delete entity;
+                                                     return true;
+                                                 }
+                                                 return false;
+                                             }),
+                              collection.entities.end());
+    return changed;
+}
+
+void clip_raft_toolpaths_to_bed(PrintObject& object)
+{
+    if (!object.has_raft())
+        return;
+    const Polygons              bed = raft_printable_area(object);
+    std::map<float, ExPolygons> centerline_bounds;
+    size_t                      trimmed_layers = 0;
+    for (SupportLayer* layer : object.support_layers()) {
+        if (layer->print_z > object.slicing_parameters().raft_contact_top_z + EPSILON)
+            continue;
+        if (object.print()->canceled())
+            throw CanceledException();
+        const bool had_extrusions = !layer->support_fills.empty();
+        if (clip_raft_collection(layer->support_fills, bed, centerline_bounds))
+            ++trimmed_layers;
+        if (had_extrusions && layer->support_fills.empty())
+            throw_empty_raft();
+        layer->support_islands = intersection_ex(layer->support_islands, bed);
+    }
+    if (trimmed_layers > 0)
+        BOOST_LOG_TRIVIAL(info) << "[Raft][BedClip] object=" << object.model_object()->name
+                                << ", trimmed_toolpath_layers=" << trimmed_layers;
+}
 
 // how much we extend support around the actual contact area
 //FIXME this should be dependent on the nozzle diameter!
@@ -1482,6 +1599,25 @@ SupportGeneratorLayersPtr generate_support_layers(
     // remove dupliated layers
     std::sort(layers_sorted.begin(), layers_sorted.end());
     layers_sorted.erase(std::unique(layers_sorted.begin(), layers_sorted.end()), layers_sorted.end());
+
+    // Both normal and Organic supports pass here, after every raft expansion
+    // and before generating perimeters / infill, including the final contact layer.
+    if (object.has_raft()) {
+        const Polygons bed = raft_printable_area(object);
+        for (SupportGeneratorLayer* layer : layers_sorted) {
+            if (layer->print_z > object.slicing_parameters().raft_contact_top_z + EPSILON)
+                continue;
+            const bool had_polygons = !layer->polygons.empty();
+            layer->polygons         = intersection(layer->polygons, bed);
+            if (had_polygons && layer->polygons.empty() &&
+                (layer->layer_type == SupporLayerType::RaftBase || layer->layer_type == SupporLayerType::RaftInterface ||
+                 is_approx(layer->print_z, object.slicing_parameters().raft_contact_top_z)))
+                throw_empty_raft();
+            for (auto* areas : {layer->contact_polygons.get(), layer->overhang_polygons.get(), layer->enforcer_polygons.get()})
+                if (areas != nullptr)
+                    *areas = intersection(*areas, bed);
+        }
+    }
 
     // Sort the layers lexicographically by a raising print_z and a decreasing height.
     std::sort(layers_sorted.begin(), layers_sorted.end(), [](auto *l1, auto *l2) { return *l1 < *l2; });

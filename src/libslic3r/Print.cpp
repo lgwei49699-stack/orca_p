@@ -216,6 +216,11 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
     bool invalidated = false;
 
     for (const t_config_option_key &opt_key : opt_keys) {
+        if (opt_key == "printable_area" || opt_key == "bed_exclude_area") {
+            for (PrintObject* object : m_objects)
+                if (object->has_raft())
+                    invalidated |= object->invalidate_step(posSupportMaterial);
+        }
         if (steps_gcode.find(opt_key) != steps_gcode.end()) {
             // These options only affect G-code export or they are just notes without influence on the generated G-code,
             // so there is nothing to invalidate.
@@ -363,6 +368,17 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             invalidated |= object->invalidate_step(ostep);
 
     return invalidated;
+}
+
+void Print::set_plate_origin(Vec3d origin)
+{
+    if (m_origin == origin)
+        return;
+    std::scoped_lock<std::mutex> lock(this->state_mutex());
+    for (PrintObject* object : m_objects)
+        if (object->has_raft())
+            object->invalidate_step(posSupportMaterial);
+    m_origin = origin;
 }
 
 void Print::set_calib_params(const Calib_Params& params) {
@@ -1486,8 +1502,9 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                 if (!is_tree(object->config().support_type.value) &&
                     object->config().raft_base_margin.value + EPSILON <
                         object->config().raft_surface_margin.value + normal_raft_base_margin_delta) {
-                    return {L("For normal support, Raft Base margin must be at least 0.5 mm larger than Raft Top margin."), object,
-                            "raft_base_margin"};
+                    return {L("Raft Base margin is too small. With the current raft settings, it must be at least 0.5 mm larger than "
+                              "the Raft Top margin."),
+                            object, "raft_base_margin"};
                 }
                 if (printer_has_mixed_nozzle_diameters) {
                     if (slicing_params.base_raft_layers > 0 && object->config().support_filament.value == 0) {
@@ -2018,7 +2035,11 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
         obj->clear_shared_object();
 
     //add the print_object share check logic
-    auto is_print_object_the_same = [this](const PrintObject* object1, const PrintObject* object2) -> bool{
+    auto is_print_object_the_same = [this](const PrintObject* object1, const PrintObject* object2) -> bool {
+        // Shared support layers cannot represent differently clipped raft edges.
+        // Multiple instances of one PrintObject are handled by raft_printable_area().
+        if (object1->has_raft() || object2->has_raft())
+            return false;
         if (object1->trafo().matrix() != object2->trafo().matrix())
             return false;
         const ModelObject* model_obj1 = object1->model_object();
@@ -2193,7 +2214,11 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                     obj->set_done(posInfill);
                 if (obj->set_started(posIroning))
                     obj->set_done(posIroning);
-                if (obj->set_started(posSupportMaterial))
+                // Regenerate a raft invalidated by bed/instance changes even when
+                // the model layers were restored from the slicing cache.
+                if (obj->has_raft())
+                    obj->generate_support_material();
+                else if (obj->set_started(posSupportMaterial))
                     obj->set_done(posSupportMaterial);
                 if (obj->set_started(posDetectOverhangsForLift))
                     obj->set_done(posDetectOverhangsForLift);

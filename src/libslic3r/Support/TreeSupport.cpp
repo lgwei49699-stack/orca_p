@@ -1379,6 +1379,7 @@ void TreeSupport::generate_toolpaths()
     }
 
     size_t layer_nr = 0;
+    const Polygons raft_bed = m_object->has_raft() ? raft_printable_area(*m_object) : Polygons{};
     if (m_slicing_params.cura_raft_mode) {
         const double raft_fill_margin = std::max({object_config.raft_base_margin.value,
                                                   object_config.raft_interface_margin.value,
@@ -1393,6 +1394,7 @@ void TreeSupport::generate_toolpaths()
                                   phase == RaftPhase::Interface ? object_config.raft_interface_margin.value :
                                                                   object_config.raft_surface_margin.value;
             ExPolygons phase_areas = margin > 0 ? offset_ex(raft_areas, scale_(margin)) : raft_areas;
+            phase_areas                         = clip_raft_areas_to_bed(phase_areas, raft_bed);
             const Flow phase_flow = m_support_params.raft_flow(phase);
             const InfillPattern phase_pattern = m_support_params.raft_fill_pattern(phase);
             std::unique_ptr<Fill> filler_raft(Fill::new_from_type(phase_pattern));
@@ -1430,6 +1432,7 @@ void TreeSupport::generate_toolpaths()
         SupportLayer *ts_layer = m_object->get_support_layer(layer_nr);
         coordf_t expand_offset = (layer_nr == 0 ? m_object_config->raft_first_layer_expansion.value : 0.);
         auto raft_areas1 = offset_ex(raft_areas, scale_(expand_offset));
+        raft_areas1                 = clip_raft_areas_to_bed(raft_areas1, raft_bed);
 
         Flow support_flow = Flow(support_extrusion_width, ts_layer->height, nozzle_diameter);
         Fill* filler_raft = Fill::new_from_type(ipRectilinear);
@@ -1464,7 +1467,10 @@ void TreeSupport::generate_toolpaths()
     first_non_raft_base = offset_ex(first_non_raft_base, support_extrusion_width);
     ExPolygons raft_base_areas = intersection_ex(raft_areas, first_non_raft_base);
     ExPolygons raft_interface_areas = diff_ex(raft_areas, raft_base_areas);
-
+    if (m_object->has_raft()) {
+        raft_base_areas      = clip_raft_areas_to_bed(raft_base_areas, raft_bed);
+        raft_interface_areas = clip_raft_areas_to_bed(raft_interface_areas, raft_bed);
+    }
 
     // raft interfaces
     for (layer_nr = m_slicing_params.base_raft_layers;
