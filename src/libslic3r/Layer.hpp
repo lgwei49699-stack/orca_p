@@ -6,6 +6,7 @@
 #include "Flow.hpp"
 #include "SurfaceCollection.hpp"
 #include "ExtrusionEntityCollection.hpp"
+#include <memory>
 #include "BoundingBox.hpp"
 namespace Slic3r {
 
@@ -273,6 +274,19 @@ enum SupportInnerType {
 class SupportLayer : public Layer
 {
 public:
+    // Filled raft region before path generation, in centered object coordinates.
+    // Kept separately from support_islands, which may also contain ordinary supports.
+    ExPolygons raft_outline;
+    struct RaftMergeBackup
+    {
+        ExtrusionEntityCollection fills;
+        ExPolygons                islands;
+    };
+    // Present only after a plate-level merge. Restored before every process() so
+    // moving/deleting a neighbour never reuses its former shared raft.
+    std::unique_ptr<RaftMergeBackup> raft_merge_backup;
+    bool                             raft_covered_by_shared_paths = false;
+
     // Polygons covered by the supports: base, interface and contact areas.
     // Used to suppress retraction if moving for a support extrusion over these support_islands.
     ExPolygons                  support_islands;

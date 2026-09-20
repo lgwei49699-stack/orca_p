@@ -747,6 +747,10 @@ void PrintObject::simplify_extrusion_path()
                               for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++layer_idx) {
                                   m_print->throw_if_canceled();
                                   const SupportLayer& layer = *m_support_layers[layer_idx];
+                                  // Shared raft paths were generated and clipped in plate
+                                  // coordinates. Keep their verified footprint unchanged.
+                                  if (layer.raft_merge_backup)
+                                      continue;
                                   // Simplification / fitted arcs may move a clipped edge outside a
                                   // curved bed or across an excluded-region corner. Keep these
                                   // near-boundary raft layers in their original linear form.

@@ -127,6 +127,12 @@ static bool clip_raft_collection(ExtrusionEntityCollection& collection, const Po
     return changed;
 }
 
+void clip_raft_paths_to_area(ExtrusionEntityCollection& paths, const Polygons& area)
+{
+    std::map<float, ExPolygons> centerline_bounds;
+    clip_raft_collection(paths, area, centerline_bounds);
+}
+
 void clip_raft_toolpaths_to_bed(PrintObject& object)
 {
     if (!object.has_raft())
@@ -1669,6 +1675,12 @@ SupportGeneratorLayersPtr generate_support_layers(
                     }
             }
             object.add_support_layer(layer_id ++, this_layer_id_interface, height_min, zavg);
+            if (object.has_raft() && zavg <= object.slicing_parameters().raft_contact_top_z + EPSILON) {
+                Polygons outline;
+                for (size_t u = i; u < j; ++u)
+                    polygons_append(outline, layers_sorted[u]->polygons);
+                object.support_layers().back()->raft_outline = union_ex(outline);
+            }
             if (num_interfaces && ! this_layer_contacts_only)
                 ++ layer_id_interface;
         }

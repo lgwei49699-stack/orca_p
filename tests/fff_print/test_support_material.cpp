@@ -12,12 +12,14 @@
 #include <nlohmann/json.hpp>
 
 #include "libslic3r/GCodeReader.hpp"
+#include "libslic3r/GCode/ConflictChecker.hpp"
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Slicing.hpp"
 #include "libslic3r/Support/RaftPlan.hpp"
+#include "libslic3r/Support/RaftMerge.hpp"
 #include "libslic3r/Support/SupportCommon.hpp"
 #include "libslic3r/Support/SupportParameters.hpp"
 #include "libslic3r/Utils.hpp"
@@ -3018,4 +3020,350 @@ TEST_CASE("Cura V1 resolves only phase geometry zero values as Auto", "[SupportM
     REQUIRE(explicit_values.surface_config.layer_height == Approx(0.23));
     REQUIRE(explicit_values.surface_config.line_width == Approx(0.53));
     REQUIRE(explicit_values.surface_config.line_spacing == Approx(0.54));
+}
+
+namespace {
+// Check actual deposited regions from all owners, allowing covered recipients
+// to have no paths. The model objects and their layer plans remain independent.
+void require_shared_rafts_are_disjoint(const Print& print)
+{
+    REQUIRE_FALSE(print.get_conflict_result().has_value());
+    struct Footprint
+    {
+        const SupportLayer* layer;
+        Polygons            polygons;
+    };
+    std::vector<Footprint> footprints;
+    Polygons               bed    = diff(Polygons{Polygon(get_bed_shape(print.config()))}, get_bed_excluded_area(print.config()));
+    const Vec3d            origin = print.get_plate_origin();
+    for (Polygon& polygon : bed)
+        polygon.translate(Point::new_scale(origin.x(), origin.y()));
+    for (const PrintObject* object : print.objects())
+        for (const SupportLayer* layer : object->support_layers()) {
+            if (layer->print_z > object->slicing_parameters().raft_contact_top_z + EPSILON)
+                continue;
+            REQUIRE((layer->has_extrusions() || layer->raft_covered_by_shared_paths));
+            Polygons area = layer->support_fills.polygons_covered_by_width();
+            for (Polygon& polygon : area)
+                polygon.translate(object->instances().front().shift);
+            REQUIRE(diff(area, offset(bed, scaled<float>(0.0001))).empty());
+            for (const auto& previous : footprints) {
+                if (std::min(layer->print_z, previous.layer->print_z) <= std::max(layer->bottom_z(), previous.layer->bottom_z()) + EPSILON)
+                    continue;
+                REQUIRE(intersection(area, previous.polygons).empty());
+            }
+            footprints.push_back({layer, std::move(area)});
+        }
+}
+
+size_t raft_path_owners(const Print& print, size_t index)
+{
+    size_t result = 0;
+    for (const PrintObject* object : print.objects()) {
+        REQUIRE(object->support_layers().size() > index);
+        result += !object->support_layers()[index]->support_fills.empty();
+    }
+    return result;
+}
+
+double all_raft_volume(const Print& print)
+{
+    double volume = 0.;
+    for (const PrintObject* object : print.objects())
+        volume += raft_volume(*object);
+    return volume;
+}
+
+struct RaftMergeTemporaryPath
+{
+    boost::filesystem::path path;
+    explicit RaftMergeTemporaryPath(const std::string& suffix = "")
+        : path(boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orca-raft-merge-%%%%-%%%%" + suffix))
+    {}
+    ~RaftMergeTemporaryPath()
+    {
+        boost::system::error_code ignored;
+        boost::filesystem::remove_all(path, ignored);
+    }
+};
+} // namespace
+
+TEST_CASE("Four independent legs share overlapping rafts while a distant tabletop stays independent", "[SupportMaterial][Raft][Merge]")
+{
+    const auto style = GENERATE(smsGrid, smsSnug, smsTreeOrganic, smsTreeSlim, smsTreeStrong, smsTreeHybrid);
+    const int  walls = GENERATE(0, 2);
+    INFO("style=" << int(style) << ", walls=" << walls);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(style));
+    config.set_key_value("support_type",
+                         new ConfigOptionEnum<SupportType>(style == smsGrid || style == smsSnug ? stNormalAuto : stTreeAuto));
+    config.set("raft_base_wall_count", walls);
+    config.set("raft_interface_wall_count", walls);
+    config.set("raft_surface_wall_count", walls);
+    Model model;
+    for (const Vec3d& offset : {Vec3d(30., 30., 0.), Vec3d(41., 30., 0.), Vec3d(30., 41., 0.), Vec3d(41., 41., 0.)})
+        add_raft_bed_test_cube(model, 8., offset);
+    add_raft_bed_test_cube(model, 15., Vec3d(70., 70., 0.))->name = "separate tabletop";
+    Print print;
+    process_raft_bed_test(print, model, config);
+    REQUIRE(print.objects().size() == 5);
+    for (size_t index = 0; index < 3; ++index)
+        REQUIRE(raft_path_owners(print, index) == 2);
+    double original_volume = 0.;
+    for (size_t i = 0; i < print.objects().size(); ++i) {
+        const PrintObject& object = *print.objects()[i];
+        REQUIRE(object.model_object()->id() == model.objects[i]->id());
+        REQUIRE(object.instances().front().model_instance->get_offset().isApprox(model.objects[i]->instances.front()->get_offset()));
+        REQUIRE_FALSE(object.layers().empty());
+        for (const SupportLayer* layer : object.support_layers()) {
+            if (layer->print_z > object.slicing_parameters().raft_contact_top_z + EPSILON)
+                continue;
+            if (i < 4) {
+                REQUIRE(layer->raft_merge_backup != nullptr);
+                original_volume += layer->raft_merge_backup->fills.total_volume();
+            } else {
+                REQUIRE(layer->raft_merge_backup == nullptr);
+                original_volume += layer->support_fills.total_volume();
+            }
+        }
+    }
+    REQUIRE(all_raft_volume(print) > 0.);
+    REQUIRE(all_raft_volume(print) < original_volume);
+    require_shared_rafts_are_disjoint(print);
+    Polygons top_material;
+    for (const PrintObject* object : print.objects()) {
+        Polygons footprint = object->support_layers()[2]->support_fills.polygons_covered_by_width();
+        for (Polygon& polygon : footprint)
+            polygon.translate(object->instances().front().shift);
+        polygons_append(top_material, footprint);
+    }
+    // Permit normal line-spacing gaps, but no missing raft underneath a leg.
+    const ExPolygons supported = offset_ex(union_ex(top_material), scale_(0.4));
+    for (const PrintObject* object : print.objects()) {
+        ExPolygons bottom = object->layers().front()->lslices;
+        translate(bottom, object->instances().front().shift);
+        REQUIRE(diff_ex(bottom, supported).empty());
+    }
+}
+
+TEST_CASE("Automatic and explicit equivalent raft values merge despite different margins and model gaps", "[SupportMaterial][Raft][Merge]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4}));
+    config.set("line_width", 0.5);
+    for (const std::string phase : {"base", "interface", "surface"})
+        for (const std::string suffix : {"layer_height", "line_width", "line_spacing"})
+            config.set("raft_" + phase + "_" + suffix, 0.);
+    Model model;
+    add_raft_bed_test_cube(model, 8., Vec3d(30., 40., 0.));
+    ModelObject* second = add_raft_bed_test_cube(model, 8., Vec3d(41., 40., 0.));
+    for (const std::string phase : {"base", "interface", "surface"}) {
+        second->config.set("raft_" + phase + "_layer_height", phase == "surface" ? 0.2 : 0.3);
+        second->config.set("raft_" + phase + "_line_width", phase == "surface" ? 0.5 : 0.6);
+        second->config.set("raft_" + phase + "_line_spacing", phase == "surface" ? 0.5 : 1.5);
+    }
+    second->config.set("raft_base_margin", 4.);
+    second->config.set("raft_interface_margin", 3.);
+    second->config.set("raft_surface_margin", 2.5);
+    second->config.set("raft_airgap", 0.31);
+    second->config.set("raft_layer_0_z_overlap", 0.08);
+    second->config.set("wall_loops", 3);
+    Print print;
+    process_raft_bed_test(print, model, config);
+    for (size_t index = 0; index < 3; ++index)
+        REQUIRE(raft_path_owners(print, index) == 1);
+    REQUIRE(print.objects()[1]->config().raft_airgap.value == Approx(0.31));
+    REQUIRE(print.objects()[1]->config().raft_layer_0_z_overlap.value == Approx(0.08));
+    REQUIRE(print.objects()[1]->layers().front()->print_z > print.objects()[0]->layers().front()->print_z);
+    require_shared_rafts_are_disjoint(print);
+}
+
+TEST_CASE("Different raft extrusion recipes partition overlap without warnings or changing their settings", "[SupportMaterial][Raft][Merge]")
+{
+    const std::string key   = GENERATE(std::string("raft_surface_line_width"), std::string("raft_surface_flow"),
+                                       std::string("raft_surface_speed"), std::string("solid_infill_direction"));
+    const double      value = key == "raft_surface_line_width" ? 0.7 :
+                              key == "raft_surface_flow"       ? 95. :
+                              key == "raft_surface_speed"      ? 35. :
+                                                                 13.;
+    INFO(key);
+    DynamicPrintConfig config = raft_bed_test_config();
+    Model              model;
+    add_raft_bed_test_cube(model, 8., Vec3d(30., 40., 0.));
+    ModelObject* second = add_raft_bed_test_cube(model, 8., Vec3d(41., 40., 0.));
+    if (key == "raft_surface_flow")
+        second->config.set_key_value(key, new ConfigOptionPercent(value));
+    else
+        second->config.set(key, value);
+    Print print;
+    process_raft_bed_test(print, model, config);
+    REQUIRE(raft_path_owners(print, 2) == 2);
+    REQUIRE(second->config.get().opt_float(key) == Approx(value));
+    require_shared_rafts_are_disjoint(print);
+    for (const PrintObject* object : print.objects()) {
+        SupportParameters parameters(*object);
+        ExtrusionPaths    paths;
+        getExtrusionPathsFromEntity(&object->support_layers()[2]->support_fills, paths);
+        REQUIRE_FALSE(paths.empty());
+        for (const ExtrusionPath& path : paths) {
+            REQUIRE(path.width == Approx(parameters.raft_flow(RaftPhase::Surface).width()));
+            REQUIRE(path.mm3_per_mm ==
+                    Approx(parameters.raft_flow(RaftPhase::Surface).mm3_per_mm() * parameters.raft_flow_ratio(RaftPhase::Surface)));
+        }
+    }
+}
+
+TEST_CASE("Shared raft paths are restored after repeated slicing, moving and deleting neighbours", "[SupportMaterial][Raft][Merge]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    Model              model;
+    ModelObject*       first  = add_raft_bed_test_cube(model, 8., Vec3d(30., 40., 0.));
+    ModelObject*       second = add_raft_bed_test_cube(model, 8., Vec3d(41., 40., 0.));
+    Print              print;
+    process_raft_bed_test(print, model, config);
+    const double merged_volume = all_raft_volume(print);
+    print.process();
+    REQUIRE(all_raft_volume(print) == Approx(merged_volume));
+    require_shared_rafts_are_disjoint(print);
+    second->instances.front()->set_offset(Vec3d(70., 40., 0.));
+    second->invalidate_bounding_box();
+    process_raft_bed_test(print, model, config);
+    REQUIRE(all_raft_volume(print) > merged_volume);
+    for (const PrintObject* object : print.objects())
+        for (const SupportLayer* layer : object->support_layers()) {
+            REQUIRE(layer->raft_merge_backup == nullptr);
+            REQUIRE(layer->has_extrusions());
+        }
+    second->instances.front()->set_offset(Vec3d(41., 40., 0.));
+    second->invalidate_bounding_box();
+    process_raft_bed_test(print, model, config);
+    REQUIRE(all_raft_volume(print) == Approx(merged_volume));
+    REQUIRE(model.delete_object(first));
+    process_raft_bed_test(print, model, config);
+    REQUIRE(print.objects().size() == 1);
+    for (const SupportLayer* layer : print.objects().front()->support_layers()) {
+        REQUIRE(layer->raft_merge_backup == nullptr);
+        REQUIRE(layer->has_extrusions());
+    }
+    Print fresh;
+    process_raft_bed_test(fresh, model, config);
+    REQUIRE(all_raft_volume(print) == Approx(all_raft_volume(fresh)));
+}
+
+TEST_CASE("Raft merge cache stores independent paths and can merge again after reload", "[SupportMaterial][Raft][Merge]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    Model              model;
+    add_raft_bed_test_cube(model, 8., Vec3d(30., 40., 0.));
+    add_raft_bed_test_cube(model, 8., Vec3d(41., 40., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    const double                 merged_volume = all_raft_volume(print);
+    const RaftMergeTemporaryPath cache;
+    REQUIRE(print.export_cached_data(cache.path.string()) == 0);
+    Print loaded;
+    loaded.apply(model, config);
+    REQUIRE(loaded.validate().string.empty());
+    loaded.set_status_silent();
+    REQUIRE(loaded.load_cached_data(cache.path.string()) == 0);
+    for (const PrintObject* object : loaded.objects())
+        for (const SupportLayer* layer : object->support_layers()) {
+            REQUIRE(layer->raft_merge_backup == nullptr);
+            REQUIRE(layer->has_extrusions());
+            REQUIRE_FALSE(layer->raft_outline.empty());
+        }
+    REQUIRE(all_raft_volume(loaded) > merged_volume);
+    // Verify the cache contents directly, without relying on regeneration to hide
+    // a cache that accidentally saved the aggregate/suppressed object paths.
+    merge_overlapping_rafts(loaded);
+    REQUIRE(all_raft_volume(loaded) == Approx(merged_volume));
+    require_shared_rafts_are_disjoint(loaded);
+    loaded.process(nullptr, true);
+    REQUIRE(all_raft_volume(loaded) == Approx(merged_volume));
+}
+
+TEST_CASE("Merged rafts retain bed clipping, excluded holes and a translated plate origin", "[SupportMaterial][Raft][Merge]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("bed_exclude_area", new ConfigOptionPoints({{8.8, 31.}, {10.2, 31.}, {10.2, 35.}, {8.8, 35.}}));
+    const Vec3d origin(150., 120., 0.);
+    Model       model;
+    add_raft_bed_test_cube(model, 8., origin + Vec3d(0., 30., 0.));
+    add_raft_bed_test_cube(model, 8., origin + Vec3d(11., 30., 0.));
+    Print print;
+    print.set_plate_origin(origin);
+    process_raft_bed_test(print, model, config);
+    REQUIRE(raft_path_owners(print, 0) == 1);
+    require_shared_rafts_are_disjoint(print);
+}
+
+TEST_CASE("G-code emits shared rafts without assigning their cancellation to a single leg", "[SupportMaterial][Raft][Merge][GCode]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("gcode_flavor", new ConfigOptionEnum<GCodeFlavor>(gcfKlipper));
+    config.set("machine_start_gcode", std::string("G90\nM83\nG92 E0"));
+    config.set("gcode_label_objects", true);
+    config.set("exclude_object", true);
+    for (const std::string& key : config.keys()) {
+        const auto* option     = dynamic_cast<const ConfigOptionEnumsGeneric*>(config.option(key));
+        const auto* definition = print_config_def.get(key);
+        if (option && !option->keys_map && definition && definition->enum_keys_map) {
+            auto* mapped   = new ConfigOptionEnumsGeneric(definition->enum_keys_map);
+            mapped->values = option->values;
+            config.set_key_value(key, mapped);
+        }
+    }
+    Model model;
+    add_raft_bed_test_cube(model, 8., Vec3d(30., 40., 0.))->name = "left leg";
+    add_raft_bed_test_cube(model, 8., Vec3d(41., 40., 0.))->name = "right leg";
+    Print print;
+    process_raft_bed_test(print, model, config);
+    const RaftMergeTemporaryPath output(".gcode");
+    set_resources_dir((boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() / "resources").string());
+    GCodeProcessorResult result;
+    print.export_gcode(output.path.string(), &result, nullptr);
+    std::ifstream     stream(output.path.string());
+    const std::string gcode((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    const size_t      first_model = gcode.find("; printing object ");
+    REQUIRE(first_model != std::string::npos);
+    REQUIRE(gcode.find("; printing object left leg") != std::string::npos);
+    REQUIRE(gcode.find("; printing object right leg") != std::string::npos);
+    const std::string raft_gcode = gcode.substr(0, first_model);
+    REQUIRE((raft_gcode.find(";TYPE:Support") != std::string::npos || raft_gcode.find("; FEATURE: Support") != std::string::npos));
+    REQUIRE(raft_gcode.find("EXCLUDE_OBJECT_START") == std::string::npos);
+    REQUIRE(gcode.find("EXCLUDE_OBJECT_START") != std::string::npos);
+    REQUIRE(gcode.find("EXCLUDE_OBJECT_START") > first_model);
+    require_shared_rafts_are_disjoint(print);
+}
+
+TEST_CASE("Different explicit raft materials keep their tools and partition overlapping regions", "[SupportMaterial][Raft][Merge]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("enable_prime_tower", false);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4, 0.4}));
+    config.set_key_value("filament_diameter", new ConfigOptionFloats({1.75, 1.75}));
+    config.set("support_filament", 1);
+    config.set("support_interface_filament", 1);
+    Model model;
+    add_raft_bed_test_cube(model, 8., Vec3d(30., 40., 0.));
+    ModelObject* second = add_raft_bed_test_cube(model, 8., Vec3d(41., 40., 0.));
+    second->config.set("support_interface_filament", 2);
+    Print print;
+    process_raft_bed_test(print, model, config);
+    REQUIRE(print.objects()[0]->config().support_interface_filament.value == 1);
+    REQUIRE(print.objects()[1]->config().support_interface_filament.value == 2);
+    REQUIRE(raft_path_owners(print, 0) == 1);
+    REQUIRE(raft_path_owners(print, 1) == 2);
+    REQUIRE(raft_path_owners(print, 2) == 2);
+    require_shared_rafts_are_disjoint(print);
+}
+
+TEST_CASE("Shared raft XY crossings are conflicts only when their physical Z intervals overlap", "[SupportMaterial][Raft][Merge]")
+{
+    const int        owner = 1, neighbour = 2;
+    const LineWithID raft(Line(Point::new_scale(-5., 0.), Point::new_scale(5., 0.)), &owner, erSupportMaterial, 0., 0.3);
+    const Line       crossing(Point::new_scale(0., -5.), Point::new_scale(0., 5.));
+    REQUIRE_FALSE(ConflictChecker::line_intersect(raft, LineWithID(crossing, &neighbour, erPerimeter, 1.0, 1.2)).has_value());
+    REQUIRE_FALSE(ConflictChecker::line_intersect(raft, LineWithID(crossing, &neighbour, erPerimeter, 0.3, 0.5)).has_value());
+    REQUIRE(ConflictChecker::line_intersect(raft, LineWithID(crossing, &neighbour, erPerimeter, 0.2, 0.4)).has_value());
 }

@@ -23,6 +23,11 @@ ExPolygons clip_raft_areas_to_bed(const ExPolygons& areas, const Polygons& bed);
 // generation, before path simplification; ordinary support layers are not trimmed.
 void clip_raft_toolpaths_to_bed(PrintObject& object);
 
+// The same width-aware clipping for newly generated plate-level raft paths.
+// Trim complete bead footprints to an assigned area; a shared raft may leave
+// no paths on a recipient object because another object supplies its raft.
+void clip_raft_paths_to_area(ExtrusionEntityCollection& paths, const Polygons& area);
+
 // Remove bridges from support contact areas.
 // To be called if PrintObjectConfig::dont_support_bridges.
 void remove_bridges_from_contacts(

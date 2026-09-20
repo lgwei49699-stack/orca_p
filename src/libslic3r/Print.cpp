@@ -36,6 +36,7 @@
 #include "nlohmann/json.hpp"
 
 #include "GCode/ConflictChecker.hpp"
+#include "Support/RaftMerge.hpp"
 
 #include <codecvt>
 
@@ -2031,6 +2032,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
     if (m_objects.empty())
         return;
 
+    restore_unmerged_rafts(*this);
+
     for (PrintObject *obj : m_objects)
         obj->clear_shared_object();
 
@@ -2241,6 +2244,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             obj->copy_layers_overhang_from_shared_object();
         }
     }
+
+    merge_overlapping_rafts(*this);
 
     if (this->set_started(psWipeTower)) {
         m_wipe_tower_data.clear();
@@ -3319,6 +3324,7 @@ const std::string PrintStatistics::TotalFilamentUsedWipeTowerValueMask = "; tota
 
 #define JSON_SUPPORT_LAYER_ISLANDS                  "support_islands"
 #define JSON_SUPPORT_LAYER_FILLS                    "support_fills"
+#define JSON_SUPPORT_LAYER_RAFT_OUTLINE "raft_outline"
 #define JSON_SUPPORT_LAYER_INTERFACE_ID             "interface_id"
 #define JSON_SUPPORT_LAYER_TYPE                     "support_type"
 
@@ -3976,6 +3982,9 @@ void extract_layer(const json& layer_json, Layer& layer) {
 void extract_support_layer(const json& support_layer_json, SupportLayer& support_layer) {
     extract_layer(support_layer_json, support_layer);
 
+    if (support_layer_json.contains(JSON_SUPPORT_LAYER_RAFT_OUTLINE))
+        support_layer.raft_outline = support_layer_json[JSON_SUPPORT_LAYER_RAFT_OUTLINE].get<ExPolygons>();
+
     support_layer.support_type = support_layer_json[JSON_SUPPORT_LAYER_TYPE];
     //support_islands
     int islands_count = support_layer_json[JSON_SUPPORT_LAYER_ISLANDS].size();
@@ -4157,18 +4166,25 @@ int Print::export_cached_data(const std::string& directory, bool with_space)
 
                         support_layer_json[JSON_SUPPORT_LAYER_INTERFACE_ID] = support_layer->interface_id();
                         support_layer_json[JSON_SUPPORT_LAYER_TYPE] = support_layer->support_type;
+                        support_layer_json[JSON_SUPPORT_LAYER_RAFT_OUTLINE] = support_layer->raft_outline;
+
+                        // Cache the object-local inputs, never a neighbour's
+                        // merged raft or the suppressed paths of a recipient.
+                        const auto*                      raft_backup = support_layer->raft_merge_backup.get();
+                        const ExPolygons&                islands     = raft_backup ? raft_backup->islands : support_layer->support_islands;
+                        const ExtrusionEntityCollection& fills       = raft_backup ? raft_backup->fills : support_layer->support_fills;
 
                         //support_islands
-                        for (const ExPolygon& support_island : support_layer->support_islands) {
+                        for (const ExPolygon& support_island : islands) {
                             json support_island_json = support_island;
                             support_islands_json.push_back(std::move(support_island_json));
                         }
                         support_layer_json[JSON_SUPPORT_LAYER_ISLANDS] = std::move(support_islands_json);
 
                         //support_fills
-                        support_fills_json[JSON_EXTRUSION_NO_SORT] = support_layer->support_fills.no_sort;
+                        support_fills_json[JSON_EXTRUSION_NO_SORT]     = fills.no_sort;
                         support_fills_json[JSON_EXTRUSION_ENTITY_TYPE] = JSON_EXTRUSION_TYPE_COLLECTION;
-                        for (const ExtrusionEntity* extrusion_entity : support_layer->support_fills.entities) {
+                        for (const ExtrusionEntity* extrusion_entity : fills.entities) {
                             json supportfill_entity_json, supportfill_entity_paths_json = json::array();
                             bool ret = convert_extrusion_to_json(supportfill_entity_json, supportfill_entity_paths_json, extrusion_entity);
                             if (!ret)

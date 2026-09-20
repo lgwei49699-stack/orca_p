@@ -1395,6 +1395,7 @@ void TreeSupport::generate_toolpaths()
                                                                   object_config.raft_surface_margin.value;
             ExPolygons phase_areas = margin > 0 ? offset_ex(raft_areas, scale_(margin)) : raft_areas;
             phase_areas                         = clip_raft_areas_to_bed(phase_areas, raft_bed);
+            ts_layer->raft_outline              = phase_areas;
             const Flow phase_flow = m_support_params.raft_flow(phase);
             const InfillPattern phase_pattern = m_support_params.raft_fill_pattern(phase);
             std::unique_ptr<Fill> filler_raft(Fill::new_from_type(phase_pattern));
@@ -1433,6 +1434,7 @@ void TreeSupport::generate_toolpaths()
         coordf_t expand_offset = (layer_nr == 0 ? m_object_config->raft_first_layer_expansion.value : 0.);
         auto raft_areas1 = offset_ex(raft_areas, scale_(expand_offset));
         raft_areas1                 = clip_raft_areas_to_bed(raft_areas1, raft_bed);
+        ts_layer->raft_outline      = raft_areas1;
 
         Flow support_flow = Flow(support_extrusion_width, ts_layer->height, nozzle_diameter);
         Fill* filler_raft = Fill::new_from_type(ipRectilinear);
@@ -1481,6 +1483,7 @@ void TreeSupport::generate_toolpaths()
 
         Flow support_flow(support_extrusion_width, ts_layer->height, nozzle_diameter);
         Fill* filler_interface = Fill::new_from_type(ipRectilinear);
+        ts_layer->raft_outline    = union_ex(raft_interface_areas, raft_base_areas);
         filler_interface->angle = PI / 2;  // interface should be perpendicular to base
         filler_interface->spacing = support_flow.spacing();
 

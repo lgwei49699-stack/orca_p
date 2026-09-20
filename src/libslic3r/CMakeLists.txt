@@ -418,6 +418,8 @@ set(lisbslic3r_sources
     Support/RaftAngleResolver.hpp
     Support/RaftPlan.cpp
     Support/RaftPlan.hpp
+    Support/RaftMerge.cpp
+    Support/RaftMerge.hpp
     Support/SupportCommon.cpp
     Support/SupportCommon.hpp
     Support/SupportLayer.hpp
