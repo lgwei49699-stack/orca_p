@@ -890,6 +890,9 @@ public:
 
     // Returns an empty string if valid, otherwise returns an error message.
     StringObjectException validate(StringObjectException *warning = nullptr, Polygons* collison_polygons = nullptr, std::vector<std::pair<Polygon, float>>* height_polygons = nullptr) const override;
+    // Check generated raft paths against objects without a raft, after skirt/brim generation.
+    // Throws SlicingError on physical overlap; does not alter geometry or object settings.
+    void                validate_raft_clearance() const;
     double              skirt_first_layer_height() const;
     Flow                brim_flow() const;
     Flow                brim_flow(coordf_t layer_height) const;

@@ -3367,3 +3367,292 @@ TEST_CASE("Shared raft XY crossings are conflicts only when their physical Z int
     REQUIRE_FALSE(ConflictChecker::line_intersect(raft, LineWithID(crossing, &neighbour, erPerimeter, 0.3, 0.5)).has_value());
     REQUIRE(ConflictChecker::line_intersect(raft, LineWithID(crossing, &neighbour, erPerimeter, 0.2, 0.4)).has_value());
 }
+
+namespace {
+void disable_test_raft(ModelObject& object)
+{
+    object.config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    object.config.set("raft_layers", 0);
+}
+
+ExPolygon clearance_rectangle(double x0, double y0, double x1, double y1)
+{
+    return ExPolygon(
+        Polygon(Points{Point::new_scale(x0, y0), Point::new_scale(x1, y0), Point::new_scale(x1, y1), Point::new_scale(x0, y1)}));
+}
+
+void append_clearance_path(ExtrusionEntityCollection& fills,
+                           const Point&               from,
+                           const Point&               to,
+                           float                      width  = 1.f,
+                           float                      height = 0.3f,
+                           ExtrusionRole              role   = erSupportMaterial)
+{
+    ExtrusionPath path(role, 0.1, width, height);
+    path.polyline.points = {from, to};
+    fills.entities.push_back(new ExtrusionPath(std::move(path)));
+}
+
+struct RaftClearanceFixture
+{
+    Model model;
+    Print print;
+
+    explicit RaftClearanceFixture(bool multiple_unrafted_instances = false, Vec3d origin = Vec3d::Zero())
+    {
+        add_raft_bed_test_cube(model, 8., origin + Vec3d(30., 40., 0.))->name = "rafted A";
+        ModelObject* other = add_raft_bed_test_cube(model, 8., origin + Vec3d(70., 70., 0.));
+        other->name        = "unrafted B";
+        disable_test_raft(*other);
+        if (multiple_unrafted_instances)
+            other->add_instance()->set_offset(origin + Vec3d(10., 10., 0.));
+        print.set_plate_origin(origin);
+        print.apply(model, raft_bed_test_config());
+        REQUIRE(print.objects().size() == 2);
+        REQUIRE(rafted().has_raft());
+        REQUIRE_FALSE(unrafted().has_raft());
+    }
+
+    PrintObject& rafted() { return *print.get_object(0); }
+    PrintObject& unrafted() { return *print.get_object(1); }
+
+    SupportLayer& raft_line(const Point& from, const Point& to, double print_z = 0.3, float height = 0.3f)
+    {
+        auto*       layer = rafted().add_support_layer(0, 0, 0.05, print_z);
+        const Point shift = rafted().instances().front().shift;
+        append_clearance_path(layer->support_fills, from - shift, to - shift, 1.f, height);
+        return *layer;
+    }
+
+    Layer& model_area(ExPolygon area, double print_z = 0.3, double height = 0.3)
+    {
+        auto* layer = unrafted().add_layer(0, height, print_z, print_z - height / 2.);
+        area.translate(-unrafted().instances().front().shift);
+        layer->lslices.push_back(std::move(area));
+        return *layer;
+    }
+};
+} // namespace
+
+TEST_CASE("One raft cannot intrude into an unrafted object and moving it away permits reslicing", "[SupportMaterial][Raft][Clearance]")
+{
+    const auto         mode   = GENERATE(RaftMode::Legacy, RaftMode::CuraV1);
+    const auto         style  = GENERATE(smsGrid, smsTreeOrganic, smsTreeSlim);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(mode));
+    config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(style));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(style == smsGrid ? stNormalAuto : stTreeAuto));
+    Model model;
+    add_raft_bed_test_cube(model, 8., Vec3d(30., 40., 0.))->name = "rafted A";
+    ModelObject* off                                             = add_raft_bed_test_cube(model, 2., Vec3d(38.5, 42., 0.));
+    off->name                                                    = "unrafted B";
+    disable_test_raft(*off);
+    // The model meshes are separated by 0.5 mm; only the expanded raft collides.
+    REQUIRE(model.objects[0]->instance_bounding_box(0).max.x() < off->instance_bounding_box(0).min.x());
+    Print print;
+    REQUIRE_THROWS_WITH(process_raft_bed_test(print, model, config), Catch::Matchers::Contains("has raft disabled"));
+    REQUIRE(print.objects()[0]->has_raft());
+    REQUIRE_FALSE(print.objects()[1]->has_raft());
+    REQUIRE(off->config.opt_int("raft_layers") == 0);
+    off->instances.front()->set_offset(Vec3d(65., 42., 0.));
+    off->invalidate_bounding_box();
+    REQUIRE_NOTHROW(process_raft_bed_test(print, model, config));
+    REQUIRE_FALSE(print.objects()[1]->has_raft());
+    // A previous successful slice must not suppress the check after another move.
+    off->instances.front()->set_offset(Vec3d(38.5, 42., 0.));
+    off->invalidate_bounding_box();
+    REQUIRE_THROWS_WITH(process_raft_bed_test(print, model, config), Catch::Matchers::Contains("has raft disabled"));
+}
+
+TEST_CASE("Merged raft ownership does not hide a conflict with an unrafted neighbour", "[SupportMaterial][Raft][Clearance]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("raft_base_margin", 5.);
+    config.set("raft_interface_margin", 4.);
+    config.set("raft_surface_margin", 3.);
+    Model model;
+    add_raft_bed_test_cube(model, 8., Vec3d(30., 40., 0.));
+    add_raft_bed_test_cube(model, 8., Vec3d(41., 40., 0.));
+    ModelObject* off = add_raft_bed_test_cube(model, 2., Vec3d(38.8, 43., 0.));
+    disable_test_raft(*off);
+    Print print;
+    REQUIRE_THROWS_WITH(process_raft_bed_test(print, model, config), Catch::Matchers::Contains("has raft disabled"));
+    REQUIRE(print.objects()[0]->support_layers().front()->raft_merge_backup != nullptr);
+    REQUIRE(print.objects()[1]->support_layers().front()->raft_merge_backup != nullptr);
+    REQUIRE((!print.objects()[0]->support_layers().front()->support_fills.empty() +
+             !print.objects()[1]->support_layers().front()->support_fills.empty()) == 1);
+}
+
+TEST_CASE("Raft clearance uses deposited width and full path height rather than intersecting centre lines",
+          "[SupportMaterial][Raft][Clearance]")
+{
+    RaftClearanceFixture f;
+    f.raft_line(Point::new_scale(40., 40.), Point::new_scale(50., 40.));
+    const Point shift = f.unrafted().instances().front().shift;
+    double      y = 40.8, z = 0.3;
+    float       height    = 0.3f;
+    bool        collision = true;
+    SECTION("parallel centre lines still overlap through their widths") {}
+    SECTION("a positive XY gap is permitted")
+    {
+        y         = 41.1;
+        collision = false;
+    }
+    SECTION("touching Z intervals are not a collision")
+    {
+        z         = 0.5;
+        height    = 0.2f;
+        collision = false;
+    }
+    SECTION("different top heights can occupy the same physical Z interval")
+    {
+        z      = 0.4;
+        height = 0.2f;
+    }
+    auto* support = f.unrafted().add_support_layer(0, 0, 0.05, z);
+    append_clearance_path(support->support_fills, Point::new_scale(42., y) - shift, Point::new_scale(48., y) - shift, 1.f, height);
+    if (collision)
+        REQUIRE_THROWS_AS(f.print.validate_raft_clearance(), SlicingError);
+    else
+        REQUIRE_NOTHROW(f.print.validate_raft_clearance());
+}
+
+TEST_CASE("Raft clearance respects holes, empty paths and physical Z when checking the model", "[SupportMaterial][Raft][Clearance]")
+{
+    RaftClearanceFixture f;
+    SupportLayer&        raft      = f.raft_line(Point::new_scale(40., 40.), Point::new_scale(50., 40.));
+    ExPolygon            area      = clearance_rectangle(39., 38., 51., 42.);
+    bool                 collision = true;
+    double               z = 0.3, height = 0.3;
+    SECTION("a raft fully contained in a solid model is a collision") {}
+    SECTION("a real model hole stays clear")
+    {
+        Polygon hole = clearance_rectangle(39.5, 39., 50.5, 41.).contour;
+        hole.reverse();
+        area.holes.push_back(std::move(hole));
+        collision = false;
+    }
+    SECTION("the model is above the raft")
+    {
+        z         = 0.5;
+        height    = 0.2;
+        collision = false;
+    }
+    SECTION("outline metadata without emitted paths is not a collision")
+    {
+        raft.raft_outline = {area};
+        raft.support_fills.clear();
+        collision = false;
+    }
+    SECTION("a non-extruding move is not a collision")
+    {
+        dynamic_cast<ExtrusionPath*>(raft.support_fills.entities.front())->set_force_no_extrusion(true);
+        collision = false;
+    }
+    f.model_area(std::move(area), z, height);
+    if (collision)
+        REQUIRE_THROWS_WITH(f.print.validate_raft_clearance(), Catch::Matchers::Contains("unrafted B"));
+    else
+        REQUIRE_NOTHROW(f.print.validate_raft_clearance());
+}
+
+TEST_CASE("Unrafted brim clearance uses actual first-layer Z and applies the plate offset only once", "[SupportMaterial][Raft][Clearance]")
+{
+    const Vec3d          origin(150., -120., 0.);
+    const Point          plate_shift = Point::new_scale(origin.x(), origin.y());
+    RaftClearanceFixture f(false, origin);
+    f.raft_line(Point::new_scale(40., 40.) + plate_shift, Point::new_scale(50., 40.) + plate_shift);
+    const double z = GENERATE(0.3, 0.6);
+    f.model_area(clearance_rectangle(70. + origin.x(), 70. + origin.y(), 78. + origin.x(), 78. + origin.y()), z, 0.2);
+    // The model stays far away. Only its already positioned brim reaches the raft.
+    append_clearance_path(f.print.get_brimMap()[f.unrafted().id()], Point::new_scale(42., 40.8) + plate_shift,
+                          Point::new_scale(48., 40.8) + plate_shift, 1.f, 0.2f, erBrim);
+    if (z < 0.4)
+        REQUIRE_THROWS_AS(f.print.validate_raft_clearance(), SlicingError);
+    else
+        REQUIRE_NOTHROW(f.print.validate_raft_clearance());
+}
+
+TEST_CASE("Raft clearance checks every unrafted instance without changing the multi-instance merge policy",
+          "[SupportMaterial][Raft][Clearance]")
+{
+    RaftClearanceFixture f(true);
+    REQUIRE(f.unrafted().instances().size() == 2);
+    const Point second = f.unrafted().instances()[1].shift;
+    f.raft_line(second + Point::new_scale(-3., 0.), second + Point::new_scale(3., 0.));
+    auto* layer    = f.unrafted().add_layer(0, 0.3, 0.3, 0.15);
+    layer->lslices = {clearance_rectangle(-2., -2., 2., 2.)};
+    REQUIRE_THROWS_AS(f.print.validate_raft_clearance(), SlicingError);
+}
+
+TEST_CASE("An unrafted per-object skirt is checked even when its model stays outside the raft", "[SupportMaterial][Raft][Clearance]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("skirt_loops", 1);
+    config.set("skirt_height", 1);
+    config.set("skirt_distance", 4.);
+    config.set_key_value("skirt_type", new ConfigOptionEnum<SkirtType>(stPerObject));
+    Model model;
+    add_raft_bed_test_cube(model, 8., Vec3d(20., 20., 0.));
+    ModelObject* off = add_raft_bed_test_cube(model, 8., Vec3d(65., 65., 0.));
+    disable_test_raft(*off);
+    Print print;
+    process_raft_bed_test(print, model, config);
+    PrintObject*   rafted   = print.get_object(0);
+    PrintObject*   unrafted = print.get_object(1);
+    ExtrusionPaths skirt;
+    getExtrusionPathsFromEntity(&unrafted->object_skirt(), skirt);
+    REQUIRE_FALSE(skirt.empty());
+    REQUIRE(skirt.front().polyline.points.size() >= 2);
+    for (SupportLayer* layer : rafted->support_layers())
+        layer->support_fills.clear();
+    const Point shift = unrafted->instances().front().shift - rafted->instances().front().shift;
+    append_clearance_path(rafted->support_layers().front()->support_fills, skirt.front().polyline.points[0] + shift,
+                          skirt.front().polyline.points[1] + shift);
+    REQUIRE_THROWS_AS(print.validate_raft_clearance(), SlicingError);
+}
+
+TEST_CASE("Raft clearance leaves all-off and print-by-object policies unchanged and honours cancellation",
+          "[SupportMaterial][Raft][Clearance]")
+{
+    RaftClearanceFixture f;
+    SECTION("all objects without a raft do not enter the checker")
+    {
+        disable_test_raft(*f.model.objects[0]);
+        f.print.apply(f.model, raft_bed_test_config());
+        REQUIRE_NOTHROW(f.print.validate_raft_clearance());
+    }
+    SECTION("print-by-object stays on its existing validation path")
+    {
+        DynamicPrintConfig config = raft_bed_test_config();
+        config.set_key_value("print_sequence", new ConfigOptionEnum<PrintSequence>(PrintSequence::ByObject));
+        f.print.apply(f.model, config);
+        f.raft_line(Point::new_scale(40., 40.), Point::new_scale(50., 40.));
+        f.model_area(clearance_rectangle(39., 38., 51., 42.));
+        REQUIRE_NOTHROW(f.print.validate_raft_clearance());
+    }
+    SECTION("cancellation interrupts footprint construction")
+    {
+        f.raft_line(Point::new_scale(40., 40.), Point::new_scale(50., 40.));
+        f.print.cancel();
+        REQUIRE_THROWS_AS(f.print.validate_raft_clearance(), CanceledException);
+    }
+    SECTION("the optional line-check flag does not bypass physical raft clearance")
+    {
+        f.raft_line(Point::new_scale(40., 40.), Point::new_scale(50., 40.));
+        f.model_area(clearance_rectangle(39., 38., 51., 42.));
+        f.print.set_no_check_flag(true);
+        REQUIRE_THROWS_AS(f.print.validate_raft_clearance(), SlicingError);
+    }
+}
+
+TEST_CASE("A raft collision is rejected before direct G-code export creates a file", "[SupportMaterial][Raft][Clearance]")
+{
+    RaftClearanceFixture f;
+    f.raft_line(Point::new_scale(40., 40.), Point::new_scale(50., 40.));
+    f.model_area(clearance_rectangle(39., 38., 51., 42.));
+    const RaftMergeTemporaryPath output(".gcode");
+    GCodeProcessorResult         result;
+    REQUIRE_THROWS_AS(f.print.export_gcode(output.path.string(), &result, nullptr), SlicingError);
+    REQUIRE_FALSE(boost::filesystem::exists(output.path));
+}

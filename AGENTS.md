@@ -37,6 +37,8 @@ OrcaSlicer 的 C++17 源码位于 `src/`，按功能模块和平台适配层拆�
 
 ### 筏层专项验证
 
+- 2026-09-20 开启／关闭筏层混摆校验已通过本机自动化验证：用户实际构建日志 `planning/build/macos-build-arm64-20260920-142033-391636.log` 包含校验源码、OrcaSlicer 及 `fff_print_tests` 的编译／链接；macOS arm64 / Release，`master` 的 `12a8ca0199` 加本次未提交补丁，源码哈希与构建前静态检查记录一致。`[SupportMaterial][Raft][Clearance]` 9 用例／145 断言、完整 `[SupportMaterial][Raft]` 47 用例／4,171 断言均退出码 0，专项已包含于完整统计，不重复相加。证据、命令、二进制／源码哈希在 `planning/raft/clearance-validation-20260920-143113/`。校验覆盖逐层打印时实际筏层路径与未开启筏层对象的模型、支撑、Brim 和逐对象裙边，使用物理 Z 区间及线宽，在切片完成及导出前拦截冲突；不修改参数或摆盘。静态差异和中英文翻译格式检查通过；本轮未做 GUI、CLI 命令端到端、实机打印、完整 CTest 或其他平台验证，不能复用旧 GUI 记录宣称本补丁 GUI 已通过。后续修改源码仍须用户重新编译后复测。
+- 2026-09-20 入库审查补充：生产源码、测试与上述构建哈希保持一致；增加同版 CLI 四个合成混摆场景对照：筏层与未开筏层对象支撑冲突、仅其逐对象裙边冲突均返回 `result.json.return_code=-100`（进程码 156），日志包含双方对象名且没有生成 G-code；分离支撑及移开裙边两例均返回 0、盘警告为空并生成非空 G-code。证据在 `planning/raft/clearance-review-20260920-merge-ready/review.json`，覆盖上一条当时尚未验证的 CLI 范围，不扩大为 GUI、实机或所有裙边组合验收。未发现阻塞入库项，未修改生产／测试源码，未提交。
 - 当前 macOS arm64 / Release 测试程序为 `build/arm64/tests/fff_print/Release/fff_print_tests.app/Contents/MacOS/fff_print_tests`。用户完成相应编译后，可直接运行 `'[SupportMaterial][Raft]' --reporter compact`；合并聚焦过滤器为 `'[SupportMaterial][Raft][Merge]'`，包含于完整筏层专项。
 - 2026-09-19 最新用户构建日志 `planning/build/macos-build-arm64-20260919-160153-075775.log` 对应：合并专项 9 用例／1,814 断言、完整筏层专项 38 用例／4,026 断言，均退出码 0；证据在 `planning/raft/merge-validation-20260919-160440/`。不能重复相加这两组统计，也不能用旧失败构建的日志替代。
 - 同版 Computer Use 验证通过五个独立对象的筏层合并、移出一条腿后重切分离、共享筏层贴平台边界裁剪；三个项目和 GUI 导出 G-code、截图、日志及线宽边界核查在 `planning/raft/gui-merge-validation-20260919-1607/`。这是合成夹具 GUI 验证，未实机打印、未覆盖完整 CTest 或其他平台。后续修改源码后须等待用户新构建再复测。详情见 `doc/print_settings/support/support_settings_raft.md`。

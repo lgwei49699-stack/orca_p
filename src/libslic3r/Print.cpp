@@ -2363,6 +2363,10 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
         }
     }
 
+    // This uses actual path widths and physical Z intervals, including adaptive
+    // layers. Keep it outside the optional legacy line-intersection checker.
+    validate_raft_clearance();
+
     // BBS
     bool has_adaptive_layer_height = false;
     for (PrintObject* obj : m_objects) {
@@ -2403,6 +2407,9 @@ std::string Print::export_gcode(const std::string& path_template, GCodeProcessor
                                 ThumbnailsGeneratorCallback thumbnail_cb, bool force_toolchange_for_single_extruder,
                                 bool embed_thumbnail_image)
 {
+    // Also guard callers exporting restored/generated paths without process().
+    // Reject before creating a G-code file, using the same GUI/CLI error path.
+    validate_raft_clearance();
     // output everything to a G-code file
     // The following call may die if the filename_format template substitution fails.
     std::string path = this->output_filepath(path_template);

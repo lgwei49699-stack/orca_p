@@ -20,6 +20,10 @@ msgstr ""
 msgid "The raft has no printable area on the bed. Move the object or check the printer's printable area."
 msgstr "筏层在打印平台内没有可打印区域。请移动模型或检查打印机的可打印区域设置。"
 
+#, boost-format
+msgid "The raft for \"%1%\" overlaps \"%2%\", which has raft disabled. Move the objects farther apart or enable a raft for \"%2%\"."
+msgstr "对象“%1%”的筏层与未开启筏层的对象“%2%”发生重叠。请增大对象间距，或为“%2%”开启筏层。"
+
 msgid "Model repair partially completed. Safe changes were kept; some geometry problems remain."
 msgstr "模型部分修复成功。已保留安全的修改，但仍有几何问题未解决。"
 

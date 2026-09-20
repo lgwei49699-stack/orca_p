@@ -153,6 +153,84 @@ slicing, moves and deletion; cache export/reload; excluded regions and translate
 plates; G-code object-cancellation labels; and physical Z overlap in conflict
 detection. GUI preview and physical printing remain separate verification.
 
+### 2026-09-20 mixed raft clearance (automated raft regression passed)
+
+`Print::validate_raft_clearance()` checks print-by-layer plates containing both
+rafted and unrafted objects. It runs after path simplification and generated
+brims/skirts, and again before G-code export creates a file. A single raft is
+checked too: the check does not depend on a shared-raft group being formed.
+It uses the final extrusion widths and each path's physical height, rather than
+nominal raft margins or intersecting centre lines. Shared-path recipients and
+merge backups are not counted as extra deposited material. Sparse raft gaps and
+model holes remain free; touching Z intervals do not count as physical overlap.
+
+The unrafted side includes model slices and emitted model paths, ordinary
+support, generated model/support brims, and active per-object skirts. Model and
+support paths are transformed for every instance; brim maps already contain the
+plate offset and instance placement. Support paths that share a physical raft
+layer are checked with that raft's low-layer paths. A collision raises the same
+translated `SlicingError` for GUI and CLI, names both objects, and identifies the
+unrafted object. It neither moves objects, clips away their required support,
+enables a raft nor changes their process parameters. This check uses real Z
+intervals and also runs when the older line checker is skipped for adaptive
+layers or `--no-check`.
+
+逐层打印时，开启／关闭筏层混摆增加实际占地校验；只有真实重叠才报错。
+英文和简体中文提示同步维护。摆盘、筏层参数兼容、逐对象打印及多实例筏层
+合并策略不变；擦料塔专项校验和自定义起始 G-code 不在本次改动范围内。
+
+New tests use `[SupportMaterial][Raft][Clearance]`, included in the full
+`[SupportMaterial][Raft]` filter. They cover a single raft versus an unrafted
+model across Legacy/Cura and support styles; merged ownership; moving and
+re-slicing after a rejection; width-only intersections; path heights differing
+from the support layer height; model holes; empty/non-extruding paths; brim Z
+and translated plates; a non-first unrafted instance; generated per-object
+skirts; unchanged all-off/ByObject paths; cancellation; and rejection before
+direct G-code export creates a file.
+
+Validation: the user's actual build log is
+`planning/build/macos-build-arm64-20260920-142033-391636.log` (the supplied
+`142603-005329` filename was not present). It compiled the changed production
+and test sources and linked OrcaSlicer and `fff_print_tests` successfully.
+The checkout was `master` at `12a8ca0199` plus the uncommitted clearance patch,
+using `build/arm64`, Ninja Multi-Config, Release and arm64. Source hashes matched
+the pre-build static review; the test binary was newer than the changed sources.
+
+- `[SupportMaterial][Raft][Clearance] --reporter compact`: **9 test cases,
+  145 assertions passed**, exit code **0**.
+- `[SupportMaterial][Raft] --reporter compact`: **47 test cases,
+  4,171 assertions passed**, exit code **0**. This includes the clearance cases;
+  do not add the two sets of totals.
+- `git diff --check` and the simplified Chinese catalog's
+  `msgfmt --check --check-format`: passed, exit code **0**.
+
+Commands, logs, platform, source hashes, binary hash and exit codes are in
+`planning/raft/clearance-validation-20260920-143113/`. No production or test
+source changes were needed after this run. The build still reports toolchain
+warnings, including linking a zstd dylib built for macOS 26.0 while targeting
+11.3; passing on the current machine does not establish older macOS compatibility.
+GUI and CLI command end-to-end error handling, physical printing, full CTest
+and other platforms were not exercised in this run. The GUI records below
+remain evidence for the previous build only.
+
+The subsequent pre-commit review used the same source and binary hashes and
+added four CLI comparisons, retained in
+`planning/raft/clearance-review-20260920-merge-ready/review.json`:
+
+- A raft overlapping an elevated unrafted object's support was rejected.
+- Moving that support clear of the raft permitted a nonempty G-code export.
+- Enabling a per-object skirt that reached the raft was rejected, although the
+  model and support were clear. This did not reproduce the suspected omission
+  when checking skirts on an object supported above the bed.
+- Moving the unrafted object farther away, keeping support and skirt enabled,
+  permitted a nonempty G-code export.
+
+Both rejections reported CLI return code `-100` (process exit code `156`), named
+both objects in the diagnostic log, and created no G-code. Both successful
+exports returned `0` and had empty plate warning messages. These are synthetic
+CLI smoke cases, not GUI or physical-print acceptance. No blocking issue was
+found in this review; production and test sources remained unchanged.
+
 ### 2026-09-19 overlap validation
 
 The user's arm64 Release build in

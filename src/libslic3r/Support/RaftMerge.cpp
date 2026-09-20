@@ -3,15 +3,18 @@
 #include "../ClipperUtils.hpp"
 #include "../Fill/FillBase.hpp"
 #include "../GCode/ConflictChecker.hpp"
+#include "../I18N.hpp"
 #include "../Print.hpp"
 #include "SupportCommon.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <tuple>
+#include <boost/format.hpp>
 #include <boost/log/trivial.hpp>
 
 namespace Slic3r {
@@ -178,7 +181,158 @@ void generate_shared_paths(MergedLayer& result, const BoundingBox& bounds, const
     clip_raft_paths_to_area(result.paths, intersection(to_polygons(result.areas), bed));
 }
 
+struct ClearanceBand
+{
+    double     bottom_z;
+    double     print_z;
+    ExPolygons areas;
+};
+
+// A support layer may contain paths of different heights. Using Layer::height
+// (the minimum of those heights) would miss collisions underneath taller paths.
+std::vector<ClearanceBand> extrusion_clearance_bands(const Print&                     print,
+                                                     const ExtrusionEntityCollection& fills,
+                                                     double                           print_z,
+                                                     double                           fallback_height,
+                                                     double                           below_z = std::numeric_limits<double>::max())
+{
+    ExtrusionPaths paths;
+    getExtrusionPathsFromEntity(&fills, paths);
+    std::map<double, Polygons> by_height;
+    for (const ExtrusionPath& path : paths) {
+        if (print.canceled())
+            throw CanceledException();
+        if (path.is_force_no_extrusion() || path.mm3_per_mm <= 0. || path.width <= 0.)
+            continue;
+        const double height = path.height > 0. ? path.height : fallback_height;
+        if (height > 0. && print_z - height + EPSILON < below_z)
+            path.polygons_covered_by_width(by_height[height], 0.f);
+    }
+    std::vector<ClearanceBand> bands;
+    for (auto& [height, areas] : by_height)
+        if (!areas.empty())
+            bands.push_back({print_z - height, print_z, union_ex(areas)});
+    return bands;
+}
+
+struct PlacedClearanceBand
+{
+    const PrintObject* owner;
+    ClearanceBand      band;
+    BoundingBox        bounds;
+};
+
 } // namespace
+
+void Print::validate_raft_clearance() const
+{
+    if (m_config.print_sequence == PrintSequence::ByObject)
+        return;
+    const bool has_unrafted = std::any_of(m_objects.begin(), m_objects.end(),
+                                          [](const PrintObject* object) { return !object->has_raft() && !object->instances().empty(); });
+    if (!has_unrafted)
+        return;
+
+    std::vector<PlacedClearanceBand> rafts;
+    double                           raft_top_z = 0.;
+    for (const PrintObject* object : m_objects) {
+        if (!object->has_raft() || object->instances().empty())
+            continue;
+        for (const SupportLayer* layer : object->support_layers()) {
+            if (layer->print_z > object->slicing_parameters().raft_contact_top_z + EPSILON)
+                continue;
+            // Inspect the final emitted paths, not the merge backups or a solid
+            // nominal outline: holes and gaps between sparse raft lines stay free.
+            // This also covers ordinary supports sharing a physical raft layer.
+            const auto bands = extrusion_clearance_bands(*this, layer->support_fills, layer->print_z, layer->height);
+            for (const PrintInstance& instance : object->instances()) {
+                for (const ClearanceBand& band : bands) {
+                    ClearanceBand placed = band;
+                    translate(placed.areas, instance.shift);
+                    BoundingBox bounds = get_extents(placed.areas);
+                    raft_top_z         = std::max(raft_top_z, placed.print_z);
+                    rafts.push_back({object, std::move(placed), bounds});
+                }
+            }
+        }
+    }
+    if (rafts.empty())
+        return;
+
+    const auto check = [&](const PrintObject& object, const ClearanceBand& band, const Point& shift) {
+        if (band.areas.empty() || band.bottom_z + EPSILON >= raft_top_z)
+            return;
+        ExPolygons areas = band.areas;
+        translate(areas, shift);
+        const BoundingBox bounds = get_extents(areas);
+        for (const PlacedClearanceBand& raft : rafts) {
+            throw_if_canceled();
+            if (std::min(band.print_z, raft.band.print_z) <= std::max(band.bottom_z, raft.band.bottom_z) + EPSILON ||
+                !bounds.overlap(raft.bounds) || intersection_ex(areas, raft.band.areas).empty())
+                continue;
+            throw SlicingError((boost::format(_u8L("The raft for \"%1%\" overlaps \"%2%\", which has raft disabled. Move the objects "
+                                                   "farther apart or enable a raft for \"%2%\".")) %
+                                raft.owner->model_object()->name % object.model_object()->name)
+                                   .str(),
+                               object.model_object()->id().id);
+        }
+    };
+    for (const PrintObject* object : m_objects) {
+        if (object->has_raft() || object->instances().empty())
+            continue;
+        throw_if_canceled();
+        const auto check_local = [&](const ClearanceBand& band) {
+            for (const PrintInstance& instance : object->instances())
+                check(*object, band, instance.shift);
+        };
+        for (const Layer* layer : object->layers()) {
+            if (layer->bottom_z() + EPSILON >= raft_top_z)
+                break;
+            // Keep real model holes; an XY bounding box is not a model footprint.
+            check_local({layer->bottom_z(), layer->print_z, layer->lslices});
+            // Width/flow settings can put emitted walls outside the slice contour.
+            for (const LayerRegion* region : layer->regions())
+                for (const auto* fills : {&region->perimeters, &region->fills})
+                    for (const ClearanceBand& band : extrusion_clearance_bands(*this, *fills, layer->print_z, layer->height, raft_top_z))
+                        check_local(band);
+        }
+        for (const SupportLayer* layer : object->support_layers()) {
+            for (const ClearanceBand& band :
+                 extrusion_clearance_bands(*this, layer->support_fills, layer->print_z, layer->height, raft_top_z))
+                check_local(band);
+        }
+
+        // Brim maps already contain every instance in plate/world coordinates.
+        // They are emitted once at the owning model/support's first print Z.
+        const auto check_brim = [&](const auto& map, const auto& layers) {
+            const auto it = map.find(object->id());
+            if (it == map.end() || layers.empty())
+                return;
+            const Layer* first = layers.front();
+            for (const ClearanceBand& band : extrusion_clearance_bands(*this, it->second, first->print_z, first->height, raft_top_z))
+                check(*object, band, Point(0, 0));
+        };
+        check_brim(m_brimMap, object->layers());
+        check_brim(m_supportBrimMap, object->support_layers());
+
+        // Per-object skirts belong to the unrafted object. Their stored paths
+        // use first-layer flow, but G-code changes the height at each model layer.
+        if (m_config.skirt_type == stPerObject && has_skirt() && !object->object_skirt().empty()) {
+            const ExPolygons all_loops = union_ex(object->object_skirt().polygons_covered_by_width());
+            const ExPolygons last_loop = m_config.single_loop_draft_shield ?
+                                             union_ex(object->object_skirt().entities.back()->polygons_covered_by_width()) :
+                                             all_loops;
+            for (const Layer* layer : object->layers()) {
+                if (layer->bottom_z() + EPSILON >= raft_top_z ||
+                    (layer->id() >= size_t(m_config.skirt_height.value) && !has_infinite_skirt()))
+                    break;
+                const LayerTools& tools = m_tool_ordering.tools_for_layer(layer->print_z);
+                if (tools.has_skirt && !tools.extruders.empty())
+                    check_local({layer->bottom_z(), layer->print_z, layer->id() == 0 ? all_loops : last_loop});
+            }
+        }
+    }
+}
 
 void restore_unmerged_rafts(Print& print)
 {
