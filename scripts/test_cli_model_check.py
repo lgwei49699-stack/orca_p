@@ -314,6 +314,7 @@ def main():
         assert check["mesh_status"] == "needs_repair"
         run("reject-slice", fixtures / "00-healthy-cube.stl", "--slice", "0", success=False)
         run("reject-legacy-repair", fixtures / "00-healthy-cube.stl", "--auto-repair-model", "1", success=False)
+        run("reject-disable-legacy-repair", fixtures / "00-healthy-cube.stl", "--auto-repair-model", "0", success=False)
         rejected, rejected_result = run("reject-repair-format-conflict", fixtures / "00-healthy-cube.obj",
                                         "--repair-model", "cgal", "--export-obj", "--export-stl", success=False)
         assert rejected["repair_status"] == "not_started"

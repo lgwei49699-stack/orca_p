@@ -142,7 +142,30 @@
 | `--check-model --repair-model cgal` | 上述检测＋按需高级修复、导出只读复检 | v4 检测与修复摘要 |
 | `--repair-model cgal --export-obj` | 单独高级修复并导出，仍做修复过程必需的几何校验 | **旧修复格式，本轮尚未精简** |
 
-单独修复当前使用 `model_repairs[].status`、`model_repairs[].mesh_validated`、`repair_validation` 等旧字段，不返回 `model_checks`。它的修复内部校验不等于 demo 的七项／两项完整分类报告；没有分类报告不表示没有做任何校验，也不能按“七项全部为 0”处理。退出码 0 不代表全部问题已修复，更不代表打印已验证。另须注意：现有单独 CGAL 分支主动关闭 STL 导入时的 ADMesh 自动修复，与 `--check-model` 组合入口固定先执行原生导入自动修复尚未对齐；本轮不修改该导入差异。
+单独修复当前使用 `model_repairs[].status`、`model_repairs[].mesh_validated`、`repair_validation` 等旧字段，不返回 `model_checks`。它的修复内部校验不等于 demo 的七项／两项完整分类报告；没有分类报告不表示没有做任何校验，也不能按“七项全部为 0”处理。退出码 0 不代表全部问题已修复，更不代表打印已验证。
+
+**2026-09-20：CGAL 前的 STL 自动修复开关（已通过用户新构建的 CLI 回归）。** 复用既有 `--auto-repair-model 0|1`，不新增同义开关。只有显式传入时才改变原来的 CGAL 导入行为：
+
+| 普通 CLI 参数（不含 `--check-model`） | STL 执行顺序 |
+|---|---|
+| `--repair-model cgal`，不传自动修复开关 | 跳过 ADMesh → CGAL，保持此前默认 |
+| `--repair-model cgal --auto-repair-model 0` | 跳过 ADMesh → CGAL |
+| `--repair-model cgal --auto-repair-model 1` | 原生 ADMesh 自动修复 → CGAL |
+| 不请求 CGAL | 仍默认开启 ADMesh，可用 `--auto-repair-model 0` 关闭 |
+
+需要“一条命令自动修复 → 高级修复 → 切片”时，在原来的打印机、工艺、耗材和输入文件参数之外，使用以下参数组合：
+
+```text
+--auto-repair-model 1 --repair-model cgal --slice 0
+```
+
+同样适用于 `--export-stl` / `--export-obj`。自动修复仅改变内存中的 STL 导入结果，不覆盖源文件；CGAL 仍按既有部分修复、保色、失败与切片警告门禁处理。`model_repairs` 继续只记录 CGAL 报告，其中 `before` 是本次导入处理后的网格，并不是原文件的缺陷统计；没有新增 JSON 字段。`--debug 3` 日志会记录 CGAL 前自动修复是否启用及最终 `auto_repair_model` 值。
+
+OBJ 仍使用原生 OBJ 导入与材质规则，不执行 ADMesh。独立 `--check-model` 仍固定按原生导入准备，不接受 `--auto-repair-model` 或 `--slice`；不能把这个开关用于改变检测入口。以上组合须使用包含本次修改的新构建，旧版本仍会强制关闭 CGAL 前的自动修复。
+
+回归沿用 `scripts/test_cli_repair_acceptance.py`：以细小裂缝夹具核对默认／显式关闭／显式开启三种模式下 CGAL 实际接收的 STL 网格，同时检查 OBJ 不受影响；提供打印参数时追加三种模式的修复后切片及非空 G-code、盘警告、返回码检查。显式开启也不得绕过 `--no-check`、`--allow-newer-file`、`--load-slicedata` 限制。`scripts/test_cli_model_check.py` 检查独立检测入口仍拒绝自动修复开关的 0 和 1。
+
+入库前验收：用户构建日志 `planning/build/macos-build-arm64-20260920-174141-288544.log` 包含本次源码编译和应用链接，源码哈希与构建前记录一致；两个 Release 应用路径的可执行文件 SHA-256 相同。macOS arm64 / Release 三个 CLI 脚本分别通过修复／导出／切片 78 项、检测入口 76 项、材质 30 项，退出码均为 0。切片配置采用维护台 EP3 Plus 机器／0.20 mm 工艺、两个通用 PLA 耗材槽以覆盖彩色 OBJ。新增裂缝对照中，STL 默认／关闭时 CGAL 前开放边为 4、开启时为 0，OBJ 三种均为 4；三种 STL 修复后切片均完成。测试产物、逐项日志、完整命令、源码与二进制哈希见 `planning/repair/cgal-auto-repair-switch-20260920/review/review.json`。静态差异、Python 语法和中英文翻译格式检查通过，未发现本次改动的阻塞入库项。未运行完整 CTest、原生 GUI 修复、其他平台或实机打印。
 
 **后续精简范围（仅记录方案，尚未编码）：**
 
@@ -151,7 +174,7 @@
 - 不额外执行七项／两项分类检测，不伪造 `issues` 或完整检查结论；需要分类检测摘要时显式加 `--check-model`。
 - 不新增“精简输出”参数，不改变修复、保色和失败保护。普通切片及“修复＋切片”仍按各自的输出契约处理，不能顺带删除切片业务数据。
 
-本次补充只更新说明。**单独修复现在仍须按旧字段解析；上面的后续方案不是已实现的新协议。**
+上述 JSON 精简方案只更新说明。**单独修复现在仍须按旧字段解析；上面的后续方案不是已实现的新协议。**
 
 ## 3. 原生导入准备（内部报告，行为不变）
 

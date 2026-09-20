@@ -79,7 +79,8 @@ def main():
     print(f"Evidence directory: {work}", flush=True)
     results = []
 
-    def run(name, source, flags, expected_success, *, slice_job=False, expected_partial=False, extra_sources=()):
+    def run(name, source, flags, expected_success, *, slice_job=False, expected_partial=False, extra_sources=(),
+            expected_open_before=None, expected_error=None):
         case = work / name
         case.mkdir()
         data, output = case / "data", case / "output"
@@ -100,6 +101,10 @@ def main():
                 repairs = report["model_repairs"]
                 validation = report["repair_validation"]
                 assert repairs and all(r["can_continue"] for r in repairs), report
+                if expected_open_before is not None:
+                    assert len(repairs) == 1 and repairs[0]["engine"] == "cgal", report
+                    assert (repairs[0]["before"]["open_edges"] > 0) == expected_open_before, \
+                        "CGAL must inspect the geometry from the selected import repair policy: " + str(repairs)
                 if expected_partial:
                     assert any(r["committed"] for r in repairs), report
                     assert any(r["repair_actions"]["unresolved"] > 0 for r in repairs), report
@@ -121,6 +126,8 @@ def main():
                     assert paths and all(p.is_file() and p.stat().st_size > 0 for p in paths), report
             else:
                 assert report.get("error_string"), report
+                if expected_error is not None:
+                    assert expected_error in report["error_string"], report
                 if source.stem == "10-only-triangle":
                     repairs = report["model_repairs"]
                     assert repairs and all(r["load_succeeded"] and r["repair_attempted"] and not r["success"]
@@ -184,6 +191,20 @@ def main():
                 run(name + "-slice", source, ["--load-settings", args.load_settings, "--load-filaments", args.load_filaments,
                                              "--arrange", "1", "--slice", "0"], True, slice_job=True)
 
+    # The displaced corner is welded only by native STL import repair. Check
+    # CGAL's input geometry, not just a log flag or the final repaired cube.
+    # OBJ must keep native import regardless of this STL-specific switch.
+    for mode, flags in (("default", []), ("off", ["--auto-repair-model", "0"]),
+                        ("on", ["--auto-repair-model", "1"])):
+        for extension in ("stl", "obj"):
+            source = fixtures / ("02-small-crack." + extension)
+            run("import-before-cgal-" + mode + "-" + extension, source, [*flags, "--export-" + extension], True,
+                expected_open_before=extension == "obj" or mode != "on")
+        if args.load_settings:
+            run("import-before-cgal-" + mode + "-slice", fixtures / "02-small-crack.stl",
+                [*flags, "--load-settings", args.load_settings, "--load-filaments", args.load_filaments,
+                 "--arrange", "1", "--slice", "0"], True, slice_job=True, expected_open_before=mode != "on")
+
     # A synthetic mixed defect in ONE mesh: remove one duplicate safely while the
     # existing non-manifold/intersecting edge remains. Failed CGAL candidates
     # must never be exported, and the result must not claim full validation.
@@ -219,7 +240,10 @@ def main():
     healthy = fixtures / "00-healthy-cube.stl"
     for name, flags in (("reject-no-check", ["--no-check"]), ("reject-allow-newer", ["--allow-newer-file"]),
                         ("reject-slice-cache", ["--load-slicedata", str(work / "unused-cache")])):
-        run(name, healthy, ["--slice", "0", *flags], False)
+        expected_error = "CGAL repair with slicing requires fresh slicing and validation"
+        run(name, healthy, ["--slice", "0", *flags], False, expected_error=expected_error)
+        run(name + "-auto-repair", healthy, ["--auto-repair-model", "1", "--slice", "0", *flags], False,
+            expected_error=expected_error)
     for path, expected in hashes.items():
         if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             results.append(dict(case="source-protection", passed=False, error=str(path)))

@@ -8416,10 +8416,12 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli     = "repair-ignore-materials";
     def->set_default_value(new ConfigOptionBool(false));
 
-    def = this->add("auto_repair_model", coBool);
-    def->label = L("Automatically repair imported model");
-    def->tooltip = L("Automatically repair STL mesh connectivity and normals while importing the model.");
-    def->cli = "auto-repair-model";
+    def             = this->add("auto_repair_model", coBool);
+    def->label      = L("Automatically repair imported model");
+    def->tooltip    = L("Automatically repair STL mesh connectivity and normals while importing the model. With --repair-model cgal, "
+                           "this defaults to 0; set to 1 to run automatic repair before CGAL. Without CGAL, this defaults to 1. "
+                           "Does not apply to OBJ or --check-model.");
+    def->cli        = "auto-repair-model";
     def->cli_params = "0|1";
     def->set_default_value(new ConfigOptionBool(true));
 

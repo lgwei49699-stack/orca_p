@@ -1956,7 +1956,6 @@ int CLI::run(int argc, char **argv)
     bool auto_repair_model = true;
     if (ConfigOptionBool* option = m_config.option<ConfigOptionBool>("auto_repair_model"))
         auto_repair_model = option->value;
-    BOOST_LOG_TRIVIAL(info) << "auto_repair_model=" << auto_repair_model;
 
     std::string repair_engine;
     if (cgal_repair_requested) {
@@ -1982,11 +1981,13 @@ int CLI::run(int argc, char **argv)
                 flush_and_exit(CLI_INVALID_PARAMS);
             }
         }
-        if (auto_repair_model) {
-            BOOST_LOG_TRIVIAL(info) << "--repair-model cgal replaces the legacy STL load-time repair for this run";
+        // Preserve the CGAL-only default, but honor an explicit request to run
+        // native STL import repair before advanced repair and slicing/export.
+        if (std::find(m_requested_options.begin(), m_requested_options.end(), "auto_repair_model") == m_requested_options.end())
             auto_repair_model = false;
-        }
+        BOOST_LOG_TRIVIAL(info) << "STL load-time repair before CGAL: " << (auto_repair_model ? "enabled" : "disabled");
     }
+    BOOST_LOG_TRIVIAL(info) << "auto_repair_model=" << auto_repair_model;
 
     const bool export_texture_obj_requested =
         std::find(m_actions.begin(), m_actions.end(), "export_texture_obj") != m_actions.end();
