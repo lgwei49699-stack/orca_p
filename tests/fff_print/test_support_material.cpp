@@ -14,12 +14,14 @@
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/GCode/ConflictChecker.hpp"
 #include "libslic3r/Geometry.hpp"
+#include "libslic3r/Fill/FillBase.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Slicing.hpp"
 #include "libslic3r/Support/RaftPlan.hpp"
 #include "libslic3r/Support/RaftMerge.hpp"
+#include "libslic3r/Support/RaftGeometry.hpp"
 #include "libslic3r/Support/SupportCommon.hpp"
 #include "libslic3r/Support/SupportParameters.hpp"
 #include "libslic3r/Utils.hpp"
@@ -3655,4 +3657,763 @@ TEST_CASE("A raft collision is rejected before direct G-code export creates a fi
     GCodeProcessorResult         result;
     REQUIRE_THROWS_AS(f.print.export_gcode(output.path.string(), &result, nullptr), SlicingError);
     REQUIRE_FALSE(boost::filesystem::exists(output.path));
+}
+
+TEST_CASE("Raft geometry follows X-PRINT size and aspect-ratio probes", "[SupportMaterial][Raft][Geometry]")
+{
+    std::ifstream stream((boost::filesystem::path(TEST_DATA_DIR) / "raft_geometry/reference-shapes.json").string());
+    REQUIRE(stream.good());
+    const nlohmann::json      fixture = nlohmann::json::parse(stream);
+    const Polygons            bed{clearance_rectangle(0., 0., 180., 180.).contour};
+    const RaftGeometryOptions options{true, fixture.at("chunk_size_mm").get<double>(), fixture.at("chunk_gap_mm").get<double>(), 0.};
+    REQUIRE(fixture.at("cases").size() == 6);
+    for (const auto& entry : fixture.at("cases")) {
+        const std::string name  = entry.at("name").get<std::string>();
+        const double      width = entry.at("width_mm").get<double>(), height = entry.at("height_mm").get<double>();
+        const size_t      sections = entry.at("sections").get<size_t>();
+        CAPTURE(name, width, height);
+        const auto result = plan_raft_geometry({{clearance_rectangle(20., 20., 20. + width, 20. + height)}}, {0.}, bed, options, 0.4);
+        REQUIRE(result.layers.front().size() == sections);
+        REQUIRE((result.layer_cuts.front() == 0) == (sections == 1));
+        REQUIRE(diff_ex(result.layers.front(), bed).empty());
+    }
+}
+
+TEST_CASE("Raft phases classify their own contours after the phase inset", "[SupportMaterial][Raft][Geometry]")
+{
+    const Polygons            bed{clearance_rectangle(0., 0., 100., 100.).contour};
+    const ExPolygons          outline{clearance_rectangle(20., 20., 60.5, 60.5)};
+    const RaftGeometryOptions options{true, 40., 0.8, 0.};
+    const auto                result = plan_raft_geometry({outline, outline, outline}, {0., 0.4, 0.25}, bed, options, 0.4);
+    REQUIRE(result.layers[0].size() == 8);
+    REQUIRE(result.layers[1].size() == 1);
+    REQUIRE(result.layers[2].size() == 1);
+    const std::vector<size_t> expected_cuts{4, 0, 0};
+    REQUIRE(result.layer_cuts == expected_cuts);
+    const ExPolygons center{clearance_rectangle(40.15, 40.15, 40.35, 40.35)};
+    REQUIRE(intersection_ex(result.layers[0], center).empty());
+    REQUIRE_FALSE(intersection_ex(result.layers[2], center).empty());
+}
+
+TEST_CASE("Separated small raft islands stay small while joined islands are chunked", "[SupportMaterial][Raft][Geometry]")
+{
+    const Polygons            bed{clearance_rectangle(0., 0., 180., 180.).contour};
+    const RaftGeometryOptions options{true, 40., 0.8, 0.};
+    const ExPolygons          separate{clearance_rectangle(10., 10., 30., 30.), clearance_rectangle(130., 130., 150., 150.)};
+    const auto                apart = plan_raft_geometry({separate}, {0.}, bed, options, 0.4);
+    REQUIRE(apart.layers.front().size() == 2);
+    REQUIRE(apart.layer_cuts.front() == 0);
+    const ExPolygons joined{clearance_rectangle(10., 10., 40., 40.), clearance_rectangle(32., 10., 62., 40.)};
+    const auto       shared = plan_raft_geometry({joined}, {0.}, bed, options, 0.4);
+    REQUIRE(shared.layers.front().size() == 2);
+    REQUIRE(shared.layer_cuts.front() > 0);
+    REQUIRE(intersection_ex(shared.layers.front(), ExPolygons{clearance_rectangle(35.8, 10., 36.2, 40.)}).empty());
+}
+
+TEST_CASE("Raft closing fills small holes but never printer exclusions", "[SupportMaterial][Raft][Geometry]")
+{
+    const ExPolygon     outer = clearance_rectangle(20., 20., 50., 50.);
+    const ExPolygons    hole{clearance_rectangle(33., 33., 37., 37.)};
+    const ExPolygons    ring = diff_ex(ExPolygons{outer}, hole);
+    const Polygons      bed{clearance_rectangle(0., 0., 100., 100.).contour};
+    RaftGeometryOptions options{true, 40., 0.8, 0.};
+    const auto          unsmoothed = plan_raft_geometry({ring}, {0.}, bed, options, 0.4);
+    REQUIRE(unsmoothed.layers.front().size() == 1);
+    REQUIRE(unsmoothed.layers.front().front().holes.size() == 1);
+    REQUIRE(std::abs(unsmoothed.layers.front().front().holes.front().area()) / 1e12 == Approx(16.).margin(0.02));
+    // Round offsets can leave sub-micron clipping residues at a hole corner.
+    // Verify the hole survives and its interior stays clear within the combined
+    // precision of the two one-micron arc offsets.
+    REQUIRE(intersection_ex(unsmoothed.layers.front(), offset_ex(hole, -scale_(0.002))).empty());
+    options.smoothing   = 5.;
+    const auto smoothed = plan_raft_geometry({ring}, {0.}, bed, options, 0.4);
+    REQUIRE(diff_ex(hole, smoothed.layers.front()).empty());
+    const Polygons excluded_bed = diff(bed, to_polygons(hole));
+    const auto     excluded     = plan_raft_geometry({ring}, {0.}, excluded_bed, options, 0.4);
+    REQUIRE(intersection_ex(excluded.layers.front(), hole).empty());
+}
+
+TEST_CASE("Raft containment uses round beads without square corner overreach", "[SupportMaterial][Raft][Geometry]")
+{
+    ExtrusionPath path(erSupportMaterial, 0.4, 2.f, 0.2f);
+    path.polyline            = Polyline{Point::new_scale(20., 20.), Point::new_scale(40., 20.), Point::new_scale(40., 40.)};
+    const ExPolygons rounded = raft_extrusion_coverage(ExtrusionPaths{path});
+    // This patch is farther than the 1 mm bead radius from the turn but inside
+    // the square join's added corner. Its coordinates are an independent oracle.
+    const ExPolygons corner{clearance_rectangle(40.39, 19.005, 40.41, 19.015)};
+    REQUIRE_FALSE(intersection_ex(path.polygons_covered_by_width(), to_polygons(corner)).empty());
+    REQUIRE(intersection_ex(rounded, corner).empty());
+    REQUIRE_FALSE(intersection_ex(rounded, ExPolygons{clearance_rectangle(39.99, 19.05, 40.01, 19.1)}).empty());
+    // Rounded ends also count as material: a real bead crossing a boundary must
+    // remain detectable even when its centerline ends exactly on that boundary.
+    REQUIRE_FALSE(intersection_ex(rounded, ExPolygons{clearance_rectangle(19.05, 19.99, 19.1, 20.01)}).empty());
+    const Polygons too_small{clearance_rectangle(20., 19., 41., 41.).contour};
+    REQUIRE_FALSE(diff_ex(rounded, too_small).empty());
+    REQUIRE_THROWS_AS(raft_extrusion_coverage(ExtrusionPaths{path}, [] { throw CanceledException(); }), CanceledException);
+}
+
+TEST_CASE("Raft geometry disabled input remains exact and planning honors cancellation", "[SupportMaterial][Raft][Geometry]")
+{
+    const Polygons                bed{clearance_rectangle(0., 0., 100., 100.).contour};
+    const std::vector<ExPolygons> input{{clearance_rectangle(10., 10., 90., 90.)}};
+    RaftGeometryOptions           options;
+    REQUIRE(plan_raft_geometry(input, {0.}, bed, options, 0.4).layers == input);
+    options.segmented = true;
+    const auto cancel = [] { throw CanceledException(); };
+    REQUIRE_THROWS_AS(plan_raft_geometry(input, {0.}, bed, options, 0.4, cancel), CanceledException);
+    options.chunk_size = 0.;
+    REQUIRE_FALSE(plan_raft_geometry(input, {0.}, bed, options, 0.4).changed);
+    REQUIRE_FALSE(plan_raft_geometry(input, {}, bed, options, 0.4).changed);
+    REQUIRE(input.front().front() == clearance_rectangle(10., 10., 90., 90.));
+}
+
+TEST_CASE("Raft path preparation omits collapsed cut remnants but preserves original small islands", "[SupportMaterial][Raft][Geometry]")
+{
+    const ExPolygon  main        = clearance_rectangle(10., 10., 20., 20.);
+    const ExPolygon  remnant     = clearance_rectangle(25., 10., 25.75, 10.75);
+    const ExPolygon  small_model = clearance_rectangle(35., 10., 35.75, 10.75);
+    const ExPolygon  narrow      = clearance_rectangle(40., 10., 50., 10.8);
+    const ExPolygons sections{main, remnant, small_model, narrow};
+    const ExPolygons uncut{clearance_rectangle(0., 0., 30., 30.), small_model, clearance_rectangle(39., 9., 51., 12.)};
+    const auto       prepared = prepare_raft_path_regions(sections, uncut, 0.6);
+    REQUIRE(prepared.omitted_regions == 1);
+    REQUIRE(intersection_ex(prepared.fill_regions, ExPolygons{remnant}).empty());
+    REQUIRE_FALSE(intersection_ex(prepared.fill_regions, ExPolygons{small_model}).empty());
+    REQUIRE_FALSE(intersection_ex(prepared.fill_regions, ExPolygons{narrow}).empty());
+    REQUIRE_FALSE(intersection_ex(prepared.wall_centerlines, ExPolygons{main}).empty());
+    const ExPolygons expected{main, small_model, narrow};
+    REQUIRE(prepared.fill_regions == expected);
+    REQUIRE(diff_ex(prepared.fill_regions, sections).empty());
+    // No reconstruction across the gap between distinct assigned sections.
+    REQUIRE(intersection_ex(prepared.fill_regions, ExPolygons{clearance_rectangle(20., 10., 25., 20.)}).empty());
+    REQUIRE_THROWS_AS(prepare_raft_path_regions(sections, uncut, 0.6, [] { throw CanceledException(); }), CanceledException);
+    REQUIRE(prepare_raft_path_regions(sections, uncut, 0.).fill_regions.empty());
+    REQUIRE(prepare_raft_path_regions(sections, uncut, std::numeric_limits<double>::infinity()).fill_regions.empty());
+    REQUIRE(sections[1] == remnant);
+}
+
+TEST_CASE("Raft fragment cleanup preserves long thin sections and only reconstructs affected fill", "[SupportMaterial][Raft][Geometry]")
+{
+    const ExPolygons uncut{clearance_rectangle(0., 0., 30., 30.)};
+    SECTION("A long narrow section survives in different orientations")
+    {
+        const double angle  = GENERATE(0., PI / 4., PI / 2.);
+        ExPolygon    narrow = clearance_rectangle(10., 10., 20., 10.605);
+        narrow.rotate(angle, Point::new_scale(15., 10.));
+        // At 0.6 mm line width this ten-millimetre strip has less than
+        // 0.01 mm² of inset area. It is a long region, not a bead-sized remnant.
+        const ExPolygons sections{narrow};
+        const auto       prepared = prepare_raft_path_regions(sections, uncut, 0.6);
+        REQUIRE(prepared.omitted_regions == 0);
+        REQUIRE_FALSE(prepared.wall_centerlines.empty());
+        REQUIRE(prepared.fill_regions == sections);
+    }
+    SECTION("A removed lobe does not return through infill or fill a hole")
+    {
+        const ExPolygon  main = clearance_rectangle(10., 10., 20., 20.);
+        const ExPolygon  lobe = clearance_rectangle(22., 14.6, 22.75, 15.35);
+        const ExPolygon  neck = clearance_rectangle(19.9, 14.9, 22.1, 15.1);
+        const ExPolygons hole{clearance_rectangle(12., 12., 14., 14.)};
+        const ExPolygons sections = diff_ex(union_ex(ExPolygons{main, lobe, neck}), hole);
+        REQUIRE(sections.size() == 1);
+        const auto prepared = prepare_raft_path_regions(sections, uncut, 0.6);
+        REQUIRE(prepared.omitted_regions == 1);
+        REQUIRE_FALSE(prepared.fill_regions.empty());
+        REQUIRE(intersection_ex(prepared.fill_regions, ExPolygons{lobe}).empty());
+        REQUIRE(intersection_ex(prepared.wall_centerlines, ExPolygons{lobe}).empty());
+        REQUIRE(intersection_ex(prepared.fill_regions, hole).empty());
+        REQUIRE(diff_ex(prepared.fill_regions, sections).empty());
+        REQUIRE(diff_ex(ExPolygons{clearance_rectangle(15., 12., 18., 18.)}, prepared.fill_regions).empty());
+    }
+}
+
+TEST_CASE("Trial raft clipping removes newly cut stubs and keeps existing short extrusion paths", "[SupportMaterial][Raft][Geometry]")
+{
+    const bool                cleanup = GENERATE(false, true);
+    const Polygons            area{clearance_rectangle(0., 0., 10., 10.).contour};
+    ExtrusionEntityCollection collection;
+    extrusion_entities_append_paths(collection.entities,
+                                    Polylines{Polyline{Point::new_scale(-1., 5.), Point::new_scale(0.45, 5.)},
+                                              Polyline{Point::new_scale(3., 3.), Point::new_scale(3.015, 3.)},
+                                              Polyline{Point::new_scale(-1., 8.), Point::new_scale(8., 8.)}},
+                                    erSupportMaterialInterface, 0.12, 0.6f, 0.2f);
+    clip_raft_paths_to_area(collection, area, cleanup);
+    ExtrusionPaths paths;
+    getExtrusionPathsFromEntity(&collection, paths);
+    REQUIRE(paths.size() == (cleanup ? 2 : 3));
+    bool preserved_short = false, preserved_long = false;
+    for (const ExtrusionPath& path : paths) {
+        REQUIRE(path.width == Approx(0.6));
+        REQUIRE(path.height == Approx(0.2));
+        REQUIRE(path.mm3_per_mm == Approx(0.12));
+        REQUIRE(path.role() == erSupportMaterialInterface);
+        if (path.first_point() == Point::new_scale(3., 3.)) {
+            REQUIRE(path.polyline.length() / 1e6 == Approx(0.015));
+            preserved_short = true;
+        }
+        // Open-path clipping may reverse the polyline; its orientation is not
+        // part of this containment/flow-preservation contract.
+        if (path.first_point() == Point::new_scale(8., 8.) || path.last_point() == Point::new_scale(8., 8.)) {
+            REQUIRE(path.polyline.length() / 1e6 == Approx(7.699).margin(0.00001));
+            preserved_long = true;
+        }
+    }
+    REQUIRE(preserved_short);
+    REQUIRE(preserved_long);
+    REQUIRE(diff_ex(raft_extrusion_coverage(paths), area).empty());
+}
+
+TEST_CASE("Captured dragon raft walls remain continuous through the final width-aware clip", "[SupportMaterial][Raft][Geometry]")
+{
+    std::ifstream stream((boost::filesystem::path(TEST_DATA_DIR) / "raft_geometry/dragon-first-raft-outline.json").string());
+    REQUIRE(stream.good());
+    const auto fixture = nlohmann::json::parse(stream);
+    const auto polygon = [](const nlohmann::json& points) {
+        Points result;
+        for (const auto& point : points)
+            result.emplace_back(point[0].get<coord_t>(), point[1].get<coord_t>());
+        return Polygon(std::move(result));
+    };
+    ExPolygons input;
+    for (const auto& entry : fixture.at("outlines")) {
+        ExPolygon p(polygon(entry.at("contour")));
+        for (const auto& hole : entry.at("holes"))
+            p.holes.push_back(polygon(hole));
+        input.push_back(std::move(p));
+    }
+    Polygons bed;
+    for (const auto& points : fixture.at("bed"))
+        bed.push_back(polygon(points));
+    const auto plan = plan_raft_geometry({input}, {0.}, bed, RaftGeometryOptions{true, 40., 0.8, 0.}, 0.4);
+    REQUIRE(plan.changed);
+    REQUIRE(plan.uncut_layers.size() == 1);
+    const auto prepared = prepare_raft_path_regions(plan.layers.front(), plan.uncut_layers.front(), 0.6f);
+    REQUIRE(prepared.omitted_regions >= 3);
+    REQUIRE_FALSE(prepared.wall_centerlines.empty());
+
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("raft_base_line_width", 0.6);
+    Model model;
+    add_raft_bed_test_cube(model, 4., Vec3d(40., 40., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    const SupportParameters params(*print.objects().front());
+    const Flow&             flow = params.raft_flow(RaftPhase::Base);
+    std::unique_ptr<Fill>   filler(Fill::new_from_type(ipRectilinear));
+    filler->set_bounding_box(get_extents(input));
+    filler->spacing = flow.spacing();
+    ExtrusionEntityCollection walls;
+    // Isolate the four perimeter loops from legitimate short hatch lines. Zero
+    // density with explicit centerlines must not route to the tree generator.
+    fill_expolygons_with_sheath_generate_paths(walls.entities, to_polygons(prepared.fill_regions), filler.get(), 0.f, erSupportMaterial,
+                                               flow, params, 4, true, 1., ipRectilinear, &prepared.wall_centerlines);
+    ExtrusionPaths before, after;
+    getExtrusionPathsFromEntity(&walls, before);
+    REQUIRE(before.size() >= 8);
+    // Use the strict legacy clip here: no short-piece filter can hide a broken
+    // loop or make this continuity assertion pass.
+    clip_raft_paths_to_area(walls, to_polygons(plan.layers.front()));
+    getExtrusionPathsFromEntity(&walls, after);
+    REQUIRE(after.size() == before.size());
+    for (size_t i = 0; i < before.size(); ++i)
+        REQUIRE(after[i].polyline == before[i].polyline);
+    REQUIRE(diff_ex(raft_extrusion_coverage(after), offset_ex(plan.layers.front(), scale_(0.002))).empty());
+}
+
+namespace {
+ModelObject* add_geometry_test_cube(Model& model, double size, const Vec3d& center)
+{
+    // make_cube uses 0..size coordinates. Position these new fixtures by their
+    // actual XY centers, so a seam assertion cannot accidentally check an edge.
+    TriangleMesh mesh = make_cube(size, size, 0.8);
+    mesh.translate(float(-0.5 * size), float(-0.5 * size), 0.f);
+    ModelObject* object = model.add_object();
+    object->name        = "raft geometry cube";
+    object->add_volume(std::move(mesh));
+    object->add_instance()->set_offset(center);
+    object->ensure_on_bed();
+    return object;
+}
+
+ExPolygons geometry_layer_material(const Print& print, size_t index)
+{
+    Polygons result;
+    for (const PrintObject* object : print.objects()) {
+        if (object->support_layers().size() <= index)
+            continue;
+        for (const PrintInstance& instance : object->instances()) {
+            Polygons paths = object->support_layers()[index]->support_fills.polygons_covered_by_width();
+            for (Polygon& path : paths)
+                path.translate(instance.shift);
+            polygons_append(result, std::move(paths));
+        }
+    }
+    return union_ex(result);
+}
+
+void require_same_geometry_material(const ExPolygons& actual, const ExPolygons& expected)
+{
+    REQUIRE(diff_ex(actual, expected).empty());
+    REQUIRE(diff_ex(expected, actual).empty());
+}
+
+ExPolygon geometry_wedge_outline()
+{
+    // A hole just above the cut intersection creates ~0.76 mm² triangular
+    // fragments after diagonal cuts, like the dragon's central raft opening.
+    ExPolygon outline = clearance_rectangle(10., 10., 90., 90.);
+    Polygon   hole    = clearance_rectangle(20., 52.2, 80., 80.).contour;
+    hole.reverse();
+    outline.holes.push_back(std::move(hole));
+    return outline;
+}
+
+std::vector<ExPolygons> geometry_dragon_outlines()
+{
+    const auto read = [](const char* name) {
+        std::ifstream stream((boost::filesystem::path(TEST_DATA_DIR) / "raft_geometry" / name).string());
+        REQUIRE(stream.good());
+        return nlohmann::json::parse(stream);
+    };
+    const auto base  = read("dragon-first-raft-outline.json");
+    const auto upper = read("dragon-upper-raft-outlines.json");
+    REQUIRE(base.at("source_capture_sha256") == upper.at("source_capture_sha256"));
+    auto layers = upper.at("upper_layers");
+    layers.insert(layers.begin(), base.at("outlines"));
+    const auto polygon = [](const nlohmann::json& points) {
+        Points result;
+        for (const auto& point : points)
+            result.emplace_back(point[0].get<coord_t>(), point[1].get<coord_t>());
+        return Polygon(std::move(result));
+    };
+    std::vector<ExPolygons> result;
+    for (const auto& layer : layers) {
+        ExPolygons outlines;
+        for (const auto& entry : layer) {
+            ExPolygon p(polygon(entry.at("contour")));
+            for (const auto& hole : entry.at("holes"))
+                p.holes.push_back(polygon(hole));
+            outlines.push_back(std::move(p));
+        }
+        result.push_back(std::move(outlines));
+    }
+    return result;
+}
+} // namespace
+
+TEST_CASE("Raft base cleanup distinguishes detached remnants from useful narrow and original regions",
+          "[SupportMaterial][Raft][Geometry][Bearing]")
+{
+    const ExPolygon body  = clearance_rectangle(0., 0., 40., 10.);
+    const ExPolygon strip = clearance_rectangle(5., 11., 31.7, 12.8);
+    ExPolygons      base{body, strip};
+    ExPolygons      parents{clearance_rectangle(0., 0., 40., 30.)};
+    ExPolygons      demand{clearance_rectangle(2., 2., 10., 8.)};
+    bool            remove_strip = true;
+    SECTION("only the detached strip is removed") {}
+    SECTION("original independent small island stays")
+    {
+        const ExPolygon small = clearance_rectangle(50., 5., 51.2, 6.2);
+        base.push_back(small);
+        parents.push_back(small);
+    }
+    SECTION("nominal upper demand protects sparse infill gaps")
+    {
+        demand.push_back(clearance_rectangle(15., 11.2, 16., 12.6));
+        remove_strip = false;
+    }
+    SECTION("touching upper demand is conservatively retained")
+    {
+        demand.push_back(clearance_rectangle(15., 12.8, 16., 14.));
+        remove_strip = false;
+    }
+    SECTION("an attached normal base extension stays")
+    {
+        base.push_back(clearance_rectangle(5., 9., 6., 12.));
+        remove_strip = false;
+    }
+    SECTION("an upper base layer can connect a useful lower base strip")
+    {
+        // The caller projects every base layer together, so the bridge may be
+        // in another physical base layer; do not judge the bottom layer alone.
+        base.push_back(clearance_rectangle(5., 9., 31.7, 12.8));
+        remove_strip = false;
+    }
+    SECTION("unknown provenance stays")
+    {
+        parents      = {body};
+        remove_strip = false;
+    }
+    SECTION("a whole uncut separate strip stays")
+    {
+        parents      = base;
+        remove_strip = false;
+    }
+    SECTION("no known useful sibling does not erase a source island")
+    {
+        demand       = {clearance_rectangle(60., 60., 70., 70.)};
+        remove_strip = false;
+    }
+    SECTION("missing demand stays")
+    {
+        demand.clear();
+        remove_strip = false;
+    }
+    const ExPolygons removed = find_unneeded_raft_base_regions(base, parents, demand);
+    REQUIRE(removed.empty() == !remove_strip);
+    if (remove_strip) {
+        REQUIRE(removed.size() == 1);
+        REQUIRE(diff_ex(ExPolygons{strip}, removed).empty());
+        REQUIRE(intersection_ex(removed, ExPolygons{body}).empty());
+    }
+    REQUIRE_THROWS_AS(find_unneeded_raft_base_regions(base, parents, demand, [] { throw CanceledException(); }), CanceledException);
+}
+
+TEST_CASE("Captured dragon raft loses its unused base strip while retaining a strip with demand",
+          "[SupportMaterial][Raft][Geometry][Bearing]")
+{
+    const auto     input = geometry_dragon_outlines();
+    const Polygons bed{clearance_rectangle(0., 0., 101., 101.).contour};
+    const auto     plan = plan_raft_geometry(input, {0., 0.3, 0.3, 0.21, 0.21}, bed, {true, 40., 0.8, 0.}, 0.4);
+    REQUIRE(plan.changed);
+    const ExPolygons probe{clearance_rectangle(30., 51.1, 40., 52.3)};
+    REQUIRE_FALSE(intersection_ex(plan.layers[0], probe).empty());
+    ExPolygons demand;
+    for (size_t i = 1; i < input.size(); ++i)
+        demand.insert(demand.end(), input[i].begin(), input[i].end());
+    const ExPolygons removed = find_unneeded_raft_base_regions(plan.layers[0], plan.uncut_layers[0], demand);
+    REQUIRE_FALSE(intersection_ex(removed, probe).empty());
+    REQUIRE(intersection_ex(diff_ex(plan.layers[0], removed), probe).empty());
+    REQUIRE(intersection_ex(removed, demand).empty());
+    // Same long strip, same size: any real bearing demand must retain it.
+    demand.push_back(probe.front());
+    REQUIRE(intersection_ex(find_unneeded_raft_base_regions(plan.layers[0], plan.uncut_layers[0], demand), probe).empty());
+}
+
+TEST_CASE("Base remnant cleanup updates paths and islands across merged base stacks and restores source data",
+          "[SupportMaterial][Raft][Geometry][Bearing]")
+{
+    const int  base_count        = GENERATE(1, 2);
+    const int  middle_count      = GENERATE(0, 2);
+    const bool shared            = GENERATE(false, true);
+    const bool model_needs_strip = GENERATE(false, true);
+    CAPTURE(base_count, middle_count, shared, model_needs_strip);
+    const auto         input  = geometry_dragon_outlines();
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {101., 0.}, {101., 101.}, {0., 101.}}));
+    config.set("raft_segmented", true);
+    config.set("raft_base_layers", base_count);
+    config.set("raft_interface_layers", middle_count);
+    config.set("raft_surface_layers", 2);
+    config.set("raft_base_layer_height", 0.3);
+    config.set("raft_interface_layer_height", 0.3);
+    config.set("raft_surface_layer_height", 0.2);
+    config.set("raft_base_line_width", 0.6);
+    config.set("raft_interface_line_width", 0.6);
+    config.set("raft_surface_line_width", 0.42);
+    config.set("raft_base_wall_count", 4);
+    config.set("raft_interface_wall_count", 0);
+    config.set("raft_surface_wall_count", 0);
+    Model model;
+    add_geometry_test_cube(model, 1., model_needs_strip ? Vec3d(35., 51.7, 0.) : Vec3d(20., 20., 0.));
+    if (shared)
+        add_geometry_test_cube(model, 1., Vec3d(75., 75., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    restore_unmerged_rafts(print);
+    for (size_t oi = 0; oi < print.objects().size(); ++oi) {
+        PrintObject&            object = *print.get_object(oi);
+        const SupportParameters params(object);
+        const Point             shift = object.instances().front().shift;
+        REQUIRE(object.support_layers().size() == size_t(base_count + middle_count + 2));
+        // As in the existing wedge test, inject the captured nominal outlines
+        // with a valid source recipe. Overlapping sources exercise single-owner
+        // output; this fixture does not claim the small cube has dragon geometry.
+        for (size_t i = 0; i < object.support_layers().size(); ++i) {
+            SupportLayer& layer = *object.support_layers()[i];
+            const auto    phase = object.slicing_parameters().raft_phase(i);
+            const Flow&   flow  = params.raft_flow(phase);
+            layer.raft_outline  = input[phase == RaftPhase::Base ? 0 : phase == RaftPhase::Interface ? 1 : 3];
+            translate(layer.raft_outline, -shift);
+            layer.support_fills.clear();
+            const double y = phase == RaftPhase::Base ? 51.7 : 20.;
+            extrusion_entities_append_paths(layer.support_fills.entities,
+                                            Polylines{Polyline{Point::new_scale(30., y) - shift, Point::new_scale(40., y) - shift}},
+                                            phase == RaftPhase::Base ? erSupportMaterial : erSupportMaterialInterface,
+                                            flow.mm3_per_mm() * params.raft_flow_ratio(phase), flow.width(), flow.height());
+        }
+    }
+    const ExPolygons probe{clearance_rectangle(30., 51.1, 40., 52.3)};
+    const ExPolygons original = geometry_layer_material(print, 0);
+    REQUIRE_FALSE(intersection_ex(original, probe).empty());
+    merge_overlapping_rafts(print);
+    std::vector<ExPolygons> first_result;
+    for (size_t i = 0; i < size_t(base_count + middle_count + 2); ++i) {
+        const ExPolygons material = geometry_layer_material(print, i);
+        REQUIRE_FALSE(material.empty());
+        first_result.push_back(material);
+        size_t     owners = 0;
+        ExPolygons islands;
+        for (const PrintObject* object : print.objects()) {
+            const SupportLayer& layer = *object->support_layers()[i];
+            REQUIRE(layer.raft_merge_backup != nullptr);
+            owners += !layer.support_fills.empty();
+            ExPolygons local = layer.support_islands;
+            translate(local, object->instances().front().shift);
+            islands.insert(islands.end(), local.begin(), local.end());
+        }
+        REQUIRE(owners == 1);
+        if (i < size_t(base_count)) {
+            REQUIRE(intersection_ex(material, probe).empty() == !model_needs_strip);
+            REQUIRE(intersection_ex(islands, probe).empty() == !model_needs_strip);
+        }
+    }
+    // Covered recipients deliberately have no extrusion. Validate the shared
+    // owner paths, bed containment and disjointness with the merger helper.
+    require_shared_rafts_are_disjoint(print);
+    merge_overlapping_rafts(print);
+    for (size_t i = 0; i < first_result.size(); ++i)
+        require_same_geometry_material(geometry_layer_material(print, i), first_result[i]);
+    restore_unmerged_rafts(print);
+    require_same_geometry_material(geometry_layer_material(print, 0), original);
+}
+
+TEST_CASE("Small cut fragments do not cancel otherwise valid raft sections", "[SupportMaterial][Raft][Geometry]")
+{
+    const ExPolygons          outline{geometry_wedge_outline()};
+    const Polygons            bed{clearance_rectangle(0., 0., 100., 100.).contour};
+    const RaftGeometryOptions options{true, 40., 0.8, 0.};
+    const auto                result = plan_raft_geometry({outline}, {0.}, bed, options, 0.01);
+    REQUIRE(result.changed);
+    REQUIRE(result.layer_cuts.front() == 4);
+    REQUIRE(result.layers.front().size() > 8);
+    REQUIRE(intersection_ex(result.layers.front(), ExPolygons{clearance_rectangle(49.8, 10., 50.2, 90.)}).empty());
+    REQUIRE(intersection_ex(result.layers.front(), ExPolygons{clearance_rectangle(10., 49.8, 90., 50.2)}).empty());
+}
+
+TEST_CASE("A walled raft emits printable sections without rolling back for omitted fragments", "[SupportMaterial][Raft][Geometry]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("raft_segmented", true);
+    config.set("raft_base_line_width", 0.6);
+    config.set("raft_base_wall_count", 4);
+    config.set("raft_interface_wall_count", 0);
+    config.set("raft_surface_wall_count", 0);
+    Model model;
+    add_geometry_test_cube(model, 60., Vec3d(50., 50., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    restore_unmerged_rafts(print);
+    PrintObject&            object = *print.get_object(0);
+    const SupportParameters params(object);
+    const Point             shift = object.instances().front().shift;
+    // Inject deterministic raft contours into the post-support stage. Keep a
+    // valid source extrusion recipe so this exercises the real regeneration,
+    // clipping and commit checks, without depending on support grid rounding.
+    for (size_t i = 0; i < object.support_layers().size(); ++i) {
+        SupportLayer& layer = *object.support_layers()[i];
+        const auto    phase = object.slicing_parameters().raft_phase(i);
+        const Flow&   flow  = params.raft_flow(phase);
+        layer.raft_outline  = {geometry_wedge_outline()};
+        translate(layer.raft_outline, -shift);
+        layer.support_fills.clear();
+        extrusion_entities_append_paths(layer.support_fills.entities,
+                                        Polylines{Polyline{Point::new_scale(15., 15.) - shift, Point::new_scale(20., 15.) - shift}},
+                                        phase == RaftPhase::Base ? erSupportMaterial : erSupportMaterialInterface,
+                                        flow.mm3_per_mm() * params.raft_flow_ratio(phase), flow.width(), flow.height());
+    }
+    merge_overlapping_rafts(print);
+    for (size_t i = 0; i < object.support_layers().size(); ++i) {
+        const SupportLayer& layer = *object.support_layers()[i];
+        REQUIRE(layer.raft_merge_backup != nullptr);
+        REQUIRE(layer.support_islands.size() >= 8);
+        const ExPolygons material = union_ex(layer.support_fills.polygons_covered_by_width());
+        for (const ExPolygon& island : layer.support_islands)
+            REQUIRE_FALSE(intersection_ex(ExPolygons{island}, material).empty());
+        const ExPolygons placed = geometry_layer_material(print, i);
+        REQUIRE(intersection_ex(placed, ExPolygons{clearance_rectangle(49.8, 10., 50.2, 90.)}).empty());
+        REQUIRE(intersection_ex(placed, ExPolygons{clearance_rectangle(10., 49.8, 90., 50.2)}).empty());
+    }
+    require_raft_inside_bed(print);
+}
+
+TEST_CASE("A single object's segmented raft restores exactly when disabled and survives cache replay", "[SupportMaterial][Raft][Geometry]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    Model              model;
+    add_geometry_test_cube(model, 60., Vec3d(50., 50., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    const ExPolygons baseline = geometry_layer_material(print, 2);
+    REQUIRE_FALSE(intersection_ex(baseline, ExPolygons{clearance_rectangle(49.85, 49.85, 50.15, 50.15)}).empty());
+    const double model_z = print.objects().front()->layers().front()->print_z;
+    config.set("raft_segmented", true);
+    process_raft_bed_test(print, model, config);
+    REQUIRE(print.objects().front()->support_layers().front()->raft_merge_backup != nullptr);
+    const ExPolygons segmented = geometry_layer_material(print, 2);
+    REQUIRE_FALSE(diff_ex(baseline, segmented).empty());
+    REQUIRE(intersection_ex(segmented, ExPolygons{clearance_rectangle(49.85, 49.85, 50.15, 50.15)}).empty());
+    REQUIRE(print.objects().front()->layers().front()->print_z == Approx(model_z));
+    require_raft_inside_bed(print);
+    print.process();
+    require_same_geometry_material(geometry_layer_material(print, 2), segmented);
+
+    const RaftMergeTemporaryPath cache;
+    REQUIRE(print.export_cached_data(cache.path.string()) == 0);
+    Print loaded;
+    loaded.apply(model, config);
+    REQUIRE(loaded.validate().string.empty());
+    loaded.set_status_silent();
+    REQUIRE(loaded.load_cached_data(cache.path.string()) == 0);
+    require_same_geometry_material(geometry_layer_material(loaded, 2), baseline);
+    merge_overlapping_rafts(loaded);
+    require_same_geometry_material(geometry_layer_material(loaded, 2), segmented);
+    loaded.process(nullptr, true);
+    require_same_geometry_material(geometry_layer_material(loaded, 2), segmented);
+
+    config.set("raft_segmented", false);
+    process_raft_bed_test(print, model, config);
+    REQUIRE(print.objects().front()->support_layers().front()->raft_merge_backup == nullptr);
+    require_same_geometry_material(geometry_layer_material(print, 2), baseline);
+}
+
+TEST_CASE("Segmented rafts remain inside 100 mm and EP7 excluded bed regions", "[SupportMaterial][Raft][Geometry]")
+{
+    const bool         ep7    = GENERATE(false, true);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("raft_segmented", true);
+    if (ep7) {
+        config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {180., 0.}, {180., 180.}, {0., 180.}}));
+        config.set_key_value("bed_exclude_area", new ConfigOptionPoints({{169., 0.}, {180., 0.}, {180., 23.}, {169., 23.}}));
+        config.set("raft_chunk_size", 20.);
+    }
+    Model model;
+    add_geometry_test_cube(model, ep7 ? 30. : 98., ep7 ? Vec3d(153., 40., 0.) : Vec3d(50., 50., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    REQUIRE(print.objects().front()->support_layers().front()->raft_merge_backup != nullptr);
+    require_raft_inside_bed(print);
+}
+
+TEST_CASE("Raft smoothing alone reaches generated paths and restores the original raft", "[SupportMaterial][Raft][Geometry]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    TriangleMesh       mesh   = make_cube(40., 20., 0.8);
+    mesh.merge(make_cube(20., 40., 0.8));
+    Model        model;
+    ModelObject* object = model.add_object();
+    object->add_volume(std::move(mesh));
+    object->center_around_origin();
+    object->add_instance()->set_offset(Vec3d(50., 50., 0.));
+    object->ensure_on_bed();
+    Print print;
+    process_raft_bed_test(print, model, config);
+    const ExPolygons    baseline = geometry_layer_material(print, 2);
+    const SupportLayer* first    = print.objects().front()->support_layers().front();
+    const ExPolygons    outline  = union_ex(first->raft_outline, first->support_fills.polygons_covered_by_width());
+    const double        model_z  = print.objects().front()->layers().front()->print_z;
+
+    config.set("raft_smoothing", 1.);
+    process_raft_bed_test(print, model, config);
+    first = print.objects().front()->support_layers().front();
+    REQUIRE(first->raft_merge_backup != nullptr);
+    REQUIRE_FALSE(diff_ex(first->support_islands, outline).empty());
+    REQUIRE_FALSE(diff_ex(outline, first->support_islands).empty());
+    REQUIRE(print.objects().front()->layers().front()->print_z == Approx(model_z));
+    require_raft_inside_bed(print);
+
+    config.set("raft_smoothing", 0.);
+    process_raft_bed_test(print, model, config);
+    REQUIRE(print.objects().front()->support_layers().front()->raft_merge_backup == nullptr);
+    require_same_geometry_material(geometry_layer_material(print, 2), baseline);
+}
+
+TEST_CASE("Shared segmented rafts split merged outlines and restore after moving a neighbour", "[SupportMaterial][Raft][Geometry]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("raft_segmented", true);
+    config.set("raft_chunk_size", 20.);
+    Model model;
+    for (const Vec3d& position : {Vec3d(30., 30., 0.), Vec3d(41., 30., 0.), Vec3d(30., 41., 0.), Vec3d(41., 41., 0.)})
+        add_geometry_test_cube(model, 8., position);
+    Print print;
+    process_raft_bed_test(print, model, config);
+    REQUIRE(raft_path_owners(print, 2) == 1);
+    const ExPolygons material = geometry_layer_material(print, 2);
+    REQUIRE(intersection_ex(material, ExPolygons{clearance_rectangle(35.35, 35.35, 35.65, 35.65)}).empty());
+    require_shared_rafts_are_disjoint(print);
+    model.objects.back()->instances.front()->set_offset(Vec3d(75., 75., 0.));
+    process_raft_bed_test(print, model, config);
+    REQUIRE(raft_path_owners(print, 2) == 2);
+    REQUIRE(print.objects().back()->support_layers().front()->raft_merge_backup != nullptr);
+    REQUIRE(print.objects().back()->support_layers().front()->support_islands.size() == 1);
+    require_shared_rafts_are_disjoint(print);
+}
+
+TEST_CASE("Different geometry settings retain the existing shared raft instead of restoring duplicates", "[SupportMaterial][Raft][Geometry]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    Model              model;
+    ModelObject*       first = add_geometry_test_cube(model, 8., Vec3d(30., 40., 0.));
+    add_geometry_test_cube(model, 8., Vec3d(41., 40., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    const ExPolygons baseline = geometry_layer_material(print, 2);
+    first->config.set("raft_segmented", true);
+    first->config.set("raft_chunk_size", 5.);
+    process_raft_bed_test(print, model, config);
+    REQUIRE(raft_path_owners(print, 2) == 1);
+    require_same_geometry_material(geometry_layer_material(print, 2), baseline);
+    require_shared_rafts_are_disjoint(print);
+}
+
+TEST_CASE("Raft geometry trial retains ordinary support and multi-instance sources", "[SupportMaterial][Raft][Geometry]")
+{
+    const bool         instances = GENERATE(false, true);
+    DynamicPrintConfig config    = raft_bed_test_config();
+    config.set("enable_support", !instances);
+    Model        model;
+    ModelObject* object = add_geometry_test_cube(model, 20., Vec3d(25., 25., 0.));
+    if (instances)
+        object->add_instance()->set_offset(Vec3d(65., 65., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    const ExPolygons baseline = geometry_layer_material(print, 2);
+    config.set("raft_segmented", true);
+    config.set("raft_chunk_size", 10.);
+    process_raft_bed_test(print, model, config);
+    require_same_geometry_material(geometry_layer_material(print, 2), baseline);
+    for (const PrintObject* source : print.objects())
+        REQUIRE(source->support_layers().front()->raft_merge_backup == nullptr);
+}
+
+TEST_CASE("Raft geometry parameters round trip and do not change legacy defaults", "[SupportMaterial][Raft][Geometry]")
+{
+    const DynamicPrintConfig defaults = DynamicPrintConfig::full_print_config();
+    REQUIRE_FALSE(defaults.opt_bool("raft_segmented"));
+    REQUIRE(defaults.opt_float("raft_smoothing") == 0.);
+    REQUIRE(defaults.opt_enum<RaftMode>("raft_mode") == RaftMode::Legacy);
+    DynamicPrintConfig source = defaults;
+    source.set("raft_segmented", true);
+    source.set("raft_chunk_size", 35.);
+    source.set("raft_chunk_gap", 0.6);
+    source.set("raft_smoothing", 1.);
+    DynamicPrintConfig loaded = defaults;
+    for (const std::string key : {"raft_segmented", "raft_chunk_size", "raft_chunk_gap", "raft_smoothing"}) {
+        REQUIRE(print_config_def.get(key) != nullptr);
+        loaded.set_deserialize_strict(key, source.opt_serialize(key));
+        REQUIRE(loaded.opt_serialize(key) == source.opt_serialize(key));
+    }
+}
+
+TEST_CASE("Raft geometry does not bypass actual clearance errors", "[SupportMaterial][Raft][Geometry][Clearance]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("raft_segmented", true);
+    Model model;
+    add_geometry_test_cube(model, 60., Vec3d(45., 45., 0.));
+    ModelObject* unrafted = add_geometry_test_cube(model, 2., Vec3d(76.5, 60., 0.));
+    disable_test_raft(*unrafted);
+    Print print;
+    REQUIRE_THROWS_WITH(process_raft_bed_test(print, model, config), Catch::Matchers::Contains("has raft disabled"));
 }

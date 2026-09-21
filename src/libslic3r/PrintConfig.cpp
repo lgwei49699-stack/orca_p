@@ -4277,6 +4277,30 @@ void PrintConfigDef::init_fff_params()
                           "raft air gap."),
                         "mm", 0.0, 10.0, 0.10, comAdvanced);
 
+    def           = this->add("raft_segmented", coBool);
+    def->label    = L("Segment raft");
+    def->category = L("Raft");
+    def->tooltip  = L(
+        "Split large Cura-style rafts into sections before generating walls and infill. Each raft phase is processed "
+         "independently. Cuts may cross model contact areas and leave marks on the model bottom. "
+         "This trial applies to compatible single-instance objects with supports disabled, one active filament and by-layer printing.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+    add_cura_raft_float(
+        "raft_chunk_size", L("Raft segment reference size"),
+        L("Reference size for raft segmentation. Narrow rafts use strips; wider rafts may use radial sections. "
+          "This is not a maximum section size. Small separate raft islands remain uncut; connected rafts are classified together."),
+        "mm", 5.0, 500.0, 40.0, comAdvanced);
+    add_cura_raft_float("raft_chunk_gap", L("Raft segment gap"),
+                        L("Gap between raft sections, measured between extrusion edges. Wider gaps may affect the model bottom."), "mm",
+                        0.1, 5.0, 0.8, comAdvanced);
+    add_cura_raft_float(
+        "raft_smoothing", L("Raft outline smoothing"),
+        L("Round inward raft corners and fill small raft holes using closing, then clean thin edges using the brim line width. "
+          "Zero disables closing; edge cleanup still runs when segmentation is enabled. Printable bed exclusions stay clear. "
+          "Uses the same trial compatibility restrictions as raft segmentation."),
+        "mm", 0.0, 20.0, 0.0, comAdvanced);
+
     add_cura_raft_int("raft_base_layers", L("Raft base layers"),
                       L("Number of build-plate-facing Base layers in Cura-style mode. At least one Base layer is required."),
                       L("layers"), 1, 20, 1, comAdvanced);

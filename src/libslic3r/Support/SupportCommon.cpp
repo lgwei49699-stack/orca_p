@@ -69,7 +69,10 @@ ExPolygons clip_raft_areas_to_bed(const ExPolygons& areas, const Polygons& bed)
 
 // Preserve collection ordering and all flow/role attributes. Only split a loop
 // when it actually crosses the boundary; an uncut loop keeps its loop semantics.
-static bool clip_raft_collection(ExtrusionEntityCollection& collection, const Polygons& bed, std::map<float, ExPolygons>& centerline_bounds)
+static bool clip_raft_collection(ExtrusionEntityCollection&   collection,
+                                 const Polygons&              bed,
+                                 std::map<float, ExPolygons>& centerline_bounds,
+                                 bool                         discard_short_fragments = false)
 {
     bool       changed    = false;
     const auto bounds_for = [&](const ExtrusionPath& path) -> const ExPolygons& {
@@ -83,7 +86,7 @@ static bool clip_raft_collection(ExtrusionEntityCollection& collection, const Po
     };
     for (ExtrusionEntity*& entity : collection.entities) {
         if (auto* nested = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
-            changed |= clip_raft_collection(*nested, bed, centerline_bounds);
+            changed |= clip_raft_collection(*nested, bed, centerline_bounds, discard_short_fragments);
             continue;
         }
         std::vector<const ExtrusionPath*> paths;
@@ -106,10 +109,13 @@ static bool clip_raft_collection(ExtrusionEntityCollection& collection, const Po
 
         auto clipped     = std::make_unique<ExtrusionEntityCollection>();
         clipped->no_sort = true;
-        for (const ExtrusionPath* path : paths)
+        for (const ExtrusionPath* path : paths) {
+            const double fragment_limit = discard_short_fragments ? scale_(0.5 * double(path->width)) : SCALED_EPSILON;
+            const double min_length     = path->polyline.length() > fragment_limit ? fragment_limit : SCALED_EPSILON;
             for (Polyline& line : intersection_pl(Polylines{path->polyline}, bounds_for(*path)))
-                if (line.points.size() >= 2 && line.length() > SCALED_EPSILON)
+                if (line.points.size() >= 2 && line.length() > min_length)
                     clipped->append(ExtrusionPath(std::move(line), *path));
+        }
         delete entity;
         entity  = clipped.release();
         changed = true;
@@ -127,10 +133,10 @@ static bool clip_raft_collection(ExtrusionEntityCollection& collection, const Po
     return changed;
 }
 
-void clip_raft_paths_to_area(ExtrusionEntityCollection& paths, const Polygons& area)
+void clip_raft_paths_to_area(ExtrusionEntityCollection& paths, const Polygons& area, bool discard_short_fragments)
 {
     std::map<float, ExPolygons> centerline_bounds;
-    clip_raft_collection(paths, area, centerline_bounds);
+    clip_raft_collection(paths, area, centerline_bounds, discard_short_fragments);
 }
 
 void clip_raft_toolpaths_to_bed(PrintObject& object)
@@ -947,24 +953,24 @@ void tree_supports_generate_paths(
     }
 }
 
-void fill_expolygons_with_sheath_generate_paths(
-    ExtrusionEntitiesPtr    &dst,
-    const Polygons          &polygons,
-    Fill                    *filler,
-    float                    density,
-    ExtrusionRole            role,
-    const Flow              &flow,
-    const SupportParameters& support_params,
-    size_t                   wall_count,
-    bool                     no_sort,
-    double                   flow_ratio,
-    InfillPattern            pattern)
+void fill_expolygons_with_sheath_generate_paths(ExtrusionEntitiesPtr&    dst,
+                                                const Polygons&          polygons,
+                                                Fill*                    filler,
+                                                float                    density,
+                                                ExtrusionRole            role,
+                                                const Flow&              flow,
+                                                const SupportParameters& support_params,
+                                                size_t                   wall_count,
+                                                bool                     no_sort,
+                                                double                   flow_ratio,
+                                                InfillPattern            pattern,
+                                                const ExPolygons*        perimeter_centerlines)
 {
     if (polygons.empty())
         return;
 
     if (wall_count > 0) {
-        if (density == 0) {
+        if (density == 0 && perimeter_centerlines == nullptr) {
             tree_supports_generate_paths(dst, polygons, flow, support_params, flow_ratio);
             return;
         }
@@ -983,7 +989,10 @@ void fill_expolygons_with_sheath_generate_paths(
     // Clip the sheath path to avoid the extruder to get exactly on the first point of the loop.
     const double clip_length = spacing * 0.15;
 
-    for (ExPolygon &expoly : closing_ex(polygons, float(SCALED_EPSILON), float(SCALED_EPSILON + 0.5*flow.scaled_width()))) {
+    const ExPolygons centers = perimeter_centerlines != nullptr ?
+                                   *perimeter_centerlines :
+                                   closing_ex(polygons, float(SCALED_EPSILON), float(SCALED_EPSILON + 0.5 * flow.scaled_width()));
+    for (const ExPolygon& expoly : centers) {
         // Don't reorder the skirt and its infills.
         std::unique_ptr<ExtrusionEntityCollection> eec;
         if (no_sort) {
@@ -1001,7 +1010,8 @@ void fill_expolygons_with_sheath_generate_paths(
         }
         // Fill in the rest.
         const double fill_inset = -(double(wall_count) - 0.6) * spacing;
-        fill_expolygons_generate_paths(out, offset_ex(expoly, float(fill_inset)), filler, fill_params, density, role, flow, flow_ratio);
+        if (density > 0)
+            fill_expolygons_generate_paths(out, offset_ex(expoly, float(fill_inset)), filler, fill_params, density, role, flow, flow_ratio);
         if (no_sort && ! eec->empty())
             dst.emplace_back(eec.release());
     }

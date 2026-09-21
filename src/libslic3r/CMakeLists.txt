@@ -420,6 +420,8 @@ set(lisbslic3r_sources
     Support/RaftPlan.hpp
     Support/RaftMerge.cpp
     Support/RaftMerge.hpp
+    Support/RaftGeometry.cpp
+    Support/RaftGeometry.hpp
     Support/SupportCommon.cpp
     Support/SupportCommon.hpp
     Support/SupportLayer.hpp

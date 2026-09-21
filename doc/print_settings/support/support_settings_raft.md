@@ -10,6 +10,75 @@ Object will be raised by this number of support layers.
 
 Z gap between object and raft. Ignored for soluble interface.
 
+## Raft geometry trial: segmentation and smoothing
+
+The advanced **Raft Geometry (Trial)** group is available in Cura-style mode.
+`raft_segmented` is off by default; its reference size (`raft_chunk_size`) is
+40 mm and its gap (`raft_chunk_gap`) is 0.8 mm. Independent outline smoothing
+(`raft_smoothing`) defaults to 0, disabled. These are opt-in trial settings,
+not new printer defaults or a guarantee of easier removal.
+
+The first version processes compatible single-instance objects during by-layer
+printing with one active filament and supports disabled. It also processes an
+individual large model. Different geometry settings, ordinary/forced supports,
+multi-instance sources and unsupported path/layer plans retain the existing
+raft behavior. If an optional candidate cannot be used, the baseline is the
+existing **merged** raft, not overlapping original paths.
+
+The geometry sequence follows the confirmed X-PRINT 5.9.6 behavior: union the
+nominal outlines, smooth, apply the phase inset, split each connected outline,
+then generate walls and infill. Base, interface and surface contours are
+processed independently; at the threshold, the base may split while upper
+layers stay continuous. Smaller islands remain uncut, long shapes use strips
+and wider shapes may use radial sections. The reference size is not a maximum
+section size. Cuts are not redirected around model contacts and may leave
+marks on the model bottom. Fragments without generated extrusion are omitted
+from island metadata without canceling the other sections.
+
+After segmentation, isolated base components with no bearing role can also be
+omitted. All base layers are projected together and checked against upper raft
+solids/toolpaths and the participating models' first layers. A component must
+have separated from a larger uncut region that still has a useful component;
+original small islands, useful narrow sections and attached borders remain.
+Both extrusion and island metadata are updated. Automated regression coverage
+for this cleanup has passed; improved peeling performance still needs physical
+print validation.
+
+Smoothing performs round closing, which can fill small raft holes, followed by
+opening using Orca's resolved brim line width. With smoothing zero, closing is
+disabled but opening still runs when segmentation is enabled. Middle and top
+contours receive a half-width inset using their resolved phase flow. These
+width mappings adapt the observed geometry sequence to Orca; they do not promise
+identical X-PRINT toolpaths. Printable-area exclusions and final extrusion-width
+clipping remain active. Growth into another object or planned raft retains the
+baseline; empty or out-of-region path results also retain it. Existing mixed-raft
+clearance checks still block export. Neither feature changes model geometry,
+flow, air gap, layer heights or arrangement spacing.
+
+中文入口：**工艺 → 筏层 → 筏层形状（试用）**。分块和平滑均默认关闭；
+首次对照可用分块参考尺寸 40 mm、缝宽 0.8 mm，平滑单独从 1 mm 试起。
+适用范围为有效 CuraV1、逐层打印、单耗材、关闭支撑的兼容单实例对象。
+各阶段独立平滑、内缩和分块；低于阈值不分块，相连轮廓按合并后的尺寸判断。
+平滑可能填平筏层小孔；开启分块时，即使平滑为 0 也会清理细边。
+不再额外避让小脚或因个别无路径碎片取消全部分块。切缝可能经过模型接触面。
+分块后会保守清理没有上方承托用途的孤立基底组件：联合检查所有基底层，
+保留有用窄条、原独立小岛及相连外扩边，同时更新路径和输出岛记录；此修订已通过专项回归。
+不适用的组仍保留原合并结果，平台边界和混摆冲突校验继续生效。
+此功能改变形状，易拆程度和底面缝痕必须实机判断。
+
+Implementation and validation history are tracked in
+[筏层试印版进度](raft_geometry_trial_progress.md).
+The new regression filter is `[SupportMaterial][Raft][Geometry]`, included in
+`[SupportMaterial][Raft]`. The September 21 13:49 macOS arm64 / Release build
+passed 23 geometry cases / 1,326 assertions and the full 70 raft cases / 5,501
+assertions, including three `[Bearing]` cases for base cleanup. Geometry is part
+of the full raft suite; these totals are not additive. Global parameter editing,
+object splitting and project save/reopen were checked in the GUI; the remaining
+single-object override display check was confirmed manually by the user.
+This does not establish full CTest, cross-platform or physical peeling results.
+Historical build failures, corrections and exact evidence are retained in the
+progress document. Source changes require a matching new build before retesting.
+
 ## Printable bed boundary
 
 Legacy and Cura-style raft outlines are clipped to the printer's printable area,

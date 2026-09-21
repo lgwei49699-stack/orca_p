@@ -1,4 +1,5 @@
 #include "RaftMerge.hpp"
+#include "RaftGeometry.hpp"
 
 #include "../ClipperUtils.hpp"
 #include "../Fill/FillBase.hpp"
@@ -150,7 +151,7 @@ struct MergedLayer
     ExPolygons                areas;
 };
 
-void generate_shared_paths(MergedLayer& result, const BoundingBox& bounds, const Polygons& bed)
+void generate_shared_paths(MergedLayer& result, const BoundingBox& bounds, const Polygons& bed, const ExPolygons* uncut_areas = nullptr)
 {
     const auto& source  = result.sources.front();
     const auto& params  = *source.raft->parameters;
@@ -170,15 +171,258 @@ void generate_shared_paths(MergedLayer& result, const BoundingBox& bounds, const
     filler->angle           = params.raft_layer_angle(source.index);
     filler->spacing         = params.raft_pattern_spacing(source.phase());
     filler->link_max_length = 0;
-    // The shared sheath helper expects wall centerline regions; inset half a
-    // bead so walls and fill remain within the assigned region, including holes.
     const size_t     walls      = params.raft_wall_count(source.phase());
-    const ExPolygons fill_areas = walls == 0 ? local_areas : offset_ex(local_areas, -scale_(0.5 * flow.width() + 0.001));
+    ExPolygons       fill_areas;
+    RaftPathRegions  path_regions;
+    if (uncut_areas != nullptr) {
+        ExPolygons local_uncut = *uncut_areas;
+        translate(local_uncut, -fill_origin);
+        path_regions = prepare_raft_path_regions(local_areas, local_uncut, flow.width(), [&source] {
+            if (source.raft->object->print()->canceled())
+                throw CanceledException();
+        });
+        fill_areas   = std::move(path_regions.fill_regions);
+        if (path_regions.omitted_regions > 0)
+            BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] omitted collapsed path regions=" << path_regions.omitted_regions
+                                    << ", layer=" << source.index;
+    } else {
+        // Preserve the established merger's sheath preparation when the trial
+        // is off. Only trial paths use explicitly prepared centerline regions.
+        fill_areas = walls == 0 ? local_areas : offset_ex(local_areas, -scale_(0.5 * flow.width() + 0.001));
+    }
     fill_expolygons_with_sheath_generate_paths(result.paths.entities, to_polygons(fill_areas), filler.get(),
                                                float(params.raft_density(source.phase())), role, flow, params, walls, true,
-                                               params.raft_flow_ratio(source.phase()), pattern);
+                                               params.raft_flow_ratio(source.phase()), pattern,
+                                               uncut_areas != nullptr ? &path_regions.wall_centerlines : nullptr);
     translate_paths(result.paths, fill_origin);
-    clip_raft_paths_to_area(result.paths, intersection(to_polygons(result.areas), bed));
+    clip_raft_paths_to_area(result.paths, intersection(to_polygons(result.areas), bed), uncut_areas != nullptr);
+}
+
+bool geometry_requested(const PrintObjectConfig& config)
+{
+    return config.raft_mode.value == RaftMode::CuraV1 && (config.raft_segmented.value || config.raft_smoothing.value > 0.);
+}
+
+bool same_geometry_options(const PrintObjectConfig& a, const PrintObjectConfig& b)
+{
+    return a.raft_segmented.value == b.raft_segmented.value && same_value(a.raft_smoothing.value, b.raft_smoothing.value) &&
+           (!a.raft_segmented.value ||
+            (same_value(a.raft_chunk_size.value, b.raft_chunk_size.value) && same_value(a.raft_chunk_gap.value, b.raft_chunk_gap.value)));
+}
+
+// Keep the existing merger as the baseline. Only replace a complete compatible
+// group's physical layers, never partial layers or unrelated ordinary supports.
+bool apply_raft_geometry(Print&                          print,
+                         const std::vector<PlacedRaft>&  placed,
+                         const std::vector<size_t>&      members,
+                         std::vector<MergedLayer>&       batches,
+                         const std::vector<MergedLayer>& pending,
+                         const BoundingBox&              bounds,
+                         const Polygons&                 bed)
+{
+    if (std::none_of(members.begin(), members.end(), [&](size_t i) { return geometry_requested(placed[i].object->config()); }))
+        return false;
+    const auto skip = [](const char* reason) {
+        BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] status=unchanged, reason=" << reason;
+        return false;
+    };
+    const auto check_cancel = [&print] {
+        if (print.canceled())
+            throw CanceledException();
+    };
+    const PlacedRaft& reference = placed[members.front()];
+    const auto&       config    = reference.object->config();
+    if (print.extruders().size() != 1 || batches.size() != reference.layers.size())
+        return skip("incompatible layer or tool plans");
+    for (size_t member : members) {
+        const auto& raft    = placed[member];
+        const auto& current = raft.object->config();
+        // Disabled ordinary supports plus exact raft layer/path checks avoid
+        // inferring path provenance from a matching extrusion width alone.
+        if (!raft.parameters || raft.object->has_support() || !same_geometry_options(config, current) ||
+            raft.layers.size() != reference.layers.size() || raft.layers.size() != raft.object->slicing_parameters().raft_layers())
+            return skip("unsupported source or different geometry settings");
+    }
+    std::vector<ExPolygons> outlines;
+    std::vector<double>     phase_insets;
+    for (size_t i = 0; i < batches.size(); ++i) {
+        const auto& batch = batches[i];
+        if (batch.areas.empty() || batch.paths.empty() || batch.sources.size() != members.size())
+            return skip("incomplete raft layer");
+        ExPolygons outline;
+        for (const RaftSlice& source : batch.sources) {
+            if (source.index != i || !can_regenerate(source) || !same_recipe(batch.sources.front(), source))
+                return skip("mixed raft paths");
+            // Use nominal source geometry. Adding old extrusion-width coverage
+            // would feed wall fringes back into smoothing and size thresholds.
+            ExPolygons local = source.layer().raft_outline;
+            translate(local, source.raft->shift);
+            outline.insert(outline.end(), std::make_move_iterator(local.begin()), std::make_move_iterator(local.end()));
+        }
+        outlines.push_back(intersection_ex(union_ex(outline), bed));
+        const RaftPhase phase = batch.sources.front().phase();
+        const double    width = reference.parameters->raft_flow(phase).width();
+        phase_insets.push_back(phase == RaftPhase::Base ? 0. : 0.5 * width);
+    }
+    const RaftGeometryOptions options{config.raft_segmented.value, config.raft_chunk_size.value, config.raft_chunk_gap.value,
+                                      config.raft_smoothing.value};
+    const double              cleanup_width = print.brim_flow().width();
+    RaftGeometryPlan          plan          = plan_raft_geometry(outlines, phase_insets, bed, options, cleanup_width, check_cancel);
+    for (size_t i = 0; i < plan.layers.size(); ++i)
+        BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] phase planning, layer=" << i << ", cuts=" << plan.layer_cuts[i]
+                                << ", islands=" << plan.layers[i].size();
+    if (!plan.changed)
+        return skip("no geometry change");
+
+    // Smoothing may add material. Do not grow into another object's model or
+    // support footprint, including raft instances excluded from this merger.
+    ExPolygons added;
+    for (size_t i = 0; i < batches.size(); ++i) {
+        ExPolygons growth = diff_ex(plan.layers[i], batches[i].areas);
+        added.insert(added.end(), growth.begin(), growth.end());
+    }
+    if (!added.empty()) {
+        added              = union_ex(added);
+        const double top_z = batches.back().sources.front().layer().print_z;
+        // Earlier groups may already have smoothing candidates. Checking only
+        // their original live paths would miss two groups growing into the same gap.
+        for (const MergedLayer& previous : pending) {
+            check_cancel();
+            if (!intersection_ex(added, previous.areas).empty())
+                return skip("smoothing reaches another planned raft");
+        }
+        for (const PrintObject* other : print.objects()) {
+            check_cancel();
+            if (std::any_of(members.begin(), members.end(), [&](size_t i) { return placed[i].object == other; }))
+                continue;
+            Polygons obstacles;
+            for (const Layer* layer : other->layers()) {
+                if (layer->bottom_z() >= top_z - EPSILON)
+                    break;
+                polygons_append(obstacles, to_polygons(layer->lslices));
+                for (const LayerRegion* region : layer->regions()) {
+                    polygons_append(obstacles, region->perimeters.polygons_covered_by_width());
+                    polygons_append(obstacles, region->fills.polygons_covered_by_width());
+                }
+            }
+            for (const SupportLayer* layer : other->support_layers()) {
+                if (layer->bottom_z() < top_z - EPSILON) {
+                    polygons_append(obstacles, to_polygons(layer->raft_outline));
+                    polygons_append(obstacles, layer->support_fills.polygons_covered_by_width());
+                }
+            }
+            for (const PrintInstance& instance : other->instances()) {
+                Polygons shifted = obstacles;
+                for (Polygon& polygon : shifted)
+                    polygon.translate(instance.shift);
+                if (!intersection_ex(added, shifted).empty())
+                    return skip("smoothing reaches another object");
+            }
+        }
+    }
+
+    std::vector<MergedLayer> candidates;
+    std::vector<ExPolygons>  materials(batches.size());
+    size_t                   omitted_fragments = 0;
+    const auto               validate_candidate = [&](MergedLayer& candidate, ExPolygons& material) {
+        ExtrusionPaths paths;
+        getExtrusionPathsFromEntity(&candidate.paths, paths);
+        material = raft_extrusion_coverage(paths, check_cancel);
+        // Geometry fragments without extrusion are not printable islands. Leave
+        // them out of output metadata instead of undoing every valid cut in the
+        // group. The generator, not an unrelated global size veto, decides this.
+        const size_t before = candidate.areas.size();
+        candidate.areas.erase(std::remove_if(candidate.areas.begin(), candidate.areas.end(),
+                                             [&](const ExPolygon& island) { return intersection_ex(ExPolygons{island}, material).empty(); }),
+                              candidate.areas.end());
+        omitted_fragments += before - candidate.areas.size();
+        // The helper clips by half the actual line width. Check the swept bead,
+        // not square-join coverage whose artificial corners can protrude even
+        // when every circular bead lies inside. Keep the existing 2 micron
+        // numerical allowance and the actual bed/gap boundaries unchanged.
+        return !material.empty() && diff_ex(material, offset_ex(candidate.areas, scale_(0.002))).empty();
+    };
+    candidates.reserve(batches.size());
+    for (size_t i = 0; i < batches.size(); ++i) {
+        check_cancel();
+        candidates.emplace_back();
+        auto& candidate   = candidates.back();
+        candidate.sources = batches[i].sources;
+        candidate.areas   = std::move(plan.layers[i]);
+        generate_shared_paths(candidate, bounds, bed, &plan.uncut_layers[i]);
+        if (candidate.paths.empty())
+            return skip("no printable paths after geometry change");
+        if (!validate_candidate(candidate, materials[i]))
+            return skip("extrusions leave the assigned region");
+    }
+
+    size_t base_layers = 0;
+    while (base_layers < candidates.size() && candidates[base_layers].sources.front().phase() == RaftPhase::Base)
+        ++base_layers;
+    size_t omitted_base_regions = 0;
+    // Only segmented base stacks with known upper raft/model data qualify.
+    // Smoothing alone, a base-only raft and incomplete caches stay unchanged.
+    if (options.segmented && base_layers > 0 && base_layers < candidates.size() &&
+        std::any_of(plan.layer_cuts.begin(), plan.layer_cuts.begin() + base_layers, [](size_t cuts) { return cuts > 0; }) &&
+        std::all_of(members.begin(), members.end(), [&](size_t member) { return !placed[member].object->layers().empty(); })) {
+        ExPolygons base, uncut_base, demand;
+        const auto append = [](ExPolygons& to, const ExPolygons& from) { to.insert(to.end(), from.begin(), from.end()); };
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            check_cancel();
+            if (i < base_layers) {
+                append(base, candidates[i].areas);
+                append(base, materials[i]);
+                append(uncut_base, plan.uncut_layers[i]);
+            } else {
+                // Solid envelopes protect sparse hatch gaps; actual beads also
+                // protect paths which extend slightly past their nominal solid.
+                append(demand, outlines[i]);
+                append(demand, plan.uncut_layers[i]);
+                append(demand, candidates[i].areas);
+                append(demand, materials[i]);
+            }
+        }
+        for (size_t member : members) {
+            check_cancel();
+            const PlacedRaft& raft  = placed[member];
+            const Layer&      first = *raft.object->layers().front();
+            ExPolygons        model = first.lslices;
+            for (const LayerRegion* region : first.regions()) {
+                append(model, union_ex(region->perimeters.polygons_covered_by_width()));
+                append(model, union_ex(region->fills.polygons_covered_by_width()));
+            }
+            translate(model, raft.shift);
+            append(demand, model);
+        }
+        const ExPolygons removed = find_unneeded_raft_base_regions(base, uncut_base, demand, check_cancel);
+        omitted_base_regions     = removed.size();
+        if (!removed.empty()) {
+            for (size_t i = 0; i < base_layers; ++i) {
+                check_cancel();
+                auto&        candidate = candidates[i];
+                const size_t before    = candidate.areas.size();
+                // Remove whole solid sections, never individual short paths.
+                // Regenerate both walls and infill using the same origin/recipe;
+                // output metadata and emitted paths then describe the same area.
+                candidate.areas.erase(std::remove_if(candidate.areas.begin(), candidate.areas.end(),
+                                                     [&](const ExPolygon& area) { return diff_ex(ExPolygons{area}, removed).empty(); }),
+                                      candidate.areas.end());
+                if (candidate.areas.size() == before)
+                    continue;
+                if (candidate.areas.empty())
+                    return skip("base cleanup would remove an entire layer");
+                candidate.paths.clear();
+                generate_shared_paths(candidate, bounds, bed, &plan.uncut_layers[i]);
+                if (!validate_candidate(candidate, materials[i]))
+                    return skip("invalid paths after base cleanup");
+            }
+        }
+    }
+    check_cancel();
+    batches = std::move(candidates);
+    BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] status=applied, objects=" << members.size() << ", omitted_fragments=" << omitted_fragments
+                            << ", omitted_base_regions=" << omitted_base_regions << ", smoothing=" << options.smoothing;
+    return true;
 }
 
 struct ClearanceBand
@@ -381,7 +625,9 @@ void merge_overlapping_rafts(Print& print)
             item.parameters = std::make_unique<SupportParameters>(*object);
         placed.push_back(std::move(item));
     }
-    if (placed.size() < 2)
+    const bool requested = std::any_of(placed.begin(), placed.end(),
+                                       [](const PlacedRaft& raft) { return geometry_requested(raft.object->config()); });
+    if (placed.size() < 2 && !requested)
         return;
 
     // Stable geometric ownership, independent of incoming OBJ order.
@@ -414,7 +660,7 @@ void merge_overlapping_rafts(Print& print)
     std::vector<MergedLayer> pending;
     size_t                   group_count = 0;
     for (const auto& [id, members] : groups) {
-        if (members.size() < 2)
+        if (members.size() < 2 && !geometry_requested(placed[members.front()].object->config()))
             continue;
         std::vector<MergedLayer> batches;
         BoundingBox              bounds;
@@ -462,6 +708,9 @@ void merge_overlapping_rafts(Print& print)
                 clip_raft_paths_to_area(batch.paths, allowed);
             }
         }
+        const bool enhanced = apply_raft_geometry(print, placed, members, batches, pending, bounds, bed);
+        if (members.size() == 1 && !enhanced)
+            continue;
         for (auto& batch : batches)
             pending.push_back(std::move(batch));
         ++group_count;
