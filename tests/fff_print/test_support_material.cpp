@@ -4760,15 +4760,12 @@ TEST_CASE("Different geometry settings retain the existing shared raft instead o
     require_shared_rafts_are_disjoint(print);
 }
 
-TEST_CASE("Raft geometry trial retains ordinary support and multi-instance sources", "[SupportMaterial][Raft][Geometry]")
+TEST_CASE("Raft geometry trial retains multi-instance sources", "[SupportMaterial][Raft][Geometry]")
 {
-    const bool         instances = GENERATE(false, true);
-    DynamicPrintConfig config    = raft_bed_test_config();
-    config.set("enable_support", !instances);
+    DynamicPrintConfig config = raft_bed_test_config();
     Model        model;
     ModelObject* object = add_geometry_test_cube(model, 20., Vec3d(25., 25., 0.));
-    if (instances)
-        object->add_instance()->set_offset(Vec3d(65., 65., 0.));
+    object->add_instance()->set_offset(Vec3d(65., 65., 0.));
     Print print;
     process_raft_bed_test(print, model, config);
     const ExPolygons baseline = geometry_layer_material(print, 2);
@@ -4809,4 +4806,293 @@ TEST_CASE("Raft geometry does not bypass actual clearance errors", "[SupportMate
     disable_test_raft(*unrafted);
     Print print;
     REQUIRE_THROWS_WITH(process_raft_bed_test(print, model, config), Catch::Matchers::Contains("has raft disabled"));
+}
+
+namespace {
+ExtrusionPaths tagged_raft_paths(const ExtrusionEntityCollection& fills, const std::vector<unsigned char>& flags, bool raft)
+{
+    REQUIRE(flags.size() == fills.entities.size());
+    ExtrusionEntityCollection selected;
+    ExtrusionPaths            paths;
+    for (size_t i = 0; i < fills.entities.size(); ++i)
+        if (bool(flags[i]) == raft)
+            selected.append(*fills.entities[i]);
+    getExtrusionPathsFromEntity(&selected, paths);
+    return paths;
+}
+
+void require_same_support_paths(const ExtrusionPaths& actual, const ExtrusionPaths& expected)
+{
+    REQUIRE(actual.size() == expected.size());
+    for (size_t i = 0; i < actual.size(); ++i) {
+        REQUIRE(actual[i].polyline == expected[i].polyline);
+        REQUIRE(actual[i].role() == expected[i].role());
+        REQUIRE(actual[i].width == expected[i].width);
+        REQUIRE(actual[i].height == expected[i].height);
+        REQUIRE(actual[i].mm3_per_mm == expected[i].mm3_per_mm);
+    }
+}
+
+void require_supported_raft_inside_bed(const Print& print)
+{
+    Polygons    bed    = diff(Polygons{Polygon(get_bed_shape(print.config()))}, get_bed_excluded_area(print.config()));
+    const Vec3d origin = print.get_plate_origin();
+    for (auto& polygon : bed)
+        polygon.translate(Point::new_scale(origin.x(), origin.y()));
+    for (const PrintObject* object : print.objects())
+        for (const SupportLayer* layer : object->support_layers()) {
+            if (layer->print_z > object->slicing_parameters().raft_contact_top_z + EPSILON)
+                continue;
+            ExtrusionPaths paths;
+            getExtrusionPathsFromEntity(&layer->support_fills, paths);
+            const ExPolygons coverage = raft_extrusion_coverage(paths);
+            for (const auto& instance : object->instances()) {
+                ExPolygons placed = coverage;
+                translate(placed, instance.shift);
+                REQUIRE(diff_ex(placed, offset_ex(bed, scale_(0.0001))).empty());
+            }
+        }
+}
+} // namespace
+
+TEST_CASE("Support generators label raft paths and preserve ordinary supports during geometry enhancement",
+          "[SupportMaterial][Raft][Geometry][Supported]")
+{
+    const auto style        = GENERATE(smsGrid, smsSnug, smsTreeOrganic, smsTreeSlim, smsTreeStrong, smsTreeHybrid);
+    const bool segmentation = GENERATE(false, true);
+    CAPTURE(style, segmentation);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("enable_support", true);
+    config.set("raft_segmented", segmentation);
+    config.set("raft_chunk_size", 10.);
+    config.set("raft_smoothing", 1.);
+    config.set("support_threshold_angle", 30);
+    config.set("support_top_z_distance", 0.2);
+    config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(style));
+    config.set_key_value("support_type",
+                         new ConfigOptionEnum<SupportType>(style == smsGrid || style == smsSnug ? stNormalAuto : stTreeAuto));
+    TriangleMesh mesh = Slic3r::Test::mesh(TestMesh::cube_20x20x20);
+    mesh.rotate_x(float(Geometry::deg2rad(15.)));
+    Model model;
+    auto* object = model.add_object();
+    object->add_volume(std::move(mesh));
+    object->add_instance()->set_offset(Vec3d(45., 45., 0.));
+    object->ensure_on_bed();
+    Print print;
+    process_raft_bed_test(print, model, config);
+    const PrintObject& printed = *print.objects().front();
+    REQUIRE(printed.support_layers().size() > printed.slicing_parameters().raft_layers());
+    size_t                      enhanced = 0;
+    std::vector<ExtrusionPaths> original_support, original_paths;
+    for (const SupportLayer* layer : printed.support_layers()) {
+        // Compare restoration with this generation's source. Independently
+        // generated tree supports may differ in traversal and path subdivision.
+        const auto& source = layer->raft_merge_backup ? layer->raft_merge_backup->fills : layer->support_fills;
+        original_paths.emplace_back();
+        getExtrusionPathsFromEntity(&source, original_paths.back());
+        if (layer->raft_merge_backup) {
+            ++enhanced;
+            REQUIRE(layer->has_raft_provenance());
+            const auto& backup   = *layer->raft_merge_backup;
+            const auto  ordinary = tagged_raft_paths(backup.fills, backup.entity_flags, false);
+            require_same_support_paths(tagged_raft_paths(layer->support_fills, layer->raft_entity_flags, false), ordinary);
+            original_support.push_back(ordinary);
+            const auto material = raft_extrusion_coverage(tagged_raft_paths(layer->support_fills, layer->raft_entity_flags, true));
+            REQUIRE(intersection_ex(material, raft_extrusion_coverage(ordinary)).empty());
+        } else {
+            ExtrusionPaths ordinary;
+            getExtrusionPathsFromEntity(&layer->support_fills, ordinary);
+            original_support.push_back(std::move(ordinary));
+        }
+    }
+    REQUIRE(enhanced == printed.slicing_parameters().raft_layers());
+    // Every ordinary path retains its owner, coordinates, Z/height and flow on replay.
+    merge_overlapping_rafts(print);
+    for (size_t i = 0; i < printed.support_layers().size(); ++i) {
+        const SupportLayer& layer = *printed.support_layers()[i];
+        ExtrusionPaths      ordinary;
+        if (layer.raft_merge_backup)
+            ordinary = tagged_raft_paths(layer.support_fills, layer.raft_entity_flags, false);
+        else
+            getExtrusionPathsFromEntity(&layer.support_fills, ordinary);
+        require_same_support_paths(ordinary, original_support[i]);
+    }
+    require_supported_raft_inside_bed(print);
+
+    restore_unmerged_rafts(print);
+    for (size_t i = 0; i < printed.support_layers().size(); ++i) {
+        const SupportLayer& layer = *printed.support_layers()[i];
+        REQUIRE(layer.raft_merge_backup == nullptr);
+        ExtrusionPaths paths;
+        getExtrusionPathsFromEntity(&layer.support_fills, paths);
+        require_same_support_paths(paths, original_paths[i]);
+    }
+    // Exercise configuration invalidation while the enhanced paths are active.
+    merge_overlapping_rafts(print);
+    REQUIRE(printed.support_layers().front()->raft_merge_backup != nullptr);
+
+    config.set("raft_segmented", false);
+    config.set("raft_smoothing", 0.);
+    REQUIRE(print.objects().front()->is_step_done(posSimplifySupportPath));
+    print.apply(model, config);
+    REQUIRE_FALSE(print.objects().front()->is_step_done(posSupportMaterial));
+    REQUIRE_FALSE(print.objects().front()->is_step_done(posSimplifySupportPath));
+    process_raft_bed_test(print, model, config);
+    Print baseline;
+    process_raft_bed_test(baseline, model, config);
+    REQUIRE(print.objects().front()->support_layers().size() == baseline.objects().front()->support_layers().size());
+    for (size_t i = 0; i < baseline.objects().front()->support_layers().size(); ++i) {
+        const SupportLayer& restored = *print.objects().front()->support_layers()[i];
+        const SupportLayer& fresh    = *baseline.objects().front()->support_layers()[i];
+        REQUIRE(restored.raft_merge_backup == nullptr);
+        REQUIRE(restored.print_z == fresh.print_z);
+        REQUIRE(restored.support_fills.empty() == fresh.support_fills.empty());
+        // Grid/Snug are deterministic for this fixture. Tree path equality is
+        // checked against its own source above, not a separate parallel run.
+        if (style == smsGrid || style == smsSnug)
+            require_same_geometry_material(union_ex(restored.support_fills.polygons_covered_by_width()),
+                                           union_ex(fresh.support_fills.polygons_covered_by_width()));
+    }
+    require_supported_raft_inside_bed(print);
+}
+
+TEST_CASE("Raft provenance preserves identical-flow columns across cuts cache and cancellation",
+          "[SupportMaterial][Raft][Geometry][Supported]")
+{
+    const double       bed_size = GENERATE(100., 180.);
+    DynamicPrintConfig config   = raft_bed_test_config();
+    config.set("enable_support", true);
+    config.set("raft_segmented", true);
+    config.set("raft_smoothing", 1.);
+    config.set("raft_base_layers", 2);
+    config.set("raft_interface_layers", 2);
+    config.set("raft_surface_layers", 2);
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {bed_size, 0.}, {bed_size, bed_size}, {0., bed_size}}));
+    Model model;
+    add_geometry_test_cube(model, 60., Vec3d(50., 50., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    restore_unmerged_rafts(print);
+    PrintObject&                object = *print.get_object(0);
+    const SupportParameters     params(object);
+    std::vector<ExtrusionPaths> original, ordinary;
+    for (size_t i = 0; i < object.support_layers().size(); ++i) {
+        SupportLayer& layer = *object.support_layers()[i];
+        REQUIRE(layer.has_raft_provenance());
+        const auto  phase = object.slicing_parameters().raft_phase(i);
+        const Flow& flow  = params.raft_flow(phase);
+        // Deliberately indistinguishable by flow/role; only provenance can
+        // preserve this column across the centre of the radial cuts.
+        extrusion_entities_append_paths(layer.support_fills.entities,
+                                        Polylines{Polyline{Point::new_scale(50., 23.) - object.instances().front().shift,
+                                                           Point::new_scale(50., 77.) - object.instances().front().shift}},
+                                        phase == RaftPhase::Base ? erSupportMaterial : erSupportMaterialInterface,
+                                        flow.mm3_per_mm() * params.raft_flow_ratio(phase), flow.width(), flow.height());
+        layer.raft_entity_flags.resize(layer.support_fills.entities.size(), 0);
+        ordinary.push_back(tagged_raft_paths(layer.support_fills, layer.raft_entity_flags, false));
+        original.emplace_back();
+        getExtrusionPathsFromEntity(&layer.support_fills, original.back());
+    }
+    merge_overlapping_rafts(print);
+    for (size_t i = 0; i < object.support_layers().size(); ++i) {
+        const SupportLayer& layer = *object.support_layers()[i];
+        REQUIRE(layer.raft_merge_backup != nullptr);
+        require_same_support_paths(tagged_raft_paths(layer.support_fills, layer.raft_entity_flags, false), ordinary[i]);
+        REQUIRE(intersection_ex(raft_extrusion_coverage(tagged_raft_paths(layer.support_fills, layer.raft_entity_flags, true)),
+                                raft_extrusion_coverage(ordinary[i]))
+                    .empty());
+    }
+    require_raft_inside_bed(print);
+    const RaftMergeTemporaryPath cache;
+    REQUIRE(print.export_cached_data(cache.path.string()) == 0);
+    Print loaded;
+    loaded.apply(model, config);
+    loaded.set_status_silent();
+    REQUIRE(loaded.load_cached_data(cache.path.string()) == 0);
+    merge_overlapping_rafts(loaded);
+    for (size_t i = 0; i < ordinary.size(); ++i) {
+        const auto& layer = *loaded.objects().front()->support_layers()[i];
+        REQUIRE(layer.raft_merge_backup != nullptr);
+        require_same_support_paths(tagged_raft_paths(layer.support_fills, layer.raft_entity_flags, false), ordinary[i]);
+    }
+    print.cancel();
+    REQUIRE_THROWS_AS(merge_overlapping_rafts(print), CanceledException);
+    print.restart();
+    for (size_t i = 0; i < original.size(); ++i) {
+        ExtrusionPaths      paths;
+        const SupportLayer& layer = *object.support_layers()[i];
+        REQUIRE(layer.raft_merge_backup == nullptr);
+        getExtrusionPathsFromEntity(&layer.support_fills, paths);
+        require_same_support_paths(paths, original[i]);
+    }
+    // Unknown/old cache metadata must never be guessed from a matching flow.
+    object.support_layers()[1]->raft_entity_flags.clear();
+    merge_overlapping_rafts(print);
+    for (size_t i = 0; i < original.size(); ++i) {
+        ExtrusionPaths      paths;
+        const SupportLayer& layer = *object.support_layers()[i];
+        REQUIRE(layer.raft_merge_backup == nullptr);
+        getExtrusionPathsFromEntity(&layer.support_fills, paths);
+        require_same_support_paths(paths, original[i]);
+    }
+}
+
+TEST_CASE("Shared enhanced raft emits once while ordinary columns keep their object owners",
+          "[SupportMaterial][Raft][Geometry][Supported][Merge]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("enable_support", true);
+    config.set("raft_segmented", true);
+    config.set("raft_chunk_size", 15.);
+    Model model;
+    add_geometry_test_cube(model, 20., Vec3d(38., 50., 0.));
+    add_geometry_test_cube(model, 20., Vec3d(60., 50., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    restore_unmerged_rafts(print);
+    std::vector<std::vector<ExtrusionPaths>> ordinary(print.objects().size());
+    for (size_t o = 0; o < print.objects().size(); ++o) {
+        PrintObject&            object = *print.get_object(o);
+        const SupportParameters params(object);
+        for (size_t i = 0; i < object.support_layers().size(); ++i) {
+            SupportLayer& layer = *object.support_layers()[i];
+            REQUIRE(layer.has_raft_provenance());
+            const auto   phase = object.slicing_parameters().raft_phase(i);
+            const Flow&  flow  = params.raft_flow(phase);
+            const double x     = o == 0 ? 35. : 63.;
+            extrusion_entities_append_paths(layer.support_fills.entities,
+                                            Polylines{Polyline{Point::new_scale(x, 41.) - object.instances().front().shift,
+                                                               Point::new_scale(x, 59.) - object.instances().front().shift}},
+                                            phase == RaftPhase::Base ? erSupportMaterial : erSupportMaterialInterface,
+                                            flow.mm3_per_mm() * params.raft_flow_ratio(phase), flow.width(), flow.height());
+            layer.raft_entity_flags.resize(layer.support_fills.entities.size(), 0);
+            ordinary[o].push_back(tagged_raft_paths(layer.support_fills, layer.raft_entity_flags, false));
+        }
+    }
+    for (size_t replay = 0; replay < 3; ++replay) {
+        merge_overlapping_rafts(print);
+        for (size_t i = 0; i < ordinary.front().size(); ++i) {
+            size_t     raft_owners = 0;
+            ExPolygons raft_material, support_material;
+            for (size_t o = 0; o < print.objects().size(); ++o) {
+                const PrintObject&  object = *print.get_object(o);
+                const SupportLayer& layer  = *object.support_layers()[i];
+                REQUIRE(layer.raft_merge_backup != nullptr);
+                REQUIRE(layer.has_raft_provenance());
+                REQUIRE_FALSE(layer.raft_covered_by_shared_paths);
+                require_same_support_paths(tagged_raft_paths(layer.support_fills, layer.raft_entity_flags, false), ordinary[o][i]);
+                const auto raft_paths = tagged_raft_paths(layer.support_fills, layer.raft_entity_flags, true);
+                raft_owners += !raft_paths.empty();
+                ExPolygons raft_area    = raft_extrusion_coverage(raft_paths);
+                ExPolygons support_area = raft_extrusion_coverage(ordinary[o][i]);
+                translate(raft_area, object.instances().front().shift);
+                translate(support_area, object.instances().front().shift);
+                raft_material    = union_ex(raft_material, raft_area);
+                support_material = union_ex(support_material, support_area);
+            }
+            REQUIRE(raft_owners == 1);
+            REQUIRE(intersection_ex(raft_material, support_material).empty());
+        }
+        require_supported_raft_inside_bed(print);
+    }
 }

@@ -72,7 +72,8 @@ ExPolygons clip_raft_areas_to_bed(const ExPolygons& areas, const Polygons& bed)
 static bool clip_raft_collection(ExtrusionEntityCollection&   collection,
                                  const Polygons&              bed,
                                  std::map<float, ExPolygons>& centerline_bounds,
-                                 bool                         discard_short_fragments = false)
+                                 bool                         discard_short_fragments = false,
+                                 std::vector<unsigned char>*  entity_flags            = nullptr)
 {
     bool       changed    = false;
     const auto bounds_for = [&](const ExtrusionPath& path) -> const ExPolygons& {
@@ -120,16 +121,22 @@ static bool clip_raft_collection(ExtrusionEntityCollection&   collection,
         entity  = clipped.release();
         changed = true;
     }
-    collection.entities.erase(std::remove_if(collection.entities.begin(), collection.entities.end(),
-                                             [](ExtrusionEntity* entity) {
-                                                 const auto* nested = dynamic_cast<const ExtrusionEntityCollection*>(entity);
-                                                 if (nested != nullptr && nested->empty()) {
-                                                     delete entity;
-                                                     return true;
-                                                 }
-                                                 return false;
-                                             }),
-                              collection.entities.end());
+    size_t kept = 0;
+    for (size_t i = 0; i < collection.entities.size(); ++i) {
+        ExtrusionEntity* entity = collection.entities[i];
+        const auto*      nested = dynamic_cast<const ExtrusionEntityCollection*>(entity);
+        if (nested != nullptr && nested->empty()) {
+            delete entity;
+            continue;
+        }
+        collection.entities[kept] = entity;
+        if (entity_flags != nullptr)
+            (*entity_flags)[kept] = (*entity_flags)[i];
+        ++kept;
+    }
+    collection.entities.resize(kept);
+    if (entity_flags != nullptr)
+        entity_flags->resize(kept);
     return changed;
 }
 
@@ -152,11 +159,13 @@ void clip_raft_toolpaths_to_bed(PrintObject& object)
         if (object.print()->canceled())
             throw CanceledException();
         const bool had_extrusions = !layer->support_fills.empty();
-        if (clip_raft_collection(layer->support_fills, bed, centerline_bounds))
+        if (clip_raft_collection(layer->support_fills, bed, centerline_bounds, false,
+                                 layer->has_raft_provenance() ? &layer->raft_entity_flags : nullptr))
             ++trimmed_layers;
         if (had_extrusions && layer->support_fills.empty())
             throw_empty_raft();
         layer->support_islands = intersection_ex(layer->support_islands, bed);
+        layer->raft_support_outline = intersection_ex(layer->raft_support_outline, bed);
     }
     if (trimmed_layers > 0)
         BOOST_LOG_TRIVIAL(info) << "[Raft][BedClip] object=" << object.model_object()->name
@@ -1748,6 +1757,11 @@ void generate_support_toolpaths(
             SupportGeneratorLayer      &raft_layer    = *raft_layers[support_layer_id];
             const RaftPhase raft_phase = support_params.cura_raft_mode ? slicing_params.raft_phase(support_layer_id) :
                                                                          RaftPhase::Interface;
+            if (support_params.cura_raft_mode) {
+                support_layer.raft_geometry_outline.clear();
+                support_layer.raft_support_outline.clear();
+                support_layer.raft_entity_flags.clear();
+            }
 
             std::unique_ptr<Fill> filler_interface = std::unique_ptr<Fill>(Fill::new_from_type(
                 support_params.cura_raft_mode ? support_params.raft_fill_pattern(raft_phase) : support_params.raft_interface_fill_pattern));
@@ -1777,6 +1791,7 @@ void generate_support_toolpaths(
                                                    support_params.support_material_flow.nozzle_diameter());
                 assert(!raft_layer.bridging);
                 if (! to_infill_polygons.empty()) {
+                    const size_t entity_begin = support_layer.support_fills.entities.size();
                     Fill *filler = filler_support.get();
                     filler->angle = support_params.cura_raft_mode ? support_params.raft_layer_angle(support_layer_id) :
                                                                    support_params.raft_angle_base;
@@ -1797,10 +1812,23 @@ void generate_support_toolpaths(
                         cura_base_phase ? support_params.raft_wall_count(raft_phase) : size_t(support_params.with_sheath), false,
                         cura_base_phase ? support_params.raft_flow_ratio(raft_phase) : 1.,
                         cura_base_phase ? support_params.raft_fill_pattern(raft_phase) : ipRectilinear);
+                    if (support_params.cura_raft_mode) {
+                        const ExPolygons areas = union_ex(tree_polygons.empty() ? to_infill_polygons :
+                                                                                  diff(to_infill_polygons, tree_polygons));
+                        if (cura_base_phase) {
+                            support_layer.mark_raft_entities(entity_begin);
+                            support_layer.raft_geometry_outline = areas;
+                        } else
+                            support_layer.raft_support_outline = areas;
+                    }
                 }
                 if (! tree_polygons.empty())
                     tree_supports_generate_paths(support_layer.support_fills.entities, tree_polygons, flow, support_params,
                                                  cura_base_phase ? support_params.raft_flow_ratio(raft_phase) : 1.);
+                if (support_params.cura_raft_mode) {
+                    support_layer.raft_entity_flags.resize(support_layer.support_fills.entities.size(), 0);
+                    support_layer.raft_support_outline = union_ex(support_layer.raft_support_outline, tree_polygons);
+                }
             }
 
             Fill *filler = filler_interface.get();
@@ -1837,6 +1865,7 @@ void generate_support_toolpaths(
             } else
                 continue;
             filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
+            const size_t entity_begin = support_layer.support_fills.entities.size();
             fill_expolygons_with_sheath_generate_paths(
                 // Destination
                 support_layer.support_fills.entities,
@@ -1853,6 +1882,11 @@ void generate_support_toolpaths(
                 support_params.cura_raft_mode ? support_params.raft_wall_count(raft_phase) : size_t(support_layer_id == 0),
                 support_layer_id == 0, support_params.cura_raft_mode ? support_params.raft_flow_ratio(raft_phase) : 1.,
                 support_params.cura_raft_mode ? support_params.raft_fill_pattern(raft_phase) : ipRectilinear);
+            if (support_params.cura_raft_mode) {
+                support_layer.mark_raft_entities(entity_begin);
+                support_layer.raft_geometry_outline = union_ex(tree_polygons.empty() ? raft_layer.polygons :
+                                                                                       diff(raft_layer.polygons, tree_polygons));
+            }
         }
     });
 
@@ -2183,17 +2217,34 @@ void generate_support_toolpaths(
     });
 
     // Now modulate the support layer height in parallel.
-    tbb::parallel_for(tbb::blocked_range<size_t>(n_raft_layers, support_layers.size()),
-        [&support_layers, &layer_caches, &support_params, &bbox_object]
-            (const tbb::blocked_range<size_t>& range) {
+    tbb::parallel_for(tbb::blocked_range<size_t>(n_raft_layers, support_layers.size()), [&support_layers, &layer_caches, &support_params,
+                                                                                         &slicing_params, &bbox_object](
+                                                                                            const tbb::blocked_range<size_t>& range) {
         for (size_t support_layer_id = range.begin(); support_layer_id < range.end(); ++ support_layer_id) {
             SupportLayer &support_layer = *support_layers[support_layer_id];
             LayerCache   &layer_cache   = layer_caches[support_layer_id];
+            const bool raft_contact = support_params.cura_raft_mode && is_approx(support_layer.print_z, slicing_params.raft_contact_top_z);
+            if (raft_contact) {
+                support_layer.raft_geometry_outline.clear();
+                support_layer.raft_support_outline.clear();
+                support_layer.raft_entity_flags.clear();
+            }
             // For all extrusion types at this print_z, ordered by decreasing layer height:
             for (LayerCacheItem &layer_cache_item : layer_cache.nonempty) {
                 // Trim the extrusion height from the bottom by the overlapping layers.
                 modulate_extrusion_by_overlapping_layers(layer_cache_item.layer_extruded->extrusions, *layer_cache_item.layer_extruded->layer, layer_cache_item.overlapping);
+                const size_t entity_begin = support_layer.support_fills.entities.size();
+                if (raft_contact) {
+                    Polygons areas;
+                    layer_cache_item.layer_extruded->polygons_append(areas);
+                    if (layer_cache_item.layer_extruded == &layer_cache.top_contact_layer)
+                        support_layer.raft_geometry_outline = union_ex(areas);
+                    else
+                        support_layer.raft_support_outline = union_ex(support_layer.raft_support_outline, areas);
+                }
                 support_layer.support_fills.append(std::move(layer_cache_item.layer_extruded->extrusions));
+                if (raft_contact && layer_cache_item.layer_extruded == &layer_cache.top_contact_layer)
+                    support_layer.mark_raft_entities(entity_begin);
             }
 
             // Orca: Generate iron toolpath for contact layer
@@ -2228,6 +2279,8 @@ void generate_support_toolpaths(
                     // Extrusion parameters
                     ExtrusionRole::erIroning, support_params.ironing_flow);
             }
+            if (raft_contact)
+                support_layer.raft_entity_flags.resize(support_layer.support_fills.entities.size(), 0);
         }
     });
 

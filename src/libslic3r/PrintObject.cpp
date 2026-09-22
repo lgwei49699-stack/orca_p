@@ -1305,8 +1305,11 @@ bool PrintObject::invalidate_step(PrintObjectStep step)
         invalidated |= this->invalidate_steps({ posIroning, posSimplifyInfill });
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
     } else if (step == posSlice) {
-		invalidated |= this->invalidate_steps({ posPerimeters, posPrepareInfill, posInfill, posIroning, posSupportMaterial, posSimplifyPath, posSimplifyInfill });
-        invalidated |= m_print->invalidate_steps({ psSkirtBrim });
+        // Bulk invalidation does not propagate the individual steps' dependencies.
+        // Regenerated supports must also run their path simplification again.
+        invalidated |= this->invalidate_steps({posPerimeters, posPrepareInfill, posInfill, posIroning, posSupportMaterial, posSimplifyPath,
+                                               posSimplifyInfill, posSimplifySupportPath});
+        invalidated |= m_print->invalidate_steps({psSkirtBrim});
         m_slicing_params.valid = false;
     } else if (step == posSupportMaterial) {
         invalidated |= this->invalidate_steps({ posSimplifySupportPath });

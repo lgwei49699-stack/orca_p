@@ -4022,6 +4022,16 @@ void extract_support_layer(const json& support_layer_json, SupportLayer& support
         }
     }
 
+    if (support_layer_json.contains("raft_entity_flags")) {
+        auto flags = support_layer_json.at("raft_entity_flags").get<std::vector<unsigned char>>();
+        if (flags.size() == support_layer.support_fills.entities.size() &&
+            std::all_of(flags.begin(), flags.end(), [](unsigned char flag) { return flag <= 1; }) &&
+            support_layer_json.contains("raft_geometry_outline") && support_layer_json.contains("raft_support_outline")) {
+            support_layer.raft_entity_flags     = std::move(flags);
+            support_layer.raft_geometry_outline = support_layer_json.at("raft_geometry_outline").get<ExPolygons>();
+            support_layer.raft_support_outline  = support_layer_json.at("raft_support_outline").get<ExPolygons>();
+        }
+    }
     return;
 }
 
@@ -4202,6 +4212,12 @@ int Print::export_cached_data(const std::string& directory, bool with_space)
                                 continue;
 
                             supportfills_entities_json.push_back(std::move(supportfill_entity_json));
+                        }
+                        const auto& flags = raft_backup ? raft_backup->entity_flags : support_layer->raft_entity_flags;
+                        if (!flags.empty() && flags.size() == fills.entities.size() && flags.size() == supportfills_entities_json.size()) {
+                            support_layer_json["raft_entity_flags"]     = flags;
+                            support_layer_json["raft_geometry_outline"] = support_layer->raft_geometry_outline;
+                            support_layer_json["raft_support_outline"]  = support_layer->raft_support_outline;
                         }
                         support_fills_json[JSON_EXTRUSION_ENTITIES] = std::move(supportfills_entities_json);
                         support_layer_json[JSON_SUPPORT_LAYER_FILLS] = std::move(support_fills_json);

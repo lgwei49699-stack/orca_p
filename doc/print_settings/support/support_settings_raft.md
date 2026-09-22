@@ -18,9 +18,13 @@ The advanced **Raft Geometry (Trial)** group is available in Cura-style mode.
 (`raft_smoothing`) defaults to 0, disabled. These are opt-in trial settings,
 not new printer defaults or a guarantee of easier removal.
 
-The first version processes compatible single-instance objects during by-layer
-printing with one active filament and supports disabled. It also processes an
-individual large model. Different geometry settings, ordinary/forced supports,
+The implementation processes compatible single-instance objects during by-layer
+printing with one active filament, including individual large models. The
+September 22 extension (pending a matching build and tests) also handles normal
+and tree supports using generator-recorded raft ownership. It regenerates only
+raft paths, reserves ordinary support material at overlapping physical heights,
+and retains ordinary support paths on their original objects. Different geometry
+settings, missing provenance, conflicting ordinary supports between objects,
 multi-instance sources and unsupported path/layer plans retain the existing
 raft behavior. If an optional candidate cannot be used, the baseline is the
 existing **merged** raft, not overlapping original paths.
@@ -57,7 +61,11 @@ flow, air gap, layer heights or arrangement spacing.
 
 中文入口：**工艺 → 筏层 → 筏层形状（试用）**。分块和平滑均默认关闭；
 首次对照可用分块参考尺寸 40 mm、缝宽 0.8 mm，平滑单独从 1 mm 试起。
-适用范围为有效 CuraV1、逐层打印、单耗材、关闭支撑的兼容单实例对象。
+适用范围为有效 CuraV1、逐层打印、单耗材的兼容单实例对象。
+2026-09-22 新增带普通／树状支撑的实现，待新构建验证：通过生成端来源标记只重建筏层，
+同物理高度的支撑占地从新筏层中扣除，普通支撑保留原对象、坐标、层高及流量。
+筏层上方的支撑脚不全面禁止切缝跨越，但会参与孤立基底的承托判定。
+旧缓存缺少来源标记、跨对象支撑本身重叠或工艺不兼容时沿用原处理。
 各阶段独立平滑、内缩和分块；低于阈值不分块，相连轮廓按合并后的尺寸判断。
 平滑可能填平筏层小孔；开启分块时，即使平滑为 0 也会清理细边。
 不再额外避让小脚或因个别无路径碎片取消全部分块。切缝可能经过模型接触面。
@@ -884,3 +892,104 @@ GUI 首次分盘失败的具体参数尚未归因，也保留记录。
 日志、结果 JSON、G-code、包络脚本及审查记录位于
 `planning/raft/merge-review-20260922/`。本轮只审查和补充验证／文档，未修改
 生产／测试源码、未自行编译、未提交。
+
+
+### 2026-09-22 带支撑分块／平滑扩展（待构建）
+
+本轮基于 `codex/raft-geometry-review` 的 `982c610271`，不改变摆盘、模型流量、
+筏层气隙或机型默认值。普通支撑与有机树的公共生成器、其他树状生成器记录
+逐个顶层挤出实体的来源；不按线宽、角色猜测，因为两类路径可以完全同参。
+多对象共享筏层仍只由一个所有者输出，其他对象保留各自普通支撑。
+
+同层避让按实际物理 Z 区间和线宽覆盖计算，并使用支撑名义轮廓保留其填充内部；
+不更改支撑生成算法，不对所有上方支撑脚新增避缝限制。候选验证通过后先准备
+所有替换数据，再统一交换；缓存保存对象原始路径和来源，重切从原始数据恢复。
+普通支撑跨对象互相重叠时暂不启用几何增强，避免恢复原支撑而撤销既有去重。
+
+新增 `[SupportMaterial][Raft][Geometry][Supported]` 用例定义覆盖普通 Grid／Snug、
+Organic／Slim／Strong／Hybrid，分块和平滑、关闭后恢复、100／180 mm 平台、
+同流量支撑跨缝保留、多对象所有权、重复执行、缓存往返、取消恢复与来源缺失。
+这些是待执行的测试定义，尚无本轮构建或通过统计；旧 76 用例／6,007 断言等
+记录不能证明本轮代码通过。用户构建应用和 `fff_print_tests` 后先跑新过滤器，
+再跑完整 `[SupportMaterial][Raft]`，随后做 GUI 小船对照。
+
+诊断增加有效分块尺寸、缝宽、平滑及支撑来源模式，候选拒绝原因、几何规划、
+支撑占地、路径生成及验证的阶段耗时。现有建议中的“大量对象、180 平台、
+反复重切和取消”属于验证覆盖需求，尚没有数据证明原版存在性能缺陷。
+本轮 180 mm 合成用例也不能替代 EP7 真实模型或大量对象基准；用户新构建后
+另做计时，不在此承诺耗时上限。取消用例检查状态恢复，不等同取消延迟基准。
+
+
+### 2026-09-22 12:40 新构建验证：重切失效链修正待复测
+
+用户实际构建 `macos-build-arm64-20260922-123607-621309.log` 完成应用和 FFF
+测试链接，源码身份已核对。新 Supported 专项 3 用例中 2 通过／1 失败；完整
+Raft 专项 79 用例中 78 通过／1 失败，19,084 断言中 12 失败，两者退出 12。
+两组不重复累计。失败集中于关闭分块／平滑后重切与全新切片的支撑几何对照；
+来源、支撑保留、共享输出归属、缓存及预取消恢复等已执行断言通过。
+
+已发现 `posSlice` 批量失效遗漏支撑路径简化步骤：重切虽重新生成支撑，仍把
+简化阶段当作已完成。最小修正补 `posSimplifySupportPath` 失效，测试增加直接
+状态断言并保留原几何对照；没有用放宽数值容差解决失败。生产／测试修改后
+须用户重新编译 OrcaSlicer 和 `fff_print_tests` 才能复测，尚不能宣称修正通过。
+GUI 由用户继续验证，本轮没有实机、完整 CTest、性能对照或跨平台验收。
+细节见 [进度记录](raft_geometry_trial_progress.md) 最新一节，证据目录为
+`planning/raft/support-validation-20260922-124609/`。
+
+
+### 2026-09-22 13:09 复测：仅剩测试判据修订待构建
+
+同版新构建已验证支撑简化失效修正：状态断言及 Grid／Snug 关闭重切对照通过。
+完整 Raft 79 用例中 78 通过／1 失败（19,794 断言，8 失败，退出 8）；剩余失败
+是树状独立生成的精确几何比较，完整专项尚未通过。只读诊断及关闭增强的 Hybrid
+六次独立 CLI 对照证明该比较假设不可靠，详见 [进度记录](raft_geometry_trial_progress.md)
+最新一节。
+
+只修订测试：所有风格改以同次生成的原始完整路径精确校验恢复，普通支撑保留
+全新切片对照；所有类型保留关闭重切失效状态、无备份残留、层 Z、非空状态和
+边界检查。生产源码未再改。同版 Grid／Organic／Hybrid CLI 的分块和平滑实际
+生效、支撑保留且导出成功，但不替代完整回归。需用户仅重新构建 `fff_print_tests`
+后复测，应用可继续 GUI 验证。证据 `planning/raft/support-retest-20260922-131257/`。
+
+### 2026-09-22 13:44 带支撑筏层回归通过
+
+用户最新构建已包含修订后的 FFF 测试；源码快照、应用与测试身份核对完成。
+macOS arm64 / Release：Supported 专项 3 用例／26,583 断言、完整 Raft 专项
+79 用例／32,575 断言全部通过，退出码均为 0，耗时约 6.49／34.88 秒；聚焦
+包含于完整统计。覆盖同次生成路径精确恢复、关闭后重切失效、普通支撑保留、
+共享归属、缓存往返、预取消恢复和 100／180 mm 合成平台等检查，上一节的
+待构建测试修订现已有通过记录。
+
+生产／测试源码本轮未变；当前应用与上一轮 Grid／Organic／Hybrid CLI 成功
+验收的二进制一致，本轮未重跑 CLI。完整命令、哈希及日志在
+`planning/raft/support-retest-20260922-134436/`，详见
+[进度记录](raft_geometry_trial_progress.md) 最新一节。GUI 由用户继续验证；
+本次专项不等同完整 CTest、跨平台、实机打印、大量对象性能或取消延迟验收。
+
+
+### 2026-09-22 入库审查后的日志优化（待新构建）
+
+带支撑筏层的来源、避让、共享归属、缓存与重切实现已再次静态审阅，未发现新的
+几何阻塞项。本次仅继续调整 TreeSupport.cpp 的诊断：每次树生成使用独立单调时钟
+统计总耗时、检测、接触点、下落、平滑、轮廓及路径阶段；删除递归／并发共用的细粒度
+计时器，逐节点信息降为 trace。保留原警告、恢复和几何行为。
+
+13:44 的 79 用例／32,575 断言与用户 13:50 GUI 日志仍仅代表修改前基线。
+本次静态检查通过，未自行编译或运行旧程序，尚未提交。须用户重建 OrcaSlicer 和
+`fff_print_tests` 后复测原筏层过滤器及新日志。审查证据：
+`planning/raft/support-precommit-review-20260922/`；细节见
+[进度记录](raft_geometry_trial_progress.md) 最新一节。
+
+
+### 2026-09-22 14:52 日志优化后的新构建验证通过
+
+用户 14:45 构建包含 TreeSupport.cpp 及应用／FFF 测试重链接，源码哈希匹配上一轮
+静态记录。Supported 3 用例／26,563 断言、完整 Raft 79 用例／32,665 断言全部通过，
+退出码 0；聚焦包含于完整统计。用户 14:49 混合树 GUI 切片、G-code 写入和预览成功，
+筏层分块 applied／preserved_support=true，没有回退；逐节点刷屏消失，阶段计时正常。
+本例平滑 0、分块 40／0.8 mm，采用 AD5X 220 mm 床和 0.25 mm 喷嘴。
+
+这覆盖上一节待构建的日志优化，当前未发现局部改动新的入库阻塞项。没有修改源码、
+自行编译或提交；性能规模、运行中取消延迟、其他平台和实机范围未扩大。详细证据：
+`planning/raft/support-retest-20260922-145236/validation.json`；见
+[进度记录](raft_geometry_trial_progress.md) 最新一节。

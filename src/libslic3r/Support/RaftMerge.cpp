@@ -9,6 +9,7 @@
 #include "SupportCommon.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iterator>
 #include <limits>
@@ -54,22 +55,67 @@ struct RaftSlice
 {
     PlacedRaft*   raft;
     size_t        index;
+    size_t        geometry_index = size_t(-1);
     SupportLayer& layer() const { return *raft->layers[index]; }
-    RaftPhase     phase() const { return raft->object->slicing_parameters().raft_phase(index); }
+    size_t        plan_index() const { return geometry_index == size_t(-1) ? index : geometry_index; }
+    RaftPhase     phase() const { return raft->object->slicing_parameters().raft_phase(plan_index()); }
 };
+
+void append_source_paths(const ExtrusionEntity* entity,
+                         ExtrusionPaths&        paths,
+                         double                 print_z      = 0.,
+                         double                 max_bottom_z = std::numeric_limits<double>::infinity())
+{
+    const auto append = [&](const ExtrusionPath& path) {
+        if (print_z - double(path.height) <= max_bottom_z + EPSILON)
+            paths.push_back(path);
+    };
+    if (const auto* collection = dynamic_cast<const ExtrusionEntityCollection*>(entity))
+        for (const auto* child : collection->entities)
+            append_source_paths(child, paths, print_z, max_bottom_z);
+    else if (const auto* path = dynamic_cast<const ExtrusionPath*>(entity))
+        append(*path);
+    else if (const auto* loop = dynamic_cast<const ExtrusionLoop*>(entity))
+        for (const auto& path : loop->paths)
+            append(path);
+    else if (const auto* multi = dynamic_cast<const ExtrusionMultiPath*>(entity))
+        for (const auto& path : multi->paths)
+            append(path);
+    else
+        throw RuntimeError("Unexpected raft source extrusion type.");
+}
+
+ExtrusionEntityCollection source_paths(const RaftSlice& slice, bool raft_only)
+{
+    const SupportLayer& layer = slice.layer();
+    if (!layer.has_raft_provenance())
+        return raft_only ? layer.support_fills : ExtrusionEntityCollection{};
+    ExtrusionEntityCollection paths;
+    paths.no_sort = layer.support_fills.no_sort;
+    for (size_t i = 0; i < layer.support_fills.entities.size(); ++i)
+        if (bool(layer.raft_entity_flags[i]) == raft_only)
+            paths.append(*layer.support_fills.entities[i]);
+    return paths;
+}
 
 // Some generators also put ordinary support columns on raft layers. Preserve
 // their original paths instead of regenerating the whole layer with raft flow.
-bool can_regenerate(const RaftSlice& slice)
+bool can_regenerate(const RaftSlice& slice, bool raft_only = false)
 {
     if (!slice.raft->parameters || slice.layer().raft_outline.empty() ||
-        !same_value(slice.layer().print_z, slice.raft->object->slicing_parameters().raft_layer_print_z(slice.index)))
+        slice.plan_index() >= slice.raft->object->slicing_parameters().raft_layers() ||
+        !same_value(slice.layer().print_z, slice.raft->object->slicing_parameters().raft_layer_print_z(slice.plan_index())))
         return false;
     const auto&    params = *slice.raft->parameters;
     const Flow&    flow   = params.raft_flow(slice.phase());
     const auto     role   = slice.phase() == RaftPhase::Base ? erSupportMaterial : erSupportMaterialInterface;
     ExtrusionPaths paths;
-    getExtrusionPathsFromEntity(&slice.layer().support_fills, paths);
+    if (raft_only && slice.layer().has_raft_provenance()) {
+        for (size_t i = 0; i < slice.layer().support_fills.entities.size(); ++i)
+            if (slice.layer().raft_entity_flags[i])
+                append_source_paths(slice.layer().support_fills.entities[i], paths);
+    } else
+        getExtrusionPathsFromEntity(&slice.layer().support_fills, paths);
     return !paths.empty() && std::all_of(paths.begin(), paths.end(), [&](const ExtrusionPath& path) {
         return path.role() == role && same_value(path.width, flow.width()) && same_value(path.height, flow.height()) &&
                same_value(path.mm3_per_mm, flow.mm3_per_mm() * params.raft_flow_ratio(slice.phase()));
@@ -88,10 +134,10 @@ int raft_extruder(const RaftSlice& slice)
     return extruders.size() == 1 ? int(extruders.front()) : -1;
 }
 
-bool same_recipe(const RaftSlice& a, const RaftSlice& b)
+bool same_recipe(const RaftSlice& a, const RaftSlice& b, bool raft_only = false)
 {
-    if (!can_regenerate(a) || !can_regenerate(b) || a.phase() != b.phase() || !same_value(a.layer().print_z, b.layer().print_z) ||
-        !same_value(a.layer().height, b.layer().height))
+    if (!can_regenerate(a, raft_only) || !can_regenerate(b, raft_only) || a.phase() != b.phase() ||
+        !same_value(a.layer().print_z, b.layer().print_z) || !same_value(a.layer().height, b.layer().height))
         return false;
     const int tool = raft_extruder(a);
     if (tool < 0 || tool != raft_extruder(b))
@@ -101,7 +147,7 @@ bool same_recipe(const RaftSlice& a, const RaftSlice& b)
     const auto   phase = a.phase();
     const Flow&  fa    = pa.raft_flow(phase);
     const Flow&  fb    = pb.raft_flow(phase);
-    const double delta = std::abs(double(pa.raft_layer_angle(a.index)) - double(pb.raft_layer_angle(b.index)));
+    const double delta = std::abs(double(pa.raft_layer_angle(a.plan_index())) - double(pb.raft_layer_angle(b.plan_index())));
     if (!same_value(fa.nozzle_diameter(), fb.nozzle_diameter()) || !same_value(fa.width(), fb.width()) ||
         !same_value(fa.height(), fb.height()) || !same_value(pa.raft_density(phase), pb.raft_density(phase)) ||
         !same_value(pa.raft_pattern_spacing(phase), pb.raft_pattern_spacing(phase)) ||
@@ -149,6 +195,7 @@ struct MergedLayer
     std::vector<RaftSlice>    sources;
     ExtrusionEntityCollection paths;
     ExPolygons                areas;
+    bool                      preserve_support = false;
 };
 
 void generate_shared_paths(MergedLayer& result, const BoundingBox& bounds, const Polygons& bed, const ExPolygons* uncut_areas = nullptr)
@@ -168,7 +215,7 @@ void generate_shared_paths(MergedLayer& result, const BoundingBox& bounds, const
     translate(local_areas, -fill_origin);
     std::unique_ptr<Fill> filler(Fill::new_from_type(pattern));
     filler->set_bounding_box(fill_bounds);
-    filler->angle           = params.raft_layer_angle(source.index);
+    filler->angle               = params.raft_layer_angle(source.plan_index());
     filler->spacing         = params.raft_pattern_spacing(source.phase());
     filler->link_max_length = 0;
     const size_t     walls      = params.raft_wall_count(source.phase());
@@ -213,7 +260,7 @@ bool same_geometry_options(const PrintObjectConfig& a, const PrintObjectConfig& 
 // Keep the existing merger as the baseline. Only replace a complete compatible
 // group's physical layers, never partial layers or unrelated ordinary supports.
 bool apply_raft_geometry(Print&                          print,
-                         const std::vector<PlacedRaft>&  placed,
+                         std::vector<PlacedRaft>&        placed,
                          const std::vector<size_t>&      members,
                          std::vector<MergedLayer>&       batches,
                          const std::vector<MergedLayer>& pending,
@@ -222,8 +269,11 @@ bool apply_raft_geometry(Print&                          print,
 {
     if (std::none_of(members.begin(), members.end(), [&](size_t i) { return geometry_requested(placed[i].object->config()); }))
         return false;
-    const auto skip = [](const char* reason) {
-        BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] status=unchanged, reason=" << reason;
+    const auto started    = std::chrono::steady_clock::now();
+    const auto elapsed_ms = [&] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(); };
+    const auto skip       = [&](const char* reason) {
+        BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] status=unchanged, reason=" << reason << ", objects=" << members.size()
+                                << ", elapsed_ms=" << elapsed_ms();
         return false;
     };
     const auto check_cancel = [&print] {
@@ -232,30 +282,57 @@ bool apply_raft_geometry(Print&                          print,
     };
     const PlacedRaft& reference = placed[members.front()];
     const auto&       config    = reference.object->config();
-    if (print.extruders().size() != 1 || batches.size() != reference.layers.size())
-        return skip("incompatible layer or tool plans");
+    const bool separate_support = std::any_of(members.begin(), members.end(), [&](size_t i) { return placed[i].object->has_support(); });
+    if (print.extruders().size() != 1)
+        return skip("incompatible tool plans");
     for (size_t member : members) {
-        const auto& raft    = placed[member];
-        const auto& current = raft.object->config();
-        // Disabled ordinary supports plus exact raft layer/path checks avoid
-        // inferring path provenance from a matching extrusion width alone.
-        if (!raft.parameters || raft.object->has_support() || !same_geometry_options(config, current) ||
-            raft.layers.size() != reference.layers.size() || raft.layers.size() != raft.object->slicing_parameters().raft_layers())
+        const auto& raft = placed[member];
+        if (!raft.parameters || !same_geometry_options(config, raft.object->config()) ||
+            raft.object->slicing_parameters().raft_layers() != reference.object->slicing_parameters().raft_layers())
             return skip("unsupported source or different geometry settings");
     }
+    // Rebuild the enhancement input from explicitly identified raft entities.
+    // Ordinary supports can have additional physical layers inside the raft Z
+    // range; those layers stay with their object and never become raft batches.
+    std::vector<MergedLayer> raft_batches;
+    if (separate_support) {
+        for (size_t i = 0; i < reference.object->slicing_parameters().raft_layers(); ++i) {
+            check_cancel();
+            raft_batches.emplace_back();
+            auto& batch = raft_batches.back();
+            for (size_t member : members) {
+                auto*        raft = &placed[member];
+                const double z    = raft->object->slicing_parameters().raft_layer_print_z(i);
+                const auto   it   = std::find_if(raft->layers.begin(), raft->layers.end(),
+                                                 [&](const SupportLayer* layer) { return same_value(layer->print_z, z); });
+                if (it == raft->layers.end() || !(*it)->has_raft_provenance() || (*it)->raft_geometry_outline.empty())
+                    return skip("missing raft path provenance; regenerate support data");
+                const RaftSlice source{raft, size_t(it - raft->layers.begin()), i};
+                if (!can_regenerate(source, true) || (!batch.sources.empty() && !same_recipe(batch.sources.front(), source, true)))
+                    return skip("incompatible raft layer recipe");
+                batch.sources.push_back(source);
+                ExPolygons outline = source.layer().raft_geometry_outline;
+                translate(outline, raft->shift);
+                batch.areas.insert(batch.areas.end(), outline.begin(), outline.end());
+            }
+            batch.areas = intersection_ex(union_ex(batch.areas), bed);
+        }
+    }
+    const auto& input_batches = separate_support ? raft_batches : batches;
+    if (input_batches.size() != reference.object->slicing_parameters().raft_layers())
+        return skip("incompatible layer plans");
     std::vector<ExPolygons> outlines;
     std::vector<double>     phase_insets;
-    for (size_t i = 0; i < batches.size(); ++i) {
-        const auto& batch = batches[i];
-        if (batch.areas.empty() || batch.paths.empty() || batch.sources.size() != members.size())
+    for (size_t i = 0; i < input_batches.size(); ++i) {
+        const auto& batch = input_batches[i];
+        if (batch.areas.empty() || batch.sources.size() != members.size())
             return skip("incomplete raft layer");
         ExPolygons outline;
         for (const RaftSlice& source : batch.sources) {
-            if (source.index != i || !can_regenerate(source) || !same_recipe(batch.sources.front(), source))
+            if (source.plan_index() != i || !can_regenerate(source, separate_support) ||
+                !same_recipe(batch.sources.front(), source, separate_support))
                 return skip("mixed raft paths");
-            // Use nominal source geometry. Adding old extrusion-width coverage
-            // would feed wall fringes back into smoothing and size thresholds.
-            ExPolygons local = source.layer().raft_outline;
+            ExPolygons local = separate_support ? source.layer().raft_geometry_outline : source.layer().raft_outline;
             translate(local, source.raft->shift);
             outline.insert(outline.end(), std::make_move_iterator(local.begin()), std::make_move_iterator(local.end()));
         }
@@ -267,23 +344,101 @@ bool apply_raft_geometry(Print&                          print,
     const RaftGeometryOptions options{config.raft_segmented.value, config.raft_chunk_size.value, config.raft_chunk_gap.value,
                                       config.raft_smoothing.value};
     const double              cleanup_width = print.brim_flow().width();
+    BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] options, objects=" << members.size() << ", segmented=" << options.segmented
+                            << ", chunk_size=" << options.chunk_size << ", chunk_gap=" << options.chunk_gap
+                            << ", smoothing=" << options.smoothing << ", support_provenance=" << separate_support;
     RaftGeometryPlan          plan          = plan_raft_geometry(outlines, phase_insets, bed, options, cleanup_width, check_cancel);
-    for (size_t i = 0; i < plan.layers.size(); ++i)
-        BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] phase planning, layer=" << i << ", cuts=" << plan.layer_cuts[i]
-                                << ", islands=" << plan.layers[i].size();
-    if (!plan.changed)
+    if (!plan.changed || plan.uncut_layers.size() != input_batches.size())
         return skip("no geometry change");
-
+    const double planning_ms = elapsed_ms();
+    ExPolygons   support_demand;
+    if (separate_support) {
+        struct Occupancy
+        {
+            const PrintObject* owner;
+            double             bottom_z;
+            double             print_z;
+            BoundingBox        bounds;
+            ExPolygons         areas;
+        };
+        std::vector<Occupancy> supports;
+        const double           raft_top = input_batches.back().sources.front().layer().print_z;
+        for (size_t member : members) {
+            const auto& raft = placed[member];
+            for (const SupportLayer* layer : raft.object->support_layers()) {
+                check_cancel();
+                ExtrusionPaths paths;
+                if (layer->has_raft_provenance()) {
+                    for (size_t e = 0; e < layer->support_fills.entities.size(); ++e)
+                        if (!layer->raft_entity_flags[e])
+                            append_source_paths(layer->support_fills.entities[e], paths, layer->print_z, raft_top);
+                } else
+                    append_source_paths(&layer->support_fills, paths, layer->print_z, raft_top);
+                if (paths.empty())
+                    continue;
+                double bottom_z = layer->print_z;
+                for (const auto& path : paths)
+                    bottom_z = std::min(bottom_z, layer->print_z - double(path.height));
+                if (bottom_z > raft_top + EPSILON)
+                    continue;
+                ExPolygons areas = union_ex(layer->has_raft_provenance() ? layer->raft_support_outline : layer->support_islands,
+                                            raft_extrusion_coverage(paths, check_cancel));
+                translate(areas, raft.shift);
+                support_demand.insert(support_demand.end(), areas.begin(), areas.end());
+                const BoundingBox area_bounds = get_extents(areas);
+                supports.push_back({raft.object, bottom_z, layer->print_z, area_bounds, std::move(areas)});
+            }
+        }
+        // The established merger may partition conflicting support columns.
+        // Do not undo that protection by restoring both owners' original paths.
+        for (size_t i = 0; i < supports.size(); ++i) {
+            check_cancel();
+            for (size_t j = i + 1; j < supports.size(); ++j) {
+                check_cancel();
+                if (supports[i].owner != supports[j].owner && supports[i].bounds.overlap(supports[j].bounds) &&
+                    std::min(supports[i].print_z, supports[j].print_z) > std::max(supports[i].bottom_z, supports[j].bottom_z) + EPSILON &&
+                    !intersection_ex(supports[i].areas, supports[j].areas).empty())
+                    return skip("ordinary supports from different objects overlap");
+            }
+        }
+        for (size_t i = 0; i < input_batches.size(); ++i) {
+            check_cancel();
+            const auto&  source = input_batches[i].sources.front();
+            const double top    = source.layer().print_z;
+            const double bottom = top - reference.parameters->raft_flow(source.phase()).height();
+            ExPolygons   occupied;
+            for (const auto& support : supports)
+                if (std::min(top, support.print_z) > std::max(bottom, support.bottom_z) + EPSILON)
+                    occupied.insert(occupied.end(), support.areas.begin(), support.areas.end());
+            if (!occupied.empty()) {
+                // Reserve same-Z columns, including their actual bead width.
+                // Feet ABOVE the raft are bearing demand, not a veto on cuts.
+                occupied             = offset_ex(union_ex(occupied), scale_(0.002));
+                plan.layers[i]       = diff_ex(plan.layers[i], occupied);
+                plan.uncut_layers[i] = diff_ex(plan.uncut_layers[i], occupied);
+            }
+        }
+    }
+    const double support_ms = elapsed_ms() - planning_ms;
+    for (size_t i = 0; i < plan.layers.size(); ++i) {
+        const auto& source = input_batches[i].sources.front();
+        const auto& params = *source.raft->parameters;
+        const Flow& flow   = params.raft_flow(source.phase());
+        BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] phase planning, layer=" << i << ", cuts=" << plan.layer_cuts[i]
+                                << ", islands=" << plan.layers[i].size() << ", z=" << source.layer().print_z << ", height=" << flow.height()
+                                << ", width=" << flow.width() << ", spacing=" << params.raft_pattern_spacing(source.phase())
+                                << ", flow_ratio=" << params.raft_flow_ratio(source.phase());
+    }
     // Smoothing may add material. Do not grow into another object's model or
     // support footprint, including raft instances excluded from this merger.
     ExPolygons added;
-    for (size_t i = 0; i < batches.size(); ++i) {
-        ExPolygons growth = diff_ex(plan.layers[i], batches[i].areas);
+    for (size_t i = 0; i < input_batches.size(); ++i) {
+        ExPolygons growth = diff_ex(plan.layers[i], input_batches[i].areas);
         added.insert(added.end(), growth.begin(), growth.end());
     }
     if (!added.empty()) {
         added              = union_ex(added);
-        const double top_z = batches.back().sources.front().layer().print_z;
+        const double top_z = input_batches.back().sources.front().layer().print_z;
         // Earlier groups may already have smoothing candidates. Checking only
         // their original live paths would miss two groups growing into the same gap.
         for (const MergedLayer& previous : pending) {
@@ -322,7 +477,7 @@ bool apply_raft_geometry(Print&                          print,
     }
 
     std::vector<MergedLayer> candidates;
-    std::vector<ExPolygons>  materials(batches.size());
+    std::vector<ExPolygons>  materials(input_batches.size());
     size_t                   omitted_fragments = 0;
     const auto               validate_candidate = [&](MergedLayer& candidate, ExPolygons& material) {
         ExtrusionPaths paths;
@@ -342,12 +497,13 @@ bool apply_raft_geometry(Print&                          print,
         // numerical allowance and the actual bed/gap boundaries unchanged.
         return !material.empty() && diff_ex(material, offset_ex(candidate.areas, scale_(0.002))).empty();
     };
-    candidates.reserve(batches.size());
-    for (size_t i = 0; i < batches.size(); ++i) {
+    candidates.reserve(input_batches.size());
+    for (size_t i = 0; i < input_batches.size(); ++i) {
         check_cancel();
         candidates.emplace_back();
         auto& candidate   = candidates.back();
-        candidate.sources = batches[i].sources;
+        candidate.sources          = input_batches[i].sources;
+        candidate.preserve_support = separate_support;
         candidate.areas   = std::move(plan.layers[i]);
         generate_shared_paths(candidate, bounds, bed, &plan.uncut_layers[i]);
         if (candidate.paths.empty())
@@ -365,7 +521,7 @@ bool apply_raft_geometry(Print&                          print,
     if (options.segmented && base_layers > 0 && base_layers < candidates.size() &&
         std::any_of(plan.layer_cuts.begin(), plan.layer_cuts.begin() + base_layers, [](size_t cuts) { return cuts > 0; }) &&
         std::all_of(members.begin(), members.end(), [&](size_t member) { return !placed[member].object->layers().empty(); })) {
-        ExPolygons base, uncut_base, demand;
+        ExPolygons base, uncut_base, demand = support_demand;
         const auto append = [](ExPolygons& to, const ExPolygons& from) { to.insert(to.end(), from.begin(), from.end()); };
         for (size_t i = 0; i < candidates.size(); ++i) {
             check_cancel();
@@ -421,7 +577,10 @@ bool apply_raft_geometry(Print&                          print,
     check_cancel();
     batches = std::move(candidates);
     BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] status=applied, objects=" << members.size() << ", omitted_fragments=" << omitted_fragments
-                            << ", omitted_base_regions=" << omitted_base_regions << ", smoothing=" << options.smoothing;
+                            << ", omitted_base_regions=" << omitted_base_regions << ", smoothing=" << options.smoothing
+                            << ", preserved_support=" << separate_support << ", planning_ms=" << planning_ms
+                            << ", support_mask_ms=" << support_ms << ", paths_validation_ms=" << elapsed_ms() - planning_ms - support_ms
+                            << ", elapsed_ms=" << elapsed_ms();
     return true;
 }
 
@@ -586,6 +745,7 @@ void restore_unmerged_rafts(Print& print)
             if (layer->raft_merge_backup) {
                 layer->support_fills.swap(layer->raft_merge_backup->fills);
                 layer->support_islands.swap(layer->raft_merge_backup->islands);
+                layer->raft_entity_flags.swap(layer->raft_merge_backup->entity_flags);
                 layer->raft_merge_backup.reset();
                 layer->raft_covered_by_shared_paths = false;
             }
@@ -720,23 +880,60 @@ void merge_overlapping_rafts(Print& print)
     if (print.canceled())
         throw CanceledException();
 
-    // All geometry is ready before changing any live paths. Backups allow moves,
-    // deletion, cached re-slicing and repeated process() calls to start cleanly.
+    // Stage ownership and allocations before touching live layers. Cancellation
+    // during geometry work leaves every object's original support paths intact.
+    struct StagedLayer
+    {
+        SupportLayer*                                  layer;
+        ExtrusionEntityCollection                      fills;
+        ExPolygons                                     islands;
+        std::vector<unsigned char>                     flags;
+        std::unique_ptr<SupportLayer::RaftMergeBackup> backup;
+        bool                                           covered = false;
+    };
+    std::vector<StagedLayer> staged;
     for (auto& batch : pending) {
         const bool supplied = !batch.paths.empty() || batch.areas.empty();
-        for (const RaftSlice& source : batch.sources) {
-            SupportLayer& layer     = source.layer();
-            layer.raft_merge_backup = std::make_unique<SupportLayer::RaftMergeBackup>();
-            layer.support_fills.swap(layer.raft_merge_backup->fills);
-            layer.raft_merge_backup->islands   = layer.support_islands;
-            layer.raft_covered_by_shared_paths = supplied;
+        for (size_t i = 0; i < batch.sources.size(); ++i) {
+            if (print.canceled())
+                throw CanceledException();
+            const RaftSlice& source = batch.sources[i];
+            staged.emplace_back();
+            auto& item                = staged.back();
+            item.layer                = &source.layer();
+            item.backup               = std::make_unique<SupportLayer::RaftMergeBackup>();
+            item.backup->islands      = item.layer->support_islands;
+            item.backup->entity_flags = item.layer->raft_entity_flags;
+            if (batch.preserve_support) {
+                item.fills = source_paths(source, false);
+                item.flags.resize(item.fills.entities.size(), 0);
+                if (!item.fills.empty())
+                    item.islands = union_ex(item.layer->raft_support_outline, item.fills.polygons_covered_by_width());
+            }
+            if (i == 0) {
+                translate_paths(batch.paths, -source.raft->shift);
+                translate(batch.areas, -source.raft->shift);
+                if (batch.preserve_support) {
+                    item.islands = union_ex(item.islands, batch.areas);
+                    item.fills.append(std::move(batch.paths.entities));
+                    item.flags.resize(item.fills.entities.size(), 1);
+                } else {
+                    item.islands = std::move(batch.areas);
+                    item.fills.swap(batch.paths);
+                }
+            }
+            item.covered = supplied && item.fills.empty() && item.islands.empty();
         }
-        const auto& owner = batch.sources.front();
-        translate_paths(batch.paths, -owner.raft->shift);
-        translate(batch.areas, -owner.raft->shift);
-        owner.layer().support_fills.swap(batch.paths);
-        owner.layer().support_islands.swap(batch.areas);
-        owner.layer().raft_covered_by_shared_paths = owner.layer().support_fills.empty() && owner.layer().support_islands.empty();
+    }
+    if (print.canceled())
+        throw CanceledException();
+    for (auto& item : staged) {
+        item.layer->support_fills.swap(item.backup->fills);
+        item.layer->raft_merge_backup = std::move(item.backup);
+        item.layer->support_fills.swap(item.fills);
+        item.layer->support_islands.swap(item.islands);
+        item.layer->raft_entity_flags.swap(item.flags);
+        item.layer->raft_covered_by_shared_paths = item.covered;
     }
     BOOST_LOG_TRIVIAL(info) << "[Raft][Merge] groups=" << group_count << ", layer_regions=" << pending.size();
 }

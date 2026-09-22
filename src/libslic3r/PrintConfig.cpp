@@ -4280,10 +4280,10 @@ void PrintConfigDef::init_fff_params()
     def           = this->add("raft_segmented", coBool);
     def->label    = L("Segment raft");
     def->category = L("Raft");
-    def->tooltip  = L(
-        "Split large Cura-style rafts into sections before generating walls and infill. Each raft phase is processed "
-         "independently. Cuts may cross model contact areas and leave marks on the model bottom. "
-         "This trial applies to compatible single-instance objects with supports disabled, one active filament and by-layer printing.");
+    def->tooltip  = L("Split large Cura-style rafts into sections before generating walls and infill. Each raft phase is processed "
+                       "independently. Cuts may cross model contact areas and leave marks on the model bottom. "
+                       "This trial applies to compatible single-instance objects, one active filament and by-layer printing. Ordinary "
+                       "support paths are preserved.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
     add_cura_raft_float(

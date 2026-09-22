@@ -78,13 +78,9 @@ enum TreeSupportStage {
     STAGE_DETECT_OVERHANGS,
     STAGE_GENERATE_CONTACT_NODES,
     STAGE_DROP_DOWN_NODES,
+    STAGE_SMOOTH_NODES,
     STAGE_DRAW_CIRCLES,
     STAGE_GENERATE_TOOLPATHS,
-    STAGE_MinimumSpanningTree,
-    STAGE_GET_AVOIDANCE,
-    STAGE_projection_onto_ex,
-    STAGE_get_collision,
-    STAGE_intersection_ln,
     STAGE_total,
     NUM_STAGES
 };
@@ -92,68 +88,41 @@ enum TreeSupportStage {
 class TreeSupportProfiler
 {
 public:
-    uint32_t stage_durations[NUM_STAGES] = { 0 };
-    uint32_t stage_index = 0;
-    boost::posix_time::ptime tic_time;
-    boost::posix_time::ptime toc_time;
-
-    TreeSupportProfiler()
-    {
-        for (uint32_t& item : stage_durations) {
-            item = 0;
-        }
-    }
-
     void stage_start(TreeSupportStage stage)
     {
-        if (stage > NUM_STAGES)
+        if (static_cast<unsigned>(stage) >= NUM_STAGES)
             return;
 
-        m_stage_start_times[stage] = boost::posix_time::microsec_clock::local_time();
+        m_stage_start_times[stage] = Clock::now();
     }
 
     void stage_finish(TreeSupportStage stage)
     {
-        if (stage > NUM_STAGES)
+        if (static_cast<unsigned>(stage) >= NUM_STAGES)
             return;
 
-        boost::posix_time::ptime time = boost::posix_time::microsec_clock::local_time();
-        stage_durations[stage] = (time - m_stage_start_times[stage]).total_milliseconds();
+        m_stage_durations_ms[stage] = std::chrono::duration<double, std::milli>(Clock::now() - m_stage_start_times[stage]).count();
     }
 
-    void tic() { tic_time = boost::posix_time::microsec_clock::local_time(); }
-    uint32_t toc() {
-        toc_time = boost::posix_time::microsec_clock::local_time();
-        return (toc_time - tic_time).total_milliseconds();
-    }
-    void stage_add(TreeSupportStage stage)
-    {
-        if (stage > NUM_STAGES)
-            return;
-        stage_durations[stage] += toc();
-    }
-
-    std::string report()
+    std::string report() const
     {
         std::stringstream ss;
-        ss << "total overhange cost: " << stage_durations[STAGE_total]
-            << "; STAGE_DETECT_OVERHANGS: " << stage_durations[STAGE_DETECT_OVERHANGS]
-            << "; STAGE_GENERATE_CONTACT_NODES: " << stage_durations[STAGE_GENERATE_CONTACT_NODES]
-            << "; STAGE_DROP_DOWN_NODES: " << stage_durations[STAGE_DROP_DOWN_NODES]
-            << "; STAGE_DRAW_CIRCLES: " << stage_durations[STAGE_DRAW_CIRCLES]
-            << "; STAGE_GENERATE_TOOLPATHS: " << stage_durations[STAGE_GENERATE_TOOLPATHS]
-            << "; STAGE_MinimumSpanningTree: " << stage_durations[STAGE_MinimumSpanningTree]
-            << "; STAGE_GET_AVOIDANCE: " << stage_durations[STAGE_GET_AVOIDANCE]
-            << "; STAGE_projection_onto_ex: " << stage_durations[STAGE_projection_onto_ex]
-            << "; STAGE_get_collision: " << stage_durations[STAGE_get_collision]
-            << "; STAGE_intersection_ln: " << stage_durations[STAGE_intersection_ln];
+        ss << "total_ms=" << m_stage_durations_ms[STAGE_total] << "; detect_overhangs_ms=" << m_stage_durations_ms[STAGE_DETECT_OVERHANGS]
+           << "; generate_contact_nodes_ms=" << m_stage_durations_ms[STAGE_GENERATE_CONTACT_NODES]
+           << "; drop_nodes_ms=" << m_stage_durations_ms[STAGE_DROP_DOWN_NODES]
+           << "; smooth_nodes_ms=" << m_stage_durations_ms[STAGE_SMOOTH_NODES]
+           << "; draw_circles_ms=" << m_stage_durations_ms[STAGE_DRAW_CIRCLES]
+           << "; generate_toolpaths_ms=" << m_stage_durations_ms[STAGE_GENERATE_TOOLPATHS];
 
         return ss.str();
     }
+
 private:
-    boost::posix_time::ptime m_stage_start_times[NUM_STAGES];
+    using Clock = std::chrono::steady_clock;
+
+    Clock::time_point m_stage_start_times[NUM_STAGES]  = {};
+    double            m_stage_durations_ms[NUM_STAGES] = {};
 };
-TreeSupportProfiler profiler;
 
 Lines spanning_tree_to_lines(const std::vector<MinimumSpanningTree>& spanning_trees)
 {
@@ -1396,17 +1365,20 @@ void TreeSupport::generate_toolpaths()
             ExPolygons phase_areas = margin > 0 ? offset_ex(raft_areas, scale_(margin)) : raft_areas;
             phase_areas                         = clip_raft_areas_to_bed(phase_areas, raft_bed);
             ts_layer->raft_outline              = phase_areas;
+            ts_layer->raft_geometry_outline     = phase_areas;
             const Flow phase_flow = m_support_params.raft_flow(phase);
             const InfillPattern phase_pattern = m_support_params.raft_fill_pattern(phase);
             std::unique_ptr<Fill> filler_raft(Fill::new_from_type(phase_pattern));
             filler_raft->angle = m_support_params.raft_layer_angle(layer_nr);
             filler_raft->spacing = m_support_params.raft_pattern_spacing(phase);
             filler_raft->set_bounding_box(raft_fill_bbox);
+            const size_t entity_begin = ts_layer->support_fills.entities.size();
             for (const ExPolygon &poly : phase_areas)
                 make_perimeter_and_infill(ts_layer->support_fills.entities, poly, m_support_params.raft_wall_count(phase), phase_flow,
                                           phase == RaftPhase::Base ? erSupportMaterial : erSupportMaterialInterface,
                                           filler_raft.get(), m_support_params.raft_density(phase), false,
                                           m_support_params.raft_flow_ratio(phase), phase_pattern);
+            ts_layer->mark_raft_entities(entity_begin);
         }
 
         ExPolygons first_non_raft_base;
@@ -1738,6 +1710,8 @@ void TreeSupport::generate()
         return;
     }
 
+    // Keep timing local to this generation; support objects may be processed concurrently.
+    TreeSupportProfiler profiler;
     profiler.stage_start(STAGE_total);
 
     // Generate overhang areas
@@ -1767,7 +1741,9 @@ void TreeSupport::generate()
     drop_nodes();
     profiler.stage_finish(STAGE_DROP_DOWN_NODES);
 
-    smooth_nodes();// , tree_support_3d_config);
+    profiler.stage_start(STAGE_SMOOTH_NODES);
+    smooth_nodes(); // , tree_support_3d_config);
+    profiler.stage_finish(STAGE_SMOOTH_NODES);
 
     //Generate support areas.
     profiler.stage_start(STAGE_DRAW_CIRCLES);
@@ -2596,12 +2572,10 @@ void TreeSupport::drop_nodes()
                     return true;
             }
             else {
-                profiler.tic();
                 Line ln(b, a);
                 Lines pls_intersect = intersection_ln(ln, layer_contours);
                 mst_line_x_layer_contour_cache.insert({ {a, b}, !pls_intersect.empty() });
                 mst_line_x_layer_contour_cache.insert({ ln, !pls_intersect.empty() });
-                profiler.stage_add(STAGE_intersection_ln);
                 if (!pls_intersect.empty())
                     return true;
             }
@@ -2660,7 +2634,6 @@ void TreeSupport::drop_nodes()
         }
 
         //Create a MST for every part.
-        profiler.tic();
         //std::vector<MinimumSpanningTree>& spanning_trees = m_spanning_trees[layer_nr];
         std::vector<MinimumSpanningTree> spanning_trees;
         for (const std::unordered_map<Point, SupportNode*, PointHash>& group : nodes_per_part)
@@ -2672,7 +2645,6 @@ void TreeSupport::drop_nodes()
             }
             spanning_trees.emplace_back(points_to_buildplate);
         }
-        profiler.stage_add(STAGE_MinimumSpanningTree);
 
 #ifdef SUPPORT_TREE_DEBUG_TO_SVG
         coordf_t branch_radius_temp = 0;
@@ -3065,7 +3037,8 @@ void TreeSupport::smooth_nodes()
                             if (branch[i]->parents.size() > 1 || (branch[i]->movement.x() > max_move || branch[i]->movement.y() > max_move) ||
                                 (total_height > thresh_tall_branch && branch[i]->dist_mm_to_top < thresh_dist_to_top))
                                 branch[i]->need_extra_wall = true;
-                            BOOST_LOG_TRIVIAL(info) << "smooth_nodes: layer_nr=" << layer_nr << ", i=" << i << ", pt=" << pt << ", movement=" << branch[i]->movement << ", radius=" << branch[i]->radius;
+                            BOOST_LOG_TRIVIAL(trace) << "smooth_nodes: layer_nr=" << layer_nr << ", i=" << i << ", pt=" << pt
+                                                     << ", movement=" << branch[i]->movement << ", radius=" << branch[i]->radius;
                         }
                     }
                     if (k < iterations - 1) {
@@ -3489,24 +3462,20 @@ TreeSupportData::TreeSupportData(const PrintObject &object, coordf_t xy_distance
 
 const ExPolygons& TreeSupportData::get_collision(coordf_t radius, size_t layer_nr) const
 {
-    profiler.tic();
     radius = ceil_radius(radius);
     RadiusLayerPair key{radius, layer_nr};
     const auto it = m_collision_cache.find(key);
     const ExPolygons& collision = it != m_collision_cache.end() ? it->second : calculate_collision(key);
-    profiler.stage_add(STAGE_get_collision);
     return collision;
 }
 
 const ExPolygons& TreeSupportData::get_avoidance(coordf_t radius, size_t layer_nr, int recursions) const
 {
-    profiler.tic();
     radius = ceil_radius(radius);
     RadiusLayerPair key{radius, layer_nr, recursions };
     const auto it = m_avoidance_cache.find(key);
     const ExPolygons& avoidance = it != m_avoidance_cache.end() ? it->second : calculate_avoidance(key);
 
-    profiler.stage_add(STAGE_GET_AVOIDANCE);
     return avoidance;
 }
 
