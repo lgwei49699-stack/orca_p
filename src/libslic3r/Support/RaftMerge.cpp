@@ -64,15 +64,18 @@ struct RaftSlice
 void append_source_paths(const ExtrusionEntity* entity,
                          ExtrusionPaths&        paths,
                          double                 print_z      = 0.,
-                         double                 max_bottom_z = std::numeric_limits<double>::infinity())
+                         double                 max_bottom_z = std::numeric_limits<double>::infinity(),
+                         bool*                  filtered     = nullptr)
 {
     const auto append = [&](const ExtrusionPath& path) {
         if (print_z - double(path.height) <= max_bottom_z + EPSILON)
             paths.push_back(path);
+        else if (filtered != nullptr)
+            *filtered = true;
     };
     if (const auto* collection = dynamic_cast<const ExtrusionEntityCollection*>(entity))
         for (const auto* child : collection->entities)
-            append_source_paths(child, paths, print_z, max_bottom_z);
+            append_source_paths(child, paths, print_z, max_bottom_z, filtered);
     else if (const auto* path = dynamic_cast<const ExtrusionPath*>(entity))
         append(*path);
     else if (const auto* loop = dynamic_cast<const ExtrusionLoop*>(entity))
@@ -241,8 +244,14 @@ void generate_shared_paths(MergedLayer& result, const BoundingBox& bounds, const
                                                float(params.raft_density(source.phase())), role, flow, params, walls, true,
                                                params.raft_flow_ratio(source.phase()), pattern,
                                                uncut_areas != nullptr ? &path_regions.wall_centerlines : nullptr);
+    const size_t generated_entities = result.paths.entities.size();
     translate_paths(result.paths, fill_origin);
     clip_raft_paths_to_area(result.paths, intersection(to_polygons(result.areas), bed), uncut_areas != nullptr);
+    if (uncut_areas != nullptr && result.paths.empty())
+        BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] empty candidate, layer=" << source.plan_index() << ", z=" << source.layer().print_z
+                                << ", height=" << flow.height() << ", width=" << flow.width() << ", regions=" << result.areas.size()
+                                << ", fill_regions=" << fill_areas.size() << ", centerline_regions=" << path_regions.wall_centerlines.size()
+                                << ", generated_entities=" << generated_entities << ", clipped_entities=0";
 }
 
 bool geometry_requested(const PrintObjectConfig& config)
@@ -362,33 +371,56 @@ bool apply_raft_geometry(Print&                          print,
             ExPolygons         areas;
         };
         std::vector<Occupancy> supports;
-        const double           raft_top = input_batches.back().sources.front().layer().print_z;
+        size_t                 mixed_height_layers = 0;
+        const double           raft_top            = input_batches.back().sources.front().layer().print_z;
         for (size_t member : members) {
             const auto& raft = placed[member];
             for (const SupportLayer* layer : raft.object->support_layers()) {
                 check_cancel();
                 ExtrusionPaths paths;
+                bool           filtered = false;
                 if (layer->has_raft_provenance()) {
                     for (size_t e = 0; e < layer->support_fills.entities.size(); ++e)
                         if (!layer->raft_entity_flags[e])
-                            append_source_paths(layer->support_fills.entities[e], paths, layer->print_z, raft_top);
+                            append_source_paths(layer->support_fills.entities[e], paths, layer->print_z, raft_top, &filtered);
                 } else
-                    append_source_paths(&layer->support_fills, paths, layer->print_z, raft_top);
+                    append_source_paths(&layer->support_fills, paths, layer->print_z, raft_top, &filtered);
                 if (paths.empty())
                     continue;
-                double bottom_z = layer->print_z;
-                for (const auto& path : paths)
-                    bottom_z = std::min(bottom_z, layer->print_z - double(path.height));
-                if (bottom_z > raft_top + EPSILON)
-                    continue;
-                ExPolygons areas = union_ex(layer->has_raft_provenance() ? layer->raft_support_outline : layer->support_islands,
-                                            raft_extrusion_coverage(paths, check_cancel));
-                translate(areas, raft.shift);
-                support_demand.insert(support_demand.end(), areas.begin(), areas.end());
-                const BoundingBox area_bounds = get_extents(areas);
-                supports.push_back({raft.object, bottom_z, layer->print_z, area_bounds, std::move(areas)});
+                // Contact modulation may leave different extrusion heights at
+                // one print Z. A thin path resting ON the raft must not inherit
+                // a neighbouring column's deeper bottom Z and erase the raft.
+                std::map<float, ExtrusionPaths> by_height;
+                for (auto& path : paths)
+                    by_height[path.height].push_back(std::move(path));
+                const bool  uniform_height = by_height.size() == 1 && !filtered;
+                const auto& outline        = layer->has_raft_provenance() ? layer->raft_support_outline : layer->support_islands;
+                for (const auto& entry : by_height) {
+                    check_cancel();
+                    const double bottom_z = layer->print_z - double(entry.first);
+                    ExPolygons   areas    = raft_extrusion_coverage(entry.second, check_cancel);
+                    // A layer-wide envelope has no per-height provenance. Keep
+                    // it as a collision mask only for a single-height layer;
+                    // otherwise reserve each height group's actual beads.
+                    if (uniform_height)
+                        areas = union_ex(outline, areas);
+                    translate(areas, raft.shift);
+                    support_demand.insert(support_demand.end(), areas.begin(), areas.end());
+                    const BoundingBox area_bounds = get_extents(areas);
+                    supports.push_back({raft.object, bottom_z, layer->print_z, area_bounds, std::move(areas)});
+                }
+                if (!uniform_height) {
+                    ++mixed_height_layers;
+                    // The whole envelope remains conservative bearing demand,
+                    // so sparse support feet never lose their base raft islands.
+                    ExPolygons demand = outline;
+                    translate(demand, raft.shift);
+                    support_demand.insert(support_demand.end(), demand.begin(), demand.end());
+                }
             }
         }
+        BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] support occupancy, groups=" << supports.size()
+                                << ", mixed_height_layers=" << mixed_height_layers;
         // The established merger may partition conflicting support columns.
         // Do not undo that protection by restoring both owners' original paths.
         for (size_t i = 0; i < supports.size(); ++i) {
