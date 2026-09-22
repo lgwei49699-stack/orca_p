@@ -145,6 +145,51 @@ TEST_CASE("Workflow keeps native OBJ geometry instead of applying standalone fac
     CHECK(inspection_file_bytes(input) == original_bytes);
 }
 
+TEST_CASE("Workflow enforces the same geometry budget at admission and serialized inspection", "[ModelRepair][Inspection]")
+{
+    InspectionTempDirectory temp;
+    const auto              input = (temp.path / "bounded.stl").string();
+    auto                    mesh  = make_cube(10., 10., 10.);
+    REQUIRE(store_stl(input.c_str(), &mesh, true));
+    const auto                original = inspection_file_bytes(input);
+    ModelCheckWorkflowOptions options;
+    options.input_file                       = input;
+    options.output_directory                 = temp.path.string();
+    options.max_input_bytes                  = original.size();
+    options.inspection_options.max_triangles = 12;
+    options.inspection_options.max_vertices  = 8;
+    ModelCheckWorkflowReport report;
+    SECTION("Exact limits accept the original and reimported export")
+    {
+        options.export_format = "obj";
+        run_model_check_workflow(options, report);
+        CHECK(report.check["check_complete"] == true);
+        CHECK(report.check["mesh_status"] == "passed");
+        CHECK(report.check["inspection"]["triangle_count"] == 12);
+    }
+    SECTION("Oversized source is rejected before importing")
+    {
+        options.max_input_bytes--;
+        REQUIRE_THROWS_WITH(run_model_check_workflow(options, report),
+                            "Model check input exceeds the " + std::to_string(options.max_input_bytes) + " byte limit.");
+        CHECK(report.check["basic_repair"].is_null());
+        CHECK(report.check["check_complete"] == false);
+    }
+    SECTION("Decoded triangle limit remains enforced")
+    {
+        options.inspection_options.max_triangles = 11;
+        REQUIRE_THROWS_WITH(run_model_check_workflow(options, report), "Model check requires 1 to 11 decoded triangles.");
+        CHECK(report.check["check_complete"] == false);
+    }
+    SECTION("Serialized inspection uses the workflow vertex budget")
+    {
+        options.inspection_options.max_vertices = 7;
+        REQUIRE_THROWS_WITH(run_model_check_workflow(options, report), "Model inspection vertex limit exceeded.");
+        CHECK(report.check["check_complete"] == false);
+    }
+    CHECK(inspection_file_bytes(input) == original);
+}
+
 TEST_CASE("Inspection reports seven checks without editing a healthy mesh", "[ModelRepair][Inspection]")
 {
     auto       mesh     = make_cube(10., 10., 10.);

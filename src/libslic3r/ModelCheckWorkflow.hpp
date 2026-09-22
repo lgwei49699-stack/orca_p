@@ -2,6 +2,7 @@
 #define slic3r_ModelCheckWorkflow_hpp_
 
 #include "ModelRepair.hpp"
+#include "ModelInspection.hpp"
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -14,6 +15,10 @@ struct ModelCheckWorkflowOptions
     std::string export_format; // Empty: source format; otherwise "stl" or "obj".
     bool        advanced_repair  = false;
     bool        ignore_materials = false;
+    // Check-only capacity is independent of the repair engine's own budgets.
+    // Keep bounded geometry and intersection work; never downsample for inspection.
+    std::size_t            max_input_bytes = 256 * 1024 * 1024;
+    ModelInspectionOptions inspection_options;
 };
 
 struct ModelCheckWorkflowReport

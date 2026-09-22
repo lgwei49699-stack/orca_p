@@ -155,8 +155,8 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
         throw std::invalid_argument("--check-model requires one STL or OBJ input.");
     if (!options.export_format.empty() && options.export_format != "obj" && options.export_format != "stl")
         throw std::invalid_argument("Invalid model check export format.");
-    if (fs::file_size(options.input_file) > 64 * 1024 * 1024)
-        throw std::runtime_error("Model check input exceeds the 64 MiB limit.");
+    if (fs::file_size(options.input_file) > options.max_input_bytes)
+        throw std::runtime_error("Model check input exceeds the " + std::to_string(options.max_input_bytes) + " byte limit.");
     DynamicPrintConfig config;
     MeshRepairReport   import_report;
     const bool         repair_stl = source_format == ".stl";
@@ -164,8 +164,9 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
                                      &import_report);
     report.check["input_materials_ignored"] = report.input_materials_ignored;
     const auto triangle_count               = model.mesh().its.indices.size();
-    if (triangle_count == 0 || triangle_count > ModelInspectionOptions{}.max_triangles)
-        throw std::runtime_error("Model check requires 1 to 1,000,000 decoded triangles.");
+    if (triangle_count == 0 || triangle_count > options.inspection_options.max_triangles)
+        throw std::runtime_error("Model check requires 1 to " + std::to_string(options.inspection_options.max_triangles) +
+                                 " decoded triangles.");
     // Match ordinary Orca source import instead of independently deleting
     // zero-area records: even a zero-area triangle can participate in paired
     // edge topology. OBJ keeps its native import/material handling, not ADMesh.
@@ -197,7 +198,7 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
     DynamicPrintConfig working_config;
     bool               ignored      = false;
     Model              working      = load_working_model(baseline.string(), working_config, options.ignore_materials, ignored);
-    auto               before       = inspect_model_mesh(working.mesh());
+    auto               before       = inspect_model_mesh(working.mesh(), options.inspection_options);
     report.check["before_advanced"] = before;
     publish_check(report, before, baseline.string(), "serialized_prepared");
     if (options.advanced_repair) {
@@ -239,7 +240,7 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
         const auto         files  = save_working_model(output, working, working_config);
         DynamicPrintConfig reloaded_config;
         Model              reloaded = load_working_model(output.string(), reloaded_config, options.ignore_materials, ignored);
-        const auto         after    = inspect_model_mesh(reloaded.mesh());
+        const auto         after    = inspect_model_mesh(reloaded.mesh(), options.inspection_options);
         // Allocate the complete publication before replacing the retained
         // baseline report. An allocation/serialization failure must not mix stages.
         auto accepted = report;
