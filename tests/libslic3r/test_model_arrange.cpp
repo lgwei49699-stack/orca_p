@@ -1,8 +1,10 @@
 #include <catch2/catch.hpp>
 
+#include <array>
 #include <chrono>
 
 #include "libslic3r/ModelArrange.hpp"
+#include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 
 using namespace Slic3r;
@@ -34,7 +36,106 @@ DynamicPrintConfig raft_config(RaftMode mode)
     return config;
 }
 
+DynamicPrintConfig unrafted_bed_config(double bed_size)
+{
+    DynamicPrintConfig config = raft_config(RaftMode::Legacy);
+    // FullPrintConfig does not include the machine's printer_technology option.
+    config.set_key_value("printer_technology", new ConfigOptionEnum<PrinterTechnology>(ptFFF));
+    config.set("raft_layers", 0);
+    config.set("enforce_support_layers", 0);
+    config.set("skirt_loops", 0);
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btNoBrim));
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {bed_size, 0.}, {bed_size, bed_size}, {0., bed_size}}));
+    config.erase("filament_type");
+    return config;
+}
+
 } // namespace
+
+TEST_CASE("Mixed raft preparation protects both movable and fixed objects without changing uniform scenes", "[Arrange][Raft][Clearance]")
+{
+    Model              model  = make_model(make_cube(10., 10., 10.));
+    ModelObject*       off    = model.add_object(*model.objects.front());
+    DynamicPrintConfig config = raft_config(RaftMode::CuraV1);
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btOuterAndInner));
+    config.set("brim_width", 2.);
+    config.set("brim_object_gap", 0.);
+    config.set("skirt_loops", 0);
+    ArrangeParams params;
+    params.min_obj_distance = scaled(0.2);
+
+    SECTION("all rafts retain their original reservation")
+    {
+        ArrangePolygons selected{get_instance_arrange_poly(model.objects[0]->instances[0], config),
+                                 get_instance_arrange_poly(off->instances[0], config)};
+        const double    before = selected.front().minimum_inflation;
+        ArrangePolygons fixed;
+        REQUIRE_FALSE(prepare_mixed_raft_clearance(selected, fixed, config, params));
+        REQUIRE(selected.front().minimum_inflation == before);
+    }
+    SECTION("virtual exclusions are not unrafted models")
+    {
+        ArrangePolygons selected{get_instance_arrange_poly(model.objects[0]->instances[0], config)};
+        ArrangePolygons fixed(1);
+        fixed.front().is_virt_object = true;
+        REQUIRE_FALSE(prepare_mixed_raft_clearance(selected, fixed, config, params));
+    }
+    SECTION("all rafts disabled retain the original reservation")
+    {
+        config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+        config.set("raft_layers", 0);
+        ArrangePolygons selected{get_instance_arrange_poly(model.objects[0]->instances[0], config),
+                                 get_instance_arrange_poly(off->instances[0], config)};
+        ArrangePolygons fixed;
+        REQUIRE_FALSE(prepare_mixed_raft_clearance(selected, fixed, config, params));
+        REQUIRE(selected.front().minimum_inflation == 0.);
+        REQUIRE(selected.back().minimum_inflation == 0.);
+    }
+    SECTION("pure legacy mixing stays unchanged")
+    {
+        config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+        config.set("raft_layers", 0);
+        model.objects[0]->config.set("raft_layers", 3);
+        ArrangePolygons selected{get_instance_arrange_poly(model.objects[0]->instances[0], config),
+                                 get_instance_arrange_poly(off->instances[0], config)};
+        ArrangePolygons fixed;
+        REQUIRE_FALSE(prepare_mixed_raft_clearance(selected, fixed, config, params));
+        REQUIRE(selected.front().minimum_inflation == 0.);
+        REQUIRE(selected.back().minimum_inflation == 0.);
+    }
+    SECTION("either side may be fixed, and small explicit distances cannot remove its footprint")
+    {
+        const bool raft_fixed = GENERATE(false, true);
+        off->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+        off->config.set("raft_layers", 0);
+        ArrangePolygons selected{get_instance_arrange_poly(model.objects[0]->instances[0], config)};
+        ArrangePolygons fixed{get_instance_arrange_poly(off->instances[0], config)};
+        if (raft_fixed)
+            selected.swap(fixed);
+        const double original = raft_fixed ? fixed.front().brim_width : selected.front().brim_width;
+        REQUIRE(prepare_mixed_raft_clearance(selected, fixed, config, params));
+        REQUIRE((raft_fixed ? fixed.front() : selected.front()).minimum_inflation > original);
+        REQUIRE((raft_fixed ? selected.front() : fixed.front()).minimum_inflation > 2.);
+        update_selected_items_inflation(selected, &config, params);
+        update_unselected_items_inflation(fixed, &config, params);
+        REQUIRE(selected.front().inflation >= scaled(selected.front().minimum_inflation));
+        REQUIRE(fixed.front().inflation >= scaled(fixed.front().minimum_inflation));
+        const double before = selected.front().minimum_inflation;
+        REQUIRE(prepare_mixed_raft_clearance(selected, fixed, config, params));
+        REQUIRE(selected.front().minimum_inflation == before);
+        REQUIRE(off->config.opt_int("raft_layers") == 0);
+    }
+    SECTION("sequential printing keeps its existing clearance policy")
+    {
+        off->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+        off->config.set("raft_layers", 0);
+        ArrangePolygons selected{get_instance_arrange_poly(model.objects[0]->instances[0], config)};
+        ArrangePolygons fixed{get_instance_arrange_poly(off->instances[0], config)};
+        params.is_seq_print = true;
+        REQUIRE_FALSE(prepare_mixed_raft_clearance(selected, fixed, config, params));
+        REQUIRE(fixed.front().minimum_inflation == 0.);
+    }
+}
 
 TEST_CASE("Legacy raft keeps the existing arrange margin", "[Arrange][Raft]")
 {
@@ -134,6 +235,384 @@ TEST_CASE("Cura V1 physical footprint is not reduced to fit the current bed", "[
     update_selected_items_inflation(legacy_items, &config, params);
     REQUIRE(legacy_items.front().minimum_inflation == Approx(0.0));
     REQUIRE(legacy_items.front().inflation < scaled(2.0));
+}
+
+TEST_CASE("Large Cura rafts fit empty beds without reducing their pairwise reservation", "[Arrange][Raft][BedClip]")
+{
+    const double bed_size = GENERATE(100., 180.);
+    const bool   occupied = GENERATE(false, true);
+    CAPTURE(bed_size, occupied);
+    Model model = make_model(make_cube(bed_size - 2., bed_size - 2., 2.));
+    model.add_object(*model.objects.front());
+    DynamicPrintConfig config = raft_config(RaftMode::CuraV1);
+    config.set("skirt_loops", 0);
+    config.set("raft_base_margin", 3.);
+    config.set("raft_interface_margin", 1.);
+    config.set("raft_surface_margin", 1.);
+    config.erase("filament_type");
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {bed_size, 0.}, {bed_size, bed_size}, {0., bed_size}}));
+    ArrangePolygons items;
+    for (ModelObject* object : model.objects)
+        items.push_back(get_instance_arrange_poly(object->instances.front(), config));
+    ArrangePolygons fixed;
+    if (occupied) {
+        ArrangePolygon obstacle;
+        obstacle.poly = ExPolygon(
+            Polygon{{scaled(45.), scaled(45.)}, {scaled(55.), scaled(45.)}, {scaled(55.), scaled(55.)}, {scaled(45.), scaled(55.)}});
+        obstacle.bed_idx = 0;
+        fixed.push_back(obstacle);
+    }
+    ArrangeParams params;
+    params.parallel    = false;
+    params.progressind = [](unsigned, std::string) {};
+    update_arrange_params(params, &config, items);
+    update_selected_items_inflation(items, &config, params);
+    const Points      bed = get_shrink_bedpts(&config, params);
+    const BoundingBox bounds(bed);
+    arrangement::arrange(items, fixed, bed, params);
+    REQUIRE(items[0].bed_idx >= (occupied ? 1 : 0));
+    REQUIRE(items[1].bed_idx >= (occupied ? 1 : 0));
+    REQUIRE(items[0].bed_idx != items[1].bed_idx);
+    for (const ArrangePolygon& item : items) {
+        REQUIRE(item.inflation == scaled(3.));
+        REQUIRE(bounds.contains(get_extents(item.transformed_poly())));
+        // The full reservation cannot fit: success must use bed clipping,
+        // rather than silently reducing the spacing used between objects.
+        REQUIRE_FALSE(diff_ex(offset_ex(item.transformed_poly(), item.inflation), Polygons{Polygon(bed)}).empty());
+    }
+}
+
+TEST_CASE("Raft bed clipping preserves support, exclusion and print-mode constraints", "[Arrange][Raft][BedClip]")
+{
+    Model              model  = make_model(make_cube(98., 98., 2.));
+    DynamicPrintConfig config = raft_config(RaftMode::CuraV1);
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {100., 0.}, {100., 100.}, {0., 100.}}));
+    config.set("skirt_loops", 0);
+    config.set("raft_base_margin", 3.);
+    config.set("raft_interface_margin", 1.);
+    config.set("raft_surface_margin", 1.);
+    config.erase("filament_type");
+    ArrangeParams params;
+    params.parallel        = false;
+    params.progressind     = [](unsigned, std::string) {};
+    bool expected_eligible = true;
+    SECTION("the model itself must fit") { model.objects.front()->instances.front()->set_scaling_factor(Vec3d(1.02, 1.02, 1.)); }
+    SECTION("support remains fully reserved")
+    {
+        config.set("enable_support", true);
+        expected_eligible = false;
+    }
+    SECTION("forced support layers remain reserved")
+    {
+        config.set("enforce_support_layers", 1);
+        expected_eligible = false;
+    }
+    SECTION("manual support enforcers remain reserved")
+    {
+        model.objects.front()->add_volume(make_cube(1., 1., 1.))->set_type(ModelVolumeType::SUPPORT_ENFORCER);
+        expected_eligible = false;
+    }
+    SECTION("skirts remain reserved")
+    {
+        config.set("skirt_loops", 1);
+        expected_eligible = false;
+    }
+    SECTION("object skirt overrides remain reserved")
+    {
+        model.objects.front()->config.set("skirt_loops", 1);
+        expected_eligible = false;
+    }
+    SECTION("legacy is not opted into clipping")
+    {
+        config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+        config.set("raft_layers", 3);
+        expected_eligible = false;
+    }
+    SECTION("sequential printing is not opted into clipping") { params.is_seq_print = true; }
+    SECTION("height limit is retained") { params.printable_height = 1.f; }
+    SECTION("cancellation does not place a fallback object")
+    {
+        params.stopcondition = []() { return true; };
+    }
+    SECTION("every bed retains its exclusion region")
+    {
+        ArrangePolygon exclusion;
+        exclusion.poly = ExPolygon(
+            Polygon{{scaled(49.), scaled(49.)}, {scaled(51.), scaled(49.)}, {scaled(51.), scaled(51.)}, {scaled(49.), scaled(51.)}});
+        exclusion.is_virt_object = true;
+        params.excluded_regions.push_back(exclusion);
+    }
+    ArrangePolygons items{get_instance_arrange_poly(model.objects.front()->instances.front(), config)};
+    items.front().bed_idx = arrangement::UNARRANGED;
+    REQUIRE(items.front().allow_raft_bed_clipping == expected_eligible);
+    update_arrange_params(params, &config, items);
+    update_selected_items_inflation(items, &config, params);
+    // Keep the negative control too large for ordinary packing, including
+    // Legacy's historical fit-to-bed inflation clamp.
+    items.front().inflation = std::max(items.front().inflation, scaled(3.));
+    arrangement::arrange(items, {}, get_shrink_bedpts(&config, params), params);
+    REQUIRE(items.front().bed_idx < 0);
+}
+
+TEST_CASE("Unrafted models at the usable bed size fit separate empty beds", "[Arrange][Raft][BedClip]")
+{
+    const double bed_size = GENERATE(100., 101., 180.);
+    const bool   occupied = GENERATE(false, true);
+    const double spacing  = GENERATE(0., 10.);
+    const BrimType brim     = GENERATE(btNoBrim, btOuterOnly, btInnerOnly, btOuterAndInner, btAutoBrim);
+    CAPTURE(bed_size, occupied, spacing, brim);
+    Model model = make_model(make_cube(bed_size - 2., bed_size - 2., 2.));
+    // Exercise two instances of one object; each must get its own empty bed.
+    model.objects.front()->add_instance();
+    DynamicPrintConfig config = unrafted_bed_config(bed_size);
+    config.set_key_value("nozzle_diameter", new ConfigOptionFloats{0.4});
+    config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.5, false));
+    config.set_key_value("line_width", new ConfigOptionFloatOrPercent(0.42, false));
+    config.set_key_value("inner_wall_line_width", new ConfigOptionFloatOrPercent(0.45, false));
+    // Effective object settings, even when the global profile disables brim.
+    model.objects.front()->config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(brim));
+    model.objects.front()->config.set("brim_width", 2.);
+    model.objects.front()->config.set("brim_object_gap", 0.3);
+    ArrangePolygons items;
+    for (ModelInstance* instance : model.objects.front()->instances)
+        items.push_back(get_instance_arrange_poly(instance, config));
+    ArrangePolygons fixed;
+    if (occupied) {
+        ArrangePolygon obstacle;
+        obstacle.poly = ExPolygon(Polygon{{scaled(45.), scaled(45.)}, {scaled(55.), scaled(45.)},
+                                          {scaled(55.), scaled(55.)}, {scaled(45.), scaled(55.)}});
+        obstacle.bed_idx = 0;
+        fixed.push_back(obstacle);
+    }
+    ArrangeParams params;
+    params.parallel         = false;
+    params.min_obj_distance = scaled(spacing);
+    params.progressind      = [](unsigned, std::string) {};
+    update_arrange_params(params, &config, items);
+    update_selected_items_inflation(items, &config, params);
+    const Points      bed = get_shrink_bedpts(&config, params);
+    const BoundingBox bounds(bed);
+    REQUIRE(bounds.size().x() == scaled(bed_size - 2.));
+    arrangement::arrange(items, fixed, bed, params);
+    REQUIRE(items[0].bed_idx >= (occupied ? 1 : 0));
+    REQUIRE(items[1].bed_idx >= (occupied ? 1 : 0));
+    REQUIRE(items[0].bed_idx != items[1].bed_idx);
+    for (const ArrangePolygon& item : items) {
+        REQUIRE(item.allow_unrafted_bed_fit == (brim == btNoBrim));
+        REQUIRE(item.allow_brim_bed_clipping == (brim != btNoBrim));
+        REQUIRE_FALSE(item.allow_raft_bed_clipping);
+        if (brim == btOuterOnly || brim == btOuterAndInner)
+            REQUIRE(item.brim_bed_clipping_margin > 2.3);
+        if (brim == btAutoBrim)
+            REQUIRE(item.brim_bed_clipping_margin == Approx(18.3 + 0.5 * 0.5));
+        REQUIRE(item.inflation == scaled(spacing > 0. ? spacing / 2. : 1.));
+        REQUIRE(bounds.contains(get_extents(item.transformed_poly())));
+        REQUIRE(get_extents(item.transformed_poly()).center() == bounds.center());
+        // The model fits, but its unchanged pairwise spacing does not.
+        REQUIRE_FALSE(diff_ex(offset_ex(item.transformed_poly(), item.inflation), Polygons{Polygon(bed)}).empty());
+    }
+}
+
+TEST_CASE("Unrafted empty-bed retry preserves attachments and hard bed constraints", "[Arrange][Raft][BedClip]")
+{
+    Model              model  = make_model(make_cube(99., 99., 2.));
+    DynamicPrintConfig config = unrafted_bed_config(101.);
+    const BrimType     brim   = GENERATE(btNoBrim, btOuterAndInner, btAutoBrim);
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(brim));
+    CAPTURE(brim);
+    ArrangeParams params;
+    params.parallel    = false;
+    params.progressind = [](unsigned, std::string) {};
+    bool expected_eligible = true;
+    SECTION("a 100 mm model still fails the 99 mm usable width")
+    {
+        model.objects.front()->instances.front()->set_scaling_factor(Vec3d(100. / 99., 100. / 99., 1.));
+    }
+    SECTION("enabled support remains reserved even without an overhang")
+    {
+        config.set("enable_support", true);
+        expected_eligible = false;
+    }
+    SECTION("forced support remains reserved")
+    {
+        model.objects.front()->config.set("enforce_support_layers", 1);
+        expected_eligible = false;
+    }
+    SECTION("manual support remains reserved")
+    {
+        model.objects.front()->add_volume(make_cube(1., 1., 1.))->set_type(ModelVolumeType::SUPPORT_ENFORCER);
+        expected_eligible = false;
+    }
+    SECTION("active legacy raft remains reserved")
+    {
+        config.set("raft_layers", 3);
+        expected_eligible = false;
+    }
+    SECTION("non-FFF printing retains its existing policy")
+    {
+        config.set_key_value("printer_technology", new ConfigOptionEnum<PrinterTechnology>(ptSLA));
+        expected_eligible = false;
+    }
+    SECTION("painted ears retain their original policy")
+    {
+        config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btPainted));
+        expected_eligible = false;
+    }
+    SECTION("automatic ears retain their original policy")
+    {
+        config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btEar));
+        expected_eligible = false;
+    }
+    SECTION("skirts remain reserved")
+    {
+        model.objects.front()->config.set("skirt_loops", 1);
+        expected_eligible = false;
+    }
+    SECTION("height limit is retained") { params.printable_height = 1.f; }
+    SECTION("sequential printing retains its policy") { params.is_seq_print = true; }
+    SECTION("cancellation does not place a fallback object") { params.stopcondition = []() { return true; }; }
+    SECTION("exclusion regions remain reserved on every bed")
+    {
+        ArrangePolygon exclusion;
+        exclusion.poly = ExPolygon(Polygon{{scaled(49.), scaled(49.)}, {scaled(51.), scaled(49.)},
+                                           {scaled(51.), scaled(51.)}, {scaled(49.), scaled(51.)}});
+        exclusion.is_virt_object = true;
+        params.excluded_regions.push_back(exclusion);
+    }
+    ArrangePolygons items{get_instance_arrange_poly(model.objects.front()->instances.front(), config)};
+    items.front().bed_idx = arrangement::UNARRANGED;
+    REQUIRE(items.front().allow_unrafted_bed_fit == (expected_eligible && brim == btNoBrim));
+    REQUIRE(items.front().allow_brim_bed_clipping == (expected_eligible && brim != btNoBrim));
+    REQUIRE_FALSE(items.front().allow_raft_bed_clipping);
+    update_arrange_params(params, &config, items);
+    update_selected_items_inflation(items, &config, params);
+    arrangement::arrange(items, {}, get_shrink_bedpts(&config, params), params);
+    REQUIRE(items.front().bed_idx < 0);
+}
+
+TEST_CASE("Empty-bed brim fitting reserves brim against exclusions without changing pairwise spacing", "[Arrange][Raft][BedClip]")
+{
+    Model              model  = make_model(make_cube(99., 50., 2.));
+    DynamicPrintConfig config = unrafted_bed_config(101.);
+    const bool         automatic = GENERATE(false, true);
+    CAPTURE(automatic);
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(automatic ? btAutoBrim : btOuterOnly));
+    config.set("brim_width", 5.);
+    config.set("brim_object_gap", 0.);
+    ArrangePolygons items{get_instance_arrange_poly(model.objects.front()->instances.front(), config)};
+    ArrangeParams   params;
+    params.parallel        = false;
+    params.allow_rotations = false;
+    params.progressind     = [](unsigned, std::string) {};
+    ArrangePolygon exclusion;
+    // At the centred candidate this is outside the model and its 1 mm spacing,
+    // but inside the brim's actual reservation. It applies to every empty bed.
+    // The automatic case is beyond the configured 5 mm but within its 18 mm cap.
+    const double exclusion_y = automatic ? 88. : 78.;
+    exclusion.poly           = ExPolygon(Polygon{{scaled(45.), scaled(exclusion_y)},
+                                                 {scaled(55.), scaled(exclusion_y)},
+                                                 {scaled(55.), scaled(exclusion_y + 1.)},
+                                                 {scaled(45.), scaled(exclusion_y + 1.)}});
+    exclusion.is_virt_object = true;
+    params.excluded_regions.push_back(exclusion);
+    update_arrange_params(params, &config, items);
+    update_selected_items_inflation(items, &config, params);
+    REQUIRE(items.front().allow_brim_bed_clipping);
+    REQUIRE(items.front().brim_bed_clipping_margin > (automatic ? 18. : 5.));
+    REQUIRE(items.front().inflation == scaled(1.));
+    arrangement::arrange(items, {}, get_shrink_bedpts(&config, params), params);
+    REQUIRE(items.front().bed_idx < 0);
+    REQUIRE(items.front().inflation == scaled(1.));
+}
+
+TEST_CASE("Empty-bed model fitting uses effective object settings", "[Arrange][Raft][BedClip]")
+{
+    Model              model  = make_model(make_cube(99., 60., 2.));
+    DynamicPrintConfig config = unrafted_bed_config(101.);
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    config.set("enable_support", true);
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btOuterOnly));
+    ModelObject& object = *model.objects.front();
+    object.config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    object.config.set("raft_layers", 0);
+    object.config.set("enable_support", false);
+    object.config.set("skirt_loops", 0);
+    const BrimType brim             = GENERATE(btNoBrim, btAutoBrim);
+    const double   configured_width = GENERATE(0., 2.);
+    CAPTURE(brim, configured_width);
+    object.config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(brim));
+    object.config.set("brim_width", configured_width);
+    ArrangePolygons items{get_instance_arrange_poly(object.instances.front(), config)};
+    REQUIRE(items.front().allow_unrafted_bed_fit == (brim == btNoBrim));
+    REQUIRE(items.front().allow_brim_bed_clipping == (brim == btAutoBrim));
+    if (brim == btAutoBrim)
+        REQUIRE(items.front().brim_bed_clipping_margin > 18.);
+    ArrangeParams params;
+    params.parallel    = false;
+    params.progressind = [](unsigned, std::string) {};
+    update_arrange_params(params, &config, items);
+    update_selected_items_inflation(items, &config, params);
+    const Points bed = get_shrink_bedpts(&config, params);
+    arrangement::arrange(items, {}, bed, params);
+    REQUIRE(items.front().bed_idx == 0);
+    REQUIRE(BoundingBox(bed).contains(get_extents(items.front().transformed_poly())));
+}
+
+TEST_CASE("Fixed raft reservations keep their actual positions through final alignment", "[Arrange][Raft][Fixed]")
+{
+    const bool                 custom_center = GENERATE(false, true);
+    Model                      model;
+    const std::array<Vec3d, 3> positions{Vec3d(56.55, 58.55, 5.05), Vec3d(56.55, 42.45, 5.05), Vec3d(42.45, 51.588883, 5.05)};
+    for (const Vec3d& position : positions) {
+        ModelObject* object = model.add_object();
+        TriangleMesh mesh   = make_cube(10.1, 10.1, 10.1);
+        mesh.translate(-5.05f, -5.05f, -5.05f);
+        object->add_volume(std::move(mesh));
+        object->add_instance()->set_offset(position);
+    }
+    DynamicPrintConfig config = raft_config(RaftMode::CuraV1);
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {100., 0.}, {100., 100.}, {0., 100.}}));
+    config.set("skirt_loops", 0);
+    config.erase("filament_type");
+    ArrangePolygons fixed{get_instance_arrange_poly(model.objects[0]->instances[0], config)};
+    ArrangePolygons items{get_instance_arrange_poly(model.objects[1]->instances[0], config),
+                          get_instance_arrange_poly(model.objects[2]->instances[0], config)};
+    fixed.front().inflation = items.front().inflation = scaled(7.60735);
+    items.back().inflation                            = scaled(3.25);
+    ArrangeParams params;
+    params.parallel    = false;
+    params.progressind = [](unsigned, std::string) {};
+    if (custom_center)
+        params.align_center = Vec2d(0.25, 0.75);
+    arrangement::arrange(items, fixed, get_shrink_bedpts(&config, params), params);
+    const ExPolygons fixed_area = offset_ex(fixed.front().transformed_poly(), fixed.front().inflation - scaled(0.001), ClipperLib::jtSquare);
+    for (ArrangePolygon& item : items) {
+        REQUIRE(item.bed_idx == 0);
+        REQUIRE(
+            intersection_ex(fixed_area, offset_ex(item.transformed_poly(), item.inflation - scaled(0.001), ClipperLib::jtSquare)).empty());
+        item.apply();
+    }
+    REQUIRE(model.objects[0]->instances[0]->get_offset().isApprox(positions[0]));
+}
+
+TEST_CASE("Fixed raft crossing the bed edge is still an obstacle", "[Arrange][Raft][Fixed][BedClip]")
+{
+    ArrangePolygon fixed;
+    fixed.poly = ExPolygon(
+        Polygon{{scaled(1.), scaled(1.)}, {scaled(99.), scaled(1.)}, {scaled(99.), scaled(99.)}, {scaled(1.), scaled(99.)}});
+    fixed.bed_idx   = 0;
+    fixed.inflation = scaled(3.);
+    ArrangePolygon moving;
+    moving.poly   = ExPolygon(Polygon{{0, 0}, {scaled(10.), 0}, {scaled(10.), scaled(10.)}, {0, scaled(10.)}});
+    moving.height = 10.;
+    ArrangePolygons items{moving};
+    ArrangeParams   params;
+    params.parallel    = false;
+    params.progressind = [](unsigned, std::string) {};
+    arrangement::arrange(items, {fixed}, BoundingBox(Point::new_scale(1., 1.), Point::new_scale(99., 99.)), params);
+    // An occupied bed must never be reported as a successful placement, even
+    // if the upstream packer retries it after temporarily removing obstacles.
+    REQUIRE(items.front().bed_idx != 0);
 }
 
 TEST_CASE("Cura V1 keeps independent margins for multiple objects and instances", "[Arrange][Raft][ModelProcess]")

@@ -1,0 +1,170 @@
+solid 07-thin-solid
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 0
+      vertex 10 10 0
+      vertex 10 0 0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 0
+      vertex 0 10 0
+      vertex 10 10 0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 10
+      vertex 10 0 10
+      vertex 10 10 10
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 10
+      vertex 10 10 10
+      vertex 0 10 10
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 0
+      vertex 10 0 0
+      vertex 10 0 10
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 0
+      vertex 10 0 10
+      vertex 0 0 10
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 10 0 0
+      vertex 10 10 0
+      vertex 10 10 10
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 10 0 0
+      vertex 10 10 10
+      vertex 10 0 10
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 10 10 0
+      vertex 0 10 0
+      vertex 0 10 10
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 10 10 0
+      vertex 0 10 10
+      vertex 10 10 10
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 10 0
+      vertex 0 0 0
+      vertex 0 0 10
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 10 0
+      vertex 0 0 10
+      vertex 0 10 10
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 12 0 0
+      vertex 22 10 0
+      vertex 22 0 0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 12 0 0
+      vertex 12 10 0
+      vertex 22 10 0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 12 0 0.001
+      vertex 22 0 0.001
+      vertex 22 10 0.001
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 12 0 0.001
+      vertex 22 10 0.001
+      vertex 12 10 0.001
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 12 0 0
+      vertex 22 0 0
+      vertex 22 0 0.001
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 12 0 0
+      vertex 22 0 0.001
+      vertex 12 0 0.001
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 22 0 0
+      vertex 22 10 0
+      vertex 22 10 0.001
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 22 0 0
+      vertex 22 10 0.001
+      vertex 22 0 0.001
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 22 10 0
+      vertex 12 10 0
+      vertex 12 10 0.001
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 22 10 0
+      vertex 12 10 0.001
+      vertex 22 10 0.001
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 12 10 0
+      vertex 12 0 0
+      vertex 12 0 0.001
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 12 10 0
+      vertex 12 0 0.001
+      vertex 12 10 0.001
+    endloop
+  endfacet
+endsolid 07-thin-solid

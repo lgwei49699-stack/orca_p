@@ -7,9 +7,11 @@
 #include "../MutablePolygon.hpp"
 #include "../Geometry.hpp"
 #include "../Point.hpp"
+#include "../I18N.hpp"
 #include "clipper/clipper_z.hpp"
 
 #include <cmath>
+#include <map>
 #include <boost/container/static_vector.hpp>
 #include <boost/log/trivial.hpp>
 
@@ -33,6 +35,142 @@
 #include <cassert>
 
 namespace Slic3r {
+
+Polygons raft_printable_area(const PrintObject& object)
+{
+    const Print&   print       = *object.print();
+    const Polygons bed         = diff(Polygons{Polygon(get_bed_shape(print.config()))}, get_bed_excluded_area(print.config()));
+    const Vec3d    origin      = print.get_plate_origin();
+    const Point    plate_shift = Point::new_scale(origin.x(), origin.y());
+    Polygons       printable;
+    bool           first = true;
+    for (const PrintInstance& instance : object.instances()) {
+        Polygons instance_bed = bed;
+        for (Polygon& polygon : instance_bed)
+            polygon.translate(plate_shift - instance.shift);
+        printable = first ? std::move(instance_bed) : intersection(printable, instance_bed);
+        first     = false;
+    }
+    return printable;
+}
+
+static void throw_empty_raft()
+{
+    throw SlicingError(_u8L("The raft has no printable area on the bed. Move the object or check the printer's printable area."));
+}
+
+ExPolygons clip_raft_areas_to_bed(const ExPolygons& areas, const Polygons& bed)
+{
+    ExPolygons clipped = intersection_ex(areas, bed);
+    if (!areas.empty() && clipped.empty())
+        throw_empty_raft();
+    return clipped;
+}
+
+// Preserve collection ordering and all flow/role attributes. Only split a loop
+// when it actually crosses the boundary; an uncut loop keeps its loop semantics.
+static bool clip_raft_collection(ExtrusionEntityCollection&   collection,
+                                 const Polygons&              bed,
+                                 std::map<float, ExPolygons>& centerline_bounds,
+                                 bool                         discard_short_fragments = false,
+                                 std::vector<unsigned char>*  entity_flags            = nullptr)
+{
+    bool       changed    = false;
+    const auto bounds_for = [&](const ExtrusionPath& path) -> const ExPolygons& {
+        auto it = centerline_bounds.find(path.width);
+        if (it == centerline_bounds.end()) {
+            // One micron covers integer clipping / G-code coordinate rounding.
+            const double inset = scale_(0.5 * double(path.width) + 0.001);
+            it                 = centerline_bounds.emplace(path.width, offset_ex(bed, -inset)).first;
+        }
+        return it->second;
+    };
+    for (ExtrusionEntity*& entity : collection.entities) {
+        if (auto* nested = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
+            changed |= clip_raft_collection(*nested, bed, centerline_bounds, discard_short_fragments);
+            continue;
+        }
+        std::vector<const ExtrusionPath*> paths;
+        if (const auto* path = dynamic_cast<const ExtrusionPath*>(entity))
+            paths.push_back(path);
+        else if (const auto* loop = dynamic_cast<const ExtrusionLoop*>(entity)) {
+            for (const ExtrusionPath& path : loop->paths)
+                paths.push_back(&path);
+        } else if (const auto* multipath = dynamic_cast<const ExtrusionMultiPath*>(entity)) {
+            for (const ExtrusionPath& path : multipath->paths)
+                paths.push_back(&path);
+        } else
+            throw RuntimeError("Unexpected raft extrusion type during bed clipping.");
+
+        const bool outside = std::any_of(paths.begin(), paths.end(), [&](const ExtrusionPath* path) {
+            return !diff_pl(Polylines{path->polyline}, bounds_for(*path)).empty();
+        });
+        if (!outside)
+            continue;
+
+        auto clipped     = std::make_unique<ExtrusionEntityCollection>();
+        clipped->no_sort = true;
+        for (const ExtrusionPath* path : paths) {
+            const double fragment_limit = discard_short_fragments ? scale_(0.5 * double(path->width)) : SCALED_EPSILON;
+            const double min_length     = path->polyline.length() > fragment_limit ? fragment_limit : SCALED_EPSILON;
+            for (Polyline& line : intersection_pl(Polylines{path->polyline}, bounds_for(*path)))
+                if (line.points.size() >= 2 && line.length() > min_length)
+                    clipped->append(ExtrusionPath(std::move(line), *path));
+        }
+        delete entity;
+        entity  = clipped.release();
+        changed = true;
+    }
+    size_t kept = 0;
+    for (size_t i = 0; i < collection.entities.size(); ++i) {
+        ExtrusionEntity* entity = collection.entities[i];
+        const auto*      nested = dynamic_cast<const ExtrusionEntityCollection*>(entity);
+        if (nested != nullptr && nested->empty()) {
+            delete entity;
+            continue;
+        }
+        collection.entities[kept] = entity;
+        if (entity_flags != nullptr)
+            (*entity_flags)[kept] = (*entity_flags)[i];
+        ++kept;
+    }
+    collection.entities.resize(kept);
+    if (entity_flags != nullptr)
+        entity_flags->resize(kept);
+    return changed;
+}
+
+void clip_raft_paths_to_area(ExtrusionEntityCollection& paths, const Polygons& area, bool discard_short_fragments)
+{
+    std::map<float, ExPolygons> centerline_bounds;
+    clip_raft_collection(paths, area, centerline_bounds, discard_short_fragments);
+}
+
+void clip_raft_toolpaths_to_bed(PrintObject& object)
+{
+    if (!object.has_raft())
+        return;
+    const Polygons              bed = raft_printable_area(object);
+    std::map<float, ExPolygons> centerline_bounds;
+    size_t                      trimmed_layers = 0;
+    for (SupportLayer* layer : object.support_layers()) {
+        if (layer->print_z > object.slicing_parameters().raft_contact_top_z + EPSILON)
+            continue;
+        if (object.print()->canceled())
+            throw CanceledException();
+        const bool had_extrusions = !layer->support_fills.empty();
+        if (clip_raft_collection(layer->support_fills, bed, centerline_bounds, false,
+                                 layer->has_raft_provenance() ? &layer->raft_entity_flags : nullptr))
+            ++trimmed_layers;
+        if (had_extrusions && layer->support_fills.empty())
+            throw_empty_raft();
+        layer->support_islands = intersection_ex(layer->support_islands, bed);
+        layer->raft_support_outline = intersection_ex(layer->raft_support_outline, bed);
+    }
+    if (trimmed_layers > 0)
+        BOOST_LOG_TRIVIAL(info) << "[Raft][BedClip] object=" << object.model_object()->name
+                                << ", trimmed_toolpath_layers=" << trimmed_layers;
+}
 
 // how much we extend support around the actual contact area
 //FIXME this should be dependent on the nozzle diameter!
@@ -824,24 +962,24 @@ void tree_supports_generate_paths(
     }
 }
 
-void fill_expolygons_with_sheath_generate_paths(
-    ExtrusionEntitiesPtr    &dst,
-    const Polygons          &polygons,
-    Fill                    *filler,
-    float                    density,
-    ExtrusionRole            role,
-    const Flow              &flow,
-    const SupportParameters& support_params,
-    size_t                   wall_count,
-    bool                     no_sort,
-    double                   flow_ratio,
-    InfillPattern            pattern)
+void fill_expolygons_with_sheath_generate_paths(ExtrusionEntitiesPtr&    dst,
+                                                const Polygons&          polygons,
+                                                Fill*                    filler,
+                                                float                    density,
+                                                ExtrusionRole            role,
+                                                const Flow&              flow,
+                                                const SupportParameters& support_params,
+                                                size_t                   wall_count,
+                                                bool                     no_sort,
+                                                double                   flow_ratio,
+                                                InfillPattern            pattern,
+                                                const ExPolygons*        perimeter_centerlines)
 {
     if (polygons.empty())
         return;
 
     if (wall_count > 0) {
-        if (density == 0) {
+        if (density == 0 && perimeter_centerlines == nullptr) {
             tree_supports_generate_paths(dst, polygons, flow, support_params, flow_ratio);
             return;
         }
@@ -860,7 +998,10 @@ void fill_expolygons_with_sheath_generate_paths(
     // Clip the sheath path to avoid the extruder to get exactly on the first point of the loop.
     const double clip_length = spacing * 0.15;
 
-    for (ExPolygon &expoly : closing_ex(polygons, float(SCALED_EPSILON), float(SCALED_EPSILON + 0.5*flow.scaled_width()))) {
+    const ExPolygons centers = perimeter_centerlines != nullptr ?
+                                   *perimeter_centerlines :
+                                   closing_ex(polygons, float(SCALED_EPSILON), float(SCALED_EPSILON + 0.5 * flow.scaled_width()));
+    for (const ExPolygon& expoly : centers) {
         // Don't reorder the skirt and its infills.
         std::unique_ptr<ExtrusionEntityCollection> eec;
         if (no_sort) {
@@ -878,7 +1019,8 @@ void fill_expolygons_with_sheath_generate_paths(
         }
         // Fill in the rest.
         const double fill_inset = -(double(wall_count) - 0.6) * spacing;
-        fill_expolygons_generate_paths(out, offset_ex(expoly, float(fill_inset)), filler, fill_params, density, role, flow, flow_ratio);
+        if (density > 0)
+            fill_expolygons_generate_paths(out, offset_ex(expoly, float(fill_inset)), filler, fill_params, density, role, flow, flow_ratio);
         if (no_sort && ! eec->empty())
             dst.emplace_back(eec.release());
     }
@@ -1483,6 +1625,25 @@ SupportGeneratorLayersPtr generate_support_layers(
     std::sort(layers_sorted.begin(), layers_sorted.end());
     layers_sorted.erase(std::unique(layers_sorted.begin(), layers_sorted.end()), layers_sorted.end());
 
+    // Both normal and Organic supports pass here, after every raft expansion
+    // and before generating perimeters / infill, including the final contact layer.
+    if (object.has_raft()) {
+        const Polygons bed = raft_printable_area(object);
+        for (SupportGeneratorLayer* layer : layers_sorted) {
+            if (layer->print_z > object.slicing_parameters().raft_contact_top_z + EPSILON)
+                continue;
+            const bool had_polygons = !layer->polygons.empty();
+            layer->polygons         = intersection(layer->polygons, bed);
+            if (had_polygons && layer->polygons.empty() &&
+                (layer->layer_type == SupporLayerType::RaftBase || layer->layer_type == SupporLayerType::RaftInterface ||
+                 is_approx(layer->print_z, object.slicing_parameters().raft_contact_top_z)))
+                throw_empty_raft();
+            for (auto* areas : {layer->contact_polygons.get(), layer->overhang_polygons.get(), layer->enforcer_polygons.get()})
+                if (areas != nullptr)
+                    *areas = intersection(*areas, bed);
+        }
+    }
+
     // Sort the layers lexicographically by a raising print_z and a decreasing height.
     std::sort(layers_sorted.begin(), layers_sorted.end(), [](auto *l1, auto *l2) { return *l1 < *l2; });
     int layer_id = 0;
@@ -1533,6 +1694,12 @@ SupportGeneratorLayersPtr generate_support_layers(
                     }
             }
             object.add_support_layer(layer_id ++, this_layer_id_interface, height_min, zavg);
+            if (object.has_raft() && zavg <= object.slicing_parameters().raft_contact_top_z + EPSILON) {
+                Polygons outline;
+                for (size_t u = i; u < j; ++u)
+                    polygons_append(outline, layers_sorted[u]->polygons);
+                object.support_layers().back()->raft_outline = union_ex(outline);
+            }
             if (num_interfaces && ! this_layer_contacts_only)
                 ++ layer_id_interface;
         }
@@ -1590,6 +1757,11 @@ void generate_support_toolpaths(
             SupportGeneratorLayer      &raft_layer    = *raft_layers[support_layer_id];
             const RaftPhase raft_phase = support_params.cura_raft_mode ? slicing_params.raft_phase(support_layer_id) :
                                                                          RaftPhase::Interface;
+            if (support_params.cura_raft_mode) {
+                support_layer.raft_geometry_outline.clear();
+                support_layer.raft_support_outline.clear();
+                support_layer.raft_entity_flags.clear();
+            }
 
             std::unique_ptr<Fill> filler_interface = std::unique_ptr<Fill>(Fill::new_from_type(
                 support_params.cura_raft_mode ? support_params.raft_fill_pattern(raft_phase) : support_params.raft_interface_fill_pattern));
@@ -1619,6 +1791,7 @@ void generate_support_toolpaths(
                                                    support_params.support_material_flow.nozzle_diameter());
                 assert(!raft_layer.bridging);
                 if (! to_infill_polygons.empty()) {
+                    const size_t entity_begin = support_layer.support_fills.entities.size();
                     Fill *filler = filler_support.get();
                     filler->angle = support_params.cura_raft_mode ? support_params.raft_layer_angle(support_layer_id) :
                                                                    support_params.raft_angle_base;
@@ -1639,10 +1812,23 @@ void generate_support_toolpaths(
                         cura_base_phase ? support_params.raft_wall_count(raft_phase) : size_t(support_params.with_sheath), false,
                         cura_base_phase ? support_params.raft_flow_ratio(raft_phase) : 1.,
                         cura_base_phase ? support_params.raft_fill_pattern(raft_phase) : ipRectilinear);
+                    if (support_params.cura_raft_mode) {
+                        const ExPolygons areas = union_ex(tree_polygons.empty() ? to_infill_polygons :
+                                                                                  diff(to_infill_polygons, tree_polygons));
+                        if (cura_base_phase) {
+                            support_layer.mark_raft_entities(entity_begin);
+                            support_layer.raft_geometry_outline = areas;
+                        } else
+                            support_layer.raft_support_outline = areas;
+                    }
                 }
                 if (! tree_polygons.empty())
                     tree_supports_generate_paths(support_layer.support_fills.entities, tree_polygons, flow, support_params,
                                                  cura_base_phase ? support_params.raft_flow_ratio(raft_phase) : 1.);
+                if (support_params.cura_raft_mode) {
+                    support_layer.raft_entity_flags.resize(support_layer.support_fills.entities.size(), 0);
+                    support_layer.raft_support_outline = union_ex(support_layer.raft_support_outline, tree_polygons);
+                }
             }
 
             Fill *filler = filler_interface.get();
@@ -1679,6 +1865,7 @@ void generate_support_toolpaths(
             } else
                 continue;
             filler->link_max_length = coord_t(scale_(filler->spacing * link_max_length_factor / density));
+            const size_t entity_begin = support_layer.support_fills.entities.size();
             fill_expolygons_with_sheath_generate_paths(
                 // Destination
                 support_layer.support_fills.entities,
@@ -1695,6 +1882,11 @@ void generate_support_toolpaths(
                 support_params.cura_raft_mode ? support_params.raft_wall_count(raft_phase) : size_t(support_layer_id == 0),
                 support_layer_id == 0, support_params.cura_raft_mode ? support_params.raft_flow_ratio(raft_phase) : 1.,
                 support_params.cura_raft_mode ? support_params.raft_fill_pattern(raft_phase) : ipRectilinear);
+            if (support_params.cura_raft_mode) {
+                support_layer.mark_raft_entities(entity_begin);
+                support_layer.raft_geometry_outline = union_ex(tree_polygons.empty() ? raft_layer.polygons :
+                                                                                       diff(raft_layer.polygons, tree_polygons));
+            }
         }
     });
 
@@ -2025,17 +2217,34 @@ void generate_support_toolpaths(
     });
 
     // Now modulate the support layer height in parallel.
-    tbb::parallel_for(tbb::blocked_range<size_t>(n_raft_layers, support_layers.size()),
-        [&support_layers, &layer_caches, &support_params, &bbox_object]
-            (const tbb::blocked_range<size_t>& range) {
+    tbb::parallel_for(tbb::blocked_range<size_t>(n_raft_layers, support_layers.size()), [&support_layers, &layer_caches, &support_params,
+                                                                                         &slicing_params, &bbox_object](
+                                                                                            const tbb::blocked_range<size_t>& range) {
         for (size_t support_layer_id = range.begin(); support_layer_id < range.end(); ++ support_layer_id) {
             SupportLayer &support_layer = *support_layers[support_layer_id];
             LayerCache   &layer_cache   = layer_caches[support_layer_id];
+            const bool raft_contact = support_params.cura_raft_mode && is_approx(support_layer.print_z, slicing_params.raft_contact_top_z);
+            if (raft_contact) {
+                support_layer.raft_geometry_outline.clear();
+                support_layer.raft_support_outline.clear();
+                support_layer.raft_entity_flags.clear();
+            }
             // For all extrusion types at this print_z, ordered by decreasing layer height:
             for (LayerCacheItem &layer_cache_item : layer_cache.nonempty) {
                 // Trim the extrusion height from the bottom by the overlapping layers.
                 modulate_extrusion_by_overlapping_layers(layer_cache_item.layer_extruded->extrusions, *layer_cache_item.layer_extruded->layer, layer_cache_item.overlapping);
+                const size_t entity_begin = support_layer.support_fills.entities.size();
+                if (raft_contact) {
+                    Polygons areas;
+                    layer_cache_item.layer_extruded->polygons_append(areas);
+                    if (layer_cache_item.layer_extruded == &layer_cache.top_contact_layer)
+                        support_layer.raft_geometry_outline = union_ex(areas);
+                    else
+                        support_layer.raft_support_outline = union_ex(support_layer.raft_support_outline, areas);
+                }
                 support_layer.support_fills.append(std::move(layer_cache_item.layer_extruded->extrusions));
+                if (raft_contact && layer_cache_item.layer_extruded == &layer_cache.top_contact_layer)
+                    support_layer.mark_raft_entities(entity_begin);
             }
 
             // Orca: Generate iron toolpath for contact layer
@@ -2070,6 +2279,8 @@ void generate_support_toolpaths(
                     // Extrusion parameters
                     ExtrusionRole::erIroning, support_params.ironing_flow);
             }
+            if (raft_contact)
+                support_layer.raft_entity_flags.resize(support_layer.support_fills.entities.size(), 0);
         }
     });
 

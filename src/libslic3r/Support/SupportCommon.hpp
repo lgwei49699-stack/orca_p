@@ -12,6 +12,24 @@ namespace Slic3r {
 class PrintObject;
 class SupportLayer;
 
+// Printable bed (including excluded regions) in the centered PrintObject coordinates.
+// Instances share toolpaths, so the area must be printable for every instance.
+Polygons raft_printable_area(const PrintObject& object);
+
+// Clip a physical raft phase, reporting an error if it is completely removed.
+ExPolygons clip_raft_areas_to_bed(const ExPolygons& areas, const Polygons& bed);
+
+// Keep the full extrusion width of raft paths inside the bed. Called after support
+// generation, before path simplification; ordinary support layers are not trimmed.
+void clip_raft_toolpaths_to_bed(PrintObject& object);
+
+// The same width-aware clipping for newly generated plate-level raft paths.
+// Trim complete bead footprints to an assigned area; a shared raft may leave
+// no paths on a recipient object because another object supplies its raft.
+// The optional trial cleanup removes short pieces created by clipping a longer
+// path, not already-short valid paths. Existing support/raft callers keep false.
+void clip_raft_paths_to_area(ExtrusionEntityCollection& paths, const Polygons& area, bool discard_short_fragments = false);
+
 // Remove bridges from support contact areas.
 // To be called if PrintObjectConfig::dont_support_bridges.
 void remove_bridges_from_contacts(
@@ -53,10 +71,20 @@ SupportGeneratorLayersPtr generate_raft_base(
 void tree_supports_generate_paths(ExtrusionEntitiesPtr &dst, const Polygons &polygons, const Flow &flow,
                                   const SupportParameters &support_params, double flow_ratio = 1.);
 
-void fill_expolygons_with_sheath_generate_paths(
-    ExtrusionEntitiesPtr &dst, const Polygons &polygons, Fill *filler, float density, ExtrusionRole role, const Flow &flow,
-    const SupportParameters &support_params, size_t wall_count, bool no_sort, double flow_ratio = 1.,
-    InfillPattern pattern = ipRectilinear);
+// Explicit perimeter centerlines are already width-safe and bypass the legacy
+// sheath inset. Used only by trial raft regeneration; ordinary callers keep it.
+void fill_expolygons_with_sheath_generate_paths(ExtrusionEntitiesPtr&    dst,
+                                                const Polygons&          polygons,
+                                                Fill*                    filler,
+                                                float                    density,
+                                                ExtrusionRole            role,
+                                                const Flow&              flow,
+                                                const SupportParameters& support_params,
+                                                size_t                   wall_count,
+                                                bool                     no_sort,
+                                                double                   flow_ratio            = 1.,
+                                                InfillPattern            pattern               = ipRectilinear,
+                                                const ExPolygons*        perimeter_centerlines = nullptr);
 
 // returns sorted layers
 SupportGeneratorLayersPtr generate_support_layers(

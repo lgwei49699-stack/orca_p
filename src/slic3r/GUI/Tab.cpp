@@ -1203,6 +1203,10 @@ void Tab::create_preset_tab()
         m_tabctrl->SetItemBold(sel_item, false);
         });
     m_tabctrl->Bind(wxEVT_TAB_SEL_CHANGED, [this](wxCommandEvent& event) {
+        // Unselecting the old tab also emits this event while switching parameter
+        // editors. It must not focus or activate a page in that old tab.
+        if (m_tabctrl->GetSelection() < 0)
+            return;
 #ifdef __linux__
         // Events queue is opposite On Linux. wxEVT_SET_FOCUS invokes after wxEVT_TAB_SEL_CHANGED,
         // and a result wxEVT_KILL_FOCUS doesn't invoke for the TextCtrls.
@@ -3385,6 +3389,12 @@ void TabPrint::build()
         optgroup->append_single_option_line("raft_contact_distance", "support_settings_raft");
         optgroup->append_single_option_line("raft_airgap", "support_settings_raft");
         optgroup->append_single_option_line("raft_layer_0_z_overlap", "support_settings_raft");
+
+        optgroup = page->new_optgroup(L("Raft Geometry (Trial)"), L"param_raft");
+        optgroup->append_single_option_line("raft_segmented", "support_settings_raft");
+        optgroup->append_single_option_line("raft_chunk_size", "support_settings_raft");
+        optgroup->append_single_option_line("raft_chunk_gap", "support_settings_raft");
+        optgroup->append_single_option_line("raft_smoothing", "support_settings_raft");
 
         optgroup = page->new_optgroup(L("Raft Base"), L"param_layer_height");
         optgroup->append_single_option_line("raft_base_margin", "support_settings_raft");
@@ -6764,11 +6774,15 @@ bool Tab::tree_sel_change_delayed(wxCommandEvent& event)
     //BBS: GUI refactor
     Page* page = nullptr;
     const auto sel_item = m_tabctrl->GetSelection();
+    // Update() may leave the control unselected after the event was accepted.
+    // No selection is a normal transition, not a missing parameter page.
+    if (sel_item < 0)
+        return false;
     // BBS: bold selection
     //OutputDebugStringA("tree_sel_change_delayed ");
     //OutputDebugStringA(m_title.c_str());
     m_tabctrl->SetItemBold(sel_item, true);
-    const auto selection = sel_item >= 0 ? m_tabctrl->GetItemText(sel_item) : "";
+    const auto selection = m_tabctrl->GetItemText(sel_item);
     //OutputDebugString(selection);
     //OutputDebugStringA("\n");
     for (auto p : m_pages)

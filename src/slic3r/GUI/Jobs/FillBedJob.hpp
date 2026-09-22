@@ -10,6 +10,7 @@ class Plater;
 class FillBedJob : public Job
 {
     int     m_object_idx = -1;
+    bool    m_used_fast_grid = false;
 
     using ArrangePolygon  = arrangement::ArrangePolygon;
     using ArrangePolygons = arrangement::ArrangePolygons;

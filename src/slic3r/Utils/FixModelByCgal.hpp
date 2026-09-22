@@ -15,6 +15,7 @@ class ModelObject;
 
 struct StagedModelRepair
 {
+    size_t                 transaction_id = 0;
     ModelRepairReport      report;
     std::shared_ptr<Model> model;
     std::string            error;
@@ -25,13 +26,15 @@ struct StagedModelRepair
 // private TriangleMesh enters the CGAL worker. Callers may create an undo
 // snapshot and commit the returned volume structure only after the whole
 // repair transaction succeeds.
+// Always preserves supported painting, regardless of the experimental mesh-
+// editing preference. Unmappable annotations fail without clearing the source.
+// Safe partial geometry changes are allowed, but do not bypass this color gate.
 // Returns false only when the user canceled the operation.
 bool stage_model_repair_by_cgal_gui(const Model&                          model,
                                     const std::vector<ModelRepairTarget>& targets,
                                     GUI::ProgressDialog&                  progress_dialog,
                                     const wxString&                       message_header,
-                                    StagedModelRepair&                    staged_repair,
-                                    bool                                  keep_painting);
+                                    StagedModelRepair&                    staged_repair);
 
 // Cross-platform replacement for the former Windows SDK helper. This overload
 // is used for temporary cut results that are not yet owned by the GUI model.

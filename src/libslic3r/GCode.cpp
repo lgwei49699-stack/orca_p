@@ -1286,8 +1286,9 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
         layer_to_print.original_object = &object;
         layers_to_print.push_back(layer_to_print);
 
-        bool has_extrusions = (layer_to_print.object_layer && layer_to_print.object_layer->has_extrusions())
-            || (layer_to_print.support_layer && layer_to_print.support_layer->has_extrusions());
+        bool has_extrusions = (layer_to_print.object_layer && layer_to_print.object_layer->has_extrusions()) ||
+                              (layer_to_print.support_layer && (layer_to_print.support_layer->has_extrusions() ||
+                                                                layer_to_print.support_layer->raft_covered_by_shared_paths));
 
         // Check that there are extrusions on the very first layer. The case with empty
         // first layer may result in skirt/brim in the air and maybe other issues.
@@ -4554,13 +4555,16 @@ LayerResult GCode::process_layer(
                 if (m_config.reduce_crossing_wall)
                     m_avoid_crossing_perimeters.init_layer(*m_layer);
 
-                if (this->config().gcode_label_objects) {
+                // A shared raft supports several independent objects. It must
+                // not be cancelled when only its path-owning object is skipped.
+                const bool shared_raft = layer_to_print.support_layer && layer_to_print.support_layer->raft_merge_backup;
+                if (this->config().gcode_label_objects && !shared_raft) {
                     gcode += std::string("; printing object ") + instance_to_print.print_object.model_object()->name +
                              " id:" + std::to_string(instance_to_print.print_object.get_id()) + " copy " +
                              std::to_string(inst.id) + "\n";
                 }
                 // exclude objects
-                if (m_enable_exclude_object) {
+                if (m_enable_exclude_object && !shared_raft) {
                     if (is_BBL_Printer()) {
                         m_writer.set_object_start_str(
                             std::string("; start printing object, unique label id: ") +
@@ -4715,7 +4719,7 @@ LayerResult GCode::process_layer(
                     gcode += this->extrude_infill(print,by_region_specific, true);
                 }
 
-                if (this->config().gcode_label_objects) {
+                if (this->config().gcode_label_objects && !shared_raft) {
                     gcode += std::string("; stop printing object ") +
                              instance_to_print.print_object.model_object()->name +
                              " id:" + std::to_string(instance_to_print.print_object.get_id()) + " copy " +
@@ -4725,7 +4729,7 @@ LayerResult GCode::process_layer(
                 // Don't set m_gcode_label_objects_end if you don't had to write the m_gcode_label_objects_start.
                 if (!m_writer.is_object_start_str_empty()) {
                     m_writer.set_object_start_str("");
-                } else if (m_enable_exclude_object) {
+                } else if (m_enable_exclude_object && !shared_raft) {
                     if (is_BBL_Printer()) {
                         m_writer.set_object_end_str(std::string("; stop printing object, unique label id: ") +
                                                     std::to_string(instance_to_print.label_object_id) + "\n" +

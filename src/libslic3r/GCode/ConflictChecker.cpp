@@ -231,6 +231,7 @@ ConflictResultOpt ConflictChecker::find_inter_of_lines_in_diff_objs(PrintObjectP
             ExtrusionLayer el;
             el.paths    = wtpaths[i];
             el.bottom_z = wtpaths[i].front().height * (float) i;
+            el.height   = wtpaths[i].front().height;
             el.layer    = nullptr;
             wtels.push_back(el);
         }
@@ -285,6 +286,12 @@ ConflictResultOpt ConflictChecker::find_inter_of_lines_in_diff_objs(PrintObjectP
 
 ConflictComputeOpt ConflictChecker::line_intersect(const LineWithID &l1, const LineWithID &l2)
 {
+    // Buckets can expose the next layer while another object is still lower.
+    // Shared rafts cross a neighbour's model in XY, but not in physical Z.
+    // Do not report these as collisions; same-height intersections still use
+    // the existing geometric/role thresholds below.
+    if (std::min(l1._top_z, l2._top_z) <= std::max(l1._bottom_z, l2._bottom_z) + EPSILON)
+        return {};
     constexpr double SUPPORT_THRESHOLD = 100;  // this large almost disables conflict check of supports
     constexpr double OTHER_THRESHOLD   = 0.01;
     if (l1._id == l2._id) { return {}; } // return true if lines are from same object

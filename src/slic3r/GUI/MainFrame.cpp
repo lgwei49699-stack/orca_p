@@ -344,7 +344,7 @@ private:
         const wxSize action_button_size(FromDIP(76), FromDIP(32));
         button_row->SetMinSize(wxSize(-1, action_button_size.y));
 
-        m_cancel_button = new Button(this, _L("取消"));
+        m_cancel_button = new Button(this, _L("关闭"));
         apply_dialog_action_button_style(m_cancel_button, ButtonStyle::Regular, action_button_size);
         button_row->Add(m_cancel_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
 
@@ -936,10 +936,10 @@ private:
 
         const auto   alive      = m_alive;
         const size_t generation = ++m_request_generation;
-        const bool queued = m_plater->prepare_cloud_config_import_async(
+        const bool   queued     = m_plater->prepare_cloud_config_import_async(
             config, token,
-            [this, alive, generation, config, allow_auth_retry,
-             request_environment, token](std::shared_ptr<GFDCloudConfigImportResult> result, bool canceled) mutable {
+            [this, alive, generation, config, allow_auth_retry, request_environment,
+             token](std::shared_ptr<GFDCloudConfigImportResult> result, bool canceled) mutable {
                 if (!alive || !alive->load() || generation != m_request_generation)
                     return;
                 if (canceled) {
@@ -982,16 +982,16 @@ private:
                     return;
                 }
 
-                m_tip_label->SetLabel(_L("正在应用云端配置..."));
+                m_tip_label->SetLabel(_L("正在准备云端参数确认..."));
                 if (m_loading_text != nullptr)
-                    m_loading_text->SetLabel(_L("正在应用云端配置，请稍候..."));
+                    m_loading_text->SetLabel(_L("正在准备云端参数确认，请稍候..."));
                 Layout();
 
                 std::string apply_error;
-                const bool imported = m_plater != nullptr && m_plater->apply_prepared_cloud_config(config, *result, apply_error);
+                const bool  imported = m_plater != nullptr && m_plater->apply_prepared_cloud_config(config, *result, apply_error);
                 set_loading_state(false);
                 if (imported) {
-                    m_tip_label->SetLabel(_L("云端配置已应用"));
+                    m_tip_label->SetLabel(_L("云端配置导入已处理"));
                     EndModal(wxID_CANCEL);
                 } else {
                     const std::string message = apply_error.empty() ? "云端配置应用失败" : apply_error;

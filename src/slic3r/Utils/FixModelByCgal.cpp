@@ -1,4 +1,5 @@
 #include "FixModelByCgal.hpp"
+#include "ModelRepairPolicy.hpp"
 
 #include "libslic3r/MeshBoolean.hpp"
 #include "libslic3r/Model.hpp"
@@ -6,6 +7,7 @@
 #include "slic3r/GUI/GUI.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <exception>
@@ -114,10 +116,12 @@ bool stage_owned_model_repair_by_cgal_gui(std::shared_ptr<Model>                
                                           GUI::ProgressDialog&                  progress_dialog,
                                           const wxString&                       message_header,
                                           StagedModelRepair&                    staged_repair,
-                                          bool                                  keep_painting,
+                                          ModelRepairOptions                    options,
                                           bool                                  progress_initialized)
 {
     staged_repair = StagedModelRepair{};
+    static std::atomic<size_t> next_transaction_id{0};
+    staged_repair.transaction_id = ++next_transaction_id;
     if (working_model == nullptr) {
         staged_repair.error = "Could not stage model repair: working model is missing.";
         return true;
@@ -129,21 +133,37 @@ bool stage_owned_model_repair_by_cgal_gui(std::shared_ptr<Model>                
     bool              cancel_requested = false;
     ModelRepairReport report;
 
-    ModelRepairOptions options;
-    options.targets = targets;
-    // Match the latest OrcaSlicer behavior: painting remapping is opt-in and
-    // experimental. Unsupported exterior annotations are cleared explicitly.
-    options.allow_annotation_clearing = true;
-    options.preserve_annotations      = keep_painting;
-    options.is_canceled               = [&cancel_requested]() { return cancel_requested; };
-    options.mesh_requires_repair      = [&](const TriangleMesh& source) {
+    options.targets              = targets;
+    options.is_canceled          = [&cancel_requested]() { return cancel_requested; };
+    options.mesh_requires_repair = [&](const TriangleMesh& source) {
         return inspect_mesh_on_worker(source, progress_dialog, message_header, cancel_requested);
     };
     options.repair_mesh_from_source = [&](const TriangleMesh& source, TriangleMesh& repaired, std::string& error) {
         return repair_mesh_on_worker(source, repaired, error, progress_dialog, message_header, cancel_requested);
     };
+    options.repair_mesh_with_partial = [&](const TriangleMesh& source, TriangleMesh& repaired, std::string& error) {
+        MeshRepairOutcome outcome = MeshRepairOutcome::Rejected;
+        run_cgal_worker(
+            [&]() {
+                TriangleMesh candidate = source;
+                outcome                = MeshBoolean::cgal::repair_with_partial(candidate, &error);
+                if (outcome != MeshRepairOutcome::Rejected)
+                    repaired = std::move(candidate);
+                return outcome != MeshRepairOutcome::Rejected;
+            },
+            progress_dialog, message_header, cancel_requested);
+        return outcome;
+    };
     options.run_painting_validation = [&](const std::function<bool()>& validation) {
         return run_cgal_worker(validation, progress_dialog, message_header, cancel_requested);
+    };
+    options.run_mesh_preparation = [&](const std::function<void()>& preparation) {
+        run_cgal_worker(
+            [&]() {
+                preparation();
+                return true;
+            },
+            progress_dialog, message_header, cancel_requested);
     };
     options.on_progress = [&](size_t completed, size_t total, const ModelRepairVolumeReport& volume_report) {
         const int         percent = total == 0 ? 100 : std::min(static_cast<int>((completed * 100) / total), 99);
@@ -168,12 +188,18 @@ bool stage_owned_model_repair_by_cgal_gui(std::shared_ptr<Model>                
     }
 
     staged_repair.report = std::move(report);
-    BOOST_LOG_TRIVIAL(info) << "CGAL GUI model repair summary: status=" << staged_repair.report.status()
-                            << ", committed=" << staged_repair.report.committed << ", objects=" << staged_repair.report.objects
-                            << ", volumes=" << staged_repair.report.volumes << ", repaired=" << staged_repair.report.repaired
-                            << ", skipped=" << staged_repair.report.skipped << ", failed=" << staged_repair.report.failed
-                            << ", facets=" << staged_repair.report.before_facets << "->" << staged_repair.report.after_facets
-                            << ", open_edges=" << staged_repair.report.before_open_edges << "->" << staged_repair.report.after_open_edges;
+    BOOST_LOG_TRIVIAL(info) << "CGAL GUI model repair summary: event=staging_completed, transaction=" << staged_repair.transaction_id
+                            << ", status=" << staged_repair.report.status() << ", staging_changed=" << staged_repair.report.committed
+                            << ", objects=" << staged_repair.report.objects << ", volumes=" << staged_repair.report.volumes
+                            << ", repaired=" << staged_repair.report.repaired << ", skipped=" << staged_repair.report.skipped
+                            << ", unresolved=" << staged_repair.report.unresolved
+                            << ", basic_removed_faces=" << staged_repair.report.basic_removed_faces
+                            << ", failed=" << staged_repair.report.failed
+                            << ", preserve_annotations=" << options.preserve_annotations
+                            << ", allow_annotation_clearing=" << options.allow_annotation_clearing
+                            << ", facets=" << staged_repair.report.before_facets << "->"
+                            << staged_repair.report.after_facets << ", open_edges=" << staged_repair.report.before_open_edges << "->"
+                            << staged_repair.report.after_open_edges;
     for (const ModelRepairFailure& failure : staged_repair.report.failures)
         BOOST_LOG_TRIVIAL(warning) << "CGAL GUI model repair failure: object=" << failure.object_name << ", volume=" << failure.volume_name
                                    << ", message=" << failure.message;
@@ -191,8 +217,7 @@ bool stage_model_repair_by_cgal_gui(const Model&                          model,
                                     const std::vector<ModelRepairTarget>& targets,
                                     GUI::ProgressDialog&                  progress_dialog,
                                     const wxString&                       message_header,
-                                    StagedModelRepair&                    staged_repair,
-                                    bool                                  keep_painting)
+                                    StagedModelRepair&                    staged_repair)
 {
     staged_repair = StagedModelRepair{};
     // Let the user cancel before staging performs any object copies.
@@ -215,7 +240,7 @@ bool stage_model_repair_by_cgal_gui(const Model&                          model,
         return true;
     }
     return stage_owned_model_repair_by_cgal_gui(std::move(working_model), targets, progress_dialog, message_header, staged_repair,
-                                                keep_painting, true);
+                                                gui_model_repair_options(), true);
 }
 
 bool fix_model_with_cgal_gui(ModelObject&         model_object,
@@ -252,40 +277,60 @@ bool fix_model_with_cgal_gui(ModelObject&         model_object,
         target.volume_index = static_cast<size_t>(volume_idx);
 
     StagedModelRepair staged_repair;
+    const auto        log_result = [&staged_repair](const char* event) {
+        BOOST_LOG_TRIVIAL(info) << "CGAL cut model repair: transaction=" << staged_repair.transaction_id << ", event=" << event;
+    };
+    // Temporary cut results keep their existing opt-in painting behavior and
+    // all-or-nothing geometry policy; explicit GUI repair has a separate policy.
+    ModelRepairOptions options;
+    options.preserve_annotations      = keep_painting;
+    options.allow_annotation_clearing = true;
+    options.allow_partial             = false;
     if (!stage_owned_model_repair_by_cgal_gui(std::move(working_source), {target}, progress_dialog, message_header, staged_repair,
-                                              keep_painting, false))
+                                              std::move(options), false)) {
+        log_result("canceled");
         return false;
+    }
 
     if (repair_report != nullptr)
         *repair_report = staged_repair.report;
 
     if (!staged_repair.error.empty()) {
+        log_result("staging_failed");
         fix_result = staged_repair.error;
         return true;
     }
     if (!staged_repair.report.success || staged_repair.model == nullptr) {
+        log_result("repair_failed");
         fix_result = staged_repair.report.failures.empty() ? "Repair failed." : staged_repair.report.failures.front().message;
         return true;
     }
 
     ModelObject* repaired_object = staged_repair.model->objects.front();
     if (repaired_object == nullptr) {
+        log_result("staged_object_missing");
         fix_result = "Repair failed: staged model object is missing.";
         return true;
     }
 
-    if (!staged_repair.report.committed)
+    if (!staged_repair.report.committed) {
+        log_result("no_change");
         return true;
+    }
 
     try {
         model_object.replace_volume_structure(*repaired_object);
     } catch (const std::exception& exception) {
         fix_result = std::string("Repair commit failed: ") + exception.what();
+        log_result("commit_failed");
         return true;
     } catch (...) {
         fix_result = "Repair commit failed.";
+        log_result("commit_failed");
         return true;
     }
+    // The target here is a temporary cut object, not the GUI scene.
+    log_result("cut_object_committed");
     return true;
 }
 

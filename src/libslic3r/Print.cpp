@@ -36,6 +36,7 @@
 #include "nlohmann/json.hpp"
 
 #include "GCode/ConflictChecker.hpp"
+#include "Support/RaftMerge.hpp"
 
 #include <codecvt>
 
@@ -216,6 +217,14 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
     bool invalidated = false;
 
     for (const t_config_option_key &opt_key : opt_keys) {
+        if (opt_key == "printable_area" || opt_key == "bed_exclude_area") {
+            // Brim paths are clipped to the actual printable area, including
+            // exclusions. G-code-only invalidation would retain the old brim.
+            steps.emplace_back(psSkirtBrim);
+            for (PrintObject* object : m_objects)
+                if (object->has_raft())
+                    invalidated |= object->invalidate_step(posSupportMaterial);
+        }
         if (steps_gcode.find(opt_key) != steps_gcode.end()) {
             // These options only affect G-code export or they are just notes without influence on the generated G-code,
             // so there is nothing to invalidate.
@@ -363,6 +372,18 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             invalidated |= object->invalidate_step(ostep);
 
     return invalidated;
+}
+
+void Print::set_plate_origin(Vec3d origin)
+{
+    if (m_origin == origin)
+        return;
+    std::scoped_lock<std::mutex> lock(this->state_mutex());
+    this->invalidate_step(psSkirtBrim);
+    for (PrintObject* object : m_objects)
+        if (object->has_raft())
+            object->invalidate_step(posSupportMaterial);
+    m_origin = origin;
 }
 
 void Print::set_calib_params(const Calib_Params& params) {
@@ -1486,8 +1507,9 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                 if (!is_tree(object->config().support_type.value) &&
                     object->config().raft_base_margin.value + EPSILON <
                         object->config().raft_surface_margin.value + normal_raft_base_margin_delta) {
-                    return {L("For normal support, Raft Base margin must be at least 0.5 mm larger than Raft Top margin."), object,
-                            "raft_base_margin"};
+                    return {L("Raft Base margin is too small. With the current raft settings, it must be at least 0.5 mm larger than "
+                              "the Raft Top margin."),
+                            object, "raft_base_margin"};
                 }
                 if (printer_has_mixed_nozzle_diameters) {
                     if (slicing_params.base_raft_layers > 0 && object->config().support_filament.value == 0) {
@@ -2014,11 +2036,17 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
     if (m_objects.empty())
         return;
 
+    restore_unmerged_rafts(*this);
+
     for (PrintObject *obj : m_objects)
         obj->clear_shared_object();
 
     //add the print_object share check logic
-    auto is_print_object_the_same = [this](const PrintObject* object1, const PrintObject* object2) -> bool{
+    auto is_print_object_the_same = [this](const PrintObject* object1, const PrintObject* object2) -> bool {
+        // Shared support layers cannot represent differently clipped raft edges.
+        // Multiple instances of one PrintObject are handled by raft_printable_area().
+        if (object1->has_raft() || object2->has_raft())
+            return false;
         if (object1->trafo().matrix() != object2->trafo().matrix())
             return false;
         const ModelObject* model_obj1 = object1->model_object();
@@ -2193,7 +2221,11 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                     obj->set_done(posInfill);
                 if (obj->set_started(posIroning))
                     obj->set_done(posIroning);
-                if (obj->set_started(posSupportMaterial))
+                // Regenerate a raft invalidated by bed/instance changes even when
+                // the model layers were restored from the slicing cache.
+                if (obj->has_raft())
+                    obj->generate_support_material();
+                else if (obj->set_started(posSupportMaterial))
                     obj->set_done(posSupportMaterial);
                 if (obj->set_started(posDetectOverhangsForLift))
                     obj->set_done(posDetectOverhangsForLift);
@@ -2216,6 +2248,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             obj->copy_layers_overhang_from_shared_object();
         }
     }
+
+    merge_overlapping_rafts(*this);
 
     if (this->set_started(psWipeTower)) {
         m_wipe_tower_data.clear();
@@ -2333,6 +2367,10 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
         }
     }
 
+    // This uses actual path widths and physical Z intervals, including adaptive
+    // layers. Keep it outside the optional legacy line-intersection checker.
+    validate_raft_clearance();
+
     // BBS
     bool has_adaptive_layer_height = false;
     for (PrintObject* obj : m_objects) {
@@ -2373,6 +2411,9 @@ std::string Print::export_gcode(const std::string& path_template, GCodeProcessor
                                 ThumbnailsGeneratorCallback thumbnail_cb, bool force_toolchange_for_single_extruder,
                                 bool embed_thumbnail_image)
 {
+    // Also guard callers exporting restored/generated paths without process().
+    // Reject before creating a G-code file, using the same GUI/CLI error path.
+    validate_raft_clearance();
     // output everything to a G-code file
     // The following call may die if the filename_format template substitution fails.
     std::string path = this->output_filepath(path_template);
@@ -3294,6 +3335,7 @@ const std::string PrintStatistics::TotalFilamentUsedWipeTowerValueMask = "; tota
 
 #define JSON_SUPPORT_LAYER_ISLANDS                  "support_islands"
 #define JSON_SUPPORT_LAYER_FILLS                    "support_fills"
+#define JSON_SUPPORT_LAYER_RAFT_OUTLINE "raft_outline"
 #define JSON_SUPPORT_LAYER_INTERFACE_ID             "interface_id"
 #define JSON_SUPPORT_LAYER_TYPE                     "support_type"
 
@@ -3951,6 +3993,9 @@ void extract_layer(const json& layer_json, Layer& layer) {
 void extract_support_layer(const json& support_layer_json, SupportLayer& support_layer) {
     extract_layer(support_layer_json, support_layer);
 
+    if (support_layer_json.contains(JSON_SUPPORT_LAYER_RAFT_OUTLINE))
+        support_layer.raft_outline = support_layer_json[JSON_SUPPORT_LAYER_RAFT_OUTLINE].get<ExPolygons>();
+
     support_layer.support_type = support_layer_json[JSON_SUPPORT_LAYER_TYPE];
     //support_islands
     int islands_count = support_layer_json[JSON_SUPPORT_LAYER_ISLANDS].size();
@@ -3977,6 +4022,16 @@ void extract_support_layer(const json& support_layer_json, SupportLayer& support
         }
     }
 
+    if (support_layer_json.contains("raft_entity_flags")) {
+        auto flags = support_layer_json.at("raft_entity_flags").get<std::vector<unsigned char>>();
+        if (flags.size() == support_layer.support_fills.entities.size() &&
+            std::all_of(flags.begin(), flags.end(), [](unsigned char flag) { return flag <= 1; }) &&
+            support_layer_json.contains("raft_geometry_outline") && support_layer_json.contains("raft_support_outline")) {
+            support_layer.raft_entity_flags     = std::move(flags);
+            support_layer.raft_geometry_outline = support_layer_json.at("raft_geometry_outline").get<ExPolygons>();
+            support_layer.raft_support_outline  = support_layer_json.at("raft_support_outline").get<ExPolygons>();
+        }
+    }
     return;
 }
 
@@ -4132,24 +4187,37 @@ int Print::export_cached_data(const std::string& directory, bool with_space)
 
                         support_layer_json[JSON_SUPPORT_LAYER_INTERFACE_ID] = support_layer->interface_id();
                         support_layer_json[JSON_SUPPORT_LAYER_TYPE] = support_layer->support_type;
+                        support_layer_json[JSON_SUPPORT_LAYER_RAFT_OUTLINE] = support_layer->raft_outline;
+
+                        // Cache the object-local inputs, never a neighbour's
+                        // merged raft or the suppressed paths of a recipient.
+                        const auto*                      raft_backup = support_layer->raft_merge_backup.get();
+                        const ExPolygons&                islands     = raft_backup ? raft_backup->islands : support_layer->support_islands;
+                        const ExtrusionEntityCollection& fills       = raft_backup ? raft_backup->fills : support_layer->support_fills;
 
                         //support_islands
-                        for (const ExPolygon& support_island : support_layer->support_islands) {
+                        for (const ExPolygon& support_island : islands) {
                             json support_island_json = support_island;
                             support_islands_json.push_back(std::move(support_island_json));
                         }
                         support_layer_json[JSON_SUPPORT_LAYER_ISLANDS] = std::move(support_islands_json);
 
                         //support_fills
-                        support_fills_json[JSON_EXTRUSION_NO_SORT] = support_layer->support_fills.no_sort;
+                        support_fills_json[JSON_EXTRUSION_NO_SORT]     = fills.no_sort;
                         support_fills_json[JSON_EXTRUSION_ENTITY_TYPE] = JSON_EXTRUSION_TYPE_COLLECTION;
-                        for (const ExtrusionEntity* extrusion_entity : support_layer->support_fills.entities) {
+                        for (const ExtrusionEntity* extrusion_entity : fills.entities) {
                             json supportfill_entity_json, supportfill_entity_paths_json = json::array();
                             bool ret = convert_extrusion_to_json(supportfill_entity_json, supportfill_entity_paths_json, extrusion_entity);
                             if (!ret)
                                 continue;
 
                             supportfills_entities_json.push_back(std::move(supportfill_entity_json));
+                        }
+                        const auto& flags = raft_backup ? raft_backup->entity_flags : support_layer->raft_entity_flags;
+                        if (!flags.empty() && flags.size() == fills.entities.size() && flags.size() == supportfills_entities_json.size()) {
+                            support_layer_json["raft_entity_flags"]     = flags;
+                            support_layer_json["raft_geometry_outline"] = support_layer->raft_geometry_outline;
+                            support_layer_json["raft_support_outline"]  = support_layer->raft_support_outline;
                         }
                         support_fills_json[JSON_EXTRUSION_ENTITIES] = std::move(supportfills_entities_json);
                         support_layer_json[JSON_SUPPORT_LAYER_FILLS] = std::move(support_fills_json);

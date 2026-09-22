@@ -296,6 +296,11 @@ set(lisbslic3r_sources
     Model.hpp
     ModelRepair.cpp
     ModelRepair.hpp
+    MeshRepairOutcome.hpp
+    ModelInspection.hpp
+    ModelPreparation.cpp
+    ModelCheckWorkflow.cpp
+    ModelCheckWorkflow.hpp
     MTUtils.hpp
     MultiMaterialSegmentation.cpp
     MultiMaterialSegmentation.hpp
@@ -308,6 +313,7 @@ set(lisbslic3r_sources
     NormalUtils.hpp
     NSVGUtils.cpp
     NSVGUtils.hpp
+    ObjColorMapping.hpp
     ObjColorUtils.hpp
     ObjectID.cpp
     ObjectID.hpp
@@ -412,8 +418,13 @@ set(lisbslic3r_sources
     Support/RaftAngleResolver.hpp
     Support/RaftPlan.cpp
     Support/RaftPlan.hpp
+    Support/RaftMerge.cpp
+    Support/RaftMerge.hpp
+    Support/RaftGeometry.cpp
+    Support/RaftGeometry.hpp
     Support/SupportCommon.cpp
     Support/SupportCommon.hpp
+    Support/SupportGridParams.hpp
     Support/SupportLayer.hpp
     Support/SupportMaterial.cpp
     Support/SupportMaterial.hpp
@@ -502,6 +513,7 @@ add_library(libslic3r_cgal STATIC
     CutSurface.hpp CutSurface.cpp
     IntersectionPoints.hpp IntersectionPoints.cpp
     MeshBoolean.hpp MeshBoolean.cpp
+    ModelInspection.cpp
     TryCatchSignal.hpp TryCatchSignal.cpp
     Triangulation.hpp Triangulation.cpp
 )

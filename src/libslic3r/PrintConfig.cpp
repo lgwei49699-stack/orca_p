@@ -4277,6 +4277,30 @@ void PrintConfigDef::init_fff_params()
                           "raft air gap."),
                         "mm", 0.0, 10.0, 0.10, comAdvanced);
 
+    def           = this->add("raft_segmented", coBool);
+    def->label    = L("Segment raft");
+    def->category = L("Raft");
+    def->tooltip  = L("Split large Cura-style rafts into sections before generating walls and infill. Each raft phase is processed "
+                       "independently. Cuts may cross model contact areas and leave marks on the model bottom. "
+                       "This trial applies to compatible single-instance objects, one active filament and by-layer printing. Ordinary "
+                       "support paths are preserved.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+    add_cura_raft_float(
+        "raft_chunk_size", L("Raft segment reference size"),
+        L("Reference size for raft segmentation. Narrow rafts use strips; wider rafts may use radial sections. "
+          "This is not a maximum section size. Small separate raft islands remain uncut; connected rafts are classified together."),
+        "mm", 5.0, 500.0, 40.0, comAdvanced);
+    add_cura_raft_float("raft_chunk_gap", L("Raft segment gap"),
+                        L("Gap between raft sections, measured between extrusion edges. Wider gaps may affect the model bottom."), "mm",
+                        0.1, 5.0, 0.8, comAdvanced);
+    add_cura_raft_float(
+        "raft_smoothing", L("Raft outline smoothing"),
+        L("Round inward raft corners and fill small raft holes using closing, then clean thin edges using the brim line width. "
+          "Zero disables closing; edge cleanup still runs when segmentation is enabled. Printable bed exclusions stay clear. "
+          "Uses the same trial compatibility restrictions as raft segmentation."),
+        "mm", 0.0, 20.0, 0.0, comAdvanced);
+
     add_cura_raft_int("raft_base_layers", L("Raft base layers"),
                       L("Number of build-plate-facing Base layers in Cura-style mode. At least one Base layer is required."),
                       L("layers"), 1, 20, 1, comAdvanced);
@@ -4313,9 +4337,7 @@ void PrintConfigDef::init_fff_params()
     add_cura_raft_int("raft_base_wall_count", L("Raft base wall count"),
                       L("Number of contours around the linear Base pattern."), L("walls"), 0, 100, 4, comAdvanced);
     add_cura_raft_float("raft_base_margin", L("Raft base margin"),
-                        L("Additional XY margin around the model footprint for the Base phase. With normal support, it must be at least "
-                          "0.5 mm larger than the Raft Top margin."),
-                        "mm", 0.0, 100.0, 3.0, comAdvanced);
+                        L("Additional XY margin around the model footprint for the Raft Base phase."), "mm", 0.0, 100.0, 3.0, comAdvanced);
 
     add_cura_raft_auto_float("raft_interface_layer_height", L("Raft middle thickness"),
                              L("Thickness of each Middle layer. Zero automatically derives it from the nozzle and normal-layer "
@@ -7817,7 +7839,9 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     // Actions:
     def          = this->add("export_obj", coBool);
     def->label = L("Export OBJ");
-    def->tooltip = L("Export the model(s) as a geometry-only OBJ without materials or textures.");
+    def->tooltip = L(
+        "Export OBJ. With --repair-model cgal, preserve supported MTL face colors and write an MTL when colors are present. "
+        "Use --repair-ignore-materials for geometry only. Without repair, export geometry only. Original textures are not preserved.");
     def->set_default_value(new ConfigOptionBool(false));
 
     def             = this->add("export_multicolor_obj", coString);
@@ -7826,6 +7850,13 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     def->cli        = "export-multicolor-obj";
     def->cli_params = "filename.obj";
     def->set_default_value(new ConfigOptionString("multicolor.obj"));
+
+    def          = this->add("check_model", coBool);
+    def->label   = L("Check model");
+    def->tooltip = L("Import one STL or OBJ using Orca's native import preparation, then inspect it without slicing. STL import includes "
+                     "automatic repair.");
+    def->cli     = "check-model";
+    def->set_default_value(new ConfigOptionBool(false));
 
     def             = this->add("repair_model", coString);
     def->label      = L("Repair model");
@@ -8093,7 +8124,8 @@ CLITransformConfigDef::CLITransformConfigDef()
 
     def          = this->add("arrange_by_color", coBool);
     def->label   = L("Arrange by Color");
-    def->tooltip = L("Keep models with different primary OBJ/MTL colors on separate plates without splitting model geometry.");
+    def->tooltip = L("Keep models with different primary OBJ/MTL colors or STL --model-color values on separate plates without splitting "
+                     "model geometry.");
     def->cli     = "arrange-by-color";
     def->set_default_value(new ConfigOptionBool(false));
 
@@ -8186,6 +8218,14 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli_params = "group";
     def->set_default_value(new ConfigOptionStrings());
 
+    def             = this->add("model_color", coStrings);
+    def->label      = L("Model Color");
+    def->tooltip    = L("Color in #RRGGBB format for the current STL --model block. Used only with --arrange-by-color; does not change "
+                           "printing filaments. --model-arrange-group takes precedence.");
+    def->cli        = "model-color";
+    def->cli_params = "#RRGGBB";
+    def->set_default_value(new ConfigOptionStrings());
+
     def = this->add("model_position", coStrings);
     def->label = L("Model Position");
     def->tooltip = L("Specify center position (x,y,z) for each model in millimeters.");
@@ -8268,6 +8308,43 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->tooltip = L("Load filament settings from the specified file list.");
     def->cli_params = "\"filament1.json;filament2.json;...\"";
     def->set_default_value(new ConfigOptionStrings());
+
+    def = this->add("variable_layer_height_mode", coString);
+    def->label = L("Variable Layer Height Mode");
+    def->tooltip = L("Control variable layer height profiles in CLI slicing: preserve keeps an existing profile, adaptive replaces it with an automatically generated profile, and reset removes it.");
+    def->cli = "variable-layer-height-mode";
+    def->cli_params = "preserve|adaptive|reset";
+    def->set_default_value(new ConfigOptionString("preserve"));
+
+    def = this->add("variable_layer_height_quality_speed", coFloat);
+    def->label = L("Variable Layer Height Quality / Speed");
+    def->tooltip = L("Adaptive layer height preference from 0 (quality) to 1 (speed).");
+    def->cli = "variable-layer-height-quality-speed";
+    def->cli_params = "0..1";
+    def->min = 0.0;
+    def->max = 1.0;
+    def->set_default_value(new ConfigOptionFloat(0.5));
+
+    def = this->add("variable_layer_height_smooth", coBool);
+    def->label = L("Smooth Variable Layer Height");
+    def->tooltip = L("Smooth the automatically generated variable layer height profile.");
+    def->cli = "variable-layer-height-smooth";
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("variable_layer_height_smoothing_radius", coInt);
+    def->label = L("Variable Layer Height Smoothing Radius");
+    def->tooltip = L("Smoothing radius for an automatically generated variable layer height profile.");
+    def->cli = "variable-layer-height-smoothing-radius";
+    def->cli_params = "1..10";
+    def->min = 1;
+    def->max = 10;
+    def->set_default_value(new ConfigOptionInt(5));
+
+    def = this->add("variable_layer_height_keep_min", coBool);
+    def->label = L("Keep Minimum Variable Layer Height");
+    def->tooltip = L("Preserve local minimum layer heights while smoothing the automatically generated profile.");
+    def->cli = "variable-layer-height-keep-min";
+    def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("texture_color_count", coInt);
     def->label = L("Texture Color Count");
@@ -8365,10 +8442,19 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli_params = "dir";
     def->set_default_value(new ConfigOptionString());
 
-    def = this->add("auto_repair_model", coBool);
-    def->label = L("Automatically repair imported model");
-    def->tooltip = L("Automatically repair STL mesh connectivity and normals while importing the model.");
-    def->cli = "auto-repair-model";
+    def          = this->add("repair_ignore_materials", coBool);
+    def->label   = L("Ignore OBJ materials during repair");
+    def->tooltip = L("With --repair-model cgal or --check-model, import OBJ geometry without reading MTL libraries, colors or UVs. "
+                     "Cannot be combined with material bindings, color grouping or multicolor OBJ export.");
+    def->cli     = "repair-ignore-materials";
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def             = this->add("auto_repair_model", coBool);
+    def->label      = L("Automatically repair imported model");
+    def->tooltip    = L("Automatically repair STL mesh connectivity and normals while importing the model. With --repair-model cgal, "
+                           "this defaults to 0; set to 1 to run automatic repair before CGAL. Without CGAL, this defaults to 1. "
+                           "Does not apply to OBJ or --check-model.");
+    def->cli        = "auto-repair-model";
     def->cli_params = "0|1";
     def->set_default_value(new ConfigOptionBool(true));
 

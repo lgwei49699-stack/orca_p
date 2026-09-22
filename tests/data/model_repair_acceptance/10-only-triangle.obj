@@ -1,0 +1,5 @@
+# Original deterministic Orca repair test fixture; coordinates in mm.
+v 0 0 0
+v 10 0 0
+v 0 10 0
+f 1 2 3

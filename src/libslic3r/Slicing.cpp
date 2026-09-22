@@ -284,20 +284,20 @@ std::vector<coordf_t> layer_height_profile_from_ranges(
     std::vector<std::pair<t_layer_height_range,coordf_t>> ranges_non_overlapping;
     ranges_non_overlapping.reserve(layer_config_ranges.size() * 4);
     if (slicing_params.first_object_layer_height_fixed())
-        ranges_non_overlapping.push_back(std::pair<t_layer_height_range,coordf_t>(
-            t_layer_height_range(0., slicing_params.first_object_layer_height), 
-            slicing_params.first_object_layer_height));
+        ranges_non_overlapping.push_back(
+            std::pair<t_layer_height_range, coordf_t>(t_layer_height_range(0., slicing_params.first_object_layer_height),
+                                                      slicing_params.first_object_layer_height));
     // The height ranges are sorted lexicographically by low / high layer boundaries.
-    for (t_layer_config_ranges::const_iterator it_range = layer_config_ranges.begin(); it_range != layer_config_ranges.end(); ++ it_range) {
-        coordf_t lo = it_range->first.first;
-        coordf_t hi = std::min(it_range->first.second, slicing_params.object_print_z_height());
+    for (t_layer_config_ranges::const_iterator it_range = layer_config_ranges.begin(); it_range != layer_config_ranges.end(); ++it_range) {
+        coordf_t lo     = it_range->first.first;
+        coordf_t hi     = std::min(it_range->first.second, slicing_params.object_print_z_uncompensated_height());
         coordf_t height = it_range->second.option("layer_height")->getFloat();
-        if (! ranges_non_overlapping.empty())
+        if (!ranges_non_overlapping.empty())
             // Trim current low with the last high.
             lo = std::max(lo, ranges_non_overlapping.back().first.second);
         if (lo + EPSILON < hi)
             // Ignore too narrow ranges.
-            ranges_non_overlapping.push_back(std::pair<t_layer_height_range,coordf_t>(t_layer_height_range(lo, hi), height));
+            ranges_non_overlapping.push_back(std::pair<t_layer_height_range, coordf_t>(t_layer_height_range(lo, hi), height));
     }
 
     // 2) Convert the trimmed ranges to a height profile, fill in the undefined intervals between z=0 and z=slicing_params.object_print_z_max()
@@ -349,16 +349,15 @@ std::vector<coordf_t> layer_height_profile_from_ranges(
    	return layer_height_profile;
 }
 
-// Based on the work of @platsch
+// Based on the work of @platsch.
 // Fill layer_height_profile by heights ensuring a prescribed maximum cusp height.
-std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slicing_params, const ModelObject& object, float quality_factor)
+// The profile Z coordinates are expressed in uncompensated model coordinates.
+static std::vector<double> layer_height_profile_adaptive_impl(const SlicingParameters& slicing_params,
+                                                              const ModelObject&       object,
+                                                              float                    quality_factor,
+                                                              SlicingAdaptive&         adaptive_slicing)
 {
-    // 1) Initialize the SlicingAdaptive class with the object meshes.
-    SlicingAdaptive as;
-    as.set_slicing_parameters(slicing_params);
-    as.prepare(object);
-
-    // 2) Generate layers using the algorithm of @platsch 
+    // Generate layers using the algorithm of @platsch.
     std::vector<double> layer_height_profile;
     layer_height_profile.push_back(0.0);
     layer_height_profile.push_back(slicing_params.first_object_layer_height);
@@ -366,37 +365,38 @@ std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slici
         layer_height_profile.push_back(slicing_params.first_object_layer_height);
         layer_height_profile.push_back(slicing_params.first_object_layer_height);
     }
-    double print_z = slicing_params.first_object_layer_height;
+    double       print_z       = slicing_params.first_object_layer_height;
+    const double object_height = slicing_params.object_print_z_uncompensated_height();
     // last facet visited by the as.next_layer_height() function, where the facets are sorted by their increasing Z span.
     size_t current_facet = 0;
     // loop until we have at least one layer and the max slice_z reaches the object height
-    while (print_z + EPSILON < slicing_params.object_print_z_height()) {
+    while (print_z + EPSILON < object_height) {
         float height = slicing_params.max_layer_height;
         // Slic3r::debugf "\n Slice layer: %d\n", $id;
         // determine next layer height
-        float cusp_height = as.next_layer_height(float(print_z), quality_factor, current_facet);
+        float cusp_height = adaptive_slicing.next_layer_height(float(print_z), quality_factor, current_facet);
 
 #if 0
         // check for horizontal features and object size
         if (this->config.match_horizontal_surfaces.value) {
             coordf_t horizontal_dist = as.horizontal_facet_distance(print_z + height, min_layer_height);
             if ((horizontal_dist < min_layer_height) && (horizontal_dist > 0)) {
-                #ifdef SLIC3R_DEBUG
+#ifdef SLIC3R_DEBUG
                 std::cout << "Horizontal feature ahead, distance: " << horizontal_dist << std::endl;
-                #endif
+#endif
                 // can we shrink the current layer a bit?
                 if (height-(min_layer_height - horizontal_dist) > min_layer_height) {
                     // yes we can
                     height -= (min_layer_height - horizontal_dist);
-                    #ifdef SLIC3R_DEBUG
+#ifdef SLIC3R_DEBUG
                     std::cout << "Shrink layer height to " << height << std::endl;
-                    #endif
+#endif
                 } else {
                     // no, current layer would become too thin
                     height += horizontal_dist;
-                    #ifdef SLIC3R_DEBUG
+#ifdef SLIC3R_DEBUG
                     std::cout << "Widen layer height to " << height << std::endl;
-                    #endif
+#endif
                 }
             }
         }
@@ -410,12 +410,12 @@ std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slici
             $height = $height - unscale((scale($height)) % (scale($gradation)));
         }
         */
-    
+
         // look for an applicable custom range
         /*
         if (my $range = first { $_->[0] <= $print_z && $_->[1] > $print_z } @{$self->layer_height_ranges}) {
             $height = $range->[2];
-    
+
             # if user set custom height to zero we should just skip the range and resume slicing over it
             if ($height == 0) {
                 $print_z += $range->[1] - $range->[0];
@@ -423,16 +423,16 @@ std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slici
             }
         }
         */
-        //BBS: avoid the layer height change to be too steep
+        // BBS: avoid the layer height change to be too steep
         if (layer_height_profile.back() < height && height - layer_height_profile.back() > LAYER_HEIGHT_CHANGE_STEP)
             height = layer_height_profile.back() + LAYER_HEIGHT_CHANGE_STEP;
         else if (layer_height_profile.back() > height && layer_height_profile.back() - height > LAYER_HEIGHT_CHANGE_STEP)
             height = layer_height_profile.back() - LAYER_HEIGHT_CHANGE_STEP;
 
-        for (auto const& [range,options] : object.layer_config_ranges) {
-            if ( print_z >= range.first && print_z <= range.second) {
-                    height = options.opt_float("layer_height");
-                    break;
+        for (auto const& [range, options] : object.layer_config_ranges) {
+            if (print_z >= range.first && print_z <= range.second) {
+                height = options.opt_float("layer_height");
+                break;
             };
         };
 
@@ -441,20 +441,52 @@ std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slici
         print_z += height;
     }
 
-    double z_gap = slicing_params.object_print_z_height() - *(layer_height_profile.end() - 2);
-    if (z_gap > 0.0)
-    {
-        layer_height_profile.push_back(slicing_params.object_print_z_height());
+    double z_gap = object_height - *(layer_height_profile.end() - 2);
+    if (z_gap > 0.0) {
+        layer_height_profile.push_back(object_height);
         layer_height_profile.push_back(std::clamp(z_gap, slicing_params.min_layer_height, slicing_params.max_layer_height));
     }
 
     return layer_height_profile;
 }
 
-std::vector<double> smooth_height_profile(const std::vector<double>& profile, const SlicingParameters& slicing_params, const HeightProfileSmoothingParams& smoothing_params)
+std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slicing_params, const ModelObject& object, float quality_factor)
 {
-    auto gauss_blur = [&slicing_params](const std::vector<double>& profile, const HeightProfileSmoothingParams& smoothing_params) -> std::vector<double> {
-        auto gauss_kernel = [] (unsigned int radius) -> std::vector<double> {
+    SlicingAdaptive adaptive_slicing;
+    adaptive_slicing.set_slicing_parameters(slicing_params);
+    adaptive_slicing.prepare(object);
+    return layer_height_profile_adaptive_impl(slicing_params, object, quality_factor, adaptive_slicing);
+}
+
+std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slicing_params,
+                                                  const ModelObject&       object,
+                                                  const ModelInstance&     representative_instance,
+                                                  float                    quality_factor)
+{
+    SlicingAdaptive adaptive_slicing;
+    adaptive_slicing.set_slicing_parameters(slicing_params);
+    adaptive_slicing.prepare(object, representative_instance);
+    return layer_height_profile_adaptive_impl(slicing_params, object, quality_factor, adaptive_slicing);
+}
+
+std::vector<double> layer_height_profile_adaptive(const SlicingParameters& slicing_params,
+                                                  const ModelObject&       object,
+                                                  const Transform3d&       representative_transform,
+                                                  float                    quality_factor)
+{
+    SlicingAdaptive adaptive_slicing;
+    adaptive_slicing.set_slicing_parameters(slicing_params);
+    adaptive_slicing.prepare(object, representative_transform);
+    return layer_height_profile_adaptive_impl(slicing_params, object, quality_factor, adaptive_slicing);
+}
+
+std::vector<double> smooth_height_profile(const std::vector<double>&          profile,
+                                          const SlicingParameters&            slicing_params,
+                                          const HeightProfileSmoothingParams& smoothing_params)
+{
+    auto gauss_blur = [&slicing_params](const std::vector<double>&          profile,
+                                        const HeightProfileSmoothingParams& smoothing_params) -> std::vector<double> {
+        auto gauss_kernel = [](unsigned int radius) -> std::vector<double> {
             unsigned int size = 2 * radius + 1;
             std::vector<double> ret;
             ret.reserve(size);

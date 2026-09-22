@@ -16,6 +16,8 @@
 
 #include "libnest2d/common.hpp"
 
+#include <atomic>
+
 #define SAVE_ARRANGE_POLY 0
 
 namespace Slic3r { namespace GUI {
@@ -472,6 +474,9 @@ void ArrangeJob::check_unprintable()
 
 void ArrangeJob::process(Ctl &ctl)
 {
+    static std::atomic<unsigned> diagnostic_sequence{0};
+    const unsigned               diagnostic_job = diagnostic_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    BOOST_LOG_TRIVIAL(info) << "[arrange-diag] job=" << diagnostic_job << " gui_begin";
     static const auto arrangestr = _u8L("Arranging");
     ctl.update_status(0, arrangestr);
     ctl.call_on_main_thread([this]{ prepare(); }).wait();;
@@ -484,10 +489,18 @@ void ArrangeJob::process(Ctl &ctl)
     if (is_bbl && params.avoid_extrusion_cali_region && global_config.opt_bool("scan_first_layer"))
         partplate_list.preprocess_nonprefered_areas(m_unselected, MAX_NUM_PLATES);
 
+    const coord_t requested_distance = params.min_obj_distance;
     update_arrange_params(params, m_plater->config(), m_selected);
+    prepare_mixed_raft_clearance(m_selected, m_unselected, global_config, params);
     update_selected_items_inflation(m_selected, m_plater->config(), params);
     update_unselected_items_inflation(m_unselected, m_plater->config(), params);
     update_selected_items_axis_align(m_selected, m_plater->config(), params);
+    BOOST_LOG_TRIVIAL(info) << "[arrange-diag] job=" << diagnostic_job << " gui_prepared current_plate_only=" << only_on_partplate
+                            << " current_plate=" << current_plate_index << " requested_distance_mm=" << unscale<double>(requested_distance)
+                            << " effective_distance_mm=" << unscale<double>(params.min_obj_distance)
+                            << " shrink_xy_mm=" << params.bed_shrink_x << ',' << params.bed_shrink_y
+                            << " axis_align=" << params.align_to_y_axis << " locked=" << m_locked.size()
+                            << " unprintable=" << m_unprintable.size();
 
     Points      bedpts = get_shrink_bedpts(m_plater->config(),params);
 
@@ -504,12 +517,15 @@ void ArrangeJob::process(Ctl &ctl)
     const ArrangePolygons selected_without_towers = m_selected;
     const ArrangePolygons unselected_without_towers = m_unselected;
 
-    auto run_arrange = [&]() {
+    unsigned diagnostic_pass = 0;
+    auto     run_arrange     = [&]() {
+        ++diagnostic_pass;
+        BOOST_LOG_TRIVIAL(info) << "[arrange-diag] job=" << diagnostic_job << " core_pass=" << diagnostic_pass;
         arrangement::arrange(m_selected, m_unselected, bedpts, params);
     };
 
     {
-        BOOST_LOG_TRIVIAL(warning)<< "Arrange full params: "<< params.to_json();
+        BOOST_LOG_TRIVIAL(debug) << "Arrange full params: " << params.to_json();
         BOOST_LOG_TRIVIAL(info) << boost::format("arrange: items selected before arranging: %1%") % m_selected.size();
         for (auto selected : m_selected) {
             BOOST_LOG_TRIVIAL(debug) << selected.name << ", extruder: " << selected.extrude_ids.back() << ", bed: " << selected.bed_idx << ", filemant_type:" << selected.filament_temp_type
@@ -605,6 +621,9 @@ void ArrangeJob::process(Ctl &ctl)
         }
     }
     we_have_unpackable_items = we_have_unpackable_items || m_current_plate_overflow;
+    BOOST_LOG_TRIVIAL(info) << "[arrange-diag] job=" << diagnostic_job << " gui_end core_passes=" << diagnostic_pass
+                            << " current_plate_overflow=" << m_current_plate_overflow
+                            << " has_unpackable_items=" << we_have_unpackable_items;
 
     // finalize just here.
     ctl.update_status(100,

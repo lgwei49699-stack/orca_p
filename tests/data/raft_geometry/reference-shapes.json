@@ -1,0 +1,13 @@
+{
+  "reference": "X-PRINT 5.9.6, geometry classification probes, 2026-09-20",
+  "chunk_size_mm": 40.0,
+  "chunk_gap_mm": 0.8,
+  "cases": [
+    {"name": "threshold-minus-one", "width_mm": 39.0, "height_mm": 39.0, "sections": 1},
+    {"name": "threshold-equal", "width_mm": 40.0, "height_mm": 40.0, "sections": 1},
+    {"name": "threshold-plus-one", "width_mm": 41.0, "height_mm": 41.0, "sections": 8},
+    {"name": "large-square", "width_mm": 80.0, "height_mm": 80.0, "sections": 8},
+    {"name": "narrow-strip", "width_mm": 80.0, "height_mm": 20.0, "sections": 2},
+    {"name": "wide-strip-then-radial", "width_mm": 100.0, "height_mm": 45.0, "sections": 24}
+  ]
+}

@@ -9,6 +9,7 @@
 #include <queue>
 #include <vector>
 #include <optional>
+#include <limits>
 
 namespace Slic3r {
 
@@ -17,8 +18,16 @@ struct LineWithID
     Line          _line;
     const void *  _id;
     ExtrusionRole _role;
+    double        _bottom_z;
+    double        _top_z;
 
-    LineWithID(const Line &line, const void* id, ExtrusionRole role) : _line(line), _id(id), _role(role) {}
+    LineWithID(const Line&   line,
+               const void*   id,
+               ExtrusionRole role,
+               double        bottom_z = -std::numeric_limits<double>::infinity(),
+               double        top_z    = std::numeric_limits<double>::infinity())
+        : _line(line), _id(id), _role(role), _bottom_z(bottom_z), _top_z(top_z)
+    {}
 };
 
 using LineWithIDs = std::vector<LineWithID>;
@@ -89,7 +98,9 @@ public:
                     Polyline check_polyline = path.polyline;
                     check_polyline.translate(_offset);
                     Lines tmpLines = check_polyline.lines();
-                    for (const Line &line : tmpLines) { lines.emplace_back(line, _id, path.role()); }
+                    for (const Line& line : tmpLines) {
+                        lines.emplace_back(line, _id, path.role(), _piles[i].bottom_z, _piles[i].bottom_z + _piles[i].height);
+                    }
                 }
             }
         }

@@ -23,6 +23,7 @@ void FillBedJob::prepare()
     m_selected.clear();
     m_unselected.clear();
     m_bedpts.clear();
+    m_used_fast_grid = false;
 
     params = init_arrange_params(m_plater);
 
@@ -215,7 +216,8 @@ void FillBedJob::process(Ctl &ctl)
     const bool is_bbl = wxGetApp().preset_bundle->is_bbl_vendor();
     if (is_bbl && params.avoid_extrusion_cali_region && global_config.opt_bool("scan_first_layer"))
         partplate_list.preprocess_nonprefered_areas(m_unselected, MAX_NUM_PLATES);
-    
+
+    const bool mixed_raft = prepare_mixed_raft_clearance(m_selected, m_unselected, global_config, params);
     update_selected_items_inflation(m_selected, m_plater->config(), params);
     update_unselected_items_inflation(m_unselected, m_plater->config(), params);
 
@@ -238,8 +240,8 @@ void FillBedJob::process(Ctl &ctl)
     const bool has_cura_v1_footprint = m_selected.front().minimum_inflation > 0.0;
     const bool has_physical_excludes = std::any_of(m_unselected.begin(), m_unselected.end(),
                                                    [](const ArrangePolygon &item) { return !item.is_virt_object; });
-    const bool use_fast_grid = m_selected.size() > 100 && (!has_cura_v1_footprint || !has_physical_excludes);
-    if (use_fast_grid){
+    m_used_fast_grid                 = m_selected.size() > 100 && !mixed_raft && (!has_cura_v1_footprint || !has_physical_excludes);
+    if (m_used_fast_grid) {
         // too many items, just find grid empty cells to put them
         const float footprint_spacing = has_cura_v1_footprint ? 2.0f * unscaled<float>(m_selected.front().inflation) :
                                                                 float(m_selected.front().brim_width);
@@ -253,8 +255,7 @@ void FillBedJob::process(Ctl &ctl)
         for (size_t i = n; i < m_selected.size(); i++) {
             m_selected[i].bed_idx = -1;
         }
-    }
-    else
+    } else
         arrangement::arrange(m_selected, m_unselected, m_bedpts, params);
 
     // finalize just here.
@@ -301,7 +302,7 @@ void FillBedJob::finalize(bool canceled, std::exception_ptr &eptr)
             else
                 ap.bed_idx = cur_plate;
 
-            if (m_selected.size() <= 100) {
+            if (!m_used_fast_grid) {
                 ap.row = ap.bed_idx / plate_cols;
                 ap.col = ap.bed_idx % plate_cols;
                 ap.translation(X) += bed_stride_x(m_plater) * ap.col;

@@ -6,6 +6,8 @@
 #include "Flow.hpp"
 #include "SurfaceCollection.hpp"
 #include "ExtrusionEntityCollection.hpp"
+#include <algorithm>
+#include <memory>
 #include "BoundingBox.hpp"
 namespace Slic3r {
 
@@ -273,6 +275,32 @@ enum SupportInnerType {
 class SupportLayer : public Layer
 {
 public:
+    // Filled raft region before path generation, in centered object coordinates.
+    // Kept separately from support_islands, which may also contain ordinary supports.
+    ExPolygons raft_outline;
+    // One flag per top-level support_fills entity, recorded by the generator,
+    // never inferred from role/flow (ordinary supports may have identical flow).
+    // Empty/mismatching metadata is an old or unsupported source.
+    std::vector<unsigned char> raft_entity_flags;
+    ExPolygons                 raft_geometry_outline;
+    ExPolygons                 raft_support_outline;
+    bool has_raft_provenance() const { return !raft_entity_flags.empty() && raft_entity_flags.size() == support_fills.entities.size(); }
+    void mark_raft_entities(size_t begin)
+    {
+        raft_entity_flags.resize(support_fills.entities.size(), 0);
+        std::fill(raft_entity_flags.begin() + begin, raft_entity_flags.end(), 1);
+    }
+    struct RaftMergeBackup
+    {
+        ExtrusionEntityCollection fills;
+        ExPolygons                islands;
+        std::vector<unsigned char> entity_flags;
+    };
+    // Present only after a plate-level merge. Restored before every process() so
+    // moving/deleting a neighbour never reuses its former shared raft.
+    std::unique_ptr<RaftMergeBackup> raft_merge_backup;
+    bool                             raft_covered_by_shared_paths = false;
+
     // Polygons covered by the supports: base, interface and contact areas.
     // Used to suppress retraction if moving for a support extrusion over these support_islands.
     ExPolygons                  support_islands;

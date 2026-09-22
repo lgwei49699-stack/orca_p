@@ -58,9 +58,11 @@
 #include "libslic3r/Model.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/ModelRepair.hpp"
+#include "libslic3r/ModelCheckWorkflow.hpp"
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/Slicing.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/GCode/Thumbnails.hpp"
 #include "libslic3r/SLAPrint.hpp"
@@ -112,6 +114,38 @@ using namespace Slic3r;
 
 #define MAX_CLONEABLE_SIZE 512
 
+static bool cli_variable_layer_height_profiles_equal(const std::vector<coordf_t> &lhs, const std::vector<coordf_t> &rhs)
+{
+    if (lhs.size() != rhs.size())
+        return false;
+    for (size_t i = 0; i < lhs.size(); ++i)
+        if (std::abs(lhs[i] - rhs[i]) > EPSILON)
+            return false;
+    return true;
+}
+
+static std::vector<coordf_t> cli_generate_variable_layer_height_profile(
+    const PrintObject &print_object,
+    float quality_speed,
+    bool smooth,
+    unsigned int smoothing_radius,
+    bool keep_min)
+{
+    if (print_object.instances().empty() || print_object.instances().front().model_instance == nullptr)
+        throw std::runtime_error("Cannot generate a variable layer height profile without a printable instance.");
+
+    std::vector<coordf_t> profile = layer_height_profile_adaptive(
+        print_object.slicing_parameters(),
+        *print_object.model_object(),
+        *print_object.instances().front().model_instance,
+        quality_speed);
+    if (smooth) {
+        const HeightProfileSmoothingParams smoothing_params(smoothing_radius, keep_min);
+        profile = smooth_height_profile(profile, print_object.slicing_parameters(), smoothing_params);
+    }
+    return profile;
+}
+
 std::map<int, std::string> cli_errors =
     {{CLI_SUCCESS, "Success."},
      {CLI_ENVIRONMENT_ERROR, "Failed setting up server environment."},
@@ -140,6 +174,7 @@ std::map<int, std::string> cli_errors =
      {CLI_FILE_VERSION_NOT_SUPPORTED, "Unsupported 3MF version or required feature. Please update OrcaSlicer before opening this project."},
      {CLI_MODEL_REPAIR_ERROR, "Failed repairing the model."},
      {CLI_RESULT_WRITE_ERROR, "Failed writing the CLI result file."},
+     {CLI_MODEL_CHECK_ERROR, "Model checking did not complete."},
      {CLI_NO_SUITABLE_OBJECTS, "One of the plate is empty or has no object fully inside it. Please check that the 3mf contains no empty "
                                "plate in Orca Slicer before uploading."},
      {CLI_VALIDATE_ERROR,
@@ -186,6 +221,7 @@ typedef struct _model_repair_info {
     std::string              engine{"admesh"};
     MeshRepairReport         report;
     ModelRepairReport        cgal_report;
+    bool                     input_materials_ignored{false};
     std::vector<std::string> output_files;
 } model_repair_info_t;
 
@@ -211,7 +247,11 @@ typedef struct _sliced_info {
     std::vector<std::string>         output_files;
     std::vector<model_repair_info_t> model_repairs;
     std::vector<obj_export_info_t>   obj_exports;
+    bool                             cgal_repair_requested{false};
+    bool                             repair_slice_requested{false};
+    size_t                           repair_slices_completed{0};
     json                             model_transforms = nlohmann::json::array();
+    json                             model_checks     = nlohmann::json::array();
 }sliced_info_t;
 std::vector<PrintBase::SlicingStatus> g_slicing_warnings;
 
@@ -586,6 +626,15 @@ bool record_exit_reson(std::string                        outputdir,
     const std::string result_file = result_path.string();
 
     try {
+        if (!sliced_info.model_checks.empty()) {
+            // Model-only business response: no slicing totals, per-volume
+            // engine records, repeated inspections or sampled coordinates.
+            const auto result = model_check_business_result(sliced_info.model_checks, code, error_message);
+            if (!write_cli_result_atomically(result_path, result.dump(2) + "\n"))
+                return false;
+            BOOST_LOG_TRIVIAL(info) << "Saved model check result to " << result_file;
+            return true;
+        }
         json j;
         //record the headers
         if (sliced_info.downward_machines.size() > 0)
@@ -598,6 +647,27 @@ bool record_exit_reson(std::string                        outputdir,
         j["prepare_time"] = sliced_info.prepare_time;
         j["export_time"] = sliced_info.export_time;
         j["output_files"] = sliced_info.output_files;
+        if (sliced_info.cgal_repair_requested) {
+            bool mesh_passed = !sliced_info.model_repairs.empty() &&
+                               std::all_of(sliced_info.model_repairs.begin(), sliced_info.model_repairs.end(),
+                                           [](const model_repair_info_t& info) {
+                                               return info.engine == "cgal" && info.cgal_report.mesh_validated();
+                                           });
+            size_t unresolved_volumes = 0;
+            for (const model_repair_info_t& info : sliced_info.model_repairs)
+                unresolved_volumes += info.cgal_report.unresolved;
+            // This is evidence about this invocation, not a universal promise
+            // of printability or a replacement for inspecting the layer preview.
+            j["repair_validation"] = {{"mesh", mesh_passed ? "passed" : "not_passed"},
+                                      {"policy", "best_effort"},
+                                      {"unresolved_volumes", unresolved_volumes},
+                                      {"slicing",
+                                       !sliced_info.repair_slice_requested ?
+                                           "not_requested" :
+                                           (code != 0 ? "failed" :
+                                                        (sliced_info.repair_slices_completed > 0 ? "completed" : "not_completed"))},
+                                      {"completed_plates", sliced_info.repair_slices_completed}};
+        }
         if (!sliced_info.model_transforms.empty())
             j["model_transforms"] = sliced_info.model_transforms;
         j["obj_exports"] = json::array();
@@ -641,27 +711,33 @@ bool record_exit_reson(std::string                        outputdir,
             if (repair_info.engine == "cgal") {
                 const ModelRepairReport& report = repair_info.cgal_report;
                 repair_json["repair_enabled"]   = true;
+                repair_json["input_materials_ignored"] = repair_info.input_materials_ignored;
                 repair_json["repair_attempted"] = report.attempted;
                 repair_json["load_succeeded"]   = true;
                 repair_json["status"]           = report.status();
                 repair_json["success"]          = report.success;
                 repair_json["committed"]        = report.committed;
-                repair_json["before"]           = {{"facets", report.before_facets}, {"open_edges", report.before_open_edges}};
-                repair_json["repair_actions"]   = {{"objects", report.objects},
-                                                   {"volumes", report.volumes},
-                                                   {"repaired", report.repaired},
-                                                   {"mesh_repaired", report.mesh_repaired},
-                                                   {"skipped", report.skipped},
-                                                   {"failed", report.failed},
-                                                   {"rolled_back", report.rolled_back},
-                                                   {"split_volumes", report.split_volumes},
-                                                   {"created_parts", report.created_parts},
-                                                   {"removed_parts", report.removed_parts}};
-                repair_json["after"]            = {{"facets", report.after_facets},
-                                                   {"open_edges", report.after_open_edges},
-                                                   {"closed", report.success && report.after_facets > 0 && report.after_open_edges == 0}};
-                repair_json["volumes"]          = json::array();
-                repair_json["failures"]         = json::array();
+                repair_json["completed"]        = report.completed;
+                repair_json["can_continue"]     = report.can_continue();
+                repair_json["mesh_validated"]          = report.mesh_validated();
+                repair_json["before"]                  = {{"facets", report.before_facets}, {"open_edges", report.before_open_edges}};
+                repair_json["repair_actions"]          = {{"objects", report.objects},
+                                                          {"volumes", report.volumes},
+                                                          {"repaired", report.repaired},
+                                                          {"mesh_repaired", report.mesh_repaired},
+                                                          {"skipped", report.skipped},
+                                                          {"failed", report.failed},
+                                                          {"rolled_back", report.rolled_back},
+                                                          {"split_volumes", report.split_volumes},
+                                                          {"created_parts", report.created_parts},
+                                                          {"removed_parts", report.removed_parts},
+                                                          {"basic_removed_faces", report.basic_removed_faces},
+                                                          {"unresolved", report.unresolved}};
+                repair_json["after"]                   = {{"facets", report.after_facets},
+                                                          {"open_edges", report.after_open_edges},
+                                                          {"closed", report.can_continue() && report.after_facets > 0 && report.after_open_edges == 0}};
+                repair_json["volumes"]                 = json::array();
+                repair_json["failures"]                = json::array();
                 for (const ModelRepairVolumeReport& volume : report.volume_reports) {
                     repair_json["volumes"].push_back(
                         {{"object_index", volume.object_index},
@@ -675,6 +751,8 @@ bool record_exit_reson(std::string                        outputdir,
                          {"repaired_parts", volume.repaired_parts},
                          {"split_parts", volume.split_parts},
                          {"removed_parts", volume.removed_parts},
+                         {"basic_removed_faces", volume.basic_removed_faces},
+                         {"unresolved_parts", volume.unresolved_parts},
                          {"before", {{"facets", volume.before_facets}, {"open_edges", volume.before_open_edges}}},
                          {"after", {{"facets", volume.after_facets}, {"open_edges", volume.after_open_edges}}}});
                 }
@@ -683,7 +761,8 @@ bool record_exit_reson(std::string                        outputdir,
                                                        {"volume_index", failure.volume_index},
                                                        {"object_name", failure.object_name},
                                                        {"volume_name", failure.volume_name},
-                                                       {"message", failure.message}});
+                                                       {"message", failure.message},
+                                                       {"recoverable", failure.recoverable}});
                 }
             } else {
                 const MeshRepairReport& report  = repair_info.report;
@@ -705,7 +784,7 @@ bool record_exit_reson(std::string                        outputdir,
             }
             j["model_repairs"].push_back(std::move(repair_json));
         }
-        for (auto& iter: key_values)
+        for (auto& iter : key_values)
             j[iter.first] = iter.second;
 
         const std::string result_contents = j.dump(4) + "\n";
@@ -1463,6 +1542,44 @@ int CLI::run(int argc, char **argv)
     long long global_begin_time = 0, global_current_time;
     sliced_info_t sliced_info;
     std::map<std::string, std::string> record_key_values;
+
+    enum class CLIVariableLayerHeightMode { Preserve, Adaptive, Reset };
+    std::string variable_layer_height_mode_name = m_config.opt_string("variable_layer_height_mode");
+    boost::algorithm::to_lower(variable_layer_height_mode_name);
+    CLIVariableLayerHeightMode variable_layer_height_mode;
+    if (variable_layer_height_mode_name == "preserve")
+        variable_layer_height_mode = CLIVariableLayerHeightMode::Preserve;
+    else if (variable_layer_height_mode_name == "adaptive")
+        variable_layer_height_mode = CLIVariableLayerHeightMode::Adaptive;
+    else if (variable_layer_height_mode_name == "reset")
+        variable_layer_height_mode = CLIVariableLayerHeightMode::Reset;
+    else {
+        const std::string message = "Invalid --variable-layer-height-mode '" + variable_layer_height_mode_name +
+                                    "'; expected preserve, adaptive, or reset.";
+        BOOST_LOG_TRIVIAL(error) << message;
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        flush_and_exit(CLI_INVALID_PARAMS);
+    }
+
+    const float variable_layer_height_quality_speed = float(m_config.opt_float("variable_layer_height_quality_speed"));
+    const bool variable_layer_height_smooth = m_config.opt_bool("variable_layer_height_smooth");
+    const unsigned int variable_layer_height_smoothing_radius =
+        unsigned(m_config.opt_int("variable_layer_height_smoothing_radius"));
+    const bool variable_layer_height_keep_min = m_config.opt_bool("variable_layer_height_keep_min");
+    const bool variable_layer_height_changes_profile =
+        variable_layer_height_mode != CLIVariableLayerHeightMode::Preserve;
+
+    if (variable_layer_height_changes_profile &&
+        std::find(m_actions.begin(), m_actions.end(), "load_slicedata") != m_actions.end()) {
+        const std::string message =
+            "--variable-layer-height-mode adaptive/reset cannot be combined with --load-slicedata because cached layers may use a different layer-height profile.";
+        BOOST_LOG_TRIVIAL(error) << message;
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        flush_and_exit(CLI_INVALID_PARAMS);
+    }
+
     std::vector<std::string> effective_load_filaments = requested_load_filaments;
     std::vector<std::vector<unsigned int>> model_material_slots(m_input_files.size());
     const bool has_model_filament_mapping = std::any_of(
@@ -1471,10 +1588,112 @@ int CLI::run(int argc, char **argv)
     const bool has_explicit_arrange_group = std::any_of(m_model_cli_specs.begin(), m_model_cli_specs.end(),
                                                         [](const ModelCliSpec& spec) { return spec.arrange_group.has_value(); });
 
+    // Validate before material catalog loading and before the no-action GUI branch.
+    const bool cgal_repair_requested   = std::find(m_actions.begin(), m_actions.end(), "repair_model") != m_actions.end();
+    if (std::find(m_actions.begin(), m_actions.end(), "check_model") != m_actions.end()) {
+        ModelCheckWorkflowReport check_report;
+        int                      code = CLI_SUCCESS;
+        std::string              message;
+        try {
+            // This is a model-only entry point, before printer/material catalog
+            // loading, arrangement, bed transforms and the normal slice path.
+            const std::set<std::string> allowed_options{"check_model", "repair_model", "export_obj", "export_stl",
+                                                        "outputdir",   "debug",        "datadir",    "repair_ignore_materials"};
+            for (const auto& key : m_requested_options)
+                if (allowed_options.count(key) == 0)
+                    throw std::invalid_argument("--check-model does not accept this slicing/transform option: " + key);
+            if (m_input_files.size() != 1 || !m_transforms.empty())
+                throw std::invalid_argument("--check-model requires exactly one untransformed STL or OBJ input.");
+            if (std::any_of(m_model_cli_specs.begin(), m_model_cli_specs.end(), [](const ModelCliSpec& spec) {
+                    return spec.filament_group || spec.arrange_group || spec.color || spec.position || spec.scale || spec.rotation ||
+                           spec.support || spec.process;
+                }))
+                throw std::invalid_argument("--check-model does not accept per-model slicing overrides.");
+            if (cgal_repair_requested && m_config.opt_string("repair_model") != "cgal")
+                throw std::invalid_argument("--check-model supports only --repair-model cgal.");
+            if (m_config.opt_bool("export_obj") && m_config.opt_bool("export_stl"))
+                throw std::invalid_argument("Choose one model check export format: OBJ or STL.");
+            ModelCheckWorkflowOptions options;
+            options.input_file       = boost::filesystem::absolute(m_input_files.front()).string();
+            options.output_directory = outfile_dir;
+            options.advanced_repair  = cgal_repair_requested;
+            options.ignore_materials = m_config.opt_bool("repair_ignore_materials");
+            options.export_format    = m_config.opt_bool("export_obj") ? "obj" : (m_config.opt_bool("export_stl") ? "stl" : "");
+            run_model_check_workflow(options, check_report);
+        } catch (const std::invalid_argument& error) {
+            code    = CLI_INVALID_PARAMS;
+            message = error.what();
+        } catch (const std::bad_alloc&) {
+            code    = CLI_OUT_OF_MEMORY;
+            message = "Insufficient memory while checking the model.";
+        } catch (const std::exception& error) {
+            code    = check_report.repair_attempted ? CLI_MODEL_REPAIR_ERROR : CLI_MODEL_CHECK_ERROR;
+            message = error.what();
+        } catch (...) {
+            code    = CLI_MODEL_CHECK_ERROR;
+            message = "Unexpected model check failure.";
+        }
+        if (check_report.check.empty())
+            check_report.check = {{"check_complete", false},
+                                  {"mesh_status", "unknown"},
+                                  {"next_action", "retry_check"},
+                                  {"advanced_repair",
+                                   {{"requested", cgal_repair_requested},
+                                    {"status", cgal_repair_requested ? "not_started" : "not_requested"}}}};
+        if (code != CLI_SUCCESS) {
+            check_report.check["operation_error"] = message;
+            check_report.check["operation_status"] = "failed";
+            if (check_report.check.contains("advanced_repair") && check_report.check["advanced_repair"].value("status", "") == "running") {
+                check_report.check["advanced_repair"]["status"]         = "failed";
+                check_report.check["advanced_repair"]["retained_stage"] = "prepared";
+            }
+            boost::nowide::cerr << message << std::endl;
+        }
+        // Preserve one actionable engine reason, not the whole per-volume
+        // diagnostic tree. Remaining issue counts describe the retained model.
+        if (!check_report.repair.failures.empty())
+            check_report.check["repair_message"] = check_report.repair.failures.front().message;
+        sliced_info.model_checks.push_back(std::move(check_report.check));
+        if (!record_exit_reson(outfile_dir, code, 0, message, sliced_info))
+            return CLI_RESULT_WRITE_ERROR;
+        return code;
+    }
+    sliced_info.cgal_repair_requested = cgal_repair_requested;
+    sliced_info.repair_slice_requested = cgal_repair_requested &&
+        std::find(m_actions.begin(), m_actions.end(), "slice") != m_actions.end();
+    if (sliced_info.repair_slice_requested &&
+        (m_config.opt_bool("no_check") || m_config.opt_bool("allow_newer_file") ||
+         std::find(m_actions.begin(), m_actions.end(), "load_slicedata") != m_actions.end())) {
+        const std::string message = "CGAL repair with slicing requires fresh slicing and validation; "
+                                    "do not combine it with --no-check, --allow-newer-file or --load-slicedata.";
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        flush_and_exit(CLI_INVALID_PARAMS);
+    }
+    const bool repair_ignore_materials = m_config.opt_bool("repair_ignore_materials");
+    const bool repair_preserve_colors  = cgal_repair_requested && !repair_ignore_materials &&
+                                        (sliced_info.repair_slice_requested || m_config.opt_bool("export_obj") ||
+                                         std::find(m_actions.begin(), m_actions.end(), "export_multicolor_obj") != m_actions.end());
+    if (repair_ignore_materials) {
+        std::string error_message;
+        if (!cgal_repair_requested)
+            error_message = "--repair-ignore-materials requires --repair-model cgal.";
+        else if (has_model_filament_mapping || m_config.opt_bool("split_by_color") || m_config.opt_bool("arrange_by_color") ||
+                 std::find(m_actions.begin(), m_actions.end(), "export_multicolor_obj") != m_actions.end())
+            error_message = "--repair-ignore-materials cannot be combined with --model-filaments, --split-by-color, "
+                            "--arrange-by-color or --export-multicolor-obj.";
+        if (!error_message.empty()) {
+            boost::nowide::cerr << error_message << std::endl;
+            record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, error_message, sliced_info);
+            flush_and_exit(CLI_INVALID_PARAMS);
+        }
+        BOOST_LOG_TRIVIAL(warning) << "Geometry-only repair import: OBJ MTL libraries, colors and UVs will be ignored.";
+    }
+
     if (!m_model_cli_specs.empty()) {
         if (m_model_cli_specs.size() != m_input_files.size()) {
-            boost::nowide::cerr << "--model block count " << m_model_cli_specs.size()
-                                << " does not match positional model count " << m_input_files.size() << std::endl;
+            boost::nowide::cerr << "--model block count " << m_model_cli_specs.size() << " does not match positional model count "
+                                << m_input_files.size() << std::endl;
             record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
             flush_and_exit(CLI_INVALID_PARAMS);
         }
@@ -1737,9 +1956,7 @@ int CLI::run(int argc, char **argv)
     bool auto_repair_model = true;
     if (ConfigOptionBool* option = m_config.option<ConfigOptionBool>("auto_repair_model"))
         auto_repair_model = option->value;
-    BOOST_LOG_TRIVIAL(info) << "auto_repair_model=" << auto_repair_model;
 
-    const bool  cgal_repair_requested = std::find(m_actions.begin(), m_actions.end(), "repair_model") != m_actions.end();
     std::string repair_engine;
     if (cgal_repair_requested) {
         repair_engine = boost::algorithm::to_lower_copy(m_config.opt_string("repair_model"));
@@ -1757,19 +1974,20 @@ int CLI::run(int argc, char **argv)
         }
         for (const std::string& input_file : m_input_files) {
             if (!boost::algorithm::iends_with(input_file, ".stl") && !boost::algorithm::iends_with(input_file, ".obj")) {
-                const std::string error_message = "--repair-model cgal currently supports STL and OBJ inputs; OBJ repair operates on "
-                                                  "geometry only and does not preserve material semantics. Unsupported input: " +
+                const std::string error_message = "--repair-model cgal currently supports STL and OBJ inputs. Unsupported input: " +
                                                   input_file;
                 boost::nowide::cerr << error_message << std::endl;
                 record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, error_message, sliced_info);
                 flush_and_exit(CLI_INVALID_PARAMS);
             }
         }
-        if (auto_repair_model) {
-            BOOST_LOG_TRIVIAL(info) << "--repair-model cgal replaces the legacy STL load-time repair for this run";
+        // Preserve the CGAL-only default, but honor an explicit request to run
+        // native STL import repair before advanced repair and slicing/export.
+        if (std::find(m_requested_options.begin(), m_requested_options.end(), "auto_repair_model") == m_requested_options.end())
             auto_repair_model = false;
-        }
+        BOOST_LOG_TRIVIAL(info) << "STL load-time repair before CGAL: " << (auto_repair_model ? "enabled" : "disabled");
     }
+    BOOST_LOG_TRIVIAL(info) << "auto_repair_model=" << auto_repair_model;
 
     const bool export_texture_obj_requested =
         std::find(m_actions.begin(), m_actions.end(), "export_texture_obj") != m_actions.end();
@@ -1919,8 +2137,8 @@ int CLI::run(int argc, char **argv)
     BOOST_LOG_TRIVIAL(info) << boost::format("plate_to_slice=%1%, normative_check=%2%, use_first_fila_as_default=%3%")%plate_to_slice %normative_check %use_first_fila_as_default;
     unsigned int input_index = 0;
     std::vector<std::string> loaded_model_sources;
-    if (!load_assemble_list.empty() && ((m_input_files.size() > 0) || (m_transforms.size() > 0)))
-    {
+    std::vector<bool>        loaded_model_materials_ignored;
+    if (!load_assemble_list.empty() && ((m_input_files.size() > 0) || (m_transforms.size() > 0))) {
         BOOST_LOG_TRIVIAL(error) << boost::format("load_assemble_list should not be used with input model files to load and should not be sued with transforms");
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, cli_errors[CLI_INVALID_PARAMS], sliced_info);
         flush_and_exit(CLI_INVALID_PARAMS);
@@ -1932,8 +2150,9 @@ int CLI::run(int argc, char **argv)
                 record_exit_reson(outfile_dir, CLI_FILE_NOTFOUND, 0, cli_errors[CLI_FILE_NOTFOUND], sliced_info);
                 flush_and_exit(CLI_FILE_NOTFOUND);
             }
-            Model model;
-            const bool collect_repair_report = !cgal_repair_requested &&
+            Model      model;
+            bool       input_materials_ignored = false;
+            const bool collect_repair_report   = !cgal_repair_requested &&
                                                (boost::algorithm::iends_with(file, ".stl") || boost::algorithm::iends_with(file, ".oltp"));
             model_repair_info_t model_repair_info;
             model_repair_info.input_file     = file;
@@ -1974,18 +2193,22 @@ int CLI::run(int argc, char **argv)
                 model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets,
                                               &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice, nullptr,
                                               auto_repair_model, collect_repair_report ? &model_repair_info.report : nullptr,
-                                              explicit_material_slots, arrange_by_color ? &detected_obj_color_group : nullptr);
+                                              explicit_material_slots, arrange_by_color ? &detected_obj_color_group : nullptr,
+                                              repair_ignore_materials, repair_preserve_colors, &input_materials_ignored);
                 if (arrange_grouping_enabled) {
-                    const std::string explicit_group = input_index < m_model_cli_specs.size() &&
-                                                               m_model_cli_specs[input_index].arrange_group.has_value() ?
-                                                           *m_model_cli_specs[input_index].arrange_group :
-                                                           std::string();
-                    const std::string resolved_group = resolve_model_arrange_group(explicit_group, arrange_by_color,
-                                                                                   arrange_grouping_enabled, detected_obj_color_group);
+                    const ModelCliSpec* model_spec   = input_index < m_model_cli_specs.size() ? &m_model_cli_specs[input_index] : nullptr;
+                    const std::string explicit_group = model_spec && model_spec->arrange_group ? *model_spec->arrange_group : std::string();
+                    const std::string model_color    = model_spec && model_spec->color ? *model_spec->color : std::string();
+                    const std::string automatic_color_group = boost::algorithm::iends_with(file, ".stl") && !model_color.empty() ?
+                                                                  model_color :
+                                                                  detected_obj_color_group;
+                    const std::string resolved_group        = resolve_model_arrange_group(explicit_group, arrange_by_color,
+                                                                                          arrange_grouping_enabled, automatic_color_group);
                     for (ModelObject* object : model.objects)
                         object->arrange_group = resolved_group;
-                    BOOST_LOG_TRIVIAL(info) << boost::format("model arrange group: input=%1%, explicit=%2%, detected=%3%, resolved=%4%") %
-                                                   file % explicit_group % detected_obj_color_group % resolved_group;
+                    BOOST_LOG_TRIVIAL(info)
+                        << boost::format("model arrange group: input=%1%, explicit=%2%, detected=%3%, resolved=%4%, model_color=%5%") %
+                               file % explicit_group % detected_obj_color_group % resolved_group % model_color;
                 }
                 if (collect_repair_report) {
                     sliced_info.model_repairs.push_back(model_repair_info);
@@ -2442,6 +2665,7 @@ int CLI::run(int argc, char **argv)
             }
             m_models.push_back(std::move(model));
             loaded_model_sources.push_back(file);
+            loaded_model_materials_ignored.push_back(input_materials_ignored);
             if (convert_textured_glb)
                 textured_glb_model_indices.push_back(m_models.size() - 1);
         }
@@ -2471,6 +2695,7 @@ int CLI::run(int argc, char **argv)
         model.add_default_instances();
         m_models.push_back(std::move(model));
         loaded_model_sources.emplace_back();
+        loaded_model_materials_ignored.push_back(false);
     }
 
     if (export_texture_obj_requested && (textured_glb_model_indices.size() != 1 || m_models.size() != 1)) {
@@ -4043,6 +4268,16 @@ int CLI::run(int argc, char **argv)
     // so reports retain their source-file identity and all outputs see the
     // same committed geometry.
     if (cgal_repair_requested) {
+        if (repair_preserve_colors && obj_multicolor_auto_mapping && !has_model_filament_mapping && loaded_model_sources.size() > 1) {
+            const std::string error_message = "Automatic colored OBJ repair requires one input per invocation. "
+                                              "Use separate jobs or explicit --model-filaments bindings for multiple inputs.";
+            record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, error_message, sliced_info);
+            boost::nowide::cerr << error_message << std::endl;
+            flush_and_exit(CLI_INVALID_PARAMS);
+        }
+        bool        any_repair_change = false;
+        bool        has_unresolved    = false;
+        std::string first_unresolved_error;
         for (size_t model_index = 0; model_index < m_models.size(); ++model_index) {
             model_repair_info_t repair_info;
             repair_info.engine      = repair_engine;
@@ -4051,8 +4286,21 @@ int CLI::run(int argc, char **argv)
                 repair_info.input_file = loaded_model_sources[model_index];
             else if (!m_models[model_index].objects.empty())
                 repair_info.input_file = m_models[model_index].objects.front()->input_file;
+            repair_info.input_materials_ignored = model_index < loaded_model_materials_ignored.size() &&
+                                                  loaded_model_materials_ignored[model_index];
+            // Missing MTL is a geometry-only fallback, unless the caller supplies
+            // explicit replacement filament bindings that must still be preserved.
+            const bool preserve_model_colors = repair_preserve_colors &&
+                                               (!repair_info.input_materials_ignored || has_model_filament_mapping);
 
-            const bool               repair_succeeded = repair_model(m_models[model_index], repair_info.cgal_report);
+            ModelRepairOptions repair_options;
+            repair_options.allow_partial             = true;
+            repair_options.preserve_annotations      = preserve_model_colors;
+            repair_options.allow_annotation_clearing = !preserve_model_colors;
+            // A strict color transaction must not discard a painted planar part
+            // during cleanup before the annotation coverage check can see it.
+            repair_options.remove_non_3d_parts        = !preserve_model_colors;
+            const bool               repair_succeeded = repair_model(m_models[model_index], repair_info.cgal_report, repair_options);
             const ModelRepairReport& report           = repair_info.cgal_report;
             BOOST_LOG_TRIVIAL(info)
                 << boost::format("CGAL model repair summary: input=%1%, status=%2%, committed=%3%, volumes=%4%, repaired=%5%, "
@@ -4060,40 +4308,63 @@ int CLI::run(int argc, char **argv)
                        repair_info.input_file % report.status() % report.committed % report.volumes % report.repaired %
                        report.mesh_repaired % report.split_volumes % report.removed_parts % report.skipped % report.before_facets %
                        report.after_facets % report.before_open_edges % report.after_open_edges;
+            BOOST_LOG_TRIVIAL(info) << "CGAL model repair validation: mesh_validated=" << report.mesh_validated()
+                                    << ", unresolved=" << report.unresolved << ", basic_removed_faces=" << report.basic_removed_faces;
 
             std::string repair_error = cli_errors[CLI_MODEL_REPAIR_ERROR];
             if (!report.failures.empty()) {
                 const ModelRepairFailure& failure = report.failures.front();
                 repair_error += " Object '" + failure.object_name + "', volume '" + failure.volume_name + "': " + failure.message;
             }
+            const bool repair_can_continue = report.can_continue();
+            any_repair_change              = any_repair_change || report.committed;
+            has_unresolved                 = has_unresolved || report.unresolved != 0;
+            if (report.unresolved != 0) {
+                if (first_unresolved_error.empty())
+                    first_unresolved_error = repair_error;
+                for (const ModelRepairFailure& issue : report.failures)
+                    BOOST_LOG_TRIVIAL(warning) << "CGAL unresolved geometry: input=" << repair_info.input_file
+                                               << ", object=" << issue.object_name << ", volume=" << issue.volume_name
+                                               << ", reason=" << issue.message;
+            }
             sliced_info.model_repairs.push_back(std::move(repair_info));
 
-            if (!repair_succeeded) {
+            if (!repair_succeeded && !repair_can_continue) {
                 BOOST_LOG_TRIVIAL(error) << repair_error;
                 record_exit_reson(outfile_dir, CLI_MODEL_REPAIR_ERROR, 0, repair_error, sliced_info);
                 flush_and_exit(CLI_MODEL_REPAIR_ERROR);
             }
         }
+        // Do not abort a batch just because an earlier file had no repairable
+        // changes. Any retained improvement is a partial repair success. With
+        // --slice, structurally usable unresolved input may still be sliced;
+        // the existing slicing/error/G-code gates remain mandatory.
+        if (has_unresolved && !any_repair_change && !sliced_info.repair_slice_requested) {
+            record_exit_reson(outfile_dir, CLI_MODEL_REPAIR_ERROR, 0, first_unresolved_error, sliced_info);
+            boost::nowide::cerr << first_unresolved_error << std::endl;
+            flush_and_exit(CLI_MODEL_REPAIR_ERROR);
+        }
+        if (has_unresolved)
+            BOOST_LOG_TRIVIAL(warning) << "Proceeding with unresolved geometry; partial repair is not full mesh validation. "
+                                          "Inspect repair_validation, slicing warnings and the layer preview.";
     }
 
-    //BBS: set default to ptFFF
+    // BBS: set default to ptFFF
     if (printer_technology == ptUnknown)
         printer_technology = ptFFF;
 
-    //BBS: merge these models into one
-    BOOST_LOG_TRIVIAL(info) << "total " << m_models.size() << " models, "<<orients_requirement.size()<<" objects"<<std::endl;
-    if (m_models.size() > 1)
-    {
+    // BBS: merge these models into one
+    BOOST_LOG_TRIVIAL(info) << "total " << m_models.size() << " models, " << orients_requirement.size() << " objects" << std::endl;
+    if (m_models.size() > 1) {
         BOOST_LOG_TRIVIAL(info) << "merge all the models into one\n";
         Model m;
         m.set_backup_path(m_models[0].get_backup_path());
         for (auto& model : m_models)
-            for (ModelObject* o : model.objects)
-            {
+            for (ModelObject* o : model.objects) {
                 ModelObject* new_object = m.add_object(*o);
-                //BOOST_LOG_TRIVIAL(info) << "object "<<o->name <<", id :" << o->id().id << "\n";
-                //orients_requirement.emplace(new_object->id().id, orients_requirement[o->id().id]);
-                //orients_requirement.erase(o->id().id);
+                // BOOST_LOG_TRIVIAL(info) << "object "<<o->name <<", id :" << o->id().id << "\n";
+                // orients_requirement.emplace(new_object->id().id, orients_requirement[o->id().id]);
+                // orients_requirement.erase(o->id().id);
             }
         m.add_default_instances();
         m_models.clear();
@@ -4910,9 +5181,9 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature = " << m_config.opt_float("cli_nozzle_temperature");
         } else if (opt_key == "cli_nozzle_temperature_initial_layer") {
             BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature_initial_layer = " << m_config.opt_float("cli_nozzle_temperature_initial_layer");
-        } else if (opt_key == "model" || opt_key == "model_filaments" || opt_key == "model_arrange_group" || opt_key == "model_position" ||
-                   opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "model_process" ||
-                   opt_key == "thumbnail_image") {
+        } else if (opt_key == "model" || opt_key == "model_filaments" || opt_key == "model_arrange_group" || opt_key == "model_color" ||
+                   opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" ||
+                   opt_key == "model_process" || opt_key == "thumbnail_image") {
             BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
             boost::nowide::cerr << "error: option not implemented yet: " << opt_key << std::endl;
@@ -5270,6 +5541,7 @@ int CLI::run(int argc, char **argv)
                 }
 
                 arrangement::update_arrange_params(arrange_cfg, &m_print_config, selected);
+                prepare_mixed_raft_clearance(selected, unselected, m_print_config, arrange_cfg);
                 arrangement::update_selected_items_inflation(selected, &m_print_config, arrange_cfg);
                 arrangement::update_unselected_items_inflation(unselected, &m_print_config, arrange_cfg);
                 arrangement::update_selected_items_axis_align(selected, &m_print_config, arrange_cfg);
@@ -5698,6 +5970,7 @@ int CLI::run(int argc, char **argv)
                 }
 
                 arrangement::update_arrange_params(arrange_cfg, &m_print_config, selected);
+                prepare_mixed_raft_clearance(selected, unselected, m_print_config, arrange_cfg);
                 arrangement::update_selected_items_inflation(selected, &m_print_config, arrange_cfg);
                 arrangement::update_unselected_items_inflation(unselected, &m_print_config, arrange_cfg);
                 arrangement::update_selected_items_axis_align(selected, &m_print_config, arrange_cfg);
@@ -6448,6 +6721,9 @@ int CLI::run(int argc, char **argv)
         return path;
     };
 
+    // Reuse the existing multicolor exporter for the common repair + export-obj
+    // command. Non-repair exports retain their previous geometry-only behavior.
+    const bool  auto_multicolor_obj = repair_preserve_colors && (obj_multicolor_auto_mapping || has_model_filament_mapping);
     std::string obj_preflight_error;
     for (const std::string& action : m_actions) {
         if (action == "export_multicolor_obj" || action == "export_texture_obj") {
@@ -6462,6 +6738,12 @@ int CLI::run(int argc, char **argv)
                 const boost::filesystem::path obj_path(this->output_filepath(model, IO::OBJ));
                 if (!claim_obj_artifact(obj_path, "--export-obj", obj_preflight_error))
                     break;
+                if (auto_multicolor_obj) {
+                    boost::filesystem::path mtl_path = obj_path;
+                    mtl_path.replace_extension(".mtl");
+                    if (!claim_obj_artifact(mtl_path, "--export-obj", obj_preflight_error))
+                        break;
+                }
             }
             if (!obj_preflight_error.empty())
                 break;
@@ -6544,7 +6826,7 @@ int CLI::run(int argc, char **argv)
             //already applied after process settings were loaded
         } else if (opt_key == "split_by_color") {
             //will be processed after model loading, before orient/arrange
-        } else if (opt_key == "arrange_by_color" || opt_key == "model_arrange_group") {
+        } else if (opt_key == "arrange_by_color" || opt_key == "model_arrange_group" || opt_key == "model_color") {
             // runtime arrange groups were resolved while loading each model
         } else if (opt_key == "cli_nozzle_temperature") {
             //already applied after filament config loading
@@ -6593,15 +6875,16 @@ int CLI::run(int argc, char **argv)
                 record_exit_reson(outfile_dir, CLI_EXPORT_STL_ERROR, 0, cli_errors[CLI_EXPORT_STL_ERROR], sliced_info);
                 flush_and_exit(CLI_EXPORT_STL_ERROR);
             }
-        } else if (opt_key == "export_multicolor_obj") {
+        } else if (opt_key == "export_multicolor_obj" || (opt_key == "export_obj" && m_config.opt_bool(opt_key) && auto_multicolor_obj)) {
+            const std::string export_action = opt_key == "export_obj" ? "--export-obj" : "--export-multicolor-obj";
             if (m_models.size() != 1) {
-                const std::string error_message = "--export-multicolor-obj currently requires exactly one output model.";
+                const std::string error_message = export_action + " currently requires exactly one output model.";
                 BOOST_LOG_TRIVIAL(error) << error_message;
                 record_exit_reson(outfile_dir, CLI_EXPORT_OBJ_ERROR, 0, error_message, sliced_info);
                 flush_and_exit(CLI_EXPORT_OBJ_ERROR);
             }
             if (!model_has_exportable_geometry(m_models.front())) {
-                const std::string error_message = "--export-multicolor-obj cannot export a model with no MODEL_PART triangles.";
+                const std::string error_message = export_action + " cannot export a model with no MODEL_PART triangles.";
                 BOOST_LOG_TRIVIAL(error) << error_message;
                 record_exit_reson(outfile_dir, CLI_EXPORT_OBJ_ERROR, 0, error_message, sliced_info);
                 flush_and_exit(CLI_EXPORT_OBJ_ERROR);
@@ -6617,15 +6900,16 @@ int CLI::run(int argc, char **argv)
                                                                                      });
                                                               });
             if (annotations_were_cleared) {
-                const std::string error_message =
-                    "--export-multicolor-obj was refused because model repair changed topology and cleared MMU/paint annotations.";
+                const std::string error_message = export_action +
+                                                  " was refused because model repair changed topology and cleared MMU/paint annotations.";
                 BOOST_LOG_TRIVIAL(error) << error_message;
                 record_exit_reson(outfile_dir, CLI_EXPORT_OBJ_ERROR, 0, error_message, sliced_info);
                 flush_and_exit(CLI_EXPORT_OBJ_ERROR);
             }
 
-            boost::filesystem::path export_path(m_config.opt_string(opt_key));
-            if (export_path.is_relative() && !outfile_dir.empty())
+            boost::filesystem::path export_path(opt_key == "export_obj" ? this->output_filepath(m_models.front(), IO::OBJ) :
+                                                                          m_config.opt_string(opt_key));
+            if (opt_key != "export_obj" && export_path.is_relative() && !outfile_dir.empty())
                 export_path = boost::filesystem::path(outfile_dir) / export_path;
             if (!boost::algorithm::iends_with(export_path.extension().string(), ".obj"))
                 export_path.replace_extension(".obj");
@@ -6763,9 +7047,10 @@ int CLI::run(int argc, char **argv)
             }
 #endif
             // Make a copy of the model if the current action is not the last action, as the model may be
-            // modified by the centering and such.
+            // modified by the centering and such. CLI variable layer height is a runtime slicing override;
+            // always keep it off the canonical model so action ordering cannot accidentally persist it to 3MF.
             Model model_copy;
-            bool  make_copy = &opt_key != &m_actions.back();
+            bool  make_copy = variable_layer_height_changes_profile || &opt_key != &m_actions.back();
             for (Model &model_in : m_models) {
                 if (make_copy)
                     model_copy = model_in;
@@ -6992,6 +7277,100 @@ int CLI::run(int argc, char **argv)
                             }
                         }
                         print->apply(model, new_print_config);
+
+                        if (variable_layer_height_changes_profile) {
+                            std::map<int, std::pair<std::string, std::vector<coordf_t>>> generated_profiles;
+                            std::set<int> active_object_ids;
+                            std::string variable_layer_height_error;
+
+                            if (print_fff == nullptr) {
+                                variable_layer_height_error = "CLI variable layer height requires an FFF print.";
+                            } else {
+                                try {
+                                    for (const PrintObject *print_object : print_fff->objects()) {
+                                        const ModelObject *model_object = print_object->model_object();
+                                        const int object_id = model_object->id().id;
+                                        active_object_ids.insert(object_id);
+
+                                        if (variable_layer_height_mode != CLIVariableLayerHeightMode::Adaptive)
+                                            continue;
+
+                                        std::vector<coordf_t> profile = cli_generate_variable_layer_height_profile(
+                                            *print_object,
+                                            variable_layer_height_quality_speed,
+                                            variable_layer_height_smooth,
+                                            variable_layer_height_smoothing_radius,
+                                            variable_layer_height_keep_min);
+
+                                        auto existing_profile = generated_profiles.find(object_id);
+                                        if (existing_profile == generated_profiles.end()) {
+                                            generated_profiles.emplace(
+                                                object_id, std::make_pair(model_object->name, std::move(profile)));
+                                        } else if (!cli_variable_layer_height_profiles_equal(existing_profile->second.second, profile)) {
+                                            variable_layer_height_error =
+                                                "Object '" + model_object->name +
+                                                "' has printable instances with different poses or scales that require different variable layer-height profiles. "
+                                                "Split those instances into separate objects before using --variable-layer-height-mode adaptive.";
+                                            break;
+                                        }
+                                    }
+                                } catch (const std::exception &ex) {
+                                    variable_layer_height_error =
+                                        std::string("Failed to generate CLI variable layer height: ") + ex.what();
+                                }
+                            }
+
+                            if (!variable_layer_height_error.empty()) {
+                                BOOST_LOG_TRIVIAL(error) << "plate " << index + 1 << ": " << variable_layer_height_error;
+                                boost::nowide::cerr << variable_layer_height_error << std::endl;
+                                record_exit_reson(outfile_dir, CLI_VALIDATE_ERROR, index + 1, variable_layer_height_error, sliced_info);
+                                flush_and_exit(CLI_VALIDATE_ERROR);
+                            }
+
+                            bool profile_changed = false;
+                            size_t updated_object_count = 0;
+                            for (ModelObject *model_object : model.objects) {
+                                if (active_object_ids.find(model_object->id().id) == active_object_ids.end())
+                                    continue;
+
+                                if (variable_layer_height_mode == CLIVariableLayerHeightMode::Reset) {
+                                    if (!model_object->layer_height_profile.empty()) {
+                                        model_object->layer_height_profile.clear();
+                                        profile_changed = true;
+                                        ++updated_object_count;
+                                    }
+                                } else {
+                                    const auto profile_it = generated_profiles.find(model_object->id().id);
+                                    if (profile_it == generated_profiles.end()) {
+                                        variable_layer_height_error =
+                                            "Unable to match generated variable layer height to object '" + model_object->name + "'.";
+                                        break;
+                                    }
+                                    const std::vector<coordf_t> current_profile = model_object->layer_height_profile.get();
+                                    if (current_profile != profile_it->second.second) {
+                                        model_object->layer_height_profile.set(profile_it->second.second);
+                                        profile_changed = true;
+                                        ++updated_object_count;
+                                    }
+                                }
+                            }
+
+                            if (!variable_layer_height_error.empty()) {
+                                BOOST_LOG_TRIVIAL(error) << "plate " << index + 1 << ": " << variable_layer_height_error;
+                                boost::nowide::cerr << variable_layer_height_error << std::endl;
+                                record_exit_reson(outfile_dir, CLI_VALIDATE_ERROR, index + 1, variable_layer_height_error, sliced_info);
+                                flush_and_exit(CLI_VALIDATE_ERROR);
+                            }
+
+                            if (profile_changed)
+                                print->apply(model, new_print_config);
+
+                            BOOST_LOG_TRIVIAL(info)
+                                << "plate " << index + 1 << ": CLI variable layer height mode="
+                                << variable_layer_height_mode_name << ", updated_objects=" << updated_object_count
+                                << ", quality_speed=" << variable_layer_height_quality_speed
+                                << ", smooth=" << variable_layer_height_smooth;
+                        }
                         BOOST_LOG_TRIVIAL(info) << boost::format("set no_check to %1%:")%no_check;
                         print->set_no_check_flag(no_check);//BBS
                         StringObjectException warning;
@@ -7031,6 +7410,8 @@ int CLI::run(int argc, char **argv)
                         }
                         else if (!warning.string.empty()) {
                             BOOST_LOG_TRIVIAL(warning) << "got warnings: "<< warning.string << std::endl;
+                            if (cgal_repair_requested)
+                                sliced_plate_info.warning_message = warning.string;
                         }
 
                         if (print->empty()) {
@@ -7113,6 +7494,14 @@ int CLI::run(int argc, char **argv)
                                     BOOST_LOG_TRIVIAL(info) << "print::process: first time_using_cache is " << time_using_cache << " secs.";
                                 }
                                 if (printer_technology == ptFFF) {
+                                    const auto print_objects = print_fff->objects();
+                                    if (cgal_repair_requested &&
+                                        std::none_of(print_objects.begin(), print_objects.end(),
+                                                     [](const PrintObject* object) { return object->layer_count() > 0; })) {
+                                        record_exit_reson(outfile_dir, CLI_SLICING_ERROR, index + 1,
+                                                          "Repaired mesh produced no printable layers.", sliced_info);
+                                        flush_and_exit(CLI_SLICING_ERROR);
+                                    }
                                     std::string conflict_result = print_fff->get_conflict_string();
                                     if (!conflict_result.empty()) {
                                        BOOST_LOG_TRIVIAL(error) << "plate "<< index+1<< ": found slicing result conflict!"<< std::endl;
@@ -7126,7 +7515,8 @@ int CLI::run(int argc, char **argv)
                                         for (unsigned int i = 0; i < g_slicing_warnings.size(); i++)
                                         {
                                             PrintBase::SlicingStatus& status = g_slicing_warnings[i];
-                                            if ((status.warning_step != -1) && (status.message_type != PrintStateBase::SlicingDefaultNotification))
+                                            if ((status.warning_step != -1) &&
+                                                (cgal_repair_requested || status.message_type != PrintStateBase::SlicingDefaultNotification))
                                             {
                                                 sliced_plate_info.warning_message = status.text;
 
@@ -7137,7 +7527,8 @@ int CLI::run(int argc, char **argv)
                                                     BOOST_LOG_TRIVIAL(warning) << boost::format("plate %1%: found slicing warnings: %2%, no_check=%3%")%(index+1) %status.text %no_check;
                                                     if (!no_check) {
                                                         //only following message will be reported under import mode
-                                                        if (status.message_type == PrintStateBase::SlicingEmptyGcodeLayers
+                                                        if (cgal_repair_requested
+                                                            || status.message_type == PrintStateBase::SlicingEmptyGcodeLayers
                                                             || status.message_type == PrintStateBase::SlicingGcodeOverlap)
                                                         {
                                                             sliced_info.sliced_plates.push_back(sliced_plate_info);
@@ -7164,6 +7555,33 @@ int CLI::run(int argc, char **argv)
                                     BOOST_LOG_TRIVIAL(info) << "process finished, will export gcode temporily to " << outfile << std::endl;
                                     temp_time = (long long)Slic3r::Utils::get_current_time_utc();
                                     outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true, true);
+                                    if (cgal_repair_requested) {
+                                        // Some diagnostics (notably empty extrusion layers) are
+                                        // emitted during G-code generation, after the earlier check.
+                                        std::string rejected_gcode = print_fff->get_conflict_string();
+                                        for (const PrintBase::SlicingStatus& status : g_slicing_warnings) {
+                                            if (status.warning_step == -1)
+                                                continue;
+                                            if (!status.text.empty())
+                                                sliced_plate_info.warning_message = status.text;
+                                            if (status.warning_level == PrintStateBase::WarningLevel::CRITICAL)
+                                                rejected_gcode = status.text.empty() ? "Critical G-code generation warning." : status.text;
+                                        }
+                                        g_slicing_warnings.clear();
+                                        if (!rejected_gcode.empty()) {
+                                            // This file was generated by this invocation and is not
+                                            // an accepted artifact. Do not leave a printable-looking
+                                            // result after reporting failure.
+                                            boost::system::error_code cleanup_error;
+                                            boost::filesystem::remove(outfile, cleanup_error);
+                                            if (cleanup_error)
+                                                BOOST_LOG_TRIVIAL(error) << "Could not remove rejected G-code: " << outfile
+                                                                        << ", " << cleanup_error.message();
+                                            sliced_info.sliced_plates.push_back(sliced_plate_info);
+                                            record_exit_reson(outfile_dir, CLI_SLICING_ERROR, index + 1, rejected_gcode, sliced_info);
+                                            flush_and_exit(CLI_SLICING_ERROR);
+                                        }
+                                    }
                                     time_using_cache = time_using_cache + ((long long)Slic3r::Utils::get_current_time_utc() - temp_time);
                                     BOOST_LOG_TRIVIAL(info) << "export_gcode finished: time_using_cache update to " << time_using_cache << " secs.";
 
@@ -7230,6 +7648,8 @@ int CLI::run(int argc, char **argv)
                                     }
                                 }
                                 sliced_info.sliced_plates.push_back(sliced_plate_info);
+                                if (cgal_repair_requested && printer_technology == ptFFF)
+                                    ++sliced_info.repair_slices_completed;
                             } catch (const Slic3r::SlicingErrors &ex) {
                                 BOOST_LOG_TRIVIAL(error) << "found slicing or export error for partplate " << index+1;
                                 for (const auto& err : ex.errors_) {
@@ -8098,7 +8518,7 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
     m_model_cli_specs.clear();
     ModelCliSpec *current = nullptr;
 
-    const std::set<std::string> model_keys = {"model",       "model-filaments", "model-arrange-group", "model-position",
+    const std::set<std::string> model_keys = {"model",       "model-filaments", "model-arrange-group", "model-color",  "model-position",
                                               "model-scale", "model-rotate",    "model-support",       "model-process"};
 
     for (int i = 1; i < argc; ++i) {
@@ -8140,6 +8560,8 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
         if (token == "model-filaments") target = &current->filament_group;
         else if (token == "model-arrange-group")
             target = &current->arrange_group;
+        else if (token == "model-color")
+            target = &current->color;
         else if (token == "model-position") target = &current->position;
         else if (token == "model-scale") target = &current->scale;
         else if (token == "model-rotate") target = &current->rotation;
@@ -8149,6 +8571,17 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
         if (target != nullptr && target->has_value()) {
             boost::nowide::cerr << "Duplicate --" << token << " for model " << current->model_token << std::endl;
             return false;
+        }
+        if (token == "model-color") {
+            if (!boost::algorithm::iends_with(current->model_token, ".stl")) {
+                boost::nowide::cerr << _u8L("--model-color requires an STL model.") << " " << current->model_token << std::endl;
+                return false;
+            }
+            if (value.size() != 7 || value.front() != '#' || value.find_first_not_of("0123456789abcdefABCDEF", 1) != std::string::npos) {
+                boost::nowide::cerr << _u8L("--model-color must be a color in #RRGGBB format.") << " " << value << std::endl;
+                return false;
+            }
+            boost::to_upper(value);
         }
         if (target != nullptr)
             *target = value;
@@ -8225,6 +8658,7 @@ bool CLI::setup(int argc, char **argv)
     }
     if (!parse_model_cli_specs(argc, argv))
         return false;
+    m_requested_options = opt_order;
     // Parse actions and transform options.
     for (auto const &opt_key : opt_order) {
         if (cli_actions_config_def.has(opt_key)) {

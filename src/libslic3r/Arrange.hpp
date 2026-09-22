@@ -5,6 +5,7 @@
 #include "PrintConfig.hpp"
 #include "Print.hpp"
 
+#include <optional>
 #include <set>
 #include <string>
 
@@ -13,6 +14,7 @@
 namespace Slic3r {
 
 class BoundingBox;
+class ModelInstance;
 
 namespace arrangement {
 
@@ -78,6 +80,18 @@ struct ArrangePolygon {
     double    height{ 0 };         // item height
     double    brim_width{ 0 };     // brim width
     double    minimum_inflation{ 0 }; // non-overridable physical footprint margin in mm
+    // A Cura raft without other bed attachments may be clipped on an otherwise
+    // empty rectangular bed. This never reduces its object-to-object inflation.
+    bool allow_raft_bed_clipping{false};
+    // A model without bed attachments may occupy an empty rectangular bed
+    // without its object-to-object spacing envelope fitting inside that bed.
+    bool allow_unrafted_bed_fit{false};
+    // Explicit-width or automatic brim may be cropped at the edge on an empty bed.
+    // Its reservation is used only by the retry, not by normal pairwise packing.
+    bool   allow_brim_bed_clipping{false};
+    double brim_bed_clipping_margin{0.}; // mm, including gap and deposited half-width
+    // Borrowed for model-aware preparation; lifetime is the same as the setter's instance.
+    const ModelInstance* model_instance{nullptr};
     std::string name;
 
     // If empty, any rotation is allowed (currently unsupported)
@@ -193,6 +207,11 @@ void update_selected_items_inflation(ArrangePolygons& selected, const DynamicPri
 void update_unselected_items_inflation(ArrangePolygons& unselected, const DynamicPrintConfig* print_cfg, const ArrangeParams& params);
 
 void update_selected_items_axis_align(ArrangePolygons& selected, const DynamicPrintConfig* print_cfg, const ArrangeParams& params);
+
+// Absolute Z seed in the unrotated, already-inflated footprint's coordinate system.
+// Canonicalizes the minimum rectangle's axis to [0, PI/2), not the model's geometry.
+// Returns no value for degenerate geometry so callers can keep the legacy path.
+std::optional<double> stable_arrange_seed_rotation(const ExPolygon& footprint);
 
 Points get_shrink_bedpts(const DynamicPrintConfig* print_cfg, const ArrangeParams& params);
 

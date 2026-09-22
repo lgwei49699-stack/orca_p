@@ -27,6 +27,12 @@ using VirtualBedFn = std::function<void(arrangement::ArrangePolygon&)>;
 }
 
 ArrangePolygons get_arrange_polys(const Model &model, ModelInstancePtrs &instances);
+// Call before computing inflation, with both movable and fixed objects. Returns
+// true only for Cura V1 / raft-off mixed, layer-by-layer arrangements.
+bool            prepare_mixed_raft_clearance(ArrangePolygons&          selected,
+                                             ArrangePolygons&          fixed,
+                                             const DynamicPrintConfig& config,
+                                             const ArrangeParams&      params);
 ArrangePolygon  get_arrange_poly(const Model &model);
 bool apply_arrange_polys(ArrangePolygons &polys, ModelInstancePtrs &instances, VirtualBedFn);
 

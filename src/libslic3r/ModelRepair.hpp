@@ -1,6 +1,8 @@
 #ifndef libslic3r_ModelRepair_hpp_
 #define libslic3r_ModelRepair_hpp_
 
+#include "MeshRepairOutcome.hpp"
+
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -16,6 +18,8 @@ class TriangleMesh;
 enum class ModelRepairVolumeStatus {
     Skipped,
     Repaired,
+    PartiallyRepaired,
+    Unresolved,
     RolledBack,
     Failed,
 };
@@ -37,6 +41,8 @@ struct ModelRepairVolumeReport
     size_t                  repaired_parts        = 0;
     size_t                  split_parts           = 1;
     size_t                  removed_parts         = 0;
+    size_t                  basic_removed_faces   = 0;
+    size_t                  unresolved_parts      = 0;
     bool                    annotations_cleared   = false;
     bool                    annotations_preserved = false;
     std::string             message;
@@ -51,24 +57,28 @@ struct ModelRepairFailure
     std::string object_name;
     std::string volume_name;
     std::string message;
+    bool        recoverable = false;
 };
 
 struct ModelRepairReport
 {
-    bool   success       = false;
-    bool   attempted     = false;
-    bool   committed     = false;
-    bool   canceled      = false;
-    size_t objects       = 0;
-    size_t volumes       = 0;
-    size_t repaired      = 0;
-    size_t mesh_repaired = 0;
-    size_t skipped       = 0;
-    size_t failed        = 0;
-    size_t rolled_back   = 0;
-    size_t split_volumes = 0;
-    size_t created_parts = 0;
-    size_t removed_parts = 0;
+    bool   success             = false;
+    bool   attempted           = false;
+    bool   committed           = false;
+    bool   canceled            = false;
+    bool   completed           = false;
+    size_t objects             = 0;
+    size_t volumes             = 0;
+    size_t repaired            = 0;
+    size_t mesh_repaired       = 0;
+    size_t skipped             = 0;
+    size_t failed              = 0;
+    size_t rolled_back         = 0;
+    size_t split_volumes       = 0;
+    size_t created_parts       = 0;
+    size_t removed_parts       = 0;
+    size_t basic_removed_faces = 0;
+    size_t unresolved          = 0; // Selected volumes with remaining geometric problems.
 
     size_t before_facets     = 0;
     size_t after_facets      = 0;
@@ -80,6 +90,8 @@ struct ModelRepairReport
     std::vector<size_t>                  changed_object_indices;
 
     const char* status() const;
+    bool        can_continue() const { return completed && !canceled && failed == 0; }
+    bool        mesh_validated() const { return can_continue() && unresolved == 0; }
 };
 
 struct ModelRepairTarget
@@ -93,6 +105,18 @@ struct ModelRepairOptions
     // Empty means all MODEL_PART volumes. A target without volume_index means
     // all MODEL_PART volumes belonging to that object.
     std::vector<ModelRepairTarget> targets;
+
+    // Keep independently safe basic cleanup, verified CGAL checkpoints within
+    // a part, and other successfully repaired parts on geometric rejection.
+    // Invalid data, inspection/worker exceptions, annotation failures and
+    // cancellation remain fatal.
+    // Deletion that opens connections is not retained. Isolated collinear caps
+    // may instead form an independently certified, surface-preserving topology
+    // baseline, retained on later geometric rejection but never exceptions. Callers
+    // must distinguish partial success from mesh_validated(); no improvement
+    // returns false but can_continue() may permit a separate slicing attempt.
+    // Explicitly enabled by GUI/CLI; the core's default remains transactional.
+    bool allow_partial = false;
 
     // CGAL does not expose interruption inside a single repair call. These
     // callbacks are therefore observed between volumes and once more before
@@ -125,12 +149,23 @@ struct ModelRepairOptions
     // worker before returning.
     std::function<bool(const TriangleMesh& source, TriangleMesh& result, std::string& error)> repair_mesh_from_source;
 
+    // Optional partial-aware source-to-result worker. Used only in partial
+    // mode, with precedence over the legacy bool hooks. Rejected outputs are
+    // ignored; partial outputs must pass the shared read-only progress gate.
+    // As with the legacy hooks, all workers must join before returning.
+    std::function<MeshRepairOutcome(const TriangleMesh& source, TriangleMesh& result, std::string& error)> repair_mesh_with_partial;
+
     // Optional synchronous runner for the read-only SavedPainting coverage
     // check. The supplied task only reads immutable painting snapshots and the
     // private staging volumes. GUI callers may execute it on a worker while the
     // main thread services progress and cancellation. The runner must not
     // retain the task and must join every worker before returning.
     std::function<bool(const std::function<bool()>& task)> run_painting_validation;
+
+    // Optional synchronous worker for basic face filtering, certified topology
+    // preparation and read-only volume-cleanup / partial-candidate validation.
+    // Only private mesh copies are modified; never touches Model IDs/state.
+    std::function<void(const std::function<void()>& task)> run_mesh_preparation;
 
     // Permit topology-indexed annotations that cannot or should not be remapped
     // to be cleared. Geometry-only CLI repair enables this explicitly.
@@ -143,10 +178,19 @@ struct ModelRepairOptions
 
     // Split disconnected shells that can be proven spatially separate into
     // individual volumes before repair. Nested, touching, or intersecting
-    // shells stay together so cavity orientation is not destroyed. Empty,
-    // planar, and vanishingly thin parts may then be removed. Both operations
-    // participate in the same transaction.
+    // shells stay together so cavity orientation is not destroyed. Empty and
+    // small/degenerate parts may then be removed using the Orca 2.4.2 policy.
+    // Both operations participate in the same transaction.
+    // Partial mode may also separate independent groups while retaining all
+    // touching/nested patches within each group. That fallback preserves winding
+    // and transforms and only retains the split when actual repair/cleanup changes
+    // are accepted; grouping alone is not progress on an unresolved model.
     bool split_components    = true;
+    // Legacy name; includes 2.4.2's source-local size/volume heuristics:
+    // min dimension or abs(volume) <= EPSILON, min/max dimension <= 1e-6,
+    // or abs(volume)/bbox volume <= 1e-6. No instance/volume scaling is applied.
+    // Disabling removal does not disable candidate validation or strict color
+    // protection. Removal must never empty an object or silently lose painting.
     bool remove_non_3d_parts = true;
 };
 
@@ -157,8 +201,10 @@ struct ModelRepairOptions
 std::unique_ptr<Model> make_model_repair_staging_copy(const Model& model, const std::vector<ModelRepairTarget>& targets);
 
 // Repairs all selected MODEL_PART volumes. Splitting, non-3D cleanup and CGAL
-// repair are staged on a private model copy; if any volume fails or the user
-// cancels, neither geometry nor volume structure is committed to the model.
+// repair are staged on a private model copy; by default, if any volume fails or
+// the user cancels, neither geometry nor volume structure is committed.
+// With allow_partial, geometric rejection is recorded without discarding safe
+// changes. A true return may therefore mean partially_repaired, not mesh-valid.
 bool repair_model(Model& model, ModelRepairReport& report, const ModelRepairOptions& options = {});
 
 // Repairs an already isolated staging model without creating another Model

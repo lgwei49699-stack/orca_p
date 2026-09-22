@@ -761,6 +761,12 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     toggle_line("raft_layer_0_z_overlap", use_cura_raft);
     toggle_field("raft_layer_0_z_overlap", have_cura_raft);
 
+    for (const char* key : {"raft_segmented", "raft_chunk_size", "raft_chunk_gap", "raft_smoothing"}) {
+        toggle_line(key, use_cura_raft);
+        const bool chunk_detail = std::string(key) == "raft_chunk_size" || std::string(key) == "raft_chunk_gap";
+        toggle_field(key, have_cura_raft && (!chunk_detail || config->opt_bool("raft_segmented")));
+    }
+
     for (const char *key : {"raft_base_layer_height", "raft_base_line_width", "raft_base_line_spacing", "raft_base_flow", "raft_base_speed",
                             "raft_base_acceleration", "raft_base_fan_speed", "raft_base_wall_count", "raft_base_margin"}) {
         toggle_line(key, use_cura_raft);

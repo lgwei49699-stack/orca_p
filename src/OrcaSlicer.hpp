@@ -101,6 +101,7 @@ struct ModelCliSpec {
     std::string                model_token;
     std::optional<std::string> filament_group;
     std::optional<std::string> arrange_group;
+    std::optional<std::string> color;
     std::optional<std::string> position;
     std::optional<std::string> scale;
     std::optional<std::string> rotation;
@@ -119,6 +120,7 @@ private:
     DynamicPrintConfig          m_extra_config;
     std::vector<std::string>    m_input_files;
     std::vector<std::string>    m_actions;
+    std::vector<std::string>    m_requested_options; // Before setup inserts option defaults.
     std::vector<std::string>    m_transforms;
     std::vector<Model>          m_models;
     std::vector<ModelCliSpec>   m_model_cli_specs;

@@ -1,10 +1,13 @@
 #include "ModelArrange.hpp"
 #include "Arrange.hpp"
+#include "Brim.hpp"
 
 #include <libslic3r/Model.hpp>
 #include <libslic3r/Geometry/ConvexHull.hpp>
 #include <libslic3r/Print.hpp>
 #include "MTUtils.hpp"
+#include "Slicing.hpp"
+#include "Support/SupportGridParams.hpp"
 
 #include <map>
 #include <set>
@@ -195,6 +198,140 @@ double estimate_arrange_support_margin(const ModelInstance &instance, const Dyna
         return margin + raft_margins.widest();
 
     return std::max(raft_margins.common_absolute(), margin + raft_margins.common_support_expansion());
+}
+
+bool prepare_mixed_raft_clearance(ArrangePolygons&          selected,
+                                  ArrangePolygons&          fixed,
+                                  const DynamicPrintConfig& config,
+                                  const ArrangeParams&      params)
+{
+    if (params.is_seq_print)
+        return false;
+
+    // Uniform jobs keep the old path without resolving full object configs.
+    bool cura_candidate = false;
+    bool off_candidate  = false;
+    for (const ArrangePolygons* polygons : {&selected, &fixed})
+        for (const ArrangePolygon& item : *polygons) {
+            if (!item.model_instance || item.is_virt_object || item.is_wipe_tower)
+                continue;
+            ModelObject* object = item.model_instance->get_object();
+            const auto*  mode   = object->get_config_value<ConfigOptionEnum<RaftMode>>(config, "raft_mode");
+            const auto*  layers = object->get_config_value<ConfigOptionInt>(config, "raft_layers");
+            const bool   cura   = mode && mode->value == RaftMode::CuraV1;
+            cura_candidate |= cura;
+            off_candidate |= !cura && (!layers || layers->value == 0);
+        }
+    if (!cura_candidate || !off_candidate)
+        return false;
+
+    // Use the same object overrides as slicing. Cache by object so copied
+    // instances do not repeatedly resolve the full configuration.
+    PrintObjectConfig defaults;
+    defaults.apply(config, true);
+    PrintConfig print_config;
+    print_config.apply(config, true);
+    std::map<const ModelObject*, PrintObjectConfig> configs;
+    std::vector<ArrangePolygon*>                    items;
+    for (ArrangePolygons* polygons : {&selected, &fixed}) {
+        for (ArrangePolygon& item : *polygons) {
+            if (!item.model_instance || item.is_virt_object || item.is_wipe_tower)
+                continue;
+            const ModelObject* object = item.model_instance->get_object();
+            if (configs.find(object) == configs.end())
+                configs.emplace(object,
+                                PrintObject::object_config_from_model_object(defaults, *object, print_config.filament_diameter.size()));
+            items.push_back(&item);
+        }
+    }
+    const auto has_raft = [](const PrintObjectConfig& cfg) { return cfg.raft_mode.value == RaftMode::CuraV1 || cfg.raft_layers.value > 0; };
+    std::vector<const PrintObjectConfig*> donors;
+    bool                                  has_unrafted = false;
+    for (const auto& entry : configs) {
+        const PrintObjectConfig& cfg = entry.second;
+        has_unrafted |= !has_raft(cfg);
+        if (cfg.raft_mode.value == RaftMode::CuraV1 && cfg.raft_base_layers.value > 0 && cfg.raft_surface_layers.value > 0 &&
+            cfg.raft_interface_layers.value >= 0)
+            donors.push_back(&cfg);
+    }
+    if (donors.empty() || !has_unrafted)
+        return false;
+
+    const auto normal_grid_growth = [&](const PrintObjectConfig& cfg) {
+        if (is_tree(cfg.support_type.value))
+            return 0.;
+        const Flow support_flow = Flow::new_from_config_width(frSupportMaterial,
+                                                              cfg.support_line_width.value > 0 ? cfg.support_line_width : cfg.line_width,
+                                                              float(print_config.nozzle_diameter.get_at(cfg.support_filament.value - 1)),
+                                                              float(cfg.layer_height.value));
+        return SupportGridParams(cfg, support_flow).arrange_expansion();
+    };
+    const auto raft_margin = [&](const PrintObjectConfig& cfg, double support_margin) {
+        const RaftPlanConfig    plan = resolve_cura_raft_plan_config(print_config, cfg,
+                                                                     print_config.nozzle_diameter.get_at(cfg.support_filament.value - 1),
+                                                                     print_config.nozzle_diameter.get_at(cfg.support_interface_filament.value -
+                                                                                                         1));
+        const CuraV1RaftMargins margins{true, plan.base_config.margin, plan.interface_config.margin, plan.surface_config.margin,
+                                        plan.interface_config.layer_count > 0};
+        const double            nominal = uses_offset_tree_raft(cfg.support_type.value, cfg.support_style.value) ? margins.widest() :
+                                                                                                                   margins.common_absolute();
+        double                  width   = std::max(plan.base_config.line_width, plan.surface_config.line_width);
+        if (margins.has_interface)
+            width = std::max(width, plan.interface_config.line_width);
+        // The original margin already accounts for support overhangs. Add the
+        // contact grid's growth and deposited half-width, independent of walls,
+        // segmentation and merging. The small gap avoids rounded-edge contact.
+        return std::max(support_margin, nominal) + normal_grid_growth(cfg) + width * 0.5 + 0.05;
+    };
+
+    t_config_option_keys raft_keys;
+    for (const auto& key : donors.front()->keys())
+        if (key.compare(0, 5, "raft_") == 0)
+            raft_keys.push_back(key);
+    for (ArrangePolygon* item : items) {
+        const ModelObject*       object = item->model_instance->get_object();
+        const PrintObjectConfig& cfg    = configs.at(object);
+        double                   margin = item->brim_width;
+        if (has_raft(cfg)) {
+            if (cfg.raft_mode.value == RaftMode::CuraV1) {
+                margin = raft_margin(cfg, margin);
+            } else {
+                // Active Legacy rafts inherit a Cura donor at slicing time.
+                // The destination plate is not known yet: reserve the largest
+                // possible donor footprint without changing saved settings.
+                for (const PrintObjectConfig* donor : donors) {
+                    PrintObjectConfig effective = cfg;
+                    effective.apply_only(*donor, raft_keys, true);
+                    margin = std::max(margin, item->brim_width + raft_margin(effective, 0.));
+                }
+            }
+        } else {
+            double brim = 0.;
+            if (cfg.brim_type.value != btNoBrim && cfg.brim_type.value != btInnerOnly) {
+                // Brim.cpp resolves automatic widths from sliced volume groups
+                // and caps them at 18 mm. Before slicing use that upper bound.
+                brim = cfg.brim_type.value == btAutoBrim ? MAX_AUTO_BRIM_WIDTH_MM : std::max(0., cfg.brim_width.value);
+                if (cfg.brim_type.value == btPainted)
+                    for (const auto& point : object->brim_points)
+                        brim = std::max(brim, double(point.head_front_radius));
+                brim += std::max(0., cfg.brim_object_gap.value);
+            }
+            const double nozzle = *std::max_element(print_config.nozzle_diameter.values.begin(), print_config.nozzle_diameter.values.end());
+            const auto*  inner_width = object->get_config_value<ConfigOptionFloatOrPercent>(config, "inner_wall_line_width");
+            const double width = std::max({print_config.initial_layer_line_width.get_abs_value(nozzle), cfg.line_width.get_abs_value(nozzle),
+                                           inner_width ? inner_width->get_abs_value(nozzle) : 0., 1.125 * nozzle});
+            // Support brims may extend beyond support feet, hence addition.
+            margin += brim + width * 0.5;
+            if (cfg.enable_support.value)
+                margin += normal_grid_growth(cfg);
+            if (print_config.skirt_type.value == stPerObject && print_config.skirt_loops.value > 0)
+                margin += std::max(0., print_config.skirt_distance.value) + print_config.skirt_loops.value * width;
+        }
+        item->minimum_inflation = std::max(item->minimum_inflation, margin);
+        BOOST_LOG_TRIVIAL(debug) << "[arrange-diag] mixed_raft name=" << item->name << " raft=" << has_raft(cfg)
+                                 << " minimum_inflation_mm=" << item->minimum_inflation;
+    }
+    return true;
 }
 
 int resolve_arrange_auto_plate_value(bool option_was_specified, int configured_value)
@@ -461,6 +598,7 @@ arrangement::ArrangePolygon get_arrange_poly(ModelInstance* inst, const Slic3r::
 ArrangePolygon get_instance_arrange_poly(ModelInstance* instance, const Slic3r::DynamicPrintConfig& config)
 {
     ArrangePolygon ap = get_arrange_poly(PtrWrapper{ instance }, config);
+    ap.model_instance = instance;
 
     //BBS: add temperature information
     if (config.has("curr_bed_type")) {
@@ -503,8 +641,43 @@ ArrangePolygon get_instance_arrange_poly(ModelInstance* instance, const Slic3r::
 
     ap.arrange_group = obj->arrange_group;
     ap.brim_width = estimate_arrange_support_margin(*instance, config);
-    if (cura_v1_raft_margins(*obj, config).enabled)
-        ap.minimum_inflation = ap.brim_width;
+    const auto* support             = obj->get_config_value<ConfigOptionBool>(config, "enable_support");
+    const auto* enforce             = obj->get_config_value<ConfigOptionInt>(config, "enforce_support_layers");
+    const auto* skirts              = obj->get_config_value<ConfigOptionInt>(config, "skirt_loops");
+    const bool  no_support_or_skirt = support && !support->value && (!enforce || enforce->value == 0) &&
+                                      !has_manual_support(*obj) && (!skirts || skirts->value == 0);
+    if (cura_v1_raft_margins(*obj, config).enabled) {
+        ap.minimum_inflation       = ap.brim_width;
+        ap.allow_raft_bed_clipping = no_support_or_skirt;
+    } else {
+        const auto* mode       = obj->get_config_value<ConfigOptionEnum<RaftMode>>(config, "raft_mode");
+        const auto* layers     = obj->get_config_value<ConfigOptionInt>(config, "raft_layers");
+        const auto* brim       = obj->get_config_value<ConfigOptionEnum<BrimType>>(config, "brim_type");
+        const auto* technology = config.option<ConfigOptionEnum<PrinterTechnology>>("printer_technology");
+        const bool  raft_off = technology && technology->value == ptFFF && no_support_or_skirt && mode && mode->value == RaftMode::Legacy &&
+                              layers && layers->value == 0;
+        ap.allow_unrafted_bed_fit = raft_off && brim && brim->value == btNoBrim;
+        // Automatic brim uses its generator's upper bound until slicing resolves
+        // the actual width (possibly zero). Painted / generated ears stay excluded.
+        if (raft_off && brim &&
+            (brim->value == btOuterOnly || brim->value == btInnerOnly || brim->value == btOuterAndInner || brim->value == btAutoBrim)) {
+            const auto* brim_width = obj->get_config_value<ConfigOptionFloat>(config, "brim_width");
+            const auto* brim_gap   = obj->get_config_value<ConfigOptionFloat>(config, "brim_object_gap");
+            const auto* nozzles    = config.option<ConfigOptionFloats>("nozzle_diameter");
+            if (brim_width && brim_gap && nozzles && !nozzles->values.empty()) {
+                const double nozzle = *std::max_element(nozzles->values.begin(), nozzles->values.end());
+                double       width  = 1.125 * nozzle;
+                for (const char* key : {"initial_layer_line_width", "line_width", "inner_wall_line_width"})
+                    if (const auto* value = obj->get_config_value<ConfigOptionFloatOrPercent>(config, key))
+                        width = std::max(width, value->get_abs_value(nozzle));
+                ap.allow_brim_bed_clipping = true;
+                if (brim->value != btInnerOnly) {
+                    const double outer_width    = brim->value == btAutoBrim ? MAX_AUTO_BRIM_WIDTH_MM : std::max(0., brim_width->value);
+                    ap.brim_bed_clipping_margin = outer_width + std::max(0., brim_gap->value) + width * 0.5;
+                }
+            }
+        }
+    }
 
     auto size = obj->instance_convex_hull_bounding_box(instance).size();
     ap.height = size.z();

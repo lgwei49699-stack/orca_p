@@ -348,6 +348,8 @@ public:
     // Get facets at a given state. Don't triangulate T-joints.
     indexed_triangle_set get_facets(EnforcerBlockerType state) const;
     // Get facets at a given state. Triangulate T-joints.
+    // Includes all referenced vertices in selector order, not just this state's
+    // vertices. Calls on the same unchanged selector share vertex numbering.
     indexed_triangle_set get_facets_strict(EnforcerBlockerType state) const;
     // Get edges around the selected area by seed fill.
     std::vector<Vec2i32> get_seed_fill_contour() const;

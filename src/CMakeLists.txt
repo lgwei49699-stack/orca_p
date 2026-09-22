@@ -279,6 +279,14 @@ if (WIN32)
     install(TARGETS OrcaSlicer RUNTIME DESTINATION ".")
     if (MSVC)
         install(TARGETS OrcaSlicer_app_gui RUNTIME DESTINATION ".")
+        # OpenSSL is linked dynamically on Windows. The runtime DLLs are copied
+        # next to OrcaSlicer during the build, so install them from that output
+        # directory to keep the NSIS package self-contained.
+        install(FILES
+            "$<TARGET_FILE_DIR:OrcaSlicer>/libcrypto-3-x64.dll"
+            "$<TARGET_FILE_DIR:OrcaSlicer>/libssl-3-x64.dll"
+            DESTINATION "."
+        )
     endif ()
     install(FILES ${output_dlls_${build_type}} DESTINATION ".")
 else ()

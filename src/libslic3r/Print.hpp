@@ -315,6 +315,12 @@ private: // Prevents erroneous use by other classes.
     typedef PrintObjectBaseWithState<Print, PrintObjectStep, posCount> Inherited;
 
 public:
+    // Resolve a copy for slicing and pre-slice arrangement without modifying
+    // the model or defaults. Applies object overrides and clamps extruder IDs.
+    static PrintObjectConfig object_config_from_model_object(const PrintObjectConfig& default_object_config,
+                                                             const ModelObject&       object,
+                                                             size_t                   num_extruders);
+
     // Size of an object: XYZ in scaled coordinates. The size might not be quite snug in XY plane.
     const Vec3crd&               size() const			{ return m_size; }
     const PrintObjectConfig&     config() const         { return m_config; }
@@ -493,8 +499,6 @@ public:
         const ConfigOptionResolver &old_config, const ConfigOptionResolver &new_config, const std::vector<t_config_option_key> &opt_keys);
     // If ! m_slicing_params.valid, recalculate.
     void                    update_slicing_parameters();
-
-    static PrintObjectConfig object_config_from_model_object(const PrintObjectConfig &default_object_config, const ModelObject &object, size_t num_extruders);
 
 private:
     void make_perimeters();
@@ -890,6 +894,9 @@ public:
 
     // Returns an empty string if valid, otherwise returns an error message.
     StringObjectException validate(StringObjectException *warning = nullptr, Polygons* collison_polygons = nullptr, std::vector<std::pair<Polygon, float>>* height_polygons = nullptr) const override;
+    // Check generated raft paths against objects without a raft, after skirt/brim generation.
+    // Throws SlicingError on physical overlap; does not alter geometry or object settings.
+    void                validate_raft_clearance() const;
     double              skirt_first_layer_height() const;
     Flow                brim_flow() const;
     Flow                brim_flow(coordf_t layer_height) const;
@@ -956,7 +963,7 @@ public:
     const ToolOrdering&         get_tool_ordering() const { return m_wipe_tower_data.tool_ordering; }
 
     //BBS: plate's origin related functions
-    void set_plate_origin(Vec3d origin) { m_origin = origin; }
+    void        set_plate_origin(Vec3d origin);
     const Vec3d get_plate_origin() const { return m_origin; }
     //BBS: export gcode from previous gcode file from 3mf
     void set_gcode_file_ready();
@@ -1066,7 +1073,7 @@ private:
     bool                                    m_support_used {false};
 
     //BBS: plate's origin
-    Vec3d   m_origin;
+    Vec3d m_origin{Vec3d::Zero()};
     //BBS: modified_count
     int     m_modified_count {0};
     //BBS

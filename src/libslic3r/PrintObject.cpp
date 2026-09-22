@@ -9,6 +9,7 @@
 #include "MutablePolygon.hpp"
 #include "PrintConfig.hpp"
 #include "Support/SupportMaterial.hpp"
+#include "Support/SupportCommon.hpp"
 #include "Support/SupportSpotsGenerator.hpp"
 #include "Support/TreeSupport.hpp"
 #include "Surface.hpp"
@@ -128,6 +129,9 @@ PrintBase::ApplyStatus PrintObject::set_instances(PrintInstances &&instances)
         status = PrintBase::APPLY_STATUS_CHANGED;
         if (m_print->invalidate_steps({ psSkirtBrim, psGCodeExport }) ||
             (! equal_length && m_print->invalidate_step(psWipeTower)))
+            status = PrintBase::APPLY_STATUS_INVALIDATED;
+        // Raft outlines depend on the position of every instance relative to the bed.
+        if (this->has_raft() && this->invalidate_step(posSupportMaterial))
             status = PrintBase::APPLY_STATUS_INVALIDATED;
         m_instances = std::move(instances);
 	    for (PrintInstance &i : m_instances)
@@ -669,6 +673,7 @@ void PrintObject::generate_support_material()
             m_print->set_status(50, L("Generating support"));
 
             this->_generate_support_material();
+            clip_raft_toolpaths_to_bed(*this);
             m_print->throw_if_canceled();
         }
         this->set_done(posSupportMaterial);
@@ -735,15 +740,26 @@ void PrintObject::simplify_extrusion_path()
     if (this->set_started(posSimplifySupportPath)) {
         m_print->set_status(75, L("Optimizing toolpath"));
         BOOST_LOG_TRIVIAL(debug) << "Simplify extrusion path of support in parallel - start";
-        tbb::parallel_for(
-            tbb::blocked_range<size_t>(0, m_support_layers.size()),
-            [this](const tbb::blocked_range<size_t>& range) {
-                for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
-                    m_print->throw_if_canceled();
-                    m_support_layers[layer_idx]->simplify_support_extrusion_path();
-                }
-            }
-        );
+        const Polygons raft_bed       = this->has_raft() ? raft_printable_area(*this) : Polygons{};
+        const float    raft_tolerance = scaled<float>(std::max(m_print->config().resolution.value, SUPPORT_RESOLUTION) + 0.002);
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, m_support_layers.size()),
+                          [this, &raft_bed, raft_tolerance](const tbb::blocked_range<size_t>& range) {
+                              for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++layer_idx) {
+                                  m_print->throw_if_canceled();
+                                  const SupportLayer& layer = *m_support_layers[layer_idx];
+                                  // Shared raft paths were generated and clipped in plate
+                                  // coordinates. Keep their verified footprint unchanged.
+                                  if (layer.raft_merge_backup)
+                                      continue;
+                                  // Simplification / fitted arcs may move a clipped edge outside a
+                                  // curved bed or across an excluded-region corner. Keep these
+                                  // near-boundary raft layers in their original linear form.
+                                  if (this->has_raft() && layer.print_z <= m_slicing_params.raft_contact_top_z + EPSILON &&
+                                      !diff(layer.support_fills.polygons_covered_by_width(raft_tolerance), raft_bed).empty())
+                                      continue;
+                                  m_support_layers[layer_idx]->simplify_support_extrusion_path();
+                              }
+                          });
         m_print->throw_if_canceled();
         BOOST_LOG_TRIVIAL(debug) << "Simplify extrusion path of support in parallel - end";
         this->set_done(posSimplifySupportPath);
@@ -960,6 +976,10 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "raft_layers"
             || opt_key == "raft_contact_distance"
             || opt_key == "raft_mode"
+            || opt_key == "raft_segmented"
+            || opt_key == "raft_chunk_size"
+            || opt_key == "raft_chunk_gap"
+            || opt_key == "raft_smoothing"
             || opt_key == "raft_airgap"
             || opt_key == "raft_layer_0_z_overlap"
             || opt_key == "raft_base_layers"
@@ -1285,8 +1305,11 @@ bool PrintObject::invalidate_step(PrintObjectStep step)
         invalidated |= this->invalidate_steps({ posIroning, posSimplifyInfill });
         invalidated |= m_print->invalidate_steps({ psSkirtBrim });
     } else if (step == posSlice) {
-		invalidated |= this->invalidate_steps({ posPerimeters, posPrepareInfill, posInfill, posIroning, posSupportMaterial, posSimplifyPath, posSimplifyInfill });
-        invalidated |= m_print->invalidate_steps({ psSkirtBrim });
+        // Bulk invalidation does not propagate the individual steps' dependencies.
+        // Regenerated supports must also run their path simplification again.
+        invalidated |= this->invalidate_steps({posPerimeters, posPrepareInfill, posInfill, posIroning, posSupportMaterial, posSimplifyPath,
+                                               posSimplifyInfill, posSimplifySupportPath});
+        invalidated |= m_print->invalidate_steps({psSkirtBrim});
         m_slicing_params.valid = false;
     } else if (step == posSupportMaterial) {
         invalidated |= this->invalidate_steps({ posSimplifySupportPath });

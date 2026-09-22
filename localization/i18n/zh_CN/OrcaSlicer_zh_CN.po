@@ -17,6 +17,94 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 "X-Generator: Poedit 3.2.2\n"
 
+msgid "The raft has no printable area on the bed. Move the object or check the printer's printable area."
+msgstr "筏层在打印平台内没有可打印区域。请移动模型或检查打印机的可打印区域设置。"
+
+#, boost-format
+msgid "The raft for \"%1%\" overlaps \"%2%\", which has raft disabled. Move the objects farther apart or enable a raft for \"%2%\"."
+msgstr "对象“%1%”的筏层与未开启筏层的对象“%2%”发生重叠。请增大对象间距，或为“%2%”开启筏层。"
+
+msgid "Model repair partially completed. Safe changes were kept; some geometry problems remain."
+msgstr "模型部分修复成功。已保留安全的修改，但仍有几何问题未解决。"
+
+msgid "Unresolved geometry problems (rejected CGAL candidates were not applied):"
+msgstr "尚未解决的几何问题（未采用失败的 CGAL 修复候选）："
+
+msgid "Unresolved geometry problems in the retained model:"
+msgstr "当前保留模型中尚未解决的几何问题："
+
+msgid "Repair retained verified progress, but geometry problems remain."
+msgstr "已保留通过校验的修复成果，但仍有几何问题未解决。"
+
+msgid "Check the slicing result before printing. Partial repair does not mean the mesh is fully valid."
+msgstr "打印前请检查切片结果。部分修复成功不代表网格已完全通过检查。"
+
+msgid "No safe repair changes were found. Geometry problems remain"
+msgstr "未获得可安全保留的修复修改，模型仍有几何问题"
+
+msgid "Repair failed: painted facet annotations could not be preserved in a partial result."
+msgstr "修复失败：部分修复结果无法保留原有的绘制特征。"
+
+msgid "Repair failed: painted facet annotations could not be mapped onto the repaired mesh."
+msgstr "修复失败：原有的颜色或其他绘制特征无法完整映射到修复后的网格。"
+
+msgid "Repair failed: painted facet annotations could not be mapped onto the remaining model parts."
+msgstr "修复失败：原有的颜色或其他绘制特征无法完整映射到保留的模型部件。"
+
+msgid "Repair cannot preserve exterior-facet annotations; allow annotation clearing or remove those annotations first."
+msgstr "修复无法保留外表面标记；请允许清除标记，或先移除这类标记。"
+
+msgid "Repair cannot preserve exterior-facet annotations."
+msgstr "修复无法保留外表面标记。"
+
+msgid "Repair failed: basic boundary cleanup produced invalid topology."
+msgstr "修复失败：基础边界清理后，候选网格连接关系不合法。"
+
+msgid "Repair failed: basic cleanup removed all geometry."
+msgstr "修复失败：基础清理后没有可用的实体几何。原模型未被替换。"
+
+msgid "Repair failed: repaired mesh still contains degenerate faces or non-manifold vertices."
+msgstr "修复失败：结果仍有退化面或非流形顶点。"
+
+msgid "Repair failed: polygon-soup cleanup exceeded the geometry-preservation limits."
+msgstr "修复失败：网格清理结果超出原有形状的允许变化范围。"
+
+msgid "Repair failed: polygon soup is still invalid after orientation and vertex splitting."
+msgstr "修复失败：统一面朝向并拆分顶点后，网格连接关系仍不合法。"
+
+msgid "Repair failed: this model has complex intersecting surfaces that cannot be safely repaired automatically."
+msgstr "修复失败：模型存在复杂的面相交，当前无法安全自动修复。请先在建模软件中处理。"
+
+msgid "Repair failed: vertex splitting left intersections or invalid topology that could not be safely repaired."
+msgstr "修复失败：拆分顶点后仍有相交或异常连接，无法安全修复。"
+
+msgid "Repair failed: vertex-split repair exceeded the geometry-preservation limits."
+msgstr "修复失败：拆分顶点后的修复结果改变了原有外形或连通部分，超出安全范围。"
+
+msgid "Export as OBJ"
+msgstr "导出为 OBJ"
+
+msgid "OBJ export does not support negative volumes. Save as 3MF to preserve them."
+msgstr "OBJ 导出暂不支持负体积。请保存为 3MF 以保留挖孔等信息。"
+
+msgid "Cannot export OBJ: invalid or missing filament colors."
+msgstr "无法导出 OBJ：耗材颜色无效或缺失。"
+
+msgid "Cannot verify the source OBJ material files. Export was cancelled to protect the originals."
+msgstr "无法核实原始 OBJ 引用的材质文件。为保护原文件，已取消导出。"
+
+msgid "Cannot overwrite a source model or material file. Choose a different export name or directory."
+msgstr "不能覆盖原始模型或材质文件。请选择其他导出文件名或目录。"
+
+msgid "Replace these existing export files?"
+msgstr "是否替换以下已有的导出文件？"
+
+msgid "OBJ export failed. Check the model, filament colors and output permissions."
+msgstr "OBJ 导出失败。请检查模型、耗材颜色及输出目录权限。"
+
+msgid "OBJ export completed:"
+msgstr "OBJ 导出完成："
+
 msgid "Current AMS humidity"
 msgstr "当前AMS湿度"
 
@@ -6217,6 +6305,12 @@ msgstr "体积为零的对象已被移除"
 msgid "The volume of the object is zero"
 msgstr "对象的体积为零"
 
+msgid "Objects without triangle faces were removed."
+msgstr "已移除不含三角面的空对象。"
+
+msgid "Empty objects removed"
+msgstr "已移除空对象"
+
 #, c-format, boost-format
 msgid ""
 "The object from file %s is too small, and maybe in meters or inches.\n"
@@ -9385,12 +9479,16 @@ msgstr "网格变更后保留绘制特征"
 
 msgid ""
 "Attempt to keep painted features (color/seam/support/fuzzy etc.) after changing "
-"the object mesh (such as cut/reload from disk/simplify/fix etc.)\n"
-"Highly experimental! Slow and may create artifact."
+"the object mesh (such as cut/reload from disk/simplify etc.)\n"
+"Highly experimental! Slow and may create artifact.\n"
+"Repair model always preserves supported painted features regardless of this setting. "
+"If they cannot be preserved, repair fails without changing the selected model."
 msgstr ""
-"在更改对象网格（例如切割、从磁盘重新加载、简化或修复等）后尝试保留绘制特征（颜"
+"在更改对象网格（例如切割、从磁盘重新加载、简化等）后尝试保留绘制特征（颜"
 "色、接缝、支撑或绒毛等）。\n"
-"高度实验性功能！速度较慢且可能产生瑕疵。"
+"高度实验性功能！速度较慢且可能产生瑕疵。\n"
+"“修复模型”始终保留受支持的绘制特征，不受此设置影响。"
+"如果无法保留，修复将失败，所选模型不会被修改。"
 
 msgid "Loading repaired objects"
 msgstr "正在加载修复的对象。"
@@ -9811,9 +9909,9 @@ msgid "Raft line spacing must be zero for Auto or at least 0.0125 mm."
 msgstr "筏层线距设为零时表示自动计算；显式线距必须至少为 0.0125 mm。"
 
 msgid ""
-"For normal support, Raft Base margin must be at least 0.5 mm larger than "
-"Raft Top margin."
-msgstr "使用普通支撑时，筏层基底外扩量必须至少比筏层顶部外扩量大 0.5 mm。"
+"Raft Base margin is too small. With the current raft settings, it must be at least 0.5 mm larger than "
+"the Raft Top margin."
+msgstr "筏层基底外扩量过小。当前设置要求它至少比筏层顶部外扩量大 0.5 mm。"
 
 msgid ""
 "Cura-style raft cannot use the current tool when printer nozzles have "
@@ -13403,12 +13501,8 @@ msgstr "墙层"
 msgid "Raft base margin"
 msgstr "筏层基底外扩量"
 
-msgid ""
-"Additional XY margin around the model footprint for the Base phase. With "
-"normal support, it must be at least 0.5 mm larger than the Raft Top margin."
-msgstr ""
-"基底阶段在模型投影轮廓周围增加的 XY 外扩距离。使用普通支撑时，该值必须至少比"
-"筏层顶部外扩量大 0.5 mm。"
+msgid "Additional XY margin around the model footprint for the Raft Base phase."
+msgstr "筏层基底阶段在模型投影轮廓周围增加的 XY 外扩距离。"
 
 msgid "Raft middle thickness"
 msgstr "筏层中间厚度"
@@ -13541,6 +13635,33 @@ msgstr "筏层顶层墙层数"
 
 msgid "Number of contours around the dense Top pattern."
 msgstr "致密顶部图案外围的轮廓层数。"
+
+msgid "Raft Geometry (Trial)"
+msgstr "筏层形状（试用）"
+
+msgid "Segment raft"
+msgstr "筏层分块"
+
+msgid "Split large Cura-style rafts into sections before generating walls and infill. Each raft phase is processed independently. Cuts may cross model contact areas and leave marks on the model bottom. This trial applies to compatible single-instance objects, one active filament and by-layer printing. Ordinary support paths are preserved."
+msgstr "在生成墙线和填充前将较大的 Cura 风格筏层分块，各筏层阶段独立处理。切缝可能穿过模型接触区域，并在模型底面留下痕迹。此试用功能适用于逐层打印、单耗材且工艺兼容的单实例对象。普通支撑路径保持不变。"
+
+msgid "Raft segment reference size"
+msgstr "筏层分块参考尺寸"
+
+msgid "Reference size for raft segmentation. Narrow rafts use strips; wider rafts may use radial sections. This is not a maximum section size. Small separate raft islands remain uncut; connected rafts are classified together."
+msgstr "筏层分块的参考尺寸。窄筏层按条带划分，较宽筏层可按放射状划分。此值不是每块的最大尺寸。独立的小筏层不切分，相连的筏层按合并后的尺寸判断。"
+
+msgid "Raft segment gap"
+msgstr "筏层分块缝宽"
+
+msgid "Gap between raft sections, measured between extrusion edges. Wider gaps may affect the model bottom."
+msgstr "筏层分块之间的间隙，按挤出线边缘测量。较大的间隙可能影响模型底面。"
+
+msgid "Raft outline smoothing"
+msgstr "筏层轮廓平滑"
+
+msgid "Round inward raft corners and fill small raft holes using closing, then clean thin edges using the brim line width. Zero disables closing; edge cleanup still runs when segmentation is enabled. Printable bed exclusions stay clear. Uses the same trial compatibility restrictions as raft segmentation."
+msgstr "通过闭运算修整筏层内凹角、填平小孔，再按 Brim 线宽清理细边。0 表示关闭闭运算；开启分块时仍会清理细边。打印平台禁打区始终保留。适用范围与筏层分块试用功能相同。"
 
 msgid "Raft top margin"
 msgstr "筏层顶层外扩量"
@@ -15473,6 +15594,24 @@ msgid ""
 "block, matching OBJ usemtl first-use order."
 msgstr ""
 
+msgid "Arrange by Color"
+msgstr "按颜色分盘"
+
+msgid "Keep models with different primary OBJ/MTL colors or STL --model-color values on separate plates without splitting model geometry."
+msgstr "根据 OBJ/MTL 主色或 STL 的 --model-color 值，将不同颜色的模型分到不同盘，保留完整模型几何。"
+
+msgid "Model Color"
+msgstr "模型分盘颜色"
+
+msgid "Color in #RRGGBB format for the current STL --model block. Used only with --arrange-by-color; does not change printing filaments. --model-arrange-group takes precedence."
+msgstr "当前 STL --model 参数块的颜色，格式为 #RRGGBB。仅与 --arrange-by-color 配合用于分盘，不改变打印耗材。--model-arrange-group 优先。"
+
+msgid "--model-color requires an STL model."
+msgstr "--model-color 只能用于 STL 模型。"
+
+msgid "--model-color must be a color in #RRGGBB format."
+msgstr "--model-color 必须是 #RRGGBB 格式的颜色。"
+
 msgid "Model Position"
 msgstr ""
 
@@ -15606,12 +15745,17 @@ msgid "Output directory for the exported files."
 msgstr "导出文件的输出路径。"
 
 msgid "Automatically repair imported model"
-msgstr ""
+msgstr "自动修复导入的模型"
 
 msgid ""
 "Automatically repair STL mesh connectivity and normals while importing the "
-"model."
+"model. With --repair-model cgal, this defaults to 0; set to 1 to run automatic "
+"repair before CGAL. Without CGAL, this defaults to 1. Does not apply to OBJ or "
+"--check-model."
 msgstr ""
+"导入模型时自动修复 STL 网格连接和法线。使用 --repair-model cgal 时默认关闭（0）；"
+"设为 1 可先自动修复，再执行 CGAL 高级修复。不使用 CGAL 时默认开启（1）。"
+"不适用于 OBJ 或 --check-model。"
 
 msgid "Debug level"
 msgstr "调试等级"
@@ -16052,6 +16196,12 @@ msgstr "加载对象：无法分析"
 
 msgid "load mtl in obj: failed to parse"
 msgstr "在obj中加载mtl：解析失败"
+
+msgid "OBJ material library is missing. Imported geometry only; original colors and textures were not preserved: %s"
+msgstr "缺少 OBJ 材质文件，已按纯几何导入，原颜色和纹理未保留：%s"
+
+msgid "The OBJ file contains a non-finite vertex coordinate."
+msgstr "OBJ 文件包含非有限数值的顶点坐标。"
 
 msgid "The file contains polygons with more than 4 vertices."
 msgstr "该文件包含顶点超过4个的多边形。"
@@ -18316,6 +18466,34 @@ msgstr ""
 #~ "Unknown file format. Input file must have .stl, .obj, .amf(.xml) "
 #~ "extension."
 #~ msgstr "未知的文件格式。输入文件的扩展名必须为.stl、.obj 或 .amf（.xml）。"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Check model"
+msgstr "检测模型"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "With --repair-model cgal or --check-model, import OBJ geometry without reading MTL libraries, colors or UVs. Cannot be combined with material bindings, color grouping or multicolor OBJ export."
+msgstr "配合 --repair-model cgal 或 --check-model 使用，仅导入 OBJ 几何，不读取 MTL 库、颜色或 UV。不能与材质绑定、颜色分组或多色 OBJ 导出参数组合使用。"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Import one STL or OBJ using Orca's native import preparation, then inspect it without slicing. STL import includes automatic repair."
+msgstr "按 Orca 原生导入流程准备单个 STL 或 OBJ，再进行检测，不切片。STL 导入包含自动修复。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+#, c-format, boost-format
+msgid "Error: %1$d unpaired mesh edge."
+msgid_plural "Error: %1$d unpaired mesh edges."
+msgstr[0] "错误：%1$d 条网格未配对边。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+#, c-format, boost-format
+msgid "%1$d unpaired mesh edge"
+msgid_plural "%1$d unpaired mesh edges"
+msgstr[0] "%1$d 条网格未配对边"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "Edge-pairing check only; this is not a complete mesh validation."
+msgstr "此处仅检查三角面边的配对关系，不代表网格已通过完整检测。"
 
 #~ msgid ""
 #~ "Improve shell precision by adjusting outer wall spacing. This also "
