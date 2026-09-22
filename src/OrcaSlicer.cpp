@@ -1605,8 +1605,8 @@ int CLI::run(int argc, char **argv)
             if (m_input_files.size() != 1 || !m_transforms.empty())
                 throw std::invalid_argument("--check-model requires exactly one untransformed STL or OBJ input.");
             if (std::any_of(m_model_cli_specs.begin(), m_model_cli_specs.end(), [](const ModelCliSpec& spec) {
-                    return spec.filament_group || spec.arrange_group || spec.position || spec.scale || spec.rotation || spec.support ||
-                           spec.process;
+                    return spec.filament_group || spec.arrange_group || spec.color || spec.position || spec.scale || spec.rotation ||
+                           spec.support || spec.process;
                 }))
                 throw std::invalid_argument("--check-model does not accept per-model slicing overrides.");
             if (cgal_repair_requested && m_config.opt_string("repair_model") != "cgal")
@@ -2196,16 +2196,19 @@ int CLI::run(int argc, char **argv)
                                               explicit_material_slots, arrange_by_color ? &detected_obj_color_group : nullptr,
                                               repair_ignore_materials, repair_preserve_colors, &input_materials_ignored);
                 if (arrange_grouping_enabled) {
-                    const std::string explicit_group = input_index < m_model_cli_specs.size() &&
-                                                               m_model_cli_specs[input_index].arrange_group.has_value() ?
-                                                           *m_model_cli_specs[input_index].arrange_group :
-                                                           std::string();
-                    const std::string resolved_group = resolve_model_arrange_group(explicit_group, arrange_by_color,
-                                                                                   arrange_grouping_enabled, detected_obj_color_group);
+                    const ModelCliSpec* model_spec   = input_index < m_model_cli_specs.size() ? &m_model_cli_specs[input_index] : nullptr;
+                    const std::string explicit_group = model_spec && model_spec->arrange_group ? *model_spec->arrange_group : std::string();
+                    const std::string model_color    = model_spec && model_spec->color ? *model_spec->color : std::string();
+                    const std::string automatic_color_group = boost::algorithm::iends_with(file, ".stl") && !model_color.empty() ?
+                                                                  model_color :
+                                                                  detected_obj_color_group;
+                    const std::string resolved_group        = resolve_model_arrange_group(explicit_group, arrange_by_color,
+                                                                                          arrange_grouping_enabled, automatic_color_group);
                     for (ModelObject* object : model.objects)
                         object->arrange_group = resolved_group;
-                    BOOST_LOG_TRIVIAL(info) << boost::format("model arrange group: input=%1%, explicit=%2%, detected=%3%, resolved=%4%") %
-                                                   file % explicit_group % detected_obj_color_group % resolved_group;
+                    BOOST_LOG_TRIVIAL(info)
+                        << boost::format("model arrange group: input=%1%, explicit=%2%, detected=%3%, resolved=%4%, model_color=%5%") %
+                               file % explicit_group % detected_obj_color_group % resolved_group % model_color;
                 }
                 if (collect_repair_report) {
                     sliced_info.model_repairs.push_back(model_repair_info);
@@ -5178,9 +5181,9 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature = " << m_config.opt_float("cli_nozzle_temperature");
         } else if (opt_key == "cli_nozzle_temperature_initial_layer") {
             BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature_initial_layer = " << m_config.opt_float("cli_nozzle_temperature_initial_layer");
-        } else if (opt_key == "model" || opt_key == "model_filaments" || opt_key == "model_arrange_group" || opt_key == "model_position" ||
-                   opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "model_process" ||
-                   opt_key == "thumbnail_image") {
+        } else if (opt_key == "model" || opt_key == "model_filaments" || opt_key == "model_arrange_group" || opt_key == "model_color" ||
+                   opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" ||
+                   opt_key == "model_process" || opt_key == "thumbnail_image") {
             BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
             boost::nowide::cerr << "error: option not implemented yet: " << opt_key << std::endl;
@@ -6823,7 +6826,7 @@ int CLI::run(int argc, char **argv)
             //already applied after process settings were loaded
         } else if (opt_key == "split_by_color") {
             //will be processed after model loading, before orient/arrange
-        } else if (opt_key == "arrange_by_color" || opt_key == "model_arrange_group") {
+        } else if (opt_key == "arrange_by_color" || opt_key == "model_arrange_group" || opt_key == "model_color") {
             // runtime arrange groups were resolved while loading each model
         } else if (opt_key == "cli_nozzle_temperature") {
             //already applied after filament config loading
@@ -8515,7 +8518,7 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
     m_model_cli_specs.clear();
     ModelCliSpec *current = nullptr;
 
-    const std::set<std::string> model_keys = {"model",       "model-filaments", "model-arrange-group", "model-position",
+    const std::set<std::string> model_keys = {"model",       "model-filaments", "model-arrange-group", "model-color",  "model-position",
                                               "model-scale", "model-rotate",    "model-support",       "model-process"};
 
     for (int i = 1; i < argc; ++i) {
@@ -8557,6 +8560,8 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
         if (token == "model-filaments") target = &current->filament_group;
         else if (token == "model-arrange-group")
             target = &current->arrange_group;
+        else if (token == "model-color")
+            target = &current->color;
         else if (token == "model-position") target = &current->position;
         else if (token == "model-scale") target = &current->scale;
         else if (token == "model-rotate") target = &current->rotation;
@@ -8566,6 +8571,17 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
         if (target != nullptr && target->has_value()) {
             boost::nowide::cerr << "Duplicate --" << token << " for model " << current->model_token << std::endl;
             return false;
+        }
+        if (token == "model-color") {
+            if (!boost::algorithm::iends_with(current->model_token, ".stl")) {
+                boost::nowide::cerr << _u8L("--model-color requires an STL model.") << " " << current->model_token << std::endl;
+                return false;
+            }
+            if (value.size() != 7 || value.front() != '#' || value.find_first_not_of("0123456789abcdefABCDEF", 1) != std::string::npos) {
+                boost::nowide::cerr << _u8L("--model-color must be a color in #RRGGBB format.") << " " << value << std::endl;
+                return false;
+            }
+            boost::to_upper(value);
         }
         if (target != nullptr)
             *target = value;

@@ -8124,7 +8124,8 @@ CLITransformConfigDef::CLITransformConfigDef()
 
     def          = this->add("arrange_by_color", coBool);
     def->label   = L("Arrange by Color");
-    def->tooltip = L("Keep models with different primary OBJ/MTL colors on separate plates without splitting model geometry.");
+    def->tooltip = L("Keep models with different primary OBJ/MTL colors or STL --model-color values on separate plates without splitting "
+                     "model geometry.");
     def->cli     = "arrange-by-color";
     def->set_default_value(new ConfigOptionBool(false));
 
@@ -8215,6 +8216,14 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->tooltip    = L("Explicit runtime arrange group for the current --model block. Overrides automatic color grouping.");
     def->cli        = "model-arrange-group";
     def->cli_params = "group";
+    def->set_default_value(new ConfigOptionStrings());
+
+    def             = this->add("model_color", coStrings);
+    def->label      = L("Model Color");
+    def->tooltip    = L("Color in #RRGGBB format for the current STL --model block. Used only with --arrange-by-color; does not change "
+                           "printing filaments. --model-arrange-group takes precedence.");
+    def->cli        = "model-color";
+    def->cli_params = "#RRGGBB";
     def->set_default_value(new ConfigOptionStrings());
 
     def = this->add("model_position", coStrings);

@@ -15594,6 +15594,24 @@ msgid ""
 "block, matching OBJ usemtl first-use order."
 msgstr ""
 
+msgid "Arrange by Color"
+msgstr "按颜色分盘"
+
+msgid "Keep models with different primary OBJ/MTL colors or STL --model-color values on separate plates without splitting model geometry."
+msgstr "根据 OBJ/MTL 主色或 STL 的 --model-color 值，将不同颜色的模型分到不同盘，保留完整模型几何。"
+
+msgid "Model Color"
+msgstr "模型分盘颜色"
+
+msgid "Color in #RRGGBB format for the current STL --model block. Used only with --arrange-by-color; does not change printing filaments. --model-arrange-group takes precedence."
+msgstr "当前 STL --model 参数块的颜色，格式为 #RRGGBB。仅与 --arrange-by-color 配合用于分盘，不改变打印耗材。--model-arrange-group 优先。"
+
+msgid "--model-color requires an STL model."
+msgstr "--model-color 只能用于 STL 模型。"
+
+msgid "--model-color must be a color in #RRGGBB format."
+msgstr "--model-color 必须是 #RRGGBB 格式的颜色。"
+
 msgid "Model Position"
 msgstr ""
 
