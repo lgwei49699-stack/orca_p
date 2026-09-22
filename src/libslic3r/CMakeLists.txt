@@ -424,6 +424,7 @@ set(lisbslic3r_sources
     Support/RaftGeometry.hpp
     Support/SupportCommon.cpp
     Support/SupportCommon.hpp
+    Support/SupportGridParams.hpp
     Support/SupportLayer.hpp
     Support/SupportMaterial.cpp
     Support/SupportMaterial.hpp

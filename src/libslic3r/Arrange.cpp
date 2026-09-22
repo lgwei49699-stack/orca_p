@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <map>
 #include <numeric>
+#include <set>
 #include <ClipperUtils.hpp>
 
 #include <boost/geometry/index/rtree.hpp>
@@ -735,7 +736,8 @@ public:
         this->params = params;
 
         // if best object center is not bed center, specify starting point here
-        if (std::abs(this->params.align_center.x() - 0.5) > 0.001 || std::abs(this->params.align_center.y() - 0.5) > 0.001) {
+        if (this->params.do_final_align &&
+            (std::abs(this->params.align_center.x() - 0.5) > 0.001 || std::abs(this->params.align_center.y() - 0.5) > 0.001)) {
             auto binbb = sl::boundingBox(m_bin);
             m_pconf.best_object_pos = binbb.minCorner() + Point{ binbb.width() * this->params.align_center.x(), binbb.height() * this->params.align_center.y() };
             m_pconf.alignment = PConfig::Alignment::USER_DEFINED;
@@ -960,8 +962,14 @@ template<class Bin> void remove_large_items(std::vector<Item> &items, Bin &&bin)
     auto it = items.begin();
     while (it != items.end())
     {
-        //BBS: skip virtual object
-        if (!it->is_virt_object && !sl::isInside(it->transformedShape(), bin))
+        // A real fixed object may have a raft reservation extending past the
+        // bed. It remains an obstacle wherever it overlaps the bed; discarding
+        // it would let movable models occupy its actual footprint.
+        const auto item_bb = it->boundingBox();
+        const auto bed_bb  = sl::boundingBox(bin);
+        const bool outside = item_bb.maxCorner().x() < bed_bb.minCorner().x() || item_bb.minCorner().x() > bed_bb.maxCorner().x() ||
+                             item_bb.maxCorner().y() < bed_bb.minCorner().y() || item_bb.minCorner().y() > bed_bb.maxCorner().y();
+        if (!it->is_virt_object && outside)
             it = items.erase(it);
         else
             it++;
@@ -1048,6 +1056,13 @@ void _arrange(
     //sl::offset(corrected_bin, md);
     ArrangeParams mod_params = params;
     mod_params.min_obj_distance = 0;  // items are already inflated
+
+    // libnest2d's final alignment also translates real fixed items internally,
+    // while this API writes back only movable items. Keep their common frame.
+    if (std::any_of(excludes.begin(), excludes.end(), [](const Item& item) { return !item.is_virt_object; })) {
+        mod_params.do_final_align = false;
+        BOOST_LOG_TRIVIAL(debug) << "[arrange-diag] final alignment disabled for real fixed objects";
+    }
 
     AutoArranger<BinT> arranger{corrected_bin, mod_params, progressfn, stopfn};
 
@@ -1205,6 +1220,91 @@ void arrange(ArrangePolygons &      items,
     });
 }
 
+// Retry failed pure models and clippable Cura rafts / brims on empty rectangular beds.
+// The model must fit the already-shrunk bed. The normal packer keeps the full
+// object-to-object reservation; it need not fit on a bed occupied by one model
+// without attachments. Cura raft and brim extrusion are clipped during slicing.
+static void place_single_objects_on_empty_beds(ArrangePolygons&       items,
+                                               const ArrangePolygons& fixed,
+                                               const BoundingBox&     bed,
+                                               const ArrangeParams&   params)
+{
+    if (params.is_seq_print || !bed.defined)
+        return;
+    const auto    canceled = [&]() { return params.stopcondition && params.stopcondition(); };
+    std::set<int> occupied_beds;
+    int           next_item_id = 0;
+    for (const ArrangePolygons* polygons : {static_cast<const ArrangePolygons*>(&items), &fixed})
+        for (const ArrangePolygon& item : *polygons)
+            if (item.bed_idx >= 0 && (!item.is_virt_object || item.is_wipe_tower)) {
+                occupied_beds.insert(item.bed_idx);
+                next_item_id = std::max(next_item_id, item.itemid + 1);
+            }
+
+    const Polygons bed_area{bed.polygon()};
+    for (ArrangePolygon& item : items) {
+        if (canceled())
+            return;
+        if (item.bed_idx >= 0 || (!item.allow_raft_bed_clipping && !item.allow_unrafted_bed_fit && !item.allow_brim_bed_clipping) ||
+            item.is_virt_object || item.is_wipe_tower || item.poly.contour.size() < 3 || item.height > params.printable_height)
+            continue;
+
+        std::vector<double> rotations{item.rotation};
+        if (params.allow_rotations && !params.align_to_y_axis) {
+            const double seed = stable_arrange_seed_rotation(item.poly).value_or(item.rotation);
+            for (int i = 0; i < 4; ++i)
+                rotations.push_back(seed + i * PI / 4.);
+        }
+        bool placed = false;
+        for (double rotation : rotations) {
+            if (canceled())
+                return;
+            ExPolygon model = item.poly;
+            model.rotate(rotation);
+            const Point shift = bed.center() - get_extents(model).center();
+            model.translate(shift);
+            if (!bed.contains(get_extents(model)))
+                continue;
+            const coord_t    reservation = std::max({coord_t(0), item.inflation, scaled(item.brim_bed_clipping_margin)});
+            const ExPolygons footprint   = intersection_ex(offset_ex(model, reservation), bed_area);
+            if (footprint.empty())
+                continue;
+            const auto overlaps = [&](const ArrangePolygon& obstacle) {
+                return !intersection_ex(footprint, offset_ex(obstacle.transformed_poly(), std::max<coord_t>(0, obstacle.inflation))).empty();
+            };
+            // These exclusions apply to every logical bed. Keep their existing
+            // spacing even though the slicer can also crop raft exclusion areas.
+            if (std::any_of(params.excluded_regions.begin(), params.excluded_regions.end(), overlaps))
+                continue;
+            for (int bed_idx = 0; bed_idx < MAX_NUM_PLATES; ++bed_idx) {
+                if (canceled())
+                    return;
+                if (occupied_beds.count(bed_idx) != 0 || std::any_of(fixed.begin(), fixed.end(), [&](const ArrangePolygon& obstacle) {
+                        return obstacle.bed_idx == bed_idx && overlaps(obstacle);
+                    }))
+                    continue;
+                item.translation = shift;
+                item.rotation    = rotation;
+                item.bed_idx     = bed_idx;
+                item.itemid      = next_item_id++;
+                occupied_beds.insert(bed_idx);
+                placed = true;
+                const char* reason = item.allow_raft_bed_clipping ? "raft bed clipping candidate" :
+                                     item.allow_brim_bed_clipping ? "brim bed clipping candidate" :
+                                                                    "unrafted model bed fit candidate";
+                BOOST_LOG_TRIVIAL(info) << "[arrange-diag] " << reason << " name=" << std::quoted(item.name) << " bed=" << bed_idx
+                                        << " pair_margin_mm=" << unscale<double>(item.inflation)
+                                        << " brim_clip_margin_mm=" << item.brim_bed_clipping_margin;
+                if (params.on_packed)
+                    params.on_packed(item);
+                break;
+            }
+            if (placed)
+                break;
+        }
+    }
+}
+
 template<class BedT>
 void arrange(ArrangePolygons &      arrangables,
              const ArrangePolygons &excludes,
@@ -1238,22 +1338,57 @@ void arrange(ArrangePolygons &      arrangables,
 
     _arrange(items, fixeditems, to_nestbin(bed), params, params.progressind, params.stopcondition);
 
-    std::map<int, size_t> objects_per_bed;
-    size_t                unarranged = 0;
     for(size_t i = 0; i < items.size(); ++i) {
         Point tr = items[i].translation();
         arrangables[i].translation = {coord_t(tr.x()), coord_t(tr.y())};
         arrangables[i].rotation    = items[i].rotation();
         arrangables[i].bed_idx     = items[i].binId();
         arrangables[i].itemid      = items[i].itemId();  // arrange order is useful for sequential printing
+    }
+
+    // The upstream packer may temporarily remove fixed objects when retrying
+    // an empty-but-blocked bed. Never publish a placement over a real fixed
+    // object's reservation, including a raft extending beyond the bed edge.
+    // Match its square joins and fixed-item rounding allowance, not a
+    // printable-width gap. Miter joins would reject valid corner placements.
+    std::vector<ExPolygons>  moving_areas(arrangables.size());
+    std::vector<BoundingBox> moving_bounds(arrangables.size());
+    for (const ArrangePolygon& fixed : excludes) {
+        if (fixed.is_virt_object || fixed.bed_idx < 0)
+            continue;
+        const ExPolygons  fixed_area = offset_ex(fixed.transformed_poly(), std::max<coord_t>(0, fixed.inflation - scaled(2. * EPSILON)),
+                                                 ClipperLib::jtSquare);
+        const BoundingBox fixed_bb   = get_extents(fixed_area);
+        for (size_t i = 0; i < arrangables.size(); ++i) {
+            ArrangePolygon& item = arrangables[i];
+            if (item.is_virt_object || item.bed_idx != fixed.bed_idx)
+                continue;
+            if (!moving_bounds[i].defined) {
+                moving_areas[i]  = offset_ex(item.transformed_poly(), std::max<coord_t>(0, item.inflation), ClipperLib::jtSquare);
+                moving_bounds[i] = get_extents(moving_areas[i]);
+            }
+            if (fixed_bb.overlap(moving_bounds[i]) && !intersection_ex(fixed_area, moving_areas[i]).empty()) {
+                item.bed_idx = UNARRANGED;
+                BOOST_LOG_TRIVIAL(warning) << "[arrange-diag] rejected placement overlapping fixed object name=" << std::quoted(item.name)
+                                           << " fixed=" << std::quoted(fixed.name);
+            }
+        }
+    }
+    if constexpr (std::is_same_v<BedT, BoundingBox>)
+        place_single_objects_on_empty_beds(arrangables, excludes, bed, params);
+
+    std::map<int, size_t> objects_per_bed;
+    size_t                unarranged = 0;
+    for (size_t i = 0; i < arrangables.size(); ++i) {
+        const ArrangePolygon& item = arrangables[i];
         BOOST_LOG_TRIVIAL(debug) << std::setprecision(17) << "[arrange-diag] run=" << diagnostic_id << " output index=" << i
-                                 << " name=" << std::quoted(items[i].name) << " packed_order=" << items[i].itemId()
-                                 << " bed=" << items[i].binId() << " rotation_deg=" << double(items[i].rotation()) * 180.0 / PI
-                                 << " xy_mm=" << unscale<double>(tr.x()) << ',' << unscale<double>(tr.y());
-        if (items[i].binId() < 0)
+                                 << " name=" << std::quoted(item.name) << " packed_order=" << item.itemid << " bed=" << item.bed_idx
+                                 << " rotation_deg=" << item.rotation * 180.0 / PI << " xy_mm=" << unscale<double>(item.translation.x())
+                                 << ',' << unscale<double>(item.translation.y());
+        if (item.bed_idx < 0)
             ++unarranged;
-        else if (!items[i].is_virt_object)
-            ++objects_per_bed[items[i].binId()];
+        else if (!item.is_virt_object)
+            ++objects_per_bed[item.bed_idx];
     }
     for (const auto& entry : objects_per_bed)
         BOOST_LOG_TRIVIAL(info) << "[arrange-diag] run=" << diagnostic_id << " bed_summary bed=" << entry.first

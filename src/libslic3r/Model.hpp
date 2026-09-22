@@ -409,7 +409,8 @@ public:
     const Model*            get_model() const { return m_model; }
     // BBS: production extension
     int                     get_backup_id() const;
-    template<typename T> const T* get_config_value(const DynamicPrintConfig& global_config, const std::string& config_option) {
+    template<typename T> const T* get_config_value(const DynamicPrintConfig& global_config, const std::string& config_option) const
+    {
         if (config.has(config_option))
             return static_cast<const T*>(config.option(config_option));
         else

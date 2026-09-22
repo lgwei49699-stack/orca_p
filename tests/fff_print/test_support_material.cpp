@@ -16,6 +16,7 @@
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
 #include "libslic3r/Layer.hpp"
+#include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Slicing.hpp"
@@ -112,6 +113,25 @@ void require_raft_inside_bed(const Print& print)
         }
         REQUIRE(raft_layers == object->slicing_parameters().raft_layers());
     }
+}
+
+Polygons require_brim_inside_bed(Print& print)
+{
+    const Polygons bed    = diff(Polygons{Polygon(get_bed_shape(print.config()))}, get_bed_excluded_area(print.config()));
+    const Vec3d    origin = print.get_plate_origin();
+    const Point    shift  = Point::new_scale(-origin.x(), -origin.y());
+    Polygons       footprint;
+    double         volume = 0.;
+    for (const auto& entry : print.get_brimMap()) {
+        append(footprint, entry.second.polygons_covered_by_width());
+        volume += entry.second.total_volume();
+    }
+    REQUIRE(volume > 0.);
+    REQUIRE_FALSE(footprint.empty());
+    for (Polygon& polygon : footprint)
+        polygon.translate(shift);
+    REQUIRE(diff(footprint, offset(bed, scaled<float>(0.0001))).empty());
+    return footprint;
 }
 
 double raft_volume(const PrintObject& object)
@@ -3483,6 +3503,379 @@ TEST_CASE("Merged raft ownership does not hide a conflict with an unrafted neigh
     REQUIRE(print.objects()[1]->support_layers().front()->raft_merge_backup != nullptr);
     REQUIRE((!print.objects()[0]->support_layers().front()->support_fills.empty() +
              !print.objects()[1]->support_layers().front()->support_fills.empty()) == 1);
+}
+
+TEST_CASE("Arranging mixed rafts reserves generated contacts and the unrafted object's brim before slicing",
+          "[SupportMaterial][Raft][Clearance][Arrange]")
+{
+    // Individual scenarios keep runtime bounded while exercising the real
+    // arrangement, contact generation, optional merging and clearance check.
+    const int scenario = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+    CAPTURE(scenario);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("initial_layer_print_height", 0.24);
+    config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.5, false));
+    config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(0.42, false));
+    config.set("raft_interface_layers", 2);
+    config.set("raft_surface_layers", 2);
+    config.set("raft_interface_margin", 1.);
+    config.set("raft_surface_margin", 1.);
+    config.set("raft_base_wall_count", 4);
+    for (const char* key : {"raft_base_line_width", "raft_interface_line_width", "raft_surface_line_width", "raft_base_line_spacing",
+                            "raft_interface_line_spacing", "raft_surface_line_spacing"})
+        config.set(key, 0.);
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(scenario == 1 ? btNoBrim : btOuterAndInner));
+    config.set("brim_width", 2.);
+    config.set("brim_object_gap", 0.);
+    if (scenario == 2)
+        config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(smsSnug));
+    if (scenario == 3 || scenario == 4) {
+        config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stTreeAuto));
+        config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(scenario == 3 ? smsTreeOrganic : smsTreeSlim));
+    }
+    if (scenario == 5) {
+        config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {180., 0.}, {180., 180.}, {0., 180.}}));
+        config.set("support_angle", 45.);
+        config.set("support_base_pattern_spacing", 4.);
+        config.set_key_value("support_line_width", new ConfigOptionFloatOrPercent(150., true));
+        config.set("raft_base_line_width", 0.8);
+    }
+    if (scenario == 11) {
+        config.set_key_value("skirt_type", new ConfigOptionEnum<SkirtType>(stPerObject));
+        config.set("skirt_loops", 1);
+        config.set("skirt_distance", 2.);
+    }
+
+    Model                      model;
+    const std::array<Vec3d, 3> positions{Vec3d(56.55, 58.55, 5.05), Vec3d(56.55, 42.45, 5.05), Vec3d(42.45, 51.588883, 5.05)};
+    for (size_t i = 0; i < positions.size(); ++i) {
+        ModelObject* object = model.add_object();
+        object->name        = "mixed arrange cube " + std::to_string(i);
+        TriangleMesh mesh   = make_cube(10.1, 10.1, 10.1);
+        mesh.translate(-5.05f, -5.05f, -5.05f);
+        object->add_volume(std::move(mesh));
+        object->add_instance()->set_offset(positions[i]);
+        object->ensure_on_bed();
+    }
+    ModelObject* off = model.objects.back();
+    disable_test_raft(*off);
+    if (scenario == 8) {
+        off->add_instance(*off->instances.front())->set_offset(Vec3d(70., 70., off->instances.front()->get_offset().z()));
+    }
+    if (scenario == 9) {
+        model.objects.front()->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+        model.objects.front()->config.set("raft_layers", 3);
+    }
+    if (scenario == 10) {
+        // A real cantilever on the unrafted object generates bed support and
+        // a support brim, rather than only setting an unused support flag.
+        TriangleMesh ledge = make_cube(24., 10., 2.);
+        ledge.translate(-12.f, -5.f, 4.f);
+        off->add_volume(std::move(ledge));
+        off->config.set("enable_support", true);
+        off->config.set("support_threshold_angle", 45);
+        off->config.set("brim_width", 3.);
+    }
+    if (scenario == 0) {
+        // Full default configs contain a few enum vectors without their string
+        // maps; export serializes these options, unlike a process-only test.
+        for (const std::string& key : config.keys()) {
+            const auto* option     = dynamic_cast<const ConfigOptionEnumsGeneric*>(config.option(key));
+            const auto* definition = print_config_def.get(key);
+            if (option && !option->keys_map && definition && definition->enum_keys_map) {
+                auto* mapped   = new ConfigOptionEnumsGeneric(definition->enum_keys_map);
+                mapped->values = option->values;
+                config.set_key_value(key, mapped);
+            }
+        }
+        Print before;
+        // Original GUI layout: nominal margins leave 4 mm but generated
+        // normal-grid raft / brim still overlap. No segmentation is needed.
+        REQUIRE_THROWS_WITH(process_raft_bed_test(before, model, config), Catch::Matchers::Contains("has raft disabled"));
+    }
+
+    ArrangePolygons selected, fixed;
+    for (size_t i = 0; i < model.objects.size(); ++i) {
+        for (ModelInstance* instance : model.objects[i]->instances) {
+            auto       item     = get_instance_arrange_poly(instance, config);
+            const bool is_fixed = (scenario == 6 && i == 2) || ((scenario == 7 || scenario == 12) && i == 0);
+            (is_fixed ? fixed : selected).push_back(std::move(item));
+        }
+    }
+    Vec3d fixed_offset = Vec3d::Zero();
+    if (!fixed.empty())
+        fixed_offset = fixed.front().model_instance->get_offset();
+    ArrangeParams params;
+    params.parallel         = false;
+    params.allow_rotations  = scenario == 5;
+    params.min_obj_distance = scaled(0.2); // must not override physical clearance
+    params.progressind      = [](unsigned, std::string) {};
+    if (scenario == 12)
+        params.align_center = Vec2d(0.25, 0.75);
+    update_arrange_params(params, &config, selected);
+    REQUIRE(prepare_mixed_raft_clearance(selected, fixed, config, params));
+    update_selected_items_inflation(selected, &config, params);
+    update_unselected_items_inflation(fixed, &config, params);
+    arrangement::arrange(selected, fixed, get_shrink_bedpts(&config, params), params);
+    for (ArrangePolygon& item : selected) {
+        REQUIRE(item.bed_idx == 0);
+        item.apply();
+    }
+    if (!fixed.empty())
+        REQUIRE(fixed.front().model_instance->get_offset().isApprox(fixed_offset));
+    REQUIRE(off->config.opt_int("raft_layers") == 0);
+
+    Print print;
+    REQUIRE_NOTHROW(process_raft_bed_test(print, model, config));
+    REQUIRE_NOTHROW(print.validate_raft_clearance());
+    REQUIRE(print.objects().size() == 3);
+    REQUIRE(print.objects().front()->has_raft());
+    REQUIRE_FALSE(print.objects().back()->has_raft());
+    if (scenario == 10)
+        REQUIRE_FALSE(print.objects().back()->support_layers().empty());
+
+    // Exercise the independent export gate as well as Print::process().
+    if (scenario == 0) {
+        const RaftMergeTemporaryPath output(".gcode");
+        set_resources_dir((boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() / "resources").string());
+        GCodeProcessorResult result;
+        REQUIRE_NOTHROW(print.export_gcode(output.path.string(), &result, nullptr));
+        REQUIRE(boost::filesystem::file_size(output.path) > 0);
+    }
+}
+
+TEST_CASE("Large rafted models arrange and slice with clipped raft paths on both printer sizes", "[SupportMaterial][Raft][BedClip][Arrange]")
+{
+    const double bed_size  = GENERATE(100., 180.);
+    const bool   segmented = GENERATE(false, true);
+    CAPTURE(bed_size, segmented);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {bed_size, 0.}, {bed_size, bed_size}, {0., bed_size}}));
+    config.set("raft_segmented", segmented);
+    Model           model;
+    ModelObject*    object = add_raft_bed_test_cube(model, bed_size - 2., Vec3d(200., 200., 0.));
+    ArrangePolygons items{get_instance_arrange_poly(object->instances.front(), config)};
+    ArrangeParams   params;
+    params.parallel    = false;
+    params.progressind = [](unsigned, std::string) {};
+    update_arrange_params(params, &config, items);
+    update_selected_items_inflation(items, &config, params);
+    const Points bed = get_shrink_bedpts(&config, params);
+    arrangement::arrange(items, {}, bed, params);
+    REQUIRE(items.front().bed_idx == 0);
+    REQUIRE(BoundingBox(bed).contains(get_extents(items.front().transformed_poly())));
+    items.front().apply();
+    Print print;
+    REQUIRE_NOTHROW(process_raft_bed_test(print, model, config));
+    REQUIRE(print.objects().size() == 1);
+    REQUIRE(print.objects().front()->has_raft());
+    REQUIRE(raft_volume(*print.objects().front()) > 0.);
+    require_raft_inside_bed(print);
+}
+
+TEST_CASE("Unrafted models filling the usable bed arrange and slice without clipping model paths",
+          "[SupportMaterial][Raft][BedClip][Arrange]")
+{
+    const double bed_size = GENERATE(100., 101., 180.);
+    const bool   with_brim = GENERATE(false, true);
+    CAPTURE(bed_size, with_brim);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("printer_technology", new ConfigOptionEnum<PrinterTechnology>(ptFFF));
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    config.set("raft_layers", 0);
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(with_brim ? btOuterAndInner : btNoBrim));
+    config.set("brim_width", 2.);
+    config.set("brim_object_gap", 0.);
+    config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.5, false));
+    config.set("initial_layer_print_height", 0.24);
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {bed_size, 0.}, {bed_size, bed_size}, {0., bed_size}}));
+    Model           model;
+    ModelObject*    object = add_raft_bed_test_cube(model, bed_size - 2., Vec3d(200., 200., 0.));
+    ArrangePolygons items{get_instance_arrange_poly(object->instances.front(), config)};
+    ArrangeParams   params;
+    params.parallel    = false;
+    params.progressind = [](unsigned, std::string) {};
+    update_arrange_params(params, &config, items);
+    update_selected_items_inflation(items, &config, params);
+    const Points bed = get_shrink_bedpts(&config, params);
+    arrangement::arrange(items, {}, bed, params);
+    REQUIRE(items.front().bed_idx == 0);
+    REQUIRE(items.front().inflation == scaled(1.));
+    REQUIRE(BoundingBox(bed).contains(get_extents(items.front().transformed_poly())));
+    items.front().apply();
+    Print print;
+    REQUIRE_NOTHROW(process_raft_bed_test(print, model, config));
+    REQUIRE(print.objects().size() == 1);
+    const PrintObject& printed = *print.objects().front();
+    REQUIRE_FALSE(printed.has_raft());
+    REQUIRE(printed.support_layers().empty());
+    REQUIRE_FALSE(printed.layers().empty());
+    const Polygons printable_bed{Polygon(get_bed_shape(print.config()))};
+    double         volume = 0.;
+    for (const Layer* layer : printed.layers()) {
+        Polygons footprint;
+        for (const LayerRegion* region : layer->regions()) {
+            Polygons perimeters = region->perimeters.polygons_covered_by_width();
+            Polygons fills      = region->fills.polygons_covered_by_width();
+            footprint.insert(footprint.end(), perimeters.begin(), perimeters.end());
+            footprint.insert(footprint.end(), fills.begin(), fills.end());
+            volume += region->perimeters.total_volume() + region->fills.total_volume();
+        }
+        REQUIRE_FALSE(footprint.empty());
+        for (const PrintInstance& instance : printed.instances()) {
+            Polygons placed = footprint;
+            for (Polygon& polygon : placed)
+                polygon.translate(instance.shift);
+            REQUIRE(diff(placed, offset(printable_bed, scaled<float>(0.0001))).empty());
+        }
+    }
+    REQUIRE(volume > 0.);
+    if (with_brim) {
+        const Polygons    footprint = require_brim_inside_bed(print);
+        const BoundingBox bounds    = get_extents(footprint);
+        // The boundary loop must survive near each bed edge, not just vanish
+        // so that the remaining inner loop appears to pass a containment check.
+        REQUIRE(unscale<double>(bounds.min.x()) < 0.01);
+        REQUIRE(unscale<double>(bounds.min.y()) < 0.01);
+        REQUIRE(unscale<double>(bounds.max.x()) > bed_size - 0.01);
+        REQUIRE(unscale<double>(bounds.max.y()) > bed_size - 0.01);
+        const auto& brim = print.get_brimMap().at(printed.id());
+        REQUIRE(std::any_of(brim.entities.begin(), brim.entities.end(), [bed_size](const ExtrusionEntity* entity) {
+            if (dynamic_cast<const ExtrusionLoop*>(entity) == nullptr)
+                return false;
+            const BoundingBox loop_bounds = get_extents(entity->polygons_covered_by_width());
+            return unscale<double>(loop_bounds.min.x()) < 0.01 && unscale<double>(loop_bounds.min.y()) < 0.01 &&
+                   unscale<double>(loop_bounds.max.x()) > bed_size - 0.01 && unscale<double>(loop_bounds.max.y()) > bed_size - 0.01;
+        }));
+    } else {
+        REQUIRE(print.get_brimMap().empty());
+    }
+}
+
+TEST_CASE("Automatic brim at the usable bed size can resolve to zero or printable clipped paths",
+          "[SupportMaterial][Raft][Brim][BedClip][Arrange]")
+{
+    const double bed_size   = GENERATE(100., 101., 180.);
+    const bool   needs_brim = GENERATE(false, true);
+    CAPTURE(bed_size, needs_brim);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("printer_technology", new ConfigOptionEnum<PrinterTechnology>(ptFFF));
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    config.set("raft_layers", 0);
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btAutoBrim));
+    // Auto does not use the explicit-width setting. Resolve the actual width
+    // through the normal slicer, including its tall/narrow adhesion rule.
+    config.set("brim_width", 0.);
+    config.set("brim_object_gap", 0.);
+    config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(0.5, false));
+    config.set("initial_layer_print_height", 0.24);
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {bed_size, 0.}, {bed_size, bed_size}, {0., bed_size}}));
+    Model        model;
+    ModelObject* object = model.add_object();
+    object->add_volume(make_cube(bed_size - 2., needs_brim ? 2. : bed_size - 2., needs_brim ? 12. : 0.8));
+    object->add_instance()->set_offset(Vec3d(200., 200., 0.));
+    object->ensure_on_bed();
+    ArrangePolygons items{get_instance_arrange_poly(object->instances.front(), config)};
+    ArrangeParams   params;
+    params.parallel        = false;
+    params.allow_rotations = false;
+    params.progressind     = [](unsigned, std::string) {};
+    update_arrange_params(params, &config, items);
+    update_selected_items_inflation(items, &config, params);
+    const Points bed = get_shrink_bedpts(&config, params);
+    REQUIRE(items.front().allow_brim_bed_clipping);
+    REQUIRE_FALSE(items.front().allow_unrafted_bed_fit);
+    REQUIRE(items.front().brim_bed_clipping_margin > 18.);
+    arrangement::arrange(items, {}, bed, params);
+    REQUIRE(items.front().bed_idx == 0);
+    REQUIRE(items.front().inflation == scaled(1.));
+    REQUIRE(BoundingBox(bed).contains(get_extents(items.front().transformed_poly())));
+    items.front().apply();
+    Print print;
+    REQUIRE_NOTHROW(process_raft_bed_test(print, model, config));
+    REQUIRE(print.objects().size() == 1);
+    const PrintObject& printed = *print.objects().front();
+    REQUIRE_FALSE(printed.has_raft());
+    REQUIRE(printed.support_layers().empty());
+    REQUIRE_FALSE(printed.layers().empty());
+    REQUIRE(printed.config().brim_type.value == btAutoBrim);
+    REQUIRE(printed.config().brim_width.value == 0.);
+    if (needs_brim) {
+        const BoundingBox footprint = get_extents(require_brim_inside_bed(print));
+        // Both ends of the long axis reach the bed edge without losing the brim.
+        REQUIRE(unscale<double>(footprint.min.x()) < 0.01);
+        REQUIRE(unscale<double>(footprint.max.x()) > bed_size - 0.01);
+    } else {
+        REQUIRE(print.get_brimMap().empty());
+    }
+}
+
+TEST_CASE("Brim clipping respects nonrectangular beds, exclusions and translated plates", "[SupportMaterial][Raft][Brim][BedClip]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    config.set("raft_layers", 0);
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btOuterOnly));
+    config.set("brim_width", 12.);
+    config.set("brim_object_gap", 0.);
+    config.set_key_value("initial_layer_line_width", new ConfigOptionFloatOrPercent(GENERATE(0.5, 0.8), false));
+    config.set("initial_layer_print_height", 0.24);
+    SECTION("an exclusion intersects the brim but not the model")
+    {
+        config.set_key_value("bed_exclude_area", new ConfigOptionPoints({{72., 40.}, {76., 40.}, {76., 60.}, {72., 60.}}));
+    }
+    SECTION("a polygonal circular bed clips expanded corners")
+    {
+        Pointfs circle;
+        for (size_t i = 0; i < 64; ++i) {
+            const double angle = 2. * PI * double(i) / 64.;
+            circle.emplace_back(50. + 35. * std::cos(angle), 50. + 35. * std::sin(angle));
+        }
+        config.set_key_value("printable_area", new ConfigOptionPoints(circle));
+    }
+    SECTION("a concave bed edge intersects the brim")
+    {
+        config.set_key_value("printable_area",
+                             new ConfigOptionPoints({{0., 0.}, {100., 0.}, {100., 100.}, {74., 100.}, {74., 74.}, {0., 74.}}));
+    }
+    const Vec3d origin(150., -120., 0.);
+    Model       model;
+    add_raft_bed_test_cube(model, 40., origin + Vec3d(30., 30., 0.));
+    Print print;
+    print.set_plate_origin(origin);
+    REQUIRE_NOTHROW(process_raft_bed_test(print, model, config));
+    require_brim_inside_bed(print);
+}
+
+TEST_CASE("Changing the printable area invalidates cached unrafted brim paths", "[SupportMaterial][Raft][Brim][BedClip]")
+{
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    config.set("raft_layers", 0);
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btOuterOnly));
+    config.set("brim_width", 10.);
+    config.set("brim_object_gap", 0.);
+    Model model;
+    add_raft_bed_test_cube(model, 20., Vec3d(40., 40., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    const double original_area = area(union_ex(require_brim_inside_bed(print)));
+    REQUIRE(print.is_step_done(psSkirtBrim));
+    SECTION("bed size changes without moving the model")
+    {
+        config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {65., 0.}, {65., 100.}, {0., 100.}}));
+    }
+    SECTION("bed exclusions change without moving the model")
+    {
+        config.set_key_value("bed_exclude_area", new ConfigOptionPoints({{62., 40.}, {68., 40.}, {68., 60.}, {62., 60.}}));
+    }
+    print.apply(model, config);
+    REQUIRE_FALSE(print.is_step_done(psSkirtBrim));
+    print.process(nullptr, true);
+    REQUIRE(area(union_ex(require_brim_inside_bed(print))) < original_area);
+    // A plate-origin change also invalidates absolute brim coordinates.
+    print.set_plate_origin(Vec3d(150., -120., 0.));
+    REQUIRE_FALSE(print.is_step_done(psSkirtBrim));
 }
 
 TEST_CASE("Raft clearance uses deposited width and full path height rather than intersecting centre lines",

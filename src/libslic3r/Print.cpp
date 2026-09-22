@@ -218,6 +218,9 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
 
     for (const t_config_option_key &opt_key : opt_keys) {
         if (opt_key == "printable_area" || opt_key == "bed_exclude_area") {
+            // Brim paths are clipped to the actual printable area, including
+            // exclusions. G-code-only invalidation would retain the old brim.
+            steps.emplace_back(psSkirtBrim);
             for (PrintObject* object : m_objects)
                 if (object->has_raft())
                     invalidated |= object->invalidate_step(posSupportMaterial);
@@ -376,6 +379,7 @@ void Print::set_plate_origin(Vec3d origin)
     if (m_origin == origin)
         return;
     std::scoped_lock<std::mutex> lock(this->state_mutex());
+    this->invalidate_step(psSkirtBrim);
     for (PrintObject* object : m_objects)
         if (object->has_raft())
             object->invalidate_step(posSupportMaterial);

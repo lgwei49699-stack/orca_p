@@ -8,6 +8,9 @@
 
 namespace Slic3r {
 
+// Shared by automatic brim generation and conservative pre-slice reservations.
+inline constexpr double MAX_AUTO_BRIM_WIDTH_MM = 18.0;
+
 class Print;
 class ExtrusionEntityCollection;
 class PrintTryCancel;

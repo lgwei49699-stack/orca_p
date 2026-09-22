@@ -315,6 +315,12 @@ private: // Prevents erroneous use by other classes.
     typedef PrintObjectBaseWithState<Print, PrintObjectStep, posCount> Inherited;
 
 public:
+    // Resolve a copy for slicing and pre-slice arrangement without modifying
+    // the model or defaults. Applies object overrides and clamps extruder IDs.
+    static PrintObjectConfig object_config_from_model_object(const PrintObjectConfig& default_object_config,
+                                                             const ModelObject&       object,
+                                                             size_t                   num_extruders);
+
     // Size of an object: XYZ in scaled coordinates. The size might not be quite snug in XY plane.
     const Vec3crd&               size() const			{ return m_size; }
     const PrintObjectConfig&     config() const         { return m_config; }
@@ -493,8 +499,6 @@ public:
         const ConfigOptionResolver &old_config, const ConfigOptionResolver &new_config, const std::vector<t_config_option_key> &opt_keys);
     // If ! m_slicing_params.valid, recalculate.
     void                    update_slicing_parameters();
-
-    static PrintObjectConfig object_config_from_model_object(const PrintObjectConfig &default_object_config, const ModelObject &object, size_t num_extruders);
 
 private:
     void make_perimeters();
