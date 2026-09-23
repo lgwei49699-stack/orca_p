@@ -13636,14 +13636,14 @@ msgstr "筏层顶层墙层数"
 msgid "Number of contours around the dense Top pattern."
 msgstr "致密顶部图案外围的轮廓层数。"
 
-msgid "Raft Geometry (Trial)"
-msgstr "筏层形状（试用）"
+msgid "Raft Geometry"
+msgstr "筏层形状"
 
 msgid "Segment raft"
 msgstr "筏层分块"
 
-msgid "Split large Cura-style rafts into sections before generating walls and infill. Each raft phase is processed independently. Cuts may cross model contact areas and leave marks on the model bottom. This trial applies to compatible single-instance objects, one active filament and by-layer printing. Ordinary support paths are preserved."
-msgstr "在生成墙线和填充前将较大的 Cura 风格筏层分块，各筏层阶段独立处理。切缝可能穿过模型接触区域，并在模型底面留下痕迹。此试用功能适用于逐层打印、单耗材且工艺兼容的单实例对象。普通支撑路径保持不变。"
+msgid "Split large Cura-style rafts into sections before generating walls and infill. Each raft phase is processed independently. Cuts may cross model contact areas and leave marks on the model bottom. Applies to compatible single-instance objects, one active filament and by-layer printing. Ordinary support paths are preserved."
+msgstr "在生成墙线和填充前将较大的 Cura 风格筏层分块，各筏层阶段独立处理。切缝可能穿过模型接触区域，并在模型底面留下痕迹。适用于逐层打印、单耗材且工艺兼容的单实例对象。普通支撑路径保持不变。"
 
 msgid "Raft segment reference size"
 msgstr "筏层分块参考尺寸"
@@ -13660,8 +13660,8 @@ msgstr "筏层分块之间的间隙，按挤出线边缘测量。较大的间隙
 msgid "Raft outline smoothing"
 msgstr "筏层轮廓平滑"
 
-msgid "Round inward raft corners and fill small raft holes using closing, then clean thin edges using the brim line width. Zero disables closing; edge cleanup still runs when segmentation is enabled. Printable bed exclusions stay clear. Uses the same trial compatibility restrictions as raft segmentation."
-msgstr "通过闭运算修整筏层内凹角、填平小孔，再按 Brim 线宽清理细边。0 表示关闭闭运算；开启分块时仍会清理细边。打印平台禁打区始终保留。适用范围与筏层分块试用功能相同。"
+msgid "Round inward raft corners and fill small raft holes using closing, then clean thin edges using the brim line width. Zero disables closing; edge cleanup still runs when segmentation is enabled. Printable bed exclusions stay clear. Uses the same compatibility restrictions as raft segmentation."
+msgstr "通过闭运算修整筏层内凹角、填平小孔，再按 Brim 线宽清理细边。0 表示关闭闭运算；开启分块时仍会清理细边。打印平台禁打区始终保留。适用范围与筏层分块功能相同。"
 
 msgid "Raft top margin"
 msgstr "筏层顶层外扩量"

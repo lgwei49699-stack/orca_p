@@ -59,7 +59,8 @@ namespace GUI {
 
 static bool gfd_filament_displays_full_name(const std::string& printer_model)
 {
-    return printer_model == "EP7" || printer_model == "EPONE" || printer_model == "EPONE Pro" || printer_model == "EPONEPro";
+    return printer_model == "EP7" || printer_model == "EPONE" || printer_model == "EPONE Pro" || printer_model == "EPONEPro" ||
+           printer_model == "EPONE Plus" || printer_model == "EPONEPlus";
 }
 
 // ---------------------------------

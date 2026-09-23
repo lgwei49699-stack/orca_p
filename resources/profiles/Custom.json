@@ -1,6 +1,6 @@
 {
     "name":  "Custom Printer",
-    "version":  "02.03.02.67",
+    "version":  "02.03.02.78",
     "force_update":  "0",
     "description":  "My configurations",
     "machine_model_list":  [
@@ -31,6 +31,10 @@
                                {
                                    "name":  "EPONE Pro",
                                    "sub_path":  "machine/EPONE Pro.json"
+                               },
+                               {
+                                   "name":  "EPONE Plus",
+                                   "sub_path":  "machine/EPONE Plus.json"
                                },
                                {
                                    "name":  "Generic RRF Printer",
@@ -231,8 +235,16 @@
                              "sub_path":  "process/0.20mm Standard @EPONE Pro.json"
                          },
                          {
+                             "name":  "0.20mm Standard @EPONE Plus",
+                             "sub_path":  "process/0.20mm Standard @EPONE Plus.json"
+                         },
+                         {
                              "name":  "0.24mm Draft @EPONE Pro",
                              "sub_path":  "process/0.24mm Draft @EPONE Pro.json"
+                         },
+                         {
+                             "name":  "0.24mm Draft @EPONE Plus",
+                             "sub_path":  "process/0.24mm Draft @EPONE Plus.json"
                          },
                          {
                              "name":  "fdm_process_n_common",
@@ -327,6 +339,10 @@
                           {
                               "name":  "EPONE-PLA Overhang @EPONE Pro",
                               "sub_path":  "filament/EPONE-PLA Overhang @EPONE Pro.json"
+                          },
+                          {
+                              "name":  "EPONE-PLA Overhang @EPONE Plus",
+                              "sub_path":  "filament/EPONE-PLA Overhang @EPONE Plus.json"
                           },
                           {
                               "name":  "fdm_filament_x5_common",
@@ -689,6 +705,10 @@
                          {
                              "name":  "EPONE Pro 0.4 nozzle",
                              "sub_path":  "machine/EPONE Pro 0.4 nozzle.json"
+                         },
+                         {
+                             "name":  "EPONE Plus 0.4 nozzle",
+                             "sub_path":  "machine/EPONE Plus 0.4 nozzle.json"
                          },
                          {
                              "name":  "fdm_qidi_x3_common",

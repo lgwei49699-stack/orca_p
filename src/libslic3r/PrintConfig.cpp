@@ -4282,7 +4282,7 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Raft");
     def->tooltip  = L("Split large Cura-style rafts into sections before generating walls and infill. Each raft phase is processed "
                        "independently. Cuts may cross model contact areas and leave marks on the model bottom. "
-                       "This trial applies to compatible single-instance objects, one active filament and by-layer printing. Ordinary "
+                       "Applies to compatible single-instance objects, one active filament and by-layer printing. Ordinary "
                        "support paths are preserved.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
@@ -4298,7 +4298,7 @@ void PrintConfigDef::init_fff_params()
         "raft_smoothing", L("Raft outline smoothing"),
         L("Round inward raft corners and fill small raft holes using closing, then clean thin edges using the brim line width. "
           "Zero disables closing; edge cleanup still runs when segmentation is enabled. Printable bed exclusions stay clear. "
-          "Uses the same trial compatibility restrictions as raft segmentation."),
+          "Uses the same compatibility restrictions as raft segmentation."),
         "mm", 0.0, 20.0, 0.0, comAdvanced);
 
     add_cura_raft_int("raft_base_layers", L("Raft base layers"),

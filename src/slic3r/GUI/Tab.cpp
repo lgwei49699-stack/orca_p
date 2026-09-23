@@ -3390,7 +3390,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("raft_airgap", "support_settings_raft");
         optgroup->append_single_option_line("raft_layer_0_z_overlap", "support_settings_raft");
 
-        optgroup = page->new_optgroup(L("Raft Geometry (Trial)"), L"param_raft");
+        optgroup = page->new_optgroup(L("Raft Geometry"), L"param_raft");
         optgroup->append_single_option_line("raft_segmented", "support_settings_raft");
         optgroup->append_single_option_line("raft_chunk_size", "support_settings_raft");
         optgroup->append_single_option_line("raft_chunk_gap", "support_settings_raft");

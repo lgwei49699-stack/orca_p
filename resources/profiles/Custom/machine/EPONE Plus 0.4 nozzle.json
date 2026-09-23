@@ -1,0 +1,14 @@
+{
+    "from": "system",
+    "name": "EPONE Plus 0.4 nozzle",
+    "inherits": "EPONE 0.4 nozzle",
+    "type": "machine",
+    "instantiation": "true",
+    "printer_settings_id": "EPONE Plus 0.4 nozzle",
+    "default_print_profile": "0.20mm Standard @EPONE Plus",
+    "setting_id": "GFD_EPONEPLUS_M_04",
+    "printer_model": "EPONE Plus",
+    "default_filament_profile": [
+        "EPONE-PLA Overhang @EPONE Plus"
+    ]
+}

@@ -77,6 +77,17 @@
                                      "print_device_types":  [
                                                                 "EPONEPro"
                                                             ]
+                                 },
+                    "EPONEPlus":  {
+                                     "cloud_import":  true,
+                                     "dynamic_params":  true,
+                                     "upload_config":  true,
+                                     "save_config":  true,
+                                     "print":  true,
+                                     "print_3mf":  false,
+                                     "print_device_types":  [
+                                                                "EPONEPlus"
+                                                            ]
                                  }
                 }
 }

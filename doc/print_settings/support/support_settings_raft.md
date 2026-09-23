@@ -23,12 +23,12 @@ and color grouping remain constraints. Mixed raft-on/off jobs and unsupported
 combinations retain their existing arrangement rules. See the
 [scope and validation record](raft_compact_arrange_progress.md).
 
-## Raft geometry trial: segmentation and smoothing
+## Raft geometry: segmentation and smoothing
 
-The advanced **Raft Geometry (Trial)** group is available in Cura-style mode.
+The advanced **Raft Geometry** group is available in Cura-style mode.
 `raft_segmented` is off by default; its reference size (`raft_chunk_size`) is
 40 mm and its gap (`raft_chunk_gap`) is 0.8 mm. Independent outline smoothing
-(`raft_smoothing`) defaults to 0, disabled. These are opt-in trial settings,
+(`raft_smoothing`) defaults to 0, disabled. These are opt-in settings,
 not new printer defaults or a guarantee of easier removal.
 
 The implementation processes compatible single-instance objects during by-layer
@@ -72,7 +72,7 @@ baseline; empty or out-of-region path results also retain it. Existing mixed-raf
 clearance checks still block export. Neither feature changes model geometry,
 flow, air gap, layer heights or arrangement spacing.
 
-中文入口：**工艺 → 筏层 → 筏层形状（试用）**。分块和平滑均默认关闭；
+中文入口：**工艺 → 筏层 → 筏层形状**。分块和平滑均默认关闭；
 首次对照可用分块参考尺寸 40 mm、缝宽 0.8 mm，平滑单独从 1 mm 试起。
 适用范围为有效 CuraV1、逐层打印、单耗材的兼容单实例对象。
 2026-09-22 新增带普通／树状支撑的实现，已通过对应构建的筏层专项：通过生成端来源标记只重建筏层，
