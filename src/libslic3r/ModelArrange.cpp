@@ -9,6 +9,7 @@
 #include "Slicing.hpp"
 #include "Support/SupportGridParams.hpp"
 
+#include <boost/log/trivial.hpp>
 #include <map>
 #include <set>
 

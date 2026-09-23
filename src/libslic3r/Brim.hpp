@@ -1,7 +1,7 @@
 #ifndef slic3r_Brim_hpp_
 #define slic3r_Brim_hpp_
 
-#include "Point.hpp"
+#include "Polygon.hpp"
 
 #include<map>
 #include<vector>
