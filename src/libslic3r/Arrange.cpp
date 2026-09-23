@@ -1305,6 +1305,133 @@ static void place_single_objects_on_empty_beds(ArrangePolygons&       items,
     }
 }
 
+// Use a temporary packing pass: model spacing is small, while obstacles retain
+// the full raft reservation. The model must stay inside the original bed; raft
+// expansion may be clipped by the slicer just as in the empty-bed retry.
+static bool try_arrange_compact_rafts(ArrangePolygons&       items,
+                                      const ArrangePolygons& fixed,
+                                      const BoundingBox&     bed,
+                                      const ArrangeParams&   params)
+{
+    if (params.is_seq_print || items.empty() || !bed.defined ||
+        std::any_of(items.begin(), items.end(), [](const ArrangePolygon& item) { return item.is_virt_object; }))
+        return false;
+    size_t count = 0;
+    for (const ArrangePolygons* group : {static_cast<const ArrangePolygons*>(&items), &fixed})
+        for (const ArrangePolygon& item : *group) {
+            if (item.is_wipe_tower)
+                return false;
+            if (item.is_virt_object)
+                continue;
+            if (!std::isfinite(item.compact_raft_obstacle_margin) || item.compact_raft_obstacle_margin <= 0.)
+                return false;
+            ++count;
+        }
+    if (count < 2)
+        return false;
+
+    const auto canceled = [&]() { return params.stopcondition && params.stopcondition(); };
+    if (canceled())
+        return true;
+    const coord_t pair_margin    = params.min_obj_distance > 0 ? params.min_obj_distance / 2 + params.min_obj_distance % 2 : scaled(1.);
+    coord_t       obstacle_extra = 0;
+    for (const ArrangePolygons* group : {static_cast<const ArrangePolygons*>(&items), &fixed})
+        for (const ArrangePolygon& item : *group)
+            if (!item.is_virt_object)
+                obstacle_extra = std::max(obstacle_extra, std::max(item.inflation, scaled(item.compact_raft_obstacle_margin)) - pair_margin);
+
+    ArrangePolygons candidates       = items;
+    ArrangePolygons obstacles        = fixed;
+    ArrangeParams   candidate_params = params;
+    if (!obstacles.empty() || !params.excluded_regions.empty())
+        candidate_params.do_final_align = false;
+    // No partial placement is published through the observer on a rejected pass.
+    candidate_params.on_packed = {};
+    for (ArrangePolygons* group : {&candidates, &obstacles})
+        for (ArrangePolygon& item : *group) {
+            item.compact_raft_obstacle_margin = 0.; // prevents re-entering this pass
+            if (item.is_virt_object) {
+                item.inflation += obstacle_extra;
+            } else {
+                item.inflation         = pair_margin;
+                item.minimum_inflation = unscale<double>(pair_margin);
+            }
+        }
+    for (ArrangePolygon& region : candidate_params.excluded_regions)
+        region.inflation += obstacle_extra;
+
+    // The ordinary packer shrinks fixed items by 2*EPSILON. In a tight raft
+    // layout that lets the first row drift into the next row's clearance,
+    // leaving a nominally sufficient slot just too small. Cancel that shrink
+    // for these compatible fixed models only; keep their full pair margin.
+    for (ArrangePolygon& obstacle : obstacles)
+        if (!obstacle.is_virt_object)
+            obstacle.inflation += scaled(2. * EPSILON);
+
+    arrange(candidates, obstacles, bed, candidate_params);
+    if (canceled())
+        return true; // keep the caller's original transforms
+
+    // Verify placements after final alignment and the packer's internal retries.
+    // Full raft envelopes are checked only against obstacles, never other rafts.
+    const auto footprint = [](const ArrangePolygon& item, coord_t margin) {
+        return offset_ex(item.transformed_poly(), std::max<coord_t>(0, margin - scaled(2. * EPSILON)), ClipperLib::jtSquare);
+    };
+    std::vector<ExPolygons>  pair_areas;
+    std::vector<BoundingBox> pair_bounds;
+    pair_areas.reserve(candidates.size());
+    pair_bounds.reserve(candidates.size());
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        if (canceled())
+            return true;
+        const ArrangePolygon& item = candidates[i];
+        if (item.bed_idx < 0 || item.height > params.printable_height || !bed.contains(get_extents(item.transformed_poly()))) {
+            BOOST_LOG_TRIVIAL(info) << "[arrange-diag] compact_raft fallback=placement_not_complete";
+            return false;
+        }
+        pair_areas.push_back(footprint(item, pair_margin));
+        pair_bounds.push_back(get_extents(pair_areas.back()));
+        const ExPolygons full_area = footprint(item, std::max(items[i].inflation, scaled(items[i].compact_raft_obstacle_margin)));
+        const auto       hits      = [&](const ArrangePolygon& obstacle) {
+            return !intersection_ex(full_area, footprint(obstacle, obstacle.inflation)).empty();
+        };
+        if (std::any_of(params.excluded_regions.begin(), params.excluded_regions.end(), hits) ||
+            std::any_of(fixed.begin(), fixed.end(), [&](const ArrangePolygon& obstacle) {
+                return obstacle.is_virt_object && obstacle.bed_idx == item.bed_idx && hits(obstacle);
+            })) {
+            BOOST_LOG_TRIVIAL(info) << "[arrange-diag] compact_raft fallback=obstacle_clearance";
+            return false;
+        }
+        for (size_t j = 0; j < i; ++j)
+            if (candidates[j].bed_idx == item.bed_idx && pair_bounds[i].overlap(pair_bounds[j]) &&
+                !intersection_ex(pair_areas[i], pair_areas[j]).empty()) {
+                BOOST_LOG_TRIVIAL(info) << "[arrange-diag] compact_raft fallback=model_clearance";
+                return false;
+            }
+        for (const ArrangePolygon& other : fixed)
+            if (!other.is_virt_object && other.bed_idx == item.bed_idx &&
+                !intersection_ex(pair_areas[i], footprint(other, pair_margin)).empty()) {
+                BOOST_LOG_TRIVIAL(info) << "[arrange-diag] compact_raft fallback=fixed_model_clearance";
+                return false;
+            }
+    }
+    if (canceled())
+        return true;
+    for (size_t i = 0; i < items.size(); ++i) {
+        items[i].translation = candidates[i].translation;
+        items[i].rotation    = candidates[i].rotation;
+        items[i].bed_idx     = candidates[i].bed_idx;
+        items[i].itemid      = candidates[i].itemid;
+    }
+    if (params.on_packed)
+        for (const auto& item : items)
+            params.on_packed(item);
+    BOOST_LOG_TRIVIAL(info) << "[arrange-diag] compact_raft applied=" << items.size()
+                            << " model_gap_mm=" << unscale<double>(2 * pair_margin)
+                            << " obstacle_extra_mm=" << unscale<double>(obstacle_extra);
+    return true;
+}
+
 template<class BedT>
 void arrange(ArrangePolygons &      arrangables,
              const ArrangePolygons &excludes,
@@ -1312,6 +1439,10 @@ void arrange(ArrangePolygons &      arrangables,
              const ArrangeParams &  params)
 {
     namespace clppr = Slic3r::ClipperLib;
+
+    if constexpr (std::is_same_v<BedT, BoundingBox>)
+        if (try_arrange_compact_rafts(arrangables, excludes, bed, params))
+            return;
 
     const std::uint64_t diagnostic_id = arrange_diagnostic_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
     const auto          bed_bb        = sl::boundingBox(to_nestbin(bed));

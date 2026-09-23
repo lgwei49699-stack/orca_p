@@ -80,6 +80,9 @@ struct ArrangePolygon {
     double    height{ 0 };         // item height
     double    brim_width{ 0 };     // brim width
     double    minimum_inflation{ 0 }; // non-overridable physical footprint margin in mm
+    // Positive only after all participating models pass the compact Cura raft
+    // eligibility check. Keep this full obstacle margin separate from pair spacing.
+    double compact_raft_obstacle_margin{0};
     // A Cura raft without other bed attachments may be clipped on an otherwise
     // empty rectangular bed. This never reduces its object-to-object inflation.
     bool allow_raft_bed_clipping{false};

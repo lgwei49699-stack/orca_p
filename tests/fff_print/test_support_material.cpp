@@ -3651,6 +3651,68 @@ TEST_CASE("Arranging mixed rafts reserves generated contacts and the unrafted ob
     }
 }
 
+TEST_CASE("Compact raft arrangement feeds one shared raft per physical layer on both printer sizes",
+          "[SupportMaterial][Raft][Merge][Arrange][Compact]")
+{
+    const double bed_size  = GENERATE(100., 180.);
+    const bool   segmented = GENERATE(false, true);
+    CAPTURE(bed_size, segmented);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {bed_size, 0.}, {bed_size, bed_size}, {0., bed_size}}));
+    config.set("raft_base_margin", 5.);
+    config.set("raft_interface_margin", 4.);
+    config.set("raft_surface_margin", 3.);
+    config.set("raft_segmented", segmented);
+    config.set("raft_smoothing", segmented ? 1. : 0.);
+    Model model;
+    for (int i = 0; i < 4; ++i)
+        add_raft_bed_test_cube(model, (bed_size - 8.) / 2., Vec3d(200. + i * bed_size, 200., 0.));
+    ArrangePolygons selected, fixed;
+    for (ModelObject* object : model.objects)
+        selected.push_back(get_instance_arrange_poly(object->instances.front(), config));
+    ArrangeParams params;
+    params.parallel    = false;
+    params.progressind = [](unsigned, std::string) {};
+    update_arrange_params(params, &config, selected);
+    REQUIRE(prepare_compact_raft_arrangement(selected, fixed, config, params));
+    update_selected_items_inflation(selected, &config, params);
+    const Points bed = get_shrink_bedpts(&config, params);
+    arrangement::arrange(selected, fixed, bed, params);
+    for (ArrangePolygon& item : selected) {
+        REQUIRE(item.bed_idx == 0);
+        REQUIRE(BoundingBox(bed).contains(get_extents(item.transformed_poly())));
+        item.apply();
+    }
+    Print print;
+    REQUIRE_NOTHROW(process_raft_bed_test(print, model, config));
+    REQUIRE(print.objects().size() == 4);
+    require_shared_rafts_are_disjoint(print);
+    for (size_t layer = 0; layer < 3; ++layer)
+        REQUIRE(raft_path_owners(print, layer) == 1);
+    REQUIRE(all_raft_volume(print) > 0.);
+    for (const PrintObject* object : print.objects()) {
+        REQUIRE(object->instances().size() == 1);
+        REQUIRE_FALSE(object->layers().empty());
+        REQUIRE(object->layers().front()->has_extrusions());
+        REQUIRE(object->support_layers().front()->raft_merge_backup != nullptr);
+    }
+    // Replaying the same source must not duplicate the merged deposition.
+    const double volume = all_raft_volume(print);
+    merge_overlapping_rafts(print);
+    REQUIRE(all_raft_volume(print) == Approx(volume));
+    require_shared_rafts_are_disjoint(print);
+
+    // A raft-off override switches the next arrange back to mixed clearance.
+    disable_test_raft(*model.objects.back());
+    selected.clear();
+    for (ModelObject* object : model.objects)
+        selected.push_back(get_instance_arrange_poly(object->instances.front(), config));
+    REQUIRE(prepare_mixed_raft_clearance(selected, fixed, config, params));
+    REQUIRE_FALSE(prepare_compact_raft_arrangement(selected, fixed, config, params));
+    for (const auto& item : selected)
+        REQUIRE(item.compact_raft_obstacle_margin == 0.);
+}
+
 TEST_CASE("Large rafted models arrange and slice with clipped raft paths on both printer sizes", "[SupportMaterial][Raft][BedClip][Arrange]")
 {
     const double bed_size  = GENERATE(100., 180.);

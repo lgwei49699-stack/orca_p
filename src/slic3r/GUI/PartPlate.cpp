@@ -1868,6 +1868,11 @@ Vec3d PartPlate::get_center_origin()
 
 void PartPlate::generate_plate_name_texture()
 {
+    // CLI project import keeps plate names but has no GUI or graphics context.
+    // Guard the rendering entry point so all name updates remain safe headless.
+    if (m_plater == nullptr)
+        return;
+
     m_plate_name_icon.reset();
 
 	// generate m_name_texture texture from m_name with generate_from_text_string

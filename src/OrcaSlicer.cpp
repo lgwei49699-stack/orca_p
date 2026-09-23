@@ -5542,6 +5542,7 @@ int CLI::run(int argc, char **argv)
 
                 arrangement::update_arrange_params(arrange_cfg, &m_print_config, selected);
                 prepare_mixed_raft_clearance(selected, unselected, m_print_config, arrange_cfg);
+                prepare_compact_raft_arrangement(selected, unselected, m_print_config, arrange_cfg);
                 arrangement::update_selected_items_inflation(selected, &m_print_config, arrange_cfg);
                 arrangement::update_unselected_items_inflation(unselected, &m_print_config, arrange_cfg);
                 arrangement::update_selected_items_axis_align(selected, &m_print_config, arrange_cfg);
@@ -5971,6 +5972,7 @@ int CLI::run(int argc, char **argv)
 
                 arrangement::update_arrange_params(arrange_cfg, &m_print_config, selected);
                 prepare_mixed_raft_clearance(selected, unselected, m_print_config, arrange_cfg);
+                prepare_compact_raft_arrangement(selected, unselected, m_print_config, arrange_cfg);
                 arrangement::update_selected_items_inflation(selected, &m_print_config, arrange_cfg);
                 arrangement::update_unselected_items_inflation(unselected, &m_print_config, arrange_cfg);
                 arrangement::update_selected_items_axis_align(selected, &m_print_config, arrange_cfg);
