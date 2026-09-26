@@ -9,6 +9,7 @@ add_executable(${_TEST_NAME}_tests
 	test_config.cpp
 	test_epone_presets.cpp
 	test_thumbnail.cpp
+	test_png_decode.cpp
 	test_elephant_foot_compensation.cpp
 	test_geometry.cpp
 	test_placeholder_parser.cpp

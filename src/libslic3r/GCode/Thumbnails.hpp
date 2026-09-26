@@ -9,6 +9,7 @@
 
 #include <vector>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include <boost/beast/core/detail/base64.hpp>
@@ -31,6 +32,8 @@ struct CompressedImageBuffer
 
 std::string get_hex(const unsigned int input);
 std::string rjust(std::string input, unsigned int width, char fill_char);
+// Load an RGB/RGBA PNG as bottom-up RGBA. Failure leaves the thumbnail empty.
+bool                                   load_png_thumbnail(const std::string& path, ThumbnailData& thumbnail);
 ThumbnailData resize_thumbnail(const ThumbnailData &data, unsigned int width, unsigned int height);
 ThumbnailData resize_thumbnail_fit(const ThumbnailData &data, unsigned int width, unsigned int height);
 std::unique_ptr<CompressedImageBuffer> compress_thumbnail(const ThumbnailData &data, GCodeThumbnailsFormat format);

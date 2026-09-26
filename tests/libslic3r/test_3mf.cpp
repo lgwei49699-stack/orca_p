@@ -345,7 +345,11 @@ bool store_bbs_project(const std::string          &path,
     return store_bbs_3mf(params);
 }
 
-bool store_bbs_gcode_project(const std::string &path, DynamicPrintConfig &config, const std::string &gcode_path)
+bool store_bbs_gcode_project(const std::string&  path,
+                             DynamicPrintConfig& config,
+                             const std::string&  gcode_path,
+                             bool                with_thumbnail   = true,
+                             int                 export_plate_idx = -1)
 {
     attach_enum_vector_serialization_maps(config);
 
@@ -369,11 +373,12 @@ bool store_bbs_gcode_project(const std::string &path, DynamicPrintConfig &config
     plate.is_support_used         = true;
     plate.is_label_object_enabled = true;
     plate.objects_and_instances.emplace_back(0, 0);
-    plate.plate_thumbnail.set(2, 2);
-    plate.plate_thumbnail.pixels = {
-        0xff, 0x00, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff,
-        0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    };
+    if (with_thumbnail) {
+        plate.plate_thumbnail.set(2, 2);
+        plate.plate_thumbnail.pixels = {
+            0xff, 0x00, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        };
+    }
 
     StoreParams params;
     params.path            = path.c_str();
@@ -381,6 +386,7 @@ bool store_bbs_gcode_project(const std::string &path, DynamicPrintConfig &config
     params.plate_data_list = {&plate};
     params.config          = &config;
     params.thumbnail_data  = {&plate.plate_thumbnail};
+    params.export_plate_idx = export_plate_idx;
     params.strategy = SaveStrategy::Zip64 | SaveStrategy::Silence | SaveStrategy::WithGcode | SaveStrategy::WithSliceInfo;
     return store_bbs_3mf(params);
 }
@@ -1279,4 +1285,36 @@ TEST_CASE("BBS 3MF readers gate unknown required features by artifact type",
     REQUIRE_FALSE(future_raft_plate.plate_thumbnail.pixels.empty());
     REQUIRE(std::string(future_raft_plate.plate_thumbnail.pixels.begin(), future_raft_plate.plate_thumbnail.pixels.end()) ==
             archived_thumbnail);
+}
+
+TEST_CASE("G-code 3MF only references thumbnails present in the archive", "[3mf][bbs][PNG][Thumbnails]")
+{
+    const bool        with_thumbnail   = GENERATE(false, true);
+    const int         export_plate_idx = GENERATE(-1, 0);
+    Temporary3mfPath  archive("orca-thumbnail-relationships");
+    TemporaryFilePath gcode("orca-thumbnail-relationships", ".gcode");
+    const std::string gcode_text = "; thumbnail recovery test\nG28\nG1 X10 Y10\n";
+    {
+        std::ofstream output(gcode.path(), std::ios::binary);
+        REQUIRE(output.good());
+        output << gcode_text;
+        REQUIRE(output.good());
+    }
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    REQUIRE(store_bbs_gcode_project(archive.path(), config, gcode.path(), with_thumbnail, export_plate_idx));
+    REQUIRE(read_zip_entry_text(archive.path(), "Metadata/plate_1.gcode") == gcode_text);
+
+    const std::string relationships = read_zip_entry_text(archive.path(), "_rels/.rels");
+    REQUIRE(relationships.find("Target=\"/3D/3dmodel.model\"") != std::string::npos);
+    REQUIRE((relationships.find("Target=\"/Metadata/plate_1.png\"") != std::string::npos) == with_thumbnail);
+    REQUIRE((relationships.find("Target=\"/Metadata/plate_1_small.png\"") != std::string::npos) == with_thumbnail);
+    for (const char* id : {"rel-2", "rel-4", "rel-5"})
+        REQUIRE((relationships.find(std::string("Id=\"") + id + "\"") != std::string::npos) == with_thumbnail);
+
+    mz_zip_archive zip;
+    mz_zip_zero_struct(&zip);
+    REQUIRE(open_zip_reader(&zip, archive.path()));
+    ZipReaderGuard guard(zip);
+    REQUIRE((mz_zip_reader_locate_file(&zip, "Metadata/plate_1.png", nullptr, 0) >= 0) == with_thumbnail);
+    REQUIRE((mz_zip_reader_locate_file(&zip, "Metadata/plate_1_small.png", nullptr, 0) >= 0) == with_thumbnail);
 }

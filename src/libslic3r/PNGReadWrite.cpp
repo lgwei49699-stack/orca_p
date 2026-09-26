@@ -54,18 +54,17 @@ static void png_read_callback(png_struct *png_ptr,
     // Retrieve our input buffer through the png_ptr
     auto reader = static_cast<IStream *>(png_get_io_ptr(png_ptr));
 
-    if (!reader || !reader->is_ok()) return;
-
-    reader->read(static_cast<std::uint8_t *>(outBytes), byteCountToRead);
+    if (!reader || !reader->is_ok() || reader->read(static_cast<std::uint8_t*>(outBytes), byteCountToRead) != byteCountToRead)
+        png_error(png_ptr, "Unexpected end of PNG input");
 }
 
 bool decode_png(IStream &in_buf, ImageGreyscale &out_img)
 {
     static const constexpr int PNG_SIG_BYTES = 8;
+    out_img                                  = {};
 
     std::vector<png_byte> sig(PNG_SIG_BYTES, 0);
-    in_buf.read(sig.data(), PNG_SIG_BYTES);
-    if (!png_check_sig(sig.data(), PNG_SIG_BYTES))
+    if (in_buf.read(sig.data(), PNG_SIG_BYTES) != PNG_SIG_BYTES || !png_check_sig(sig.data(), PNG_SIG_BYTES))
         return false;
 
     PNGDescr dsc;
@@ -76,6 +75,13 @@ bool decode_png(IStream &in_buf, ImageGreyscale &out_img)
 
     dsc.info = png_create_info_struct(dsc.png);
     if(!dsc.info) return false;
+
+    // Keep owning objects above setjmp; libpng errors must return to this frame,
+    // not abort the slicing process or jump over C++ object destruction.
+    if (setjmp(png_jmpbuf(dsc.png))) {
+        out_img = {};
+        return false;
+    }
 
     png_set_read_fn(dsc.png, static_cast<void *>(&in_buf), png_read_callback);
 
@@ -89,8 +95,10 @@ bool decode_png(IStream &in_buf, ImageGreyscale &out_img)
     size_t color_type = png_get_color_type(dsc.png, dsc.info);
     size_t bit_depth  = png_get_bit_depth(dsc.png, dsc.info);
 
-    if (color_type != PNG_COLOR_TYPE_GRAY || bit_depth != 8)
+    if (color_type != PNG_COLOR_TYPE_GRAY || bit_depth != 8) {
+        out_img = {};
         return false;
+    }
 
     out_img.buf.resize(out_img.rows * out_img.cols);
 
@@ -98,16 +106,17 @@ bool decode_png(IStream &in_buf, ImageGreyscale &out_img)
     for (size_t r = 0; r < out_img.rows; ++r)
         png_read_row(dsc.png, readbuf + r * out_img.cols, nullptr);
 
+    png_read_end(dsc.png, dsc.info);
     return true;
 }
 
 bool decode_colored_png(IStream &in_buf, ImageColorscale &out_img)
 {
     static const constexpr int PNG_SIG_BYTES = 8;
+    out_img                                  = {};
 
     std::vector<png_byte> sig(PNG_SIG_BYTES, 0);
-    in_buf.read(sig.data(), PNG_SIG_BYTES);
-    if (!png_check_sig(sig.data(), PNG_SIG_BYTES)) {
+    if (in_buf.read(sig.data(), PNG_SIG_BYTES) != PNG_SIG_BYTES || !png_check_sig(sig.data(), PNG_SIG_BYTES)) {
         BOOST_LOG_TRIVIAL(error) << boost::format("decode_colored_png: png_check_sig failed");
         return false;
     }
@@ -124,7 +133,13 @@ bool decode_colored_png(IStream &in_buf, ImageColorscale &out_img)
     dsc.info = png_create_info_struct(dsc.png);
     if(!dsc.info) {
         BOOST_LOG_TRIVIAL(error) << boost::format("decode_colored_png: png_create_info_struct failed");
-        png_destroy_read_struct(&dsc.png, &dsc.info, NULL);
+        return false;
+    }
+
+    // PNGDescr and sig already exist here; no owning automatic objects may be
+    // introduced below this point across a libpng call that can longjmp.
+    if (setjmp(png_jmpbuf(dsc.png))) {
+        out_img = {};
         return false;
     }
 
@@ -141,6 +156,12 @@ bool decode_colored_png(IStream &in_buf, ImageColorscale &out_img)
     size_t bit_depth  = png_get_bit_depth(dsc.png, dsc.info);
     unsigned long rowbytes = png_get_rowbytes(dsc.png, dsc.info);
 
+    // Thumbnail consumers expect one byte per channel.
+    if (bit_depth != 8) {
+        out_img = {};
+        return false;
+    }
+
     switch(color_type)
     {
         case PNG_COLOR_TYPE_RGB:
@@ -150,7 +171,7 @@ bool decode_colored_png(IStream &in_buf, ImageColorscale &out_img)
             out_img.bytes_per_pixel = 4;
             break;
         default: //not supported currently
-            png_destroy_read_struct(&dsc.png, &dsc.info, NULL);
+            out_img = {};
             return false;
     }
 
@@ -169,7 +190,6 @@ bool decode_colored_png(IStream &in_buf, ImageColorscale &out_img)
     }
 
     png_read_end(dsc.png, dsc.info);
-    png_destroy_read_struct(&dsc.png, &dsc.info, NULL);
 
     return true;
 }

@@ -81,7 +81,6 @@
 #include "libslic3r/FlushVolCalc.hpp"
 
 #include "libslic3r/Orient.hpp"
-#include "libslic3r/PNGReadWrite.hpp"
 
 #include "OrcaSlicer.hpp"
     // BBS: add exception handler for win32
@@ -831,37 +830,9 @@ static void attach_exported_model_paths(sliced_info_t&                          
     }
 }
 
-static int decode_png_to_thumbnail(std::string png_file, ThumbnailData& thumbnail_data)
+static int decode_png_to_thumbnail(const std::string& png_file, ThumbnailData& thumbnail_data)
 {
-    if (!boost::filesystem::exists(png_file))
-    {
-        BOOST_LOG_TRIVIAL(error) << boost::format("can not find file %1%")%png_file;
-        return -1;
-    }
-
-    const std::size_t &size  = boost::filesystem::file_size(png_file);
-    std::string png_buffer(size, '\0');
-    png_buffer.reserve(size);
-
-    boost::filesystem::ifstream ifs(png_file, std::ios::binary);
-    ifs.read(png_buffer.data(), png_buffer.size());
-    ifs.close();
-
-    Slic3r::png::ImageColorscale img;
-    Slic3r::png::ReadBuf rb{png_buffer.data(), png_buffer.size()};
-    BOOST_LOG_TRIVIAL(info) << boost::format("read png file %1%, size %2%")%png_file %size;
-
-    if ( !Slic3r::png::decode_colored_png(rb, img))
-    {
-        BOOST_LOG_TRIVIAL(error) << boost::format("decode png file %1% failed")%png_file;
-        return -2;
-    }
-
-    thumbnail_data.width = img.cols;
-    thumbnail_data.height = img.rows;
-    thumbnail_data.pixels = std::move(img.buf);
-
-    return 0;
+    return Slic3r::GCodeThumbnails::load_png_thumbnail(png_file, thumbnail_data) ? 0 : -2;
 }
 
 static bool load_cli_thumbnail_image_for_3mf(const std::string& png_file, ThumbnailData& thumbnail_data)
@@ -869,14 +840,15 @@ static bool load_cli_thumbnail_image_for_3mf(const std::string& png_file, Thumbn
     ThumbnailData source_thumbnail;
     const int decode_result = decode_png_to_thumbnail(png_file, source_thumbnail);
     if (decode_result != 0) {
-        BOOST_LOG_TRIVIAL(warning) << boost::format("decode --thumbnail-image failed, keep original thumbnail file path: %1%, result=%2%") %
+        BOOST_LOG_TRIVIAL(warning) << boost::format(
+                                          "decode --thumbnail-image failed, skip invalid thumbnail for gcode.3mf: %1%, result=%2%") %
                                           png_file % decode_result;
         return false;
     }
 
     thumbnail_data = Slic3r::GCodeThumbnails::resize_thumbnail_fit(source_thumbnail, 512, 512);
     if (!thumbnail_data.is_valid()) {
-        BOOST_LOG_TRIVIAL(warning) << boost::format("resize --thumbnail-image to 512x512 failed, keep original thumbnail file path: %1%") %
+        BOOST_LOG_TRIVIAL(warning) << boost::format("resize --thumbnail-image to 512x512 failed, skip thumbnail for gcode.3mf: %1%") %
                                           png_file;
         return false;
     }
@@ -7798,11 +7770,11 @@ int CLI::run(int argc, char **argv)
             if (!nozzle_diameter_str.empty())
                 plate_data->nozzle_diameters = nozzle_diameter_str;
             if (use_cli_thumbnail_for_this_plate) {
+                // Never package the original file after a failed decode.
+                plate_data->thumbnail_file.clear();
                 if (load_cli_thumbnail_image_for_3mf(cli_thumbnail_image_path, plate_data->plate_thumbnail)) {
-                    plate_data->thumbnail_file.clear();
                     need_create_thumbnail_group = true;
                 } else {
-                    plate_data->thumbnail_file = cli_thumbnail_image_path;
                     plate_data->plate_thumbnail.reset();
                 }
                 plate_data->no_light_thumbnail_file.clear();

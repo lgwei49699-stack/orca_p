@@ -12,7 +12,6 @@
 #include "GCode/PrintExtents.hpp"
 #include "GCode/Thumbnails.hpp"
 #include "GCode/WipeTower.hpp"
-#include "PNGReadWrite.hpp"
 #include "ShortestPath.hpp"
 #include "Print.hpp"
 #include "Utils.hpp"
@@ -125,41 +124,6 @@ static std::vector<Vec2d> thumbnail_image_sizes_from_config(const ConfigBase &co
         sizes.emplace_back(g_default_thumbnail_image_size);
 
     return sizes;
-}
-
-static bool decode_png_thumbnail_image(const std::string &thumbnail_image_path, ThumbnailData &thumbnail_data)
-{
-    const std::size_t size = boost::filesystem::file_size(thumbnail_image_path);
-    std::string png_buffer(size, '\0');
-
-    boost::filesystem::ifstream ifs(thumbnail_image_path, std::ios::binary);
-    if (!ifs.good())
-        return false;
-    ifs.read(png_buffer.data(), png_buffer.size());
-    ifs.close();
-
-    png::ImageColorscale img;
-    png::ReadBuf rb{png_buffer.data(), png_buffer.size()};
-    if (!png::decode_colored_png(rb, img))
-        return false;
-
-    if (img.bytes_per_pixel != 3 && img.bytes_per_pixel != 4)
-        return false;
-
-    thumbnail_data.set(static_cast<unsigned int>(img.cols), static_cast<unsigned int>(img.rows));
-    const size_t src_stride = img.cols * img.bytes_per_pixel;
-    for (size_t y = 0; y < img.rows; ++y) {
-        for (size_t x = 0; x < img.cols; ++x) {
-            const size_t src_offset = y * src_stride + x * img.bytes_per_pixel;
-            const size_t dst_offset = 4 * (y * img.cols + x);
-            thumbnail_data.pixels[dst_offset] = img.buf[src_offset];
-            thumbnail_data.pixels[dst_offset + 1] = img.buf[src_offset + 1];
-            thumbnail_data.pixels[dst_offset + 2] = img.buf[src_offset + 2];
-            thumbnail_data.pixels[dst_offset + 3] = img.bytes_per_pixel == 4 ? img.buf[src_offset + 3] : 255;
-        }
-    }
-
-    return thumbnail_data.is_valid();
 }
 
 template<typename WriteToOutput>
@@ -2164,8 +2128,9 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                 if (boost::filesystem::exists(thumbnail_image_path)) {
                     try {
                         ThumbnailData source_thumbnail;
-                        if (!decode_png_thumbnail_image(thumbnail_image_path, source_thumbnail)) {
-                            BOOST_LOG_TRIVIAL(warning) << "--thumbnail-image currently supports PNG RGB/RGBA images only: " << thumbnail_image_path;
+                        if (!GCodeThumbnails::load_png_thumbnail(thumbnail_image_path, source_thumbnail)) {
+                            BOOST_LOG_TRIVIAL(warning)
+                                << "Failed to decode --thumbnail-image; skipping thumbnail: " << thumbnail_image_path;
                         } else {
                             const std::vector<Vec2d> thumbnail_sizes = thumbnail_image_sizes_from_config(print.full_print_config());
                             for (const Vec2d &size : thumbnail_sizes) {

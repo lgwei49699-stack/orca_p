@@ -1,19 +1,88 @@
 #include "Thumbnails.hpp"
+#include "../PNGReadWrite.hpp"
 #include "../miniz_extension.hpp"
 #include "format.hpp"
 
 #include <boost/algorithm/string/case_conv.hpp>
+#include <boost/filesystem.hpp>
+#include <boost/log/trivial.hpp>
+#include <boost/nowide/fstream.hpp>
 #include <qoi/qoi.h>
 #include <jpeglib.h>
 #include <jerror.h>
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <limits>
+#include <utility>
 #include <boost/algorithm/string.hpp>
 
 namespace Slic3r::GCodeThumbnails {
 
 using namespace std::literals;
+
+bool load_png_thumbnail(const std::string& path, ThumbnailData& thumbnail)
+{
+    thumbnail.reset();
+    try {
+        if (!boost::filesystem::is_regular_file(path)) {
+            BOOST_LOG_TRIVIAL(warning) << "Cannot load PNG thumbnail; not a regular file: " << path;
+            return false;
+        }
+        boost::nowide::ifstream input(path, std::ios::binary);
+        if (!input.good()) {
+            BOOST_LOG_TRIVIAL(warning) << "Cannot open PNG thumbnail: " << path;
+            return false;
+        }
+
+        // Feed libpng directly so short reads are detected without buffering the entire file.
+        struct FileStream final : png::IStream
+        {
+            std::istream& input;
+            explicit FileStream(std::istream& stream) : input(stream) {}
+            size_t read(std::uint8_t* output, size_t amount) override
+            {
+                if (amount > size_t(std::numeric_limits<std::streamsize>::max()))
+                    return 0;
+                input.read(reinterpret_cast<char*>(output), static_cast<std::streamsize>(amount));
+                return static_cast<size_t>(input.gcount());
+            }
+            bool is_ok() const override { return input.good(); }
+        } stream(input);
+
+        png::ImageColorscale image;
+        if (!png::decode_colored_png(stream, image) || (image.bytes_per_pixel != 3 && image.bytes_per_pixel != 4)) {
+            BOOST_LOG_TRIVIAL(warning) << "Failed to decode PNG thumbnail: " << path;
+            return false;
+        }
+
+        ThumbnailData decoded;
+        decoded.width  = static_cast<unsigned int>(image.cols);
+        decoded.height = static_cast<unsigned int>(image.rows);
+        if (image.bytes_per_pixel == 4) {
+            decoded.pixels = std::move(image.buf);
+        } else {
+            const size_t pixel_count = image.buf.size() / 3;
+            if (pixel_count > decoded.pixels.max_size() / 4) {
+                BOOST_LOG_TRIVIAL(warning) << "PNG thumbnail is too large: " << path;
+                return false;
+            }
+            decoded.pixels.resize(pixel_count * 4, 255);
+            for (size_t i = 0; i < pixel_count; ++i)
+                std::copy_n(image.buf.data() + i * 3, 3, decoded.pixels.data() + i * 4);
+        }
+        if (!decoded.is_valid()) {
+            BOOST_LOG_TRIVIAL(warning) << "Invalid PNG thumbnail pixel layout: " << path;
+            return false;
+        }
+        thumbnail = std::move(decoded);
+        return true;
+    } catch (const std::exception& error) {
+        BOOST_LOG_TRIVIAL(warning) << "Failed to load PNG thumbnail " << path << ": " << error.what();
+        return false;
+    }
+}
 
 struct CompressedPNG : CompressedImageBuffer
 {
