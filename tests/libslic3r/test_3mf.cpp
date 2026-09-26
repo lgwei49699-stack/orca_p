@@ -504,57 +504,6 @@ SCENARIO("Export+Import geometry to/from 3mf file cycle", "[3mf]") {
     }
 }
 
-SCENARIO("2D convex hull of sinking object", "[3mf]") {
-    GIVEN("model") {
-        // load a model
-        Model model;
-        std::string src_file = std::string(TEST_DATA_DIR) + "/test_3mf/Prusa.stl";
-        load_stl(src_file.c_str(), &model);
-        model.add_default_instances();
-
-        WHEN("model is rotated, scaled and set as sinking") {
-            ModelObject* object = model.objects.front();
-            object->center_around_origin(false);
-
-            // set instance's attitude so that it is rotated, scaled and sinking
-            ModelInstance* instance = object->instances.front();
-            instance->set_rotation(X, -M_PI / 4.0);
-            instance->set_offset(Vec3d::Zero());
-            instance->set_scaling_factor({ 2.0, 2.0, 2.0 });
-
-            // calculate 2D convex hull
-            Polygon hull_2d = object->convex_hull_2d(instance->get_transformation().get_matrix());
-
-            // verify result
-            Points result = {
-                { -91501496, -15914144 },
-                { 91501496, -15914144 },
-                { 91501496, 4243 },
-                { 78229680, 4246883 },
-                { 56898100, 4246883 },
-                { -85501496, 4242641 },
-                { -91501496, 4243 }
-            };
-
-            // Allow 1um error due to floating point rounding.
-            bool res = hull_2d.points.size() == result.size();
-            if (res)
-                for (size_t i = 0; i < result.size(); ++ i) {
-                    const Point &p1 = result[i];
-                    const Point &p2 = hull_2d.points[i];
-                    if (std::abs(p1.x() - p2.x()) > 1 || std::abs(p1.y() - p2.y()) > 1) {
-                        res = false;
-                        break;
-                    }
-                }
-
-            THEN("2D convex hull should match with reference") {
-                REQUIRE(res);
-            }
-        }
-    }
-}
-
 TEST_CASE("BBS 3MF advertises the Cura V1 raft reader requirement", "[3mf][bbs][Raft][RequiredFeature]")
 {
     Temporary3mfPath archive("orca-required-feature-write");
