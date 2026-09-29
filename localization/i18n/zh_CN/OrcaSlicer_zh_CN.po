@@ -27,6 +27,9 @@ msgstr "对象“%1%”的筏层与未开启筏层的对象“%2%”发生重叠
 msgid "Model repair partially completed. Safe changes were kept; some geometry problems remain."
 msgstr "模型部分修复成功。已保留安全的修改，但仍有几何问题未解决。"
 
+msgid "Repair changes were kept, but automatic backup could not be scheduled. Save the project manually."
+msgstr "已保留模型修复结果，但无法安排自动备份。请手动保存项目。"
+
 msgid "Unresolved geometry problems (rejected CGAL candidates were not applied):"
 msgstr "尚未解决的几何问题（未采用失败的 CGAL 修复候选）："
 

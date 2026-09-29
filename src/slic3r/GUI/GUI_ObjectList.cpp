@@ -32,6 +32,7 @@
 #include <wx/headerctrl.h>
 
 #include "slic3r/Utils/FixModelByCgal.hpp"
+#include "slic3r/Utils/ModelRepairBackup.hpp"
 #include "libslic3r/Format/bbs_3mf.hpp"
 #include "libslic3r/PrintConfig.hpp"
 
@@ -5740,9 +5741,11 @@ void ObjectList::fix_through_cgal()
     if (completed)
         completed = progress_dlg.Update(100, "");
 
-    const auto notify = [plater](const wxString& message) {
+    const auto notify = [plater](const wxString& message, bool warning = false) {
         plater->get_notification_manager()->push_notification(NotificationType::CgalFinished,
-                                                              NotificationManager::NotificationLevel::PrintInfoShortNotificationLevel,
+                                                              warning ?
+                                                                  NotificationManager::NotificationLevel::WarningNotificationLevel :
+                                                                  NotificationManager::NotificationLevel::PrintInfoShortNotificationLevel,
                                                               into_u8(message));
     };
 
@@ -5894,6 +5897,19 @@ void ObjectList::fix_through_cgal()
     }
     plater->sidebar().obj_list()->update_plate_values_for_items();
 
+    // changed_mesh() refreshes the scene, but does not refresh the per-object
+    // mesh files used by crash recovery. Queue the committed, adjusted objects
+    // before requesting the next metadata backup; never back up staging here.
+    const ModelRepairBackupResult backup_result = queue_committed_model_repair_backup(
+        model, staged_repair.report, [](ModelObject& object) { Slic3r::save_object_mesh(object); }, [] { Slic3r::backup_soon(); });
+    BOOST_LOG_TRIVIAL(info) << "CGAL GUI model repair: transaction=" << staged_repair.transaction_id << ", event="
+                            << (backup_result.failed()        ? "backup_queue_failed" :
+                                backup_result.metadata_queued ? "backup_queued" :
+                                                                "backup_skipped")
+                            << ", queued_objects=" << backup_result.queued_objects << ", failed_objects=" << backup_result.failed_objects
+                            << ", metadata_queued=" << backup_result.metadata_queued
+                            << ", metadata_failed=" << backup_result.metadata_failed;
+
     // Restore by stable object / volume IDs only. A repaired or split volume
     // intentionally receives a new ID; in that case selecting its object row
     // is safer than retaining or guessing a stale part selection.
@@ -6010,7 +6026,9 @@ void ObjectList::fix_through_cgal()
         }
         message += "\n" + _L("Check the slicing result before printing. Partial repair does not mean the mesh is fully valid.");
     }
-    notify(message);
+    if (backup_result.failed())
+        message += "\n\n" + _L("Repair changes were kept, but automatic backup could not be scheduled. Save the project manually.");
+    notify(message, backup_result.failed());
 }
 
 void ObjectList::simplify()

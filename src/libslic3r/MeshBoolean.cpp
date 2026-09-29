@@ -17,6 +17,7 @@
 #include <stdexcept>
 
 #include <boost/next_prior.hpp>
+#include <boost/variant/get.hpp>
 #include "boost/log/trivial.hpp"
 // Include igl first. It defines "L" macro which then clashes with our localization
 #include <igl/copyleft/cgal/mesh_boolean.h>
@@ -28,6 +29,8 @@
 #include <CGAL/Polygon_mesh_processing/connected_components.h>
 #include <CGAL/Polygon_mesh_processing/distance.h>
 #include <CGAL/Exact_integer.h>
+#include <CGAL/Intersections_3/Triangle_3_Triangle_3.h>
+#include <CGAL/Side_of_triangle_mesh.h>
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/Cartesian_converter.h>
 #include <CGAL/Kernel/global_functions_3.h>
@@ -593,6 +596,214 @@ void prepare_open_surface(_EpicMesh& surface)
         surface = std::move(candidate);
         BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=basic_boundary_cleanup, isolated_faces_removed=" << removed_faces;
     }
+}
+
+using RepairSoupFace  = std::vector<size_t>;
+using RepairSoupEdge  = std::array<size_t, 2>;
+using RepairSoupEdges = std::map<RepairSoupEdge, std::vector<size_t>>;
+
+RepairSoupEdge soup_edge(size_t a, size_t b) { return {std::min(a, b), std::max(a, b)}; }
+
+RepairSoupEdges soup_edges(const std::vector<RepairSoupFace>& faces)
+{
+    RepairSoupEdges edges;
+    for (size_t i = 0; i < faces.size(); ++i)
+        for (size_t j = 0; j < 3; ++j)
+            edges[soup_edge(faces[i][j], faces[i][(j + 1) % 3])].push_back(i);
+    return edges;
+}
+
+// Only subdivide an existing boundary triangle along EXACTLY collinear source
+// vertices. No snapping, new coordinates, area removal or hole patches. Work
+// on a private soup: incomplete/budget-limited preparation is never published.
+bool conform_soup_boundary(const std::vector<_EpicMesh::Point>& points, std::vector<RepairSoupFace>& faces, size_t& splits)
+{
+    size_t budget = 2000000;
+    for (unsigned pass = 0; pass < 8; ++pass) {
+        const auto       edges = soup_edges(faces);
+        std::set<size_t> boundary_vertices;
+        for (const auto& entry : edges)
+            if (entry.second.size() == 1)
+                boundary_vertices.insert(entry.first.begin(), entry.first.end());
+        std::vector<RepairSoupFace> next_faces;
+        bool                        changed = false;
+        for (const auto& face : faces) {
+            bool divided = false;
+            for (size_t j = 0; j < 3 && !divided; ++j) {
+                const size_t a = face[j], b = face[(j + 1) % 3], c = face[(j + 2) % 3];
+                if (edges.at(soup_edge(a, b)).size() != 1)
+                    continue;
+                std::vector<size_t> middle;
+                for (size_t v : boundary_vertices) {
+                    if (budget == 0)
+                        return false;
+                    --budget;
+                    if (v != a && v != b && CGAL::collinear(points[a], points[v], points[b]) &&
+                        CGAL::collinear_are_strictly_ordered_along_line(points[a], points[v], points[b]))
+                        middle.push_back(v);
+                }
+                if (middle.empty())
+                    continue;
+                // Lexicographic order is monotone along an exact straight edge.
+                std::sort(middle.begin(), middle.end(), [&](size_t x, size_t y) { return points[x] < points[y]; });
+                if (points[b] < points[a])
+                    std::reverse(middle.begin(), middle.end());
+                size_t previous = a;
+                for (size_t v : middle) {
+                    next_faces.push_back({previous, v, c});
+                    previous = v;
+                }
+                next_faces.push_back({previous, b, c});
+                splits += middle.size();
+                if (splits > 1024)
+                    return false;
+                changed = divided = true;
+            }
+            if (!divided)
+                next_faces.push_back(face);
+        }
+        faces = std::move(next_faces);
+        if (!changed)
+            return true;
+    }
+    return false;
+}
+
+// Certify that a deleted triangle's OPEN interior is strictly inside the
+// retained solid. A centroid test alone is insufficient: a large triangle can
+// cross an exterior wall or bridge a through-hole. Exact intersections may
+// touch its edges, but never its interior or overlap it in area.
+bool internal_soup_faces(const std::vector<_EpicMesh::Point>& points, const std::vector<RepairSoupFace>& removed, const _EpicMesh& retained)
+{
+    _EpecMesh exact;
+    CGAL::copy_face_graph(retained, exact);
+    using Side = CGAL::Side_of_triangle_mesh<_EpecMesh, EpecKernel>;
+    Side::AABB_tree tree(exact.faces().begin(), exact.faces().end(), exact);
+    tree.build();
+    Side   side(tree);
+    size_t intersections = 0;
+    for (const auto& face : removed) {
+        const auto point = [&](size_t i) {
+            const auto& p = points[face[i]];
+            return EpecKernel::Point_3(p.x(), p.y(), p.z());
+        };
+        const EpecKernel::Triangle_3 triangle(point(0), point(1), point(2));
+        if (side(CGAL::centroid(triangle)) != CGAL::ON_BOUNDED_SIDE)
+            return false;
+        std::vector<_EpecMesh::Face_index> contacts;
+        tree.all_intersected_primitives(triangle, std::back_inserter(contacts));
+        intersections += contacts.size();
+        if (intersections > 20000)
+            return false;
+        for (const auto f : contacts) {
+            const auto                   h = exact.halfedge(f);
+            const EpecKernel::Triangle_3 other(exact.point(target(h, exact)), exact.point(target(next(h, exact), exact)),
+                                               exact.point(target(prev(h, exact), exact)));
+            const auto                   contact = CGAL::intersection(triangle, other);
+            if (!contact)
+                return false;
+            bool boundary_only = false;
+            for (int j = 0; j < 3; ++j) {
+                const EpecKernel::Segment_3 edge(triangle.vertex(j), triangle.vertex((j + 1) % 3));
+                if (const auto* p = boost::get<EpecKernel::Point_3>(&*contact))
+                    boundary_only = boundary_only || edge.has_on(*p);
+                else if (const auto* s = boost::get<EpecKernel::Segment_3>(&*contact))
+                    boundary_only = boundary_only || (edge.has_on(s->source()) && edge.has_on(s->target()));
+            }
+            if (!boundary_only)
+                return false;
+        }
+    }
+    return true;
+}
+
+// CAD/STL exports can retain planar partitions at rounded/joined solid seams.
+// Orienting those three-face edges first splits the soup; filling the resulting
+// artificial holes may then cover real openings. Try a bounded, certified path
+// BEFORE splitting. No general self-union, largest-shell selection or tolerance
+// based face deletion: every positive-area face is either retained exactly (up
+// to subdivision/winding) or certified to lie inside the final closed solid.
+bool repair_soup_topology(const std::vector<_EpicMesh::Point>& source_points,
+                          const std::vector<RepairSoupFace>&   source_faces,
+                          _EpicMesh&                           result)
+{
+    if (source_faces.empty() || source_faces.size() > 20000)
+        return false;
+    for (const auto& f : source_faces)
+        if (f.size() != 3 || CGAL::collinear(source_points[f[0]], source_points[f[1]], source_points[f[2]]))
+            return false;
+
+    auto   faces  = source_faces;
+    size_t splits = 0;
+    if (!conform_soup_boundary(source_points, faces, splits))
+        return false;
+    const auto                       edges = soup_edges(faces);
+    std::vector<std::vector<size_t>> neighbors(faces.size());
+    for (const auto& entry : edges)
+        if (entry.second.size() == 2) {
+            neighbors[entry.second[0]].push_back(entry.second[1]);
+            neighbors[entry.second[1]].push_back(entry.second[0]);
+        }
+    std::vector<bool> visited(faces.size(), false), remove(faces.size(), false);
+    for (size_t seed = 0; seed < faces.size(); ++seed) {
+        if (visited[seed])
+            continue;
+        std::vector<size_t> patch{seed};
+        visited[seed] = true;
+        for (size_t i = 0; i < patch.size(); ++i)
+            for (size_t n : neighbors[patch[i]])
+                if (!visited[n]) {
+                    visited[n] = true;
+                    patch.push_back(n);
+                }
+        bool        planar = true, singular_boundary = false, supported_boundary = true;
+        const auto& base = faces[seed];
+        for (size_t f : patch)
+            for (size_t j = 0; j < 3; ++j) {
+                planar = planar &&
+                         CGAL::coplanar(source_points[base[0]], source_points[base[1]], source_points[base[2]], source_points[faces[f][j]]);
+                const size_t count = edges.at(soup_edge(faces[f][j], faces[f][(j + 1) % 3])).size();
+                singular_boundary  = singular_boundary || count == 3;
+                supported_boundary = supported_boundary && (count == 2 || count == 3);
+            }
+        if (planar && singular_boundary && supported_boundary)
+            for (size_t f : patch)
+                remove[f] = true;
+    }
+    std::vector<RepairSoupFace> kept, removed;
+    for (size_t f = 0; f < faces.size(); ++f)
+        (remove[f] ? removed : kept).push_back(faces[f]);
+    if ((splits == 0 && removed.empty()) || kept.empty() || removed.size() > 2048)
+        return false;
+
+    auto points = source_points;
+    if (!CGALProc::orient_polygon_soup(points, kept) || points.size() != source_points.size() ||
+        !CGALProc::is_polygon_soup_a_polygon_mesh(kept))
+        return false;
+    _EpicMesh candidate;
+    CGALProc::polygon_soup_to_polygon_mesh(points, kept, candidate);
+    if (candidate.num_faces() != kept.size() || !CGAL::is_valid_polygon_mesh(candidate) || !CGAL::is_triangle_mesh(candidate) ||
+        !CGAL::is_closed(candidate))
+        return false;
+    std::vector<_EpicMesh::Halfedge_index> singular;
+    CGALProc::non_manifold_vertices(candidate, std::back_inserter(singular));
+    if (!singular.empty() || CGALProc::does_self_intersect(candidate))
+        return false;
+    if (!removed.empty() && !internal_soup_faces(source_points, removed, candidate))
+        return false;
+
+    CGALProc::orient_to_bound_a_volume(candidate);
+    CGALProc::remove_isolated_vertices(candidate);
+    candidate.collect_garbage();
+    // Recheck the actual float/welded representation, not merely the temporary
+    // Surface_mesh connectivity. Never retain an unvalidated partial candidate.
+    if (requires_repair(TriangleMesh(cgal_to_indexed_triangle_set(candidate))))
+        return false;
+    BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=soup_topology_certified, boundary_splits=" << splits
+                            << ", internal_faces_removed=" << removed.size() << ", faces=" << source_faces.size() << "->"
+                            << candidate.num_faces() << ", moved_vertices=0, hole_patches=0";
+    result = std::move(candidate);
+    return true;
 }
 
 } // namespace
@@ -1212,39 +1423,47 @@ static bool repair_impl(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors,
             if (points.empty() || polygons.empty())
                 return fail("Repair failed: polygon soup cleanup removed all geometry.", true);
 
-            // false means that CGAL duplicated singular vertices, not that the
-            // modified soup cannot be converted. Such a candidate still needs
-            // all topology, self-intersection and fidelity checks below.
-            const size_t points_before_orientation = points.size();
-            stage                                  = "soup_orientation";
-            soup_vertices_split                    = !PMP::orient_polygon_soup(points, polygons);
-            partial_checkpoints_allowed            = !soup_vertices_split;
-            BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=soup_oriented, split_vertices=" << points.size() - points_before_orientation
-                                    << ", faces=" << polygons.size();
-            if (!PMP::is_polygon_soup_a_polygon_mesh(polygons))
-                return fail(L("Repair failed: polygon soup is still invalid after orientation and vertex splitting."));
+            stage = "soup_topology_preparation";
+            if (repair_soup_topology(points, polygons, cgal_mesh)) {
+                // The certificate preserves all exterior surface and removes
+                // only strictly interior partitions. Later cleanup must keep
+                // this complete solid, not compare it to redundant partitions.
+                fallback_fidelity_reference = cgal_mesh;
+            } else {
+                // false means that CGAL duplicated singular vertices, not that the
+                // modified soup cannot be converted. Such a candidate still needs
+                // all topology, self-intersection and fidelity checks below.
+                const size_t points_before_orientation = points.size();
+                stage                                  = "soup_orientation";
+                soup_vertices_split                    = !PMP::orient_polygon_soup(points, polygons);
+                partial_checkpoints_allowed            = !soup_vertices_split;
+                BOOST_LOG_TRIVIAL(info) << "CGAL repair: event=soup_oriented, split_vertices=" << points.size() - points_before_orientation
+                                        << ", faces=" << polygons.size();
+                if (!PMP::is_polygon_soup_a_polygon_mesh(polygons))
+                    return fail(L("Repair failed: polygon soup is still invalid after orientation and vertex splitting."));
 
-            PMP::polygon_soup_to_polygon_mesh(points, polygons, cgal_mesh);
-            if (cgal_mesh.is_empty() || cgal_mesh.num_faces() != polygons.size() || !CGAL::is_valid_polygon_mesh(cgal_mesh) ||
-                !CGAL::is_triangle_mesh(cgal_mesh))
-                return fail(L("Repair failed: polygon soup is still invalid after orientation and vertex splitting."));
-            if (input_had_no_open_edges) {
-                // For an input whose quick topology was already closed, soup
-                // cleanup may canonicalize duplicated/inconsistent faces but
-                // must not silently turn that surface into an open mesh and
-                // then replace a large region through hole filling. Save the
-                // canonical surface as a fidelity baseline for the final
-                // candidate.
-                if (cgal_mesh.is_empty() || !CGAL::is_valid_polygon_mesh(cgal_mesh) || !CGAL::is_triangle_mesh(cgal_mesh) ||
-                    !CGAL::is_closed(cgal_mesh))
-                    return fail("Repair failed: closed mesh became open or invalid during polygon-soup cleanup.");
-                fallback_fidelity_reference = cgal_mesh;
+                PMP::polygon_soup_to_polygon_mesh(points, polygons, cgal_mesh);
+                if (cgal_mesh.is_empty() || cgal_mesh.num_faces() != polygons.size() || !CGAL::is_valid_polygon_mesh(cgal_mesh) ||
+                    !CGAL::is_triangle_mesh(cgal_mesh))
+                    return fail(L("Repair failed: polygon soup is still invalid after orientation and vertex splitting."));
+                if (input_had_no_open_edges) {
+                    // For an input whose quick topology was already closed, soup
+                    // cleanup may canonicalize duplicated/inconsistent faces but
+                    // must not silently turn that surface into an open mesh and
+                    // then replace a large region through hole filling. Save the
+                    // canonical surface as a fidelity baseline for the final
+                    // candidate.
+                    if (cgal_mesh.is_empty() || !CGAL::is_valid_polygon_mesh(cgal_mesh) || !CGAL::is_triangle_mesh(cgal_mesh) ||
+                        !CGAL::is_closed(cgal_mesh))
+                        return fail("Repair failed: closed mesh became open or invalid during polygon-soup cleanup.");
+                    fallback_fidelity_reference = cgal_mesh;
+                }
+                // A split candidate also needs a baseline when the original was
+                // open. Its existing surface must survive; new hole patches need
+                // not have the same area or volume as an incomplete input.
+                if (soup_vertices_split)
+                    fallback_fidelity_reference = cgal_mesh;
             }
-            // A split candidate also needs a baseline when the original was
-            // open. Its existing surface must survive; new hole patches need
-            // not have the same area or volume as an incomplete input.
-            if (soup_vertices_split)
-                fallback_fidelity_reference = cgal_mesh;
         }
 
         stage = "mesh_cleanup";

@@ -22,6 +22,7 @@
 #include <libslic3r/ModelInspection.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 #include <libslic3r/TriangleMeshSlicer.hpp>
+#include <slic3r/Utils/ModelRepairBackup.hpp>
 #include <slic3r/Utils/ModelRepairPolicy.hpp>
 #include <boost/filesystem.hpp>
 
@@ -115,6 +116,47 @@ TriangleMesh tetrahedra_sharing_an_edge()
                     Vec3f(0.f, 0.f, 10.f), Vec3f(0.f, -10.f, 0.f), Vec3f(0.f, 0.f, -10.f)};
     its.indices  = {Vec3i32(0, 2, 1), Vec3i32(0, 1, 3), Vec3i32(0, 3, 2), Vec3i32(1, 2, 3),
                     Vec3i32(0, 4, 1), Vec3i32(0, 1, 5), Vec3i32(0, 5, 4), Vec3i32(1, 4, 5)};
+    return TriangleMesh(std::move(its));
+}
+
+TriangleMesh cube_with_internal_partition()
+{
+    auto its = make_cube(10., 10., 10.).its;
+    // x=y diagonal: all four boundary edges already have two exterior faces.
+    its.indices.emplace_back(0, 2, 6);
+    its.indices.emplace_back(0, 6, 4);
+    return TriangleMesh(std::move(its));
+}
+
+TriangleMesh tube_with_spurious_membrane(bool spans_outer_ring)
+{
+    indexed_triangle_set       its;
+    const std::array<Vec2f, 8> ring{Vec2f(0, 0), Vec2f(10, 0), Vec2f(10, 10), Vec2f(0, 10),
+                                    Vec2f(1, 1), Vec2f(2, 1),  Vec2f(2, 2),   Vec2f(1, 2)};
+    for (int level = 0; level < 3; ++level)
+        for (const auto& p : ring)
+            its.vertices.emplace_back(p.x(), p.y(), float(5 * level));
+    for (int level = 0; level < 2; ++level)
+        for (int j = 0; j < 4; ++j) {
+            const int a = 8 * level + j, b = 8 * level + (j + 1) % 4;
+            its.indices.emplace_back(a, b, b + 8);
+            its.indices.emplace_back(a, b + 8, a + 8);
+            its.indices.emplace_back(a + 4, b + 12, b + 4);
+            its.indices.emplace_back(a + 4, a + 12, b + 12);
+        }
+    for (int j = 0; j < 4; ++j) {
+        const int k = (j + 1) % 4;
+        its.indices.emplace_back(j, j + 4, k + 4);
+        its.indices.emplace_back(j, k + 4, k);
+        its.indices.emplace_back(j + 16, k + 20, j + 20);
+        its.indices.emplace_back(j + 16, k + 16, k + 20);
+    }
+    const int first = spans_outer_ring ? 8 : 12;
+    // The small disk's centroid is in the hole. The large disk's centroids
+    // are INSIDE material, but its triangles cross the hole's walls. Neither
+    // can be deleted on a mere centroid/edge-count certificate.
+    its.indices.emplace_back(first, first + 1, first + 2);
+    its.indices.emplace_back(first, first + 2, first + 3);
     return TriangleMesh(std::move(its));
 }
 
@@ -700,6 +742,207 @@ TEST_CASE("GUI-style staged repair needs only one isolated model copy", "[ModelR
     CHECK(its_num_open_edges(staging.objects.front()->volumes.front()->mesh().its) == 0);
 }
 
+TEST_CASE("GUI repair backup snapshots changed live objects after commit and bed adjustment", "[ModelRepair][Backup][Transaction]")
+{
+    Model model = make_model(cube_with_open_side());
+    model.objects.front()->add_volume(make_cube(4., 4., 4.));
+    ModelObject* untouched = model.add_object();
+    untouched->add_volume(make_cube(6., 6., 6.));
+    untouched->add_instance();
+    ModelObject* second = model.add_object();
+    second->add_volume(cube_with_open_side());
+    second->add_instance();
+    const auto original_mesh  = model.objects[0]->volumes[0]->mesh_ptr();
+    const auto untouched_mesh = untouched->volumes[0]->mesh_ptr();
+
+    // Setup is complete before enabling backup. Private staging must not
+    // inherit it; test callbacks below never invoke the real backup manager.
+    model.set_need_backup();
+    auto staged = make_model_repair_staging_copy(model, {{0, size_t(0)}, {2, size_t(0)}});
+    CHECK_FALSE(staged->is_need_backup());
+    ModelRepairOptions options = gui_model_repair_options();
+    options.targets            = {{0, size_t(0)}, {2, size_t(0)}};
+    ModelRepairReport report;
+    REQUIRE(repair_staged_model(*staged, report, options));
+    REQUIRE(report.changed_object_indices == std::vector<size_t>{0, 2});
+
+    // Simulate the final candidate's painting and placement. This tests backup
+    // snapshot contents, not the separate painting-remapping algorithm.
+    ModelVolume* repaired = staged->objects[0]->volumes[0];
+    paint_facet(repaired->mmu_segmentation_facets, repaired->mesh(), 0, EnforcerBlockerType::ENFORCER);
+    paint_facet(repaired->supported_facets, repaired->mesh(), 1, EnforcerBlockerType::BLOCKER);
+    staged->objects[0]->instances[0]->set_offset(Vec3d(12., 3., 20.));
+    staged->objects[2]->instances[0]->set_offset(Vec3d(2., 4., 30.));
+
+    Model                     snapshots;
+    std::vector<ModelObject*> queued_objects;
+    std::vector<int>          order;
+    const auto                save_object = [&](ModelObject& object) {
+        snapshots.add_object(object);
+        queued_objects.push_back(&object);
+        order.push_back(1);
+    };
+    const auto save_metadata = [&] { order.push_back(2); };
+    const auto staged_backup = queue_committed_model_repair_backup(*staged, report, save_object, save_metadata);
+    CHECK_FALSE(staged_backup.failed());
+    CHECK_FALSE(staged_backup.metadata_queued);
+    CHECK(queued_objects.empty());
+    CHECK(model.objects[0]->volumes[0]->mesh_ptr() == original_mesh);
+
+    auto prepared = model.prepare_move_object_volume_structures(*staged, report.changed_object_indices);
+    model.commit_move_object_volume_structures(std::move(prepared));
+    for (size_t index : report.changed_object_indices) {
+        model.objects[index]->invalidate_bounding_box();
+        model.objects[index]->ensure_on_bed(false);
+    }
+    const auto backup = queue_committed_model_repair_backup(model, report, save_object, save_metadata);
+    CHECK_FALSE(backup.failed());
+    CHECK(backup.queued_objects == 2);
+    CHECK(backup.metadata_queued);
+    CHECK(order == std::vector<int>{1, 1, 2});
+    REQUIRE(queued_objects == std::vector<ModelObject*>{model.objects[0], model.objects[2]});
+    REQUIRE(snapshots.objects.size() == 2);
+    CHECK(model.objects[0]->volumes[0]->mesh_ptr() != original_mesh);
+    CHECK(untouched->volumes[0]->mesh_ptr() == untouched_mesh);
+    for (size_t i = 0; i < queued_objects.size(); ++i) {
+        const ModelObject* live  = queued_objects[i];
+        const ModelObject* saved = snapshots.objects[i];
+        REQUIRE(saved->volumes.size() == live->volumes.size());
+        for (size_t v = 0; v < live->volumes.size(); ++v) {
+            CHECK(saved->volumes[v]->mesh().its.vertices == live->volumes[v]->mesh().its.vertices);
+            CHECK(saved->volumes[v]->mesh().its.indices == live->volumes[v]->mesh().its.indices);
+            CHECK(saved->volumes[v]->get_transformation() == live->volumes[v]->get_transformation());
+            CHECK(saved->volumes[v]->mmu_segmentation_facets.get_data() == live->volumes[v]->mmu_segmentation_facets.get_data());
+            CHECK(saved->volumes[v]->supported_facets.get_data() == live->volumes[v]->supported_facets.get_data());
+        }
+        REQUIRE(saved->instances.size() == live->instances.size());
+        REQUIRE_FALSE(saved->instances.empty());
+        CHECK(saved->instances[0]->get_transformation() == live->instances[0]->get_transformation());
+        CHECK(saved->min_z() == Approx(0.).margin(1.e-6));
+        CHECK(its_num_open_edges(saved->volumes[0]->mesh().its) == 0);
+    }
+}
+
+TEST_CASE("GUI repair backup skips failed canceled unchanged and unfinished reports", "[ModelRepair][Backup]")
+{
+    const int variant = GENERATE(0, 1, 2, 3, 4, 5, 6);
+    CAPTURE(variant);
+    Model             model = make_model(make_cube(10., 10., 10.));
+    ModelRepairReport report;
+    report.success = report.committed = report.completed = true;
+    report.changed_object_indices                        = {0};
+    if (variant != 6)
+        model.set_need_backup();
+    switch (variant) {
+    case 0: report.success = false; break;
+    case 1: report.committed = false; break;
+    case 2: report.canceled = true; break;
+    case 3: report.failed = 1; break;
+    case 4: report.completed = false; break;
+    case 5: report.changed_object_indices.clear(); break;
+    default: break; // Backup disabled, as for a private staging model.
+    }
+    size_t     calls  = 0;
+    const auto backup = queue_committed_model_repair_backup(model, report, [&](ModelObject&) { ++calls; }, [&] { ++calls; });
+    CHECK(calls == 0);
+    CHECK(backup.queued_objects == 0);
+    CHECK_FALSE(backup.metadata_queued);
+    CHECK_FALSE(backup.failed());
+}
+
+TEST_CASE("GUI repair backup retains accepted partial progress without copying unchanged objects", "[ModelRepair][Backup][Partial]")
+{
+    Model model = make_model(make_cube(10., 10., 10.));
+    model.add_object(*model.objects[0]);
+    model.set_need_backup();
+    ModelRepairReport report;
+    report.success = report.committed = report.completed = true;
+    report.unresolved                                    = 1;
+    report.changed_object_indices                        = {0};
+    std::vector<ModelObject*> queued;
+    size_t                    metadata_calls = 0;
+    const auto                backup         = queue_committed_model_repair_backup(
+        model, report, [&](ModelObject& object) { queued.push_back(&object); }, [&] { ++metadata_calls; });
+    CHECK_FALSE(report.mesh_validated());
+    CHECK_FALSE(backup.failed());
+    CHECK(backup.queued_objects == 1);
+    CHECK(backup.metadata_queued);
+    CHECK(queued == std::vector<ModelObject*>{model.objects[0]});
+    CHECK(metadata_calls == 1);
+}
+
+TEST_CASE("GUI repair backup enqueue errors do not undo the scene commit", "[ModelRepair][Backup][Transaction]")
+{
+    const int failure = GENERATE(0, 1, 2, 3);
+    CAPTURE(failure);
+    Model model = make_model(cube_with_open_side());
+    model.add_object(*model.objects[0]);
+    Model staged(model);
+    for (ModelObject* object : staged.objects)
+        object->volumes[0]->set_mesh(make_cube(10., 10., 10.));
+    ModelRepairReport report;
+    report.success = report.committed = report.completed = true;
+    report.changed_object_indices                        = {0, 1};
+    auto prepared = model.prepare_move_object_volume_structures(staged, report.changed_object_indices);
+    model.commit_move_object_volume_structures(std::move(prepared));
+    const auto committed_mesh = model.objects[0]->volumes[0]->mesh_ptr();
+    model.set_need_backup();
+    size_t     object_calls   = 0;
+    size_t     metadata_calls = 0;
+    const auto backup         = queue_committed_model_repair_backup(
+        model, report,
+        [&](ModelObject&) {
+            ++object_calls;
+            if (object_calls == 1 && failure == 0)
+                throw std::bad_alloc();
+            if (object_calls == 1 && failure == 1)
+                throw 1;
+        },
+        [&] {
+            ++metadata_calls;
+            if (failure == 2)
+                throw std::runtime_error("metadata queue unavailable");
+            throw 1;
+        });
+    CHECK(backup.failed());
+    CHECK(object_calls == 2); // Continue queuing other changed objects.
+    CHECK(backup.queued_objects == (failure < 2 ? 1 : 2));
+    CHECK(backup.failed_objects == (failure < 2 ? 1 : 0));
+    CHECK(metadata_calls == (failure < 2 ? 0 : 1));
+    CHECK_FALSE(backup.metadata_queued);
+    CHECK(backup.metadata_failed == (failure >= 2));
+    CHECK(model.objects[0]->volumes[0]->mesh_ptr() == committed_mesh);
+    CHECK(its_num_open_edges(committed_mesh->its) == 0);
+    CHECK(report.success);
+    CHECK(report.committed);
+}
+
+TEST_CASE("GUI repair backup does not publish metadata for missing object data", "[ModelRepair][Backup]")
+{
+    const int invalid = GENERATE(0, 1, 2, 3);
+    CAPTURE(invalid);
+    Model             model = make_model(make_cube(10., 10., 10.));
+    ModelRepairReport report;
+    report.success = report.committed = report.completed = true;
+    report.changed_object_indices                        = {0};
+    if (invalid == 0)
+        report.changed_object_indices = {1};
+    else if (invalid == 1) {
+        model.objects.push_back(nullptr);
+        report.changed_object_indices = {1};
+    } else if (invalid == 2)
+        model.objects[0]->clear_volumes();
+    else
+        model.objects[0]->clear_instances();
+    model.set_need_backup();
+    size_t     calls  = 0;
+    const auto backup = queue_committed_model_repair_backup(model, report, [&](ModelObject&) { ++calls; }, [&] { ++calls; });
+    CHECK(calls == 0);
+    CHECK(backup.failed_objects == 1);
+    CHECK(backup.failed());
+    CHECK_FALSE(backup.metadata_queued);
+}
+
 TEST_CASE("CGAL repair fails closed for overlapping self-intersecting shells", "[ModelRepair][CGAL][SelfIntersection]")
 {
     TriangleMesh mesh = overlapping_cubes();
@@ -755,6 +998,146 @@ TEST_CASE("Vertex-split soup failure preserves model painting and ownership", "[
     CHECK(volume->mesh_ptr() == original_mesh);
     CHECK(volume->mmu_segmentation_facets.equals(before.objects.front()->volumes.front()->mmu_segmentation_facets));
     CHECK(volume->supported_facets.equals(before.objects.front()->volumes.front()->supported_facets));
+}
+
+TEST_CASE("Certified soup topology keeps the cube surface without filling artificial holes",
+          "[ModelRepair][CGAL][SoupTopology][SoupOrientation]")
+{
+    const int variant = GENERATE(0, 1, 2, 3);
+    auto      mesh    = variant == 1 ? make_cube(10., 10., 10.) : cube_with_internal_partition();
+    if (variant == 3) {
+        auto separate = make_cube(10., 10., 10.);
+        separate.translate(30.f, 0.f, 0.f);
+        mesh.merge(separate); // Never select only the largest shell.
+    }
+    if (variant != 0) {
+        mesh = with_degenerate_edge_cap(std::move(mesh), 5);
+        mesh.its.indices.pop_back(); // An exact T-junction, without a zero-area cap.
+        mesh = TriangleMesh(std::move(mesh.its));
+    }
+    if (variant == 2) {
+        std::reverse(mesh.its.indices.begin(), mesh.its.indices.end());
+        for (size_t i = 0; i < mesh.its.indices.size(); i += 3)
+            std::swap(mesh.its.indices[i][0], mesh.its.indices[i][1]);
+    }
+    const auto  original = mesh.its;
+    std::string error;
+    REQUIRE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
+    INFO(error);
+    CHECK_FALSE(MeshBoolean::cgal::requires_repair(mesh));
+    CHECK(mesh.facets_count() == (variant == 0 ? 12 : variant == 3 ? 26 : 14));
+    CHECK(its_volume(mesh.its) == Approx(variant == 3 ? 2000. : 1000.));
+    for (const auto& p : mesh.its.vertices)
+        CHECK(std::find(original.vertices.begin(), original.vertices.end(), p) != original.vertices.end());
+    const auto slices = slice_mesh_ex(mesh.its, {0.2f, 5.f, 9.8f});
+    REQUIRE(slices.size() == 3);
+    for (const auto& slice : slices) {
+        REQUIRE(slice.size() == (variant == 3 ? 2 : 1));
+        for (const auto& polygon : slice)
+            CHECK(polygon.holes.empty());
+        CHECK(area(slice) == Approx((variant == 3 ? 200. : 100.) / (SCALING_FACTOR * SCALING_FACTOR)));
+    }
+}
+
+TEST_CASE("Soup topology does not erase membranes outside material or crossing a through-hole",
+          "[ModelRepair][CGAL][SoupTopology][SoupOrientation]")
+{
+    const bool  spans_outer_ring = GENERATE(false, true);
+    auto        mesh             = tube_with_spurious_membrane(spans_outer_ring);
+    const auto  original         = mesh.its;
+    std::string error;
+    CHECK_FALSE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
+    CHECK_FALSE(error.empty());
+    CHECK(mesh.its.vertices == original.vertices);
+    CHECK(mesh.its.indices == original.indices);
+}
+
+TEST_CASE("Bracket soup repair preserves exterior geometry and real holes", "[ModelRepair][CGAL][SoupTopology][Acceptance]")
+{
+    TriangleMesh mesh;
+    REQUIRE(mesh.ReadSTLFile((std::string(TEST_DATA_DIR) + "/model_repair_topology/bracket.stl").c_str(), false));
+    REQUIRE(mesh.facets_count() == 862);
+    const auto original = mesh.its;
+    const auto bounds   = mesh.bounding_box();
+    const auto before   = inspect_model_mesh(mesh);
+    REQUIRE(before["issues"]["nonmanifold_edge"]["count"] == 10);
+    std::string error;
+    REQUIRE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
+    INFO(error);
+    CHECK(mesh.facets_count() == 856);
+    CHECK(mesh.bounding_box().min == bounds.min);
+    CHECK(mesh.bounding_box().max == bounds.max);
+    for (const auto& p : mesh.its.vertices)
+        CHECK(std::find(original.vertices.begin(), original.vertices.end(), p) != original.vertices.end());
+    const auto after = inspect_model_mesh(mesh);
+    for (const char* key :
+         {"boundary", "nonmanifold_edge", "nonmanifold_vertex", "self_intersection", "degenerate", "duplicate", "orientation"}) {
+        INFO(key);
+        CHECK(after["issues"][key]["complete"].get<bool>());
+        CHECK(after["issues"][key]["count"] == 0);
+    }
+    CHECK_FALSE(MeshBoolean::cgal::requires_repair(mesh));
+    // Horizontal sections across the original bore: a clear passage through
+    // X=0..5 at Y=30 must not be capped, and adjacent plate material must remain.
+    const auto slices = slice_mesh_ex(mesh.its, {44.9f, 45.1f});
+    REQUIRE(slices.size() == 2);
+    for (const auto& slice : slices) {
+        for (float x : {0.25f, 2.5f, 4.75f})
+            CHECK(std::none_of(slice.begin(), slice.end(), [&](const ExPolygon& p) { return p.contains(Point::new_scale(x, 30.)); }));
+        CHECK(std::any_of(slice.begin(), slice.end(), [](const ExPolygon& p) { return p.contains(Point::new_scale(2.5, 40.)); }));
+        CHECK(std::any_of(slice.begin(), slice.end(), [](const ExPolygon& p) { return p.contains(Point::new_scale(-50., -2.)); }));
+    }
+    const auto repaired = mesh.its;
+    REQUIRE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
+    const auto face_keys = [](const indexed_triangle_set& its) {
+        std::vector<std::array<std::array<float, 3>, 3>> keys;
+        for (const auto& f : its.indices) {
+            std::array<std::array<float, 3>, 3> key;
+            for (int i = 0; i < 3; ++i) {
+                const auto& p = its.vertices[f[i]];
+                key[i]        = {p.x(), p.y(), p.z()};
+            }
+            std::rotate(key.begin(), std::min_element(key.begin(), key.end()), key.end());
+            keys.push_back(key);
+        }
+        std::sort(keys.begin(), keys.end());
+        return keys;
+    };
+    CHECK(face_keys(mesh.its) == face_keys(repaired));
+}
+
+TEST_CASE("Bracket repair uses the GUI transaction and refuses loss of annotated partitions",
+          "[ModelRepair][CGAL][SoupTopology][GUIColor][Painting]")
+{
+    const bool   painted_partition = GENERATE(false, true);
+    TriangleMesh input;
+    REQUIRE(input.ReadSTLFile((std::string(TEST_DATA_DIR) + "/model_repair_topology/bracket.stl").c_str(), false));
+    Model model  = make_model(std::move(input)); // Include the usual ModelVolume centering.
+    auto* volume = model.objects.front()->volumes.front();
+    paint_facet(volume->mmu_segmentation_facets, volume->mesh(), painted_partition ? 0 : 2, EnforcerBlockerType::ENFORCER);
+    const auto        source_mesh      = volume->mesh_ptr();
+    const auto        source_painting  = volume->mmu_segmentation_facets.get_data();
+    const auto        source_transform = volume->get_matrix();
+    auto              options          = gui_model_repair_options();
+    ModelRepairReport report;
+    const bool        success = repair_model(model, report, options);
+    REQUIRE(model.objects.front()->volumes.size() == 1);
+    const auto* result_volume = model.objects.front()->volumes.front();
+    if (painted_partition) {
+        CHECK_FALSE(success);
+        CHECK_FALSE(report.committed);
+        REQUIRE(result_volume == volume);
+        CHECK(volume->mesh_ptr() == source_mesh);
+        CHECK(volume->mmu_segmentation_facets.get_data() == source_painting);
+    } else {
+        REQUIRE(success);
+        CHECK(report.committed);
+        CHECK(report.mesh_validated());
+        CHECK_FALSE(result_volume->mmu_segmentation_facets.empty());
+        CHECK_FALSE(MeshBoolean::cgal::requires_repair(result_volume->mesh()));
+    }
+    CHECK(result_volume->get_object() == model.objects.front());
+    CHECK(result_volume->get_matrix().isApprox(source_transform));
 }
 
 TEST_CASE("Soup orientation preserves separated shells and their geometry", "[ModelRepair][MeshBoolean][CGAL][SoupOrientation]")
