@@ -12390,9 +12390,9 @@ msgid "Nozzle HRC"
 msgstr "喷嘴洛氏硬度"
 
 msgid ""
-"The nozzle's hardness. Zero means no checking for nozzle's hardness during "
-"slicing."
-msgstr "喷嘴硬度。零值表示在切片时不检查喷嘴硬度。"
+"The nozzle's hardness. Zero uses the default hardness for the selected nozzle type. "
+"If the nozzle type is also undefined, nozzle hardness checking is skipped."
+msgstr "喷嘴硬度。设为 0 时使用所选喷嘴类型的默认硬度；如果喷嘴类型也未定义，则跳过喷嘴硬度检查。"
 
 msgid "HRC"
 msgstr "洛氏硬度"

@@ -3019,7 +3019,8 @@ void PrintConfigDef::init_fff_params()
 
     def                = this->add("nozzle_hrc", coInt);
     def->label         = L("Nozzle HRC");
-    def->tooltip       = L("The nozzle's hardness. Zero means no checking for nozzle's hardness during slicing.");
+    def->tooltip       = L("The nozzle's hardness. Zero uses the default hardness for the selected nozzle type. "
+                                 "If the nozzle type is also undefined, nozzle hardness checking is skipped.");
     def->sidetext      = L("HRC");
     def->min           = 0;
     def->max           = 500;
