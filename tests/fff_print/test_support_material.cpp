@@ -4461,7 +4461,221 @@ std::vector<ExPolygons> geometry_dragon_outlines()
     }
     return result;
 }
+
+void require_connected_raft_zigzags(const SupportLayer& layer)
+{
+    ExtrusionPaths paths;
+    getExtrusionPathsFromEntity(&layer.support_fills, paths);
+    REQUIRE_FALSE(paths.empty());
+    REQUIRE_FALSE(layer.support_islands.empty());
+    double total_length     = 0.;
+    double connected_length = 0.;
+    for (const ExtrusionPath& path : paths) {
+        bool          has_turn = false;
+        const Points& points   = path.polyline.points;
+        for (size_t i = 2; i < points.size(); ++i) {
+            const Vec2d a = (points[i - 1] - points[i - 2]).cast<double>();
+            const Vec2d b = (points[i] - points[i - 1]).cast<double>();
+            if (std::abs(a.x() * b.y() - a.y() * b.x()) > 0.1 * a.norm() * b.norm())
+                has_turn = true;
+        }
+        total_length += path.polyline.length();
+        if (has_turn)
+            connected_length += path.polyline.length();
+
+        // A continuous path must stay in ONE chunk, including its swept width.
+        // Continuity alone could otherwise be satisfied by bridging the seams.
+        const ExPolygons material = raft_extrusion_coverage(ExtrusionPaths{path});
+        REQUIRE_FALSE(material.empty());
+        REQUIRE(std::any_of(layer.support_islands.begin(), layer.support_islands.end(), [&](const ExPolygon& island) {
+            return diff_ex(material, offset_ex(ExPolygons{island}, scale_(0.002))).empty();
+        }));
+    }
+    REQUIRE(total_length > 0.);
+    // Allow short end stubs and legitimate disconnected corners; most of the
+    // fill must still belong to connected zigzags rather than individual lines.
+    REQUIRE(connected_length > 0.9 * total_length);
+}
+
+void require_raft_gcode_completes_each_chunk(Print& print)
+{
+    const PrintObject&             object = *print.objects().front();
+    const size_t                   count  = object.slicing_parameters().raft_layers();
+    std::vector<std::vector<bool>> visited(count);
+    std::vector<size_t>            previous(count, size_t(-1));
+    for (size_t i = 0; i < count; ++i)
+        visited[i].resize(object.support_layers()[i]->support_islands.size(), false);
+    const RaftMergeTemporaryPath output(".gcode");
+    struct ResourceGuard
+    {
+        std::string previous = resources_dir();
+        ~ResourceGuard() { set_resources_dir(previous); }
+    } resources;
+    set_resources_dir((boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() / "resources").string());
+    GCodeProcessorResult result;
+    print.export_gcode(output.path.string(), &result, nullptr);
+    for (const auto& move : result.moves) {
+        if (move.type != EMoveType::Extrude ||
+            (move.extrusion_role != erSupportMaterial && move.extrusion_role != erSupportMaterialInterface))
+            continue;
+        for (size_t i = 0; i < count; ++i) {
+            const SupportLayer& layer = *object.support_layers()[i];
+            if (std::abs(double(move.position.z()) - layer.print_z) > 0.0001)
+                continue;
+            const Point point = Point::new_scale(move.position.x(), move.position.y()) - object.instances().front().shift;
+            const auto  owner = std::find_if(layer.support_islands.begin(), layer.support_islands.end(),
+                                             [&](const ExPolygon& island) { return island.contains(point); });
+            REQUIRE(owner != layer.support_islands.end());
+            const size_t index = size_t(owner - layer.support_islands.begin());
+            CAPTURE(i, index, previous[i]);
+            if (previous[i] != index) {
+                // Observe actual exported moves, not the in-memory collection
+                // order: the exporter is allowed to reorder and reverse paths.
+                REQUIRE_FALSE(visited[i][index]);
+                visited[i][index] = true;
+                previous[i]       = index;
+            }
+        }
+    }
+    for (size_t i = 0; i < count; ++i) {
+        CAPTURE(i);
+        REQUIRE(visited[i].size() > 1);
+        REQUIRE(std::all_of(visited[i].begin(), visited[i].end(), [](bool seen) { return seen; }));
+    }
+}
 } // namespace
+
+TEST_CASE("Enhanced raft zigzags retain connected turns and restore when disabled", "[SupportMaterial][Raft][Geometry][Continuity]")
+{
+    const bool   segmented     = GENERATE(false, true);
+    const double surface_width = GENERATE(0., 0.8);
+    CAPTURE(segmented, surface_width);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set("raft_interface_layers", 2);
+    config.set("raft_surface_layers", 2);
+    config.set("raft_interface_line_width", 0.);
+    config.set("raft_interface_line_spacing", 0.);
+    config.set("raft_surface_line_width", surface_width);
+    config.set("raft_surface_line_spacing", 0.);
+    config.set("raft_interface_wall_count", 0);
+    config.set("raft_surface_wall_count", 0);
+    Model model;
+    add_geometry_test_cube(model, 60., Vec3d(50., 50., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    REQUIRE(print.objects().front()->support_layers().size() == 5);
+    std::vector<ExPolygons> baseline;
+    for (size_t i = 0; i < 5; ++i)
+        baseline.push_back(geometry_layer_material(print, i));
+    const double model_z = print.objects().front()->layers().front()->print_z;
+
+    config.set("raft_segmented", segmented);
+    config.set("raft_smoothing", segmented ? 0. : 3.);
+    process_raft_bed_test(print, model, config);
+    REQUIRE(print.objects().front()->support_layers().size() == 5);
+    for (size_t i = 1; i < 5; ++i) {
+        const SupportLayer& layer = *print.objects().front()->support_layers()[i];
+        CAPTURE(i, layer.print_z);
+        REQUIRE(layer.raft_merge_backup != nullptr);
+        if (segmented)
+            REQUIRE(layer.support_islands.size() > 1);
+        require_connected_raft_zigzags(layer);
+        // These convex chunks need only a few continuous paths each, not one
+        // extrusion/retraction cycle per hatch line as in the Benchy failure.
+        REQUIRE(layer.support_fills.items_count() <= 2 * layer.support_islands.size());
+    }
+    REQUIRE(print.objects().front()->layers().front()->print_z == Approx(model_z));
+    require_raft_inside_bed(print);
+
+    config.set("raft_segmented", false);
+    config.set("raft_smoothing", 0.);
+    process_raft_bed_test(print, model, config);
+    REQUIRE(print.objects().front()->support_layers().size() == 5);
+    for (size_t i = 0; i < 5; ++i) {
+        REQUIRE(print.objects().front()->support_layers()[i]->raft_merge_backup == nullptr);
+        require_same_geometry_material(geometry_layer_material(print, i), baseline[i]);
+    }
+}
+
+TEST_CASE("Connected raft turns preserve holes cuts bed limits and exported chunk order",
+          "[SupportMaterial][Raft][Geometry][Continuity][Ordering][GCode]")
+{
+    const double bed_size = GENERATE(100., 180.);
+    CAPTURE(bed_size);
+    const double       origin = 0.5 * (bed_size - 100.);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {bed_size, 0.}, {bed_size, bed_size}, {0., bed_size}}));
+    const ExPolygon exclusion = clearance_rectangle(origin + 88., origin + 15., origin + 100., origin + 35.);
+    config.set_key_value("bed_exclude_area", new ConfigOptionPoints({{origin + 88., origin + 15.},
+                                                                     {origin + 100., origin + 15.},
+                                                                     {origin + 100., origin + 35.},
+                                                                     {origin + 88., origin + 35.}}));
+    config.set("raft_segmented", true);
+    config.set("raft_interface_layers", 2);
+    config.set("raft_surface_layers", 2);
+    config.set("raft_interface_line_width", 0.);
+    config.set("raft_interface_line_spacing", 0.);
+    config.set("raft_surface_line_width", 0.);
+    config.set("raft_surface_line_spacing", 0.);
+    config.set("raft_interface_wall_count", 0);
+    config.set("raft_surface_wall_count", 0);
+    config.set("machine_start_gcode", std::string("G90\nM83\nG92 E0"));
+    config.set("enable_arc_fitting", false);
+    for (const std::string& key : config.keys()) {
+        const auto* option     = dynamic_cast<const ConfigOptionEnumsGeneric*>(config.option(key));
+        const auto* definition = print_config_def.get(key);
+        if (option && !option->keys_map && definition && definition->enum_keys_map) {
+            auto* mapped   = new ConfigOptionEnumsGeneric(definition->enum_keys_map);
+            mapped->values = option->values;
+            config.set_key_value(key, mapped);
+        }
+    }
+    Model model;
+    add_geometry_test_cube(model, 40., Vec3d(0.5 * bed_size, 0.5 * bed_size, 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    restore_unmerged_rafts(print);
+    PrintObject&            object = *print.get_object(0);
+    const SupportParameters params(object);
+    const Point             shift   = object.instances().front().shift;
+    ExPolygon               outline = clearance_rectangle(origin + 4., origin + 20., origin + 96., origin + 80.);
+    const ExPolygon         hole    = clearance_rectangle(origin + 43., origin + 43., origin + 57., origin + 57.);
+    outline.holes.push_back(hole.contour);
+    outline.holes.back().reverse();
+    // Supply a deterministic ring at the same post-support boundary used by
+    // existing geometry tests; no support-grid rounding changes the fixture.
+    REQUIRE(object.support_layers().size() == 5);
+    for (size_t i = 0; i < 5; ++i) {
+        SupportLayer&   layer = *object.support_layers()[i];
+        const RaftPhase phase = object.slicing_parameters().raft_phase(i);
+        const Flow&     flow  = params.raft_flow(phase);
+        layer.raft_outline    = {outline};
+        translate(layer.raft_outline, -shift);
+        layer.support_fills.clear();
+        extrusion_entities_append_paths(layer.support_fills.entities,
+                                        Polylines{Polyline{Point::new_scale(origin + 15., origin + 25.) - shift,
+                                                           Point::new_scale(origin + 20., origin + 25.) - shift}},
+                                        phase == RaftPhase::Base ? erSupportMaterial : erSupportMaterialInterface,
+                                        flow.mm3_per_mm() * params.raft_flow_ratio(phase), flow.width(), flow.height());
+    }
+    merge_overlapping_rafts(print);
+    for (size_t i = 1; i < 5; ++i) {
+        const SupportLayer& layer = *object.support_layers()[i];
+        CAPTURE(i, layer.print_z);
+        REQUIRE(layer.raft_merge_backup != nullptr);
+        REQUIRE(layer.support_islands.size() > 1);
+        require_connected_raft_zigzags(layer);
+        ExtrusionPaths paths;
+        getExtrusionPathsFromEntity(&layer.support_fills, paths);
+        ExPolygons material = raft_extrusion_coverage(paths);
+        translate(material, shift);
+        REQUIRE(intersection_ex(material, ExPolygons{hole, exclusion}).empty());
+    }
+    require_raft_inside_bed(print);
+    REQUIRE(std::any_of(object.support_layers().begin(), object.support_layers().end(),
+                        [](const SupportLayer* layer) { return layer->support_fills.items_count() > layer->support_islands.size(); }));
+    require_raft_gcode_completes_each_chunk(print);
+}
 
 TEST_CASE("Raft base cleanup distinguishes detached remnants from useful narrow and original regions",
           "[SupportMaterial][Raft][Geometry][Bearing]")
