@@ -7,6 +7,7 @@
 #include <string.h>
 #include "I18N.hpp"
 #include "libslic3r/AppConfig.hpp"
+#include "libslic3r/GuideMachineMetadata.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "slic3r/GUI/wxExtensions.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
@@ -1238,27 +1239,33 @@ int GuideFrame::LoadProfileFamily(std::string strVendor, std::string strFilePath
         // BBS:Machine
         json pmachine = jLocal["machine_list"];
         nsize         = pmachine.size();
+        GuideMachineMetadataResolver machine_metadata(vendor_dir, pmachine);
+        for (const auto& error : machine_metadata.catalog_errors())
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": " << vendor_dir.string() << ": " << error;
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(",  got %1% machines") % nsize;
         for (int n = 0; n < nsize; n++) {
-            json OneMachine = pmachine.at(n);
-
-            std::string s1 = OneMachine["name"];
-            std::string s2 = OneMachine["sub_path"];
-
-            // wxString ModelFilePath = wxString::Format("%s\\%s\\%s", strFolder, strVendor, s2);
-            boost::filesystem::path sub_path = boost::filesystem::absolute(vendor_dir / s2).make_preferred();
-            if (!boost::filesystem::exists(sub_path)) continue;
-
-            std::string             sub_file = sub_path.string();
-            LoadFile(sub_file, contents);
-            json pm = json::parse(contents);
-
-            std::string strInstant = pm["instantiation"];
-            if (strInstant.compare("true") == 0) {
-                OneMachine["model"] = pm["printer_model"];
-                OneMachine["nozzle"] = pm["nozzle_diameter"][0];
-
-                m_ProfileJson["machine"][s1]=OneMachine;
+            // One malformed machine must not abort the vendor's remaining
+            // machines, filament compatibility map and process list.
+            try {
+                json              OneMachine = pmachine.at(n);
+                const std::string name       = OneMachine.at("name").get<std::string>();
+                const auto        path       = vendor_dir / OneMachine.at("sub_path").get<std::string>();
+                LoadFile(path.string(), contents);
+                const json pm = json::parse(contents);
+                if (pm.at("instantiation").get<std::string>() != "true")
+                    continue;
+                std::string error;
+                const auto  metadata = machine_metadata.resolve(name, error);
+                if (!metadata) {
+                    BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": skipping machine " << error;
+                    continue;
+                }
+                OneMachine["model"]            = metadata->model;
+                OneMachine["nozzle"]           = metadata->nozzle;
+                m_ProfileJson["machine"][name] = std::move(OneMachine);
+            } catch (const std::exception& e) {
+                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": skipping machine " << pmachine.at(n).dump() << " in " << vendor_dir.string()
+                                         << ": " << e.what();
             }
         }
 

@@ -1,6 +1,7 @@
 #include <catch2/catch.hpp>
 
 #include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/GuideMachineMetadata.hpp"
 #include "libslic3r/Utils.hpp"
 
 #include <boost/filesystem.hpp>
@@ -155,6 +156,108 @@ json read_custom_profile(const std::string& kind, const std::string& name)
 }
 
 } // namespace
+
+TEST_CASE("Guide machine metadata resolves inheritance without selected printer state", "[Preset][Guide]")
+{
+    ScopedPresetDirectory directory;
+    json                  catalog = json::array();
+    auto                  save    = [&](const std::string& name, const json& value) {
+        const std::string       file = name + ".json";
+        boost::nowide::ofstream output((directory.path / file).string());
+        output << value.dump();
+        output.close();
+        REQUIRE(output.good());
+        catalog.push_back({{"name", name}, {"sub_path", file}});
+    };
+    save("base", {{"printer_model", "Base"}, {"nozzle_diameter", json::array({"0.4"})}});
+    save("child", {{"inherits", "base"}, {"printer_model", "Child"}});
+    save("grandchild", {{"inherits", "child"}, {"nozzle_diameter", json::array({"0.60"})}});
+    save("orphan", {{"inherits", "absent"}});
+    save("cycle-a", {{"inherits", "cycle-b"}});
+    save("cycle-b", {{"inherits", "cycle-a"}});
+    save("null-nozzle", {{"inherits", "base"}, {"nozzle_diameter", nullptr}});
+    save("empty-nozzle", {{"inherits", "base"}, {"nozzle_diameter", json::array()}});
+    save("zero-nozzle", {{"inherits", "base"}, {"nozzle_diameter", json::array({"0"})}});
+    save("negative-nozzle", {{"inherits", "base"}, {"nozzle_diameter", json::array({-0.4})}});
+    save("invalid-nozzle", {{"inherits", "base"}, {"nozzle_diameter", json::array({"0.4mm"})}});
+    save("empty-model", {{"inherits", "base"}, {"printer_model", " "}});
+    save("numeric", {{"inherits", "base"}, {"nozzle_diameter", json::array({0.25})}});
+    catalog.push_back({{"name", "missing-file"}, {"sub_path", "missing.json"}});
+    catalog.push_back({{"name", "bad-entry"}});
+
+    const auto                   original_files = directory.file_contents();
+    GuideMachineMetadataResolver resolver(directory.path, catalog);
+    REQUIRE(resolver.catalog_errors().size() == 1);
+    std::string error;
+    for (const auto name : {"orphan", "cycle-a", "null-nozzle", "empty-nozzle", "zero-nozzle", "negative-nozzle", "invalid-nozzle",
+                            "empty-model", "missing-file"}) {
+        CAPTURE(name);
+        CHECK_FALSE(resolver.resolve(name, error));
+        CHECK(error.find(name) != std::string::npos);
+        CHECK(error.find(directory.path.string()) != std::string::npos);
+        // A failure cannot poison the resolver or block the following valid entry.
+        const auto valid = resolver.resolve("grandchild", error);
+        REQUIRE(valid);
+        CHECK(error.empty());
+        CHECK(valid->model == "Child");
+        CHECK(valid->nozzle == "0.60");
+    }
+    const auto direct = resolver.resolve("base", error);
+    REQUIRE(direct);
+    CHECK(direct->nozzle == "0.4");
+    const auto numeric = resolver.resolve("numeric", error);
+    REQUIRE(numeric);
+    CHECK(numeric->nozzle == "0.25");
+    CHECK(directory.file_contents() == original_files);
+}
+
+TEST_CASE("Guide loads inherited EP machine nozzles and preserves the source profiles", "[Preset][Guide][EPONE]")
+{
+    const auto                   catalog = read_resource("profiles/Custom.json");
+    GuideMachineMetadataResolver resolver(resource_path("profiles/Custom"), catalog.at("machine_list"));
+    REQUIRE(resolver.catalog_errors().empty());
+    for (const auto& entry : std::vector<std::pair<std::string, std::string>>{{"EP3 Plus 0.4 nozzle", "EP3Plus"},
+                                                                              {"EPONE Pro 0.4 nozzle", "EPONE Pro"},
+                                                                              {"EPONE Plus 0.4 nozzle", "EPONE Plus"}}) {
+        CAPTURE(entry.first);
+        const json before = read_custom_profile("machine", entry.first);
+        REQUIRE_FALSE(before.contains("nozzle_diameter"));
+        std::string error;
+        const auto  metadata = resolver.resolve(entry.first, error);
+        INFO(error);
+        REQUIRE(metadata);
+        CHECK(metadata->model == entry.second);
+        CHECK(metadata->nozzle == "0.4");
+        CHECK(read_custom_profile("machine", entry.first) == before);
+    }
+}
+
+TEST_CASE("Guide preserves decimal nozzle identifiers for filament matching", "[Preset][Guide]")
+{
+    struct Machine
+    {
+        const char* vendor;
+        const char* model;
+        const char* nozzle;
+    };
+    for (const auto& machine : std::vector<Machine>{{"Blocks", "BLOCKS Pro S100", "1.0"},
+                                                    {"Voron", "Voron Trident 350", "1.0"},
+                                                    {"Ginger Additive", "Ginger G1", "5.0"}}) {
+        CAPTURE(machine.vendor, machine.model, machine.nozzle);
+        const std::string            root    = std::string("profiles/") + machine.vendor;
+        const auto                   catalog = read_resource(root + ".json");
+        GuideMachineMetadataResolver resolver(resource_path(root), catalog.at("machine_list"));
+        std::string                  error;
+        const auto                   metadata = resolver.resolve(std::string(machine.model) + " " + machine.nozzle + " nozzle", error);
+        INFO(error);
+        REQUIRE(metadata);
+        CHECK(metadata->model == machine.model);
+        CHECK(metadata->nozzle == machine.nozzle);
+        const auto model   = read_resource(root + "/machine/" + machine.model + ".json");
+        const auto options = ";" + model.at("nozzle_diameter").get<std::string>() + ";";
+        CHECK(options.find(";" + metadata->nozzle + ";") != std::string::npos);
+    }
+}
 
 TEST_CASE("EPONE Plus resources are registered under independent device and preset names", "[Preset][EPONE]")
 {
