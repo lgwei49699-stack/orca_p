@@ -259,6 +259,13 @@ TEST_CASE("Guide preserves decimal nozzle identifiers for filament matching", "[
     }
 }
 
+TEST_CASE("EP3 profiles do not claim the Generic ToolChanger migration name", "[Preset][Guide]")
+{
+    for (const auto name : {"EP3-PLA悬垂优化 @EP3", "EP3-PLA悬垂优化 @EP3 Pro", "EP3-PLA悬垂优化 @EP3 Plus"})
+        CHECK_FALSE(read_custom_profile("filament", name).contains("renamed_from"));
+    CHECK(read_custom_profile("filament", "Generic PLA @MyToolChanger").at("renamed_from") == "My Generic PLA @MyToolChanger");
+}
+
 TEST_CASE("EPONE Plus resources are registered under independent device and preset names", "[Preset][EPONE]")
 {
     const json                                             catalogue = read_resource("profiles/Custom.json");
