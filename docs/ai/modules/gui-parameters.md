@@ -1,0 +1,42 @@
+# 参数面板与对象覆盖
+
+<!-- module-review
+{
+  "id": "gui-parameters",
+  "source_fingerprint": "sha256:761de41395dcbd67fca531e1733bd90a97f123b261b25330b934835940787d7d",
+  "reason": "按 2026-10-04 用户约定补齐 GUI／CLI 同步检查、必要构建与测试分工、GUI 验证交接；只改维护规则，源码指纹及既有测试证据未变。"
+}
+-->
+
+## 职责与边界
+
+本模块负责参数面板与对象覆盖。归属以[模块清单](../modules.json)的 `gui-parameters` 为准。
+
+## 入口与调用
+
+- [Tab.cpp](../../../src/slic3r/GUI/Tab.cpp)：`Tab` 及机器／耗材／工艺子类构建参数页，管理预设切换、脏状态及修改回调。
+- [ParamsPanel.cpp](../../../src/slic3r/GUI/ParamsPanel.cpp)：`ParamsPanel` 组织全局／对象参数面板与布局、搜索高亮和选择状态。
+- [GUI_ObjectSettings.cpp](../../../src/slic3r/GUI/GUI_ObjectSettings.cpp)：`ObjectSettings::update_settings_list` 从当前选择刷新对象覆盖项；先核对对象／体积索引。
+- [ConfigManipulation.cpp](../../../src/slic3r/GUI/ConfigManipulation.cpp)：`ConfigManipulation::apply` 应用参数联动，温度等专用检查和 toggle 接口控制有效字段。
+
+## 核心流程
+
+Tab 构造参数页及预设编辑状态，OptionsGroup／Field 处理值和显示单位；ParamsPanel 在全局与对象范围切换，GUI_ObjectSettings／ObjectTable 把覆盖写回模型。ConfigManipulation 根据组合规则调整可见／可用状态并提示不合法组合。
+
+## 配置与约束
+
+显示默认值、父预设继承值和对象显式覆盖必须区分；0 只有在具体选项定义允许时才有继承含义。内部单位及序列化键由 PrintConfig 决定，不能用控件文案推测。修改一项后需同步脏标记及后台失效；同时检查 CLI 反序列化后的相同有效值与处理规则，不能只让 GUI 控件正确。
+
+## 失败与取消
+
+选中对象被删除或参数页重建时，事件可能晚到；先验证对象和页状态。批量更新有防递归处理，不应在 change 回调里反复重新选择预设。
+
+## 修改与验证
+
+改控件或文案需中英文、恢复默认、对象覆盖、保存／重开验证。墙长“倍”是相对于路径宽度的系数，GUI 文案修正不等于 CLI 参数数值迁移；分支差异见墙模块。具体参数入口、设置值与保存重开步骤按[GUI 交接规范](../gui-validation.md) 写到本轮验证 MD。
+
+现有测试/工具范围：`tests/libslic3r/test_config.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+## 关联模块
+
+[配置定义、预设继承与资源更新](presets.md)、[配置向导与预设创建](guide.md)、[FFF 切片步骤与层状态](slicing.md)、[周长墙与 Arachne 可变线宽](walls.md)。

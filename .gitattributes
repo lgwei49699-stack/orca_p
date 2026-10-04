@@ -1,2 +1,5 @@
 # Set the default behavior, in case people don't have core.autocrlf set.
 * text=auto
+
+# Preserve the original Markdown hard-break spaces in this verbatim archive.
+/docs/ai/history/claude-before-module-docs.md whitespace=-blank-at-eol

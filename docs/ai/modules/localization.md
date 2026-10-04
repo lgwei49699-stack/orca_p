@@ -1,0 +1,41 @@
+# 中英文与翻译资源
+
+<!-- module-review
+{
+  "id": "localization",
+  "source_fingerprint": "sha256:8b465f49386fe99d102bbb3249b219f1cbfa9418b32a641f6e77a74d8123b477",
+  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。"
+}
+-->
+
+## 职责与边界
+
+本模块负责中英文与翻译资源。归属以[模块清单](../modules.json)的 `localization` 为准。
+
+## 入口与调用
+
+- [OrcaSlicer_zh_CN.po](../../../localization/i18n/zh_CN/OrcaSlicer_zh_CN.po)：简体中文 msgid/msgstr 与占位符映射；新增产品文案同步英文源串及本文件。
+- [run_gettext.sh](../../../scripts/run_gettext.sh)：提取／合并 gettext 文案，`--full` 同时重新提取源串与 hints；注意生成范围。
+- [I18N.cpp](../../../src/slic3r/GUI/I18N.cpp)：`L_str` 把 UTF-8 字符串交给 `wxGetTranslation`，不承担语言包生成。
+
+## 核心流程
+
+代码用英文原文及翻译标记，gettext 提取到模板再更新 po，构建／打包使用编译后的语言资源。提示文本可能来自 PrintConfig、GUI 控件或网页，修改前先区分来源。
+
+## 配置与约束
+
+默认完成英文和简体中文；其他语言保持现有条目并允许英文回退。占位符、复数、HTML 链接与参数单位须一致，不能把“倍”只翻译成长度。
+
+## 失败与取消
+
+缺翻译通常回退英文，格式占位符不匹配则可能运行出错；fuzzy 条目不代表翻译一定被发布。不能批量覆盖无关语言消除检查噪声。
+
+## 修改与验证
+
+改文案检查原文/zh_CN 对应及占位符，按需运行已有不触发业务构建的校验。gettext 脚本可能改大量条目，执行前审范围，本轮未生成 mo。
+
+现有测试/工具范围：暂无独立自动化目标，按本节检查场景验证。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+## 关联模块
+
+[参数面板与对象覆盖](gui-parameters.md)、[配置定义、预设继承与资源更新](presets.md)、[图标、着色器及静态辅助资源](resource-ui.md)、[内嵌网页与原生消息桥](web-assets.md)。
