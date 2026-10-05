@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:9e31d4ba867df096d005e2cbe04fe1830397f3be3b224e5fe69da9068a18ab2a",
-  "reason": "按 2026-10-04 用户约定补齐 GUI／CLI 同步检查、必要构建与测试分工、GUI 验证交接；只改维护规则，源码指纹及既有测试证据未变。"
+  "source_fingerprint": "sha256:5ca9dac91e3848f7dbc1f9f264f6f673669e342617316291643cf9a3008e74d6",
+  "reason": "核对日志接收器恢复原日志级别、成功/拒绝/异常的计时覆盖、查询预算/面数上限后仍走回退且原网格不变；修正 Boost 布尔文本的断言后重建复测，不修改既有修复验收预期。"
 }
 -->
 
@@ -23,6 +23,8 @@
 Catch2 公共配置连接 libslic3r_tests、fff_print_tests、slic3rutils 等目标；Python／CLI 工具组织隔离输入、输出与结果审计。模块文档检查独立读取 Git 快照，不调用切片、网络或 CodeGraph。
 
 现有 C++ 测试源统一归本模块维护基础设施；各业务模块在清单 tests 中依赖相关用例，所以修改用例也会触发对应业务文档复核。scripts 平铺目录逐文件登记，新脚本不会自动归类。
+
+模型修复 `[ModelRepair][Diagnostics]` 使用作用域日志接收器，恢复原日志级别，不改生产接口或注入测试策略。验证阶段耗时为非负、同一次调用 ID 一致及唯一汇总，并覆盖成功/拒绝/异常和资源超限原因；超限样例还必须证明后续分支继续且原网格未被失败候选修改。运行记录与 GUI 手测见[必要优化记录](../validation/2026-10-04-smart-print-engine.md)。
 
 ## 配置与约束
 

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model-repair",
-  "source_fingerprint": "sha256:5e644e1f0b2d1a14a0fa6927230ec83a401a922ba4e776235e1c1531bff91968",
-  "reason": "按 2026-10-04 用户约定补齐 GUI／CLI 同步检查、必要构建与测试分工、GUI 验证交接；只改维护规则，源码指纹及既有测试证据未变。"
+  "source_fingerprint": "sha256:8dc21150701c5bad40757ad157dbefd4176643a6cb2e80e4ede57e9130112646",
+  "reason": "核对共享 CGAL 阶段计时、局部拓扑预算/证明失败诊断，以及已确定拒绝时跳过距离计算；阈值、修复步骤、公共协议和 GUI/CLI 策略未变。补充诊断专项及当前交接，不沿用已撤回保守模式结论。"
 }
 -->
 
@@ -24,9 +24,15 @@
 
 GUI 修复入口经 FixModelByCgal 调用模型修复核心。repair_model 创建隔离的 staging 模型，选择 MODEL_PART 体积；修复前检查、网格修复、属性校验成功后才提交。repair_staged_model 供已隔离的调用者使用，失败结果不可直接写回原模型。
 
+共享 CGAL 修复在 info 日志记录 `stage_finished` 与 `timing_summary`，以单次调用 `repair_id` 关联、单调时钟毫秒计时。统计仅覆盖该次 CGAL 候选生成/校验，不含外层模型检测、绘制恢复、导出或 GUI 等待；阶段包含其中的检查点工作，不能将汇总时间与阶段时间重复相加。`candidate_rejected` 不等于整个模型失败，外层仍可能采用已验证的部分成果；异常退出单独标为 `exception`。
+
+局部拓扑准备记录 `soup_topology_result`：`face_limit`、`boundary_query_budget`、`boundary_split_limit`、`boundary_pass_limit`、`removed_face_limit`、`interior_contact_limit` 表示对应资源保护；`no_topology_change` 表示无适用修改；其余 `orientation_unproven`、`candidate_*`、`removed_face_*`、`float_output_invalid` 等说明几何证明/验收未通过。跳过本分支仍走既有后续处理，不把超限说成整个引擎不能修复；全部限制未改。
+
 ## 配置与约束
 
 几何是否需要修复、是否允许拆壳／删除非三维部件、是否允许清除绘制与能否保色是独立政策。GUI／CLI 的默认策略必须分别查看调用处，不能因为共用 CGAL 就认为都允许丢弃材质。相同修复选项下应按同一规则保留几何与属性；现存入口差异需记录原因／影响，新改动不能只更新一端。
+
+闭合候选及 polygon-soup 候选的形状验收先判断原有部件数、包围盒、面积/体积条件；已确定拒绝时不计算 Hausdorff 距离，日志 `distance_checked=false`，距离字段为未计算的 NaN，不代表零偏差。廉价条件通过时仍运行原有单向/双向距离检查，阈值、候选接受条件、保色、公开检测/修复 JSON 均不变。不增加保守模式、不改变取消架构或 20,000 面上限。
 
 ## 失败与取消
 
@@ -37,6 +43,8 @@ GUI 修复入口经 FixModelByCgal 调用模型修复核心。repair_model 创�
 改核心需检验健康模型、开边、退化／重复面、空体积、材质与绘制、失败原模型不变。按验证规范选 `[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]`，无匹配不能计为通过。
 
 现有测试/工具范围：`tests/libslic3r/test_model_repair.cpp`；`tests/libslic3r/test_meshboolean.cpp`；`tests/libslic3r/test_saved_painting.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+计时/退出原因专项标签为 `[ModelRepair][Diagnostics]`：覆盖成功、拒绝、异常、边界查询预算及面数上限，断言后续分支继续、拒绝不修改原网格；耗时仅要求非负，不使用脆弱的速度阈值。必要优化的构建、CLI 证据和 GUI 交接复用[执行记录](../validation/2026-10-04-smart-print-engine.md)的当前任务章节，后半部分已撤回方案不得作为现行行为。
 
 ## 分支现状
 

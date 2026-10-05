@@ -3,9 +3,132 @@
 
 #include <libslic3r/TriangleMesh.hpp>
 #include <libslic3r/MeshBoolean.hpp>
+#include <libslic3r/Utils.hpp>
+#include <algorithm>
 #include <limits>
+#include <string>
+#include <vector>
+#include <boost/log/attributes/value_extraction.hpp>
+#include <boost/log/core.hpp>
+#include <boost/log/sinks/basic_sink_backend.hpp>
+#include <boost/log/sinks/sync_frontend.hpp>
+#include <boost/make_shared.hpp>
+
+namespace {
+class RepairLogCapture
+{
+    class Backend : public boost::log::sinks::basic_sink_backend<boost::log::sinks::synchronized_feeding>
+    {
+    public:
+        std::vector<std::string> messages;
+        void                     consume(const boost::log::record_view& record)
+        {
+            const auto message = record.attribute_values()["Message"].extract<std::string>();
+            if (message)
+                messages.push_back(message.get());
+        }
+    };
+    using Sink                                = boost::log::sinks::synchronous_sink<Backend>;
+    const unsigned             previous_level = Slic3r::get_logging_level();
+    boost::shared_ptr<Backend> backend        = boost::make_shared<Backend>();
+    boost::shared_ptr<Sink>    sink           = boost::make_shared<Sink>(backend);
+
+public:
+    RepairLogCapture()
+    {
+        boost::log::core::get()->add_sink(sink);
+        Slic3r::set_logging_level(3);
+    }
+    ~RepairLogCapture()
+    {
+        boost::log::core::get()->remove_sink(sink);
+        Slic3r::set_logging_level(previous_level);
+    }
+    const std::vector<std::string>& messages() const { return backend->messages; }
+    bool                            contains(const std::string& text) const
+    {
+        return std::any_of(messages().begin(), messages().end(),
+                           [&](const std::string& message) { return message.find(text) != std::string::npos; });
+    }
+};
+} // namespace
 
 using namespace Slic3r;
+
+TEST_CASE("CGAL repair diagnostics cover accepted rejected and exceptional exits", "[MeshBoolean][ModelRepair][Diagnostics]")
+{
+    RepairLogCapture logs;
+    std::string      error;
+    SECTION("accepted candidate")
+    {
+        auto mesh = make_cube(10., 10., 10.);
+        mesh.its.indices.erase(mesh.its.indices.begin(), mesh.its.indices.begin() + 2);
+        REQUIRE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
+        CHECK(logs.contains("reason=no_topology_change"));
+        CHECK(logs.contains("outcome=candidate_accepted"));
+        CHECK(logs.contains("distance_checked=true"));
+        CHECK(its_num_open_edges(mesh.its) == 0);
+    }
+    SECTION("rejected candidate")
+    {
+        TriangleMesh empty;
+        CHECK_FALSE(MeshBoolean::cgal::repair(empty, nullptr, &error));
+        CHECK(logs.contains("outcome=candidate_rejected"));
+        CHECK_FALSE(error.empty());
+    }
+    SECTION("exception does not hide timing or change partial API semantics")
+    {
+        TriangleMesh empty;
+        CHECK_THROWS(MeshBoolean::cgal::repair_with_partial(empty, &error));
+        CHECK(logs.contains("outcome=exception"));
+        CHECK(empty.empty());
+    }
+    size_t      summaries = 0, stages = 0;
+    std::string repair_id;
+    for (const auto& message : logs.messages()) {
+        if (message.find("event=stage_finished") == std::string::npos && message.find("event=timing_summary") == std::string::npos)
+            continue;
+        const auto id_begin = message.find("repair_id=");
+        REQUIRE(id_begin != std::string::npos);
+        const auto id = message.substr(id_begin, message.find(',', id_begin) - id_begin);
+        if (repair_id.empty())
+            repair_id = id;
+        CHECK(id == repair_id);
+        const auto elapsed = message.find("elapsed_ms=");
+        REQUIRE(elapsed != std::string::npos);
+        CHECK(std::stod(message.substr(elapsed + 11)) >= 0.);
+        if (message.find("event=timing_summary") != std::string::npos)
+            ++summaries;
+        else
+            ++stages;
+    }
+    CHECK(summaries == 1);
+    CHECK(stages >= 1);
+}
+
+TEST_CASE("Soup topology diagnostics distinguish query budget from face limit", "[MeshBoolean][ModelRepair][Diagnostics]")
+{
+    const int face_count = GENERATE(700, 20001);
+    CAPTURE(face_count);
+    indexed_triangle_set its;
+    for (int i = 0; i < face_count; ++i) {
+        const float x = 3.f * i;
+        its.vertices.emplace_back(x, 0.f, 0.f);
+        its.vertices.emplace_back(x + 1.f, 0.f, 0.f);
+        its.vertices.emplace_back(x, 1.f, 0.f);
+        its.indices.emplace_back(3 * i, 3 * i + 1, 3 * i + 2);
+    }
+    TriangleMesh     mesh(its);
+    RepairLogCapture logs;
+    std::string      error;
+    CHECK_FALSE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
+    CHECK(logs.contains("event=soup_topology_result"));
+    CHECK(logs.contains(face_count == 700 ? "reason=boundary_query_budget" : "reason=face_limit"));
+    CHECK(logs.contains("stage=soup_orientation")); // Skips this branch, not the entire repair.
+    CHECK(logs.contains("outcome=candidate_rejected"));
+    CHECK(mesh.its.vertices == its.vertices);
+    CHECK(mesh.its.indices == its.indices);
+}
 
 TEST_CASE("CGAL and TriangleMesh conversions", "[MeshBoolean]") {
     TriangleMesh sphere = make_sphere(1.);
