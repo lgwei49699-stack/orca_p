@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "guide",
-  "source_fingerprint": "sha256:58817685f767d32ac5c2cc0f8d1f66c626c5a2285583f7ea545dca85ae0fa67a",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。"
+  "source_fingerprint": "sha256:3b89b2911f40ebb8e672386b38604c6278eaa6d821fdff9f94360f04b913e449",
+  "reason": "核对网页向导日志降噪：不再输出完整配置/消息，仅为日志生成的两次 dump 删除；逐耗材正常信息降为 debug，info 保留数量/加载/保存摘要，error 原样保留。配置解析、继承、选择、保存和网页业务载荷不变；CLI 不提供此界面，专项与 GUI 交接另行记录。"
 }
 -->
 
@@ -24,6 +24,8 @@
 
 GuideFrame 读取品牌目录，组织机型、喷嘴、耗材 JSON 供向导网页显示；apply_config 将选择落到 AppConfig/PresetBundle。ConfigWizard 与创建／保存预设对话框仍是不同入口，不能以当前选中打印机推算目录里所有机器。
 
+网页向导的常规 info 日志只记录品牌数量、最终 model/machine/filament/process 数量和选择/保存/取消等摘要；逐耗材路径与正常继承查找为 debug，trace 的文件/消息只记录大小及命令，不输出完整配置正文或完整收发脚本。不为写日志额外序列化整份配置，网页仍接收原有完整数据。解析及坏项 error 保留；不修改全局日志等级，不影响模型修复的 info 诊断。
+
 ## 配置与约束
 
 向导的显示名称、machine 的 printer_model/nozzle_diameter、model_id 与设备类型各有用途。系统目录与资源目录的优先级需保持，隐藏某个机型不等于删除旧用户已启用配置。
@@ -37,6 +39,10 @@ GuideFrame 读取品牌目录，组织机型、喷嘴、耗材 JSON 供向导网
 验证直接值、继承、多级覆盖、坏项及 EP3 Plus／EPONE Pro／Plus；源码测试不等于向导 GUI 已验证，需隔离配置目录检查首次及升级启动。
 
 现有测试/工具范围：`tests/libslic3r/test_epone_presets.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+日志降噪只涉及 GUI 向导，不涉及 CLI 或共享配置加载规则。除必要应用构建和 `[Preset][Guide]` 专项外，手测应打开打印机向导确认列表、搜索、取消/确认及日志摘要；回归结果见[当前执行记录的向导日志章节](../validation/2026-10-04-smart-print-engine.md)。静态“非日志业务语句未变”核对不能替代网页交互验收。
+
+2026-10-05 已使用新打包的 macOS arm64 应用完成上述最小 GUI 场景，选择配置的规范化摘要哈希前后一致，完整 JSON 日志不再出现；详细程序身份、日志及范围见同一记录。此结果不覆盖首次安装、其他平台或所有坏预设路径。
 
 ## 分支现状
 
