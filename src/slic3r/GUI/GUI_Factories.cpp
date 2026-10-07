@@ -827,6 +827,10 @@ wxMenuItem* MenuFactory::append_menu_item_fix_through_cgal(wxMenu* menu)
         menu, wxID_ANY, _L("Fix model"), "", [](wxCommandEvent&) { obj_list()->fix_through_cgal(); }, "", menu,
         []() { return plater()->can_fix_through_cgal(); }, plater());
 
+    append_menu_item(
+        menu, wxID_ANY, _L("Reconstruct model"), "", [](wxCommandEvent&) { obj_list()->reconstruct_model(); }, "", menu,
+        []() { return printer_technology() == ptFFF && plater()->is_view3D_shown() && get_selection().get_object_idx() >= 0; }, plater());
+
     return menu_item;
 }
 

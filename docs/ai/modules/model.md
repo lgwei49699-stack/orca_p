@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model",
-  "source_fingerprint": "sha256:047f927a26338c77838d20174c1b21ce9e032017164e2b2ed31d789d19538a9b",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。"
+  "source_fingerprint": "sha256:9ad559187dc8ed33ca3ff2af30ba523d88b288524050a98d452af449b773500d",
+  "reason": "新增仅安装已验证匹配凸包的 ModelVolume 接口，同时清理二维投影缓存；独立重建把凸包计算留在受限 worker，避免主进程重算和复制后的旧轮廓复用。"
 }
 -->
 
@@ -22,6 +22,8 @@
 ## 核心流程
 
 Model 包含对象、体积、实例和材质，TriangleMesh 保存三角网格，TriangleSelector 保存绘制选择；导入器建立这些结构，编辑器修改后 Print::apply 以 ID／变换／配置差异重建打印对象。共享网格与实例副本不能混为一谈。
+
+`ModelVolume::set_convex_hull` 只安装由调用方保证已验证且匹配当前网格的凸包，不计算几何，并清除全部二维投影缓存。独立重建在受限 worker 内计算和验证模型局部凸包，父进程仅检查受限协议与校验值后安装；替换候选还使实例轮廓及对象包围盒失效，不能沿用 staging 副本复制的旧轮廓。
 
 ## 配置与约束
 

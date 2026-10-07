@@ -3,6 +3,8 @@
 
 #include <wx/event.h>
 
+class wxDataViewCtrl;
+
 namespace Slic3r {
 namespace GUI {
 
@@ -16,6 +18,7 @@ void set_tag_when_enter_full_screen(bool isfullscreen);
 void set_title_colour_after_set_title(void * window);
 void initGestures(void * view,  wxEvtHandler * handler);
 void openFolderForFile(wxString const & file);
+void          mac_enable_object_list_editing(wxDataViewCtrl* control);
 #endif
 
 

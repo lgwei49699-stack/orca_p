@@ -424,6 +424,7 @@ public:
     void split_instances();
     void rename_item();
     void fix_through_cgal();
+    void reconstruct_model();
     void simplify();
     void update_item_error_icon(int obj_idx, int model_volume_idx) const;
 

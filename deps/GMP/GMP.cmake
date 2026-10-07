@@ -20,6 +20,24 @@ if (MSVC)
     add_custom_target(dep_GMP SOURCES ${_output})
 
 else ()
+    set(_gmp_url https://github.com/SoftFever/OrcaSlicer_deps/releases/download/gmp-6.2.1/gmp-6.2.1.tar.bz2)
+    set(_gmp_sha256 eae9326beb4158c386e39a356818031bd28f3124cf915f8c5b1dc4c7a36b4d7c)
+    set(_gmp_patch git apply ${GMP_DIRECTORY_FLAG} --verbose ${CMAKE_CURRENT_LIST_DIR}/0001-GMP_GCC15.patch)
+    # GMP 6.2.1 uses x18 in its arm64 assembly, but Darwin reserves that register.
+    # Select by the target architecture, not the host (including cross builds).
+    # Keep the existing source and GCC 15 patch on every other platform.
+    if (APPLE)
+        set(_gmp_target_arch "${CMAKE_OSX_ARCHITECTURES}")
+        if (NOT _gmp_target_arch)
+            set(_gmp_target_arch "${CMAKE_SYSTEM_PROCESSOR}")
+        endif ()
+        if (_gmp_target_arch MATCHES "^(arm64|aarch64)$")
+            set(_gmp_url https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz)
+            set(_gmp_sha256 a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898)
+            set(_gmp_patch "")
+        endif ()
+    endif ()
+
     set(_gmp_ccflags "-O2 -DNDEBUG -fPIC -DPIC -Wall -Wmissing-prototypes -Wpointer-arith -pedantic -fomit-frame-pointer -fno-common")
     set(_gmp_build_tgt "${CMAKE_SYSTEM_PROCESSOR}")
 
@@ -60,10 +78,10 @@ else ()
     endif ()
 
     ExternalProject_Add(dep_GMP
-        URL https://github.com/SoftFever/OrcaSlicer_deps/releases/download/gmp-6.2.1/gmp-6.2.1.tar.bz2
-        URL_HASH SHA256=eae9326beb4158c386e39a356818031bd28f3124cf915f8c5b1dc4c7a36b4d7c
+        URL ${_gmp_url}
+        URL_HASH SHA256=${_gmp_sha256}
         DOWNLOAD_DIR ${DEP_DOWNLOAD_DIR}/GMP
-        PATCH_COMMAND git apply ${GMP_DIRECTORY_FLAG} --verbose ${CMAKE_CURRENT_LIST_DIR}/0001-GMP_GCC15.patch
+        PATCH_COMMAND ${_gmp_patch}
         BUILD_IN_SOURCE ON
         CONFIGURE_COMMAND  env "CFLAGS=${_gmp_ccflags}" "CXXFLAGS=${_gmp_ccflags}" ./configure ${_cross_compile_arg} --enable-shared=no --enable-cxx=yes --enable-static=yes "--prefix=${DESTDIR}" ${_gmp_build_tgt}
         BUILD_COMMAND     make -j

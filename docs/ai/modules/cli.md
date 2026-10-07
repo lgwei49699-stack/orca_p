@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:aa0bca78f6c5f9f2d9023a1f09a42a362afc3dbd423a9c15208c2d53f41fd34e",
-  "reason": "按 2026-10-04 用户约定补齐 GUI／CLI 同步检查、必要构建与测试分工、GUI 验证交接；只改维护规则，源码指纹及既有测试证据未变。"
+  "source_fingerprint": "sha256:88dfcc0dc6e25b1228bf7b7e3cabc15756a2bb34264b77a5983e25da9f630986",
+  "reason": "增加与GUI一致的可关闭开放边界预闭合参数并贯通worker协议，帮助说明封口风险与薄壳回退；旧协议字段和高级修复不变，补默认/禁用的独立CLI回归。"
 }
 -->
 
@@ -21,19 +21,29 @@
 
 `main()` 进入 `CLI::run()`，解析动作、变换和配置，加载模型后按请求分盘、切片或导出；需要交互界面时转入 GUI 启动。模型导出走 `CLI::export_models()`，工程导出走 `export_project()`，不是同一种输出。无 GUI 的业务依然复用 Model、Print 和文件格式层。
 
+独立 `--reconstruct-model` 与内部 `--reconstruction-worker` 在 `CLI::run` 的普通解析、预设和 GUI 启动之前分流到 ModelReconstruction。前者要求一个无色 STL、尚不存在的 `--outputdir` 和显式 `--accept-reconstruction-risk`；后者只用于受控任务目录中的 worker 协议。GUI 与公共 CLI 共享候选核心，不通过旧 `--repair-model cgal` 或 `--check-model` 间接执行重建。
+
 ## 配置与约束
 
 命令行加载的机器／耗材／工艺配置与输入工程的配置合成为有效配置，再应用动作及对象覆盖。输入顺序、单位变换、多盘及颜色分组都会影响输出，不能只比较命令末尾几个参数。日志、进程退出码与结果 JSON 分别核对。
 
+重建首版仅为模型候选入口，拒绝额外输入、普通切片配置／变换和未白名单参数；STL 数值按毫米解释，不猜单位或采用原修复的 geometry-only 导入降级。公开参数为 `--reconstruction-alpha`、`--reconstruction-offset`、`--reconstruction-max-deviation`（毫米）及 `--reconstruction-timeout`（秒）。其中 max-deviation 保留参数名但改为偏差告警阈值，不再因超过它拒绝已通过完整网格检查的候选；帮助和 `deviation_policy=warning_only` 明确这一点，与 GUI 告警文案一致。最多三档尝试共享总预算，报告包含每轮及最终 alpha/offset。默认几何／资源策略见[模型修复](model-repair.md)。由于首版尚未自动试切片，不能把“同一预设名”或 CLI 候选生成当成与 GUI 同有效配置切片对照已完成。
+
 ## 失败与取消
 
 输入解析、参数组合、IO 和切片校验失败有不同出口；分盘未排入与进程成功不能画等号。应同时核对盘归属、警告和实际产物。用户没有要求时不要启动真实设备任务，也不要把运行生成的 result.json 入库。
+
+重建不覆盖源 STL／已有目录，不生成旧 `result.json`，仅在本次创建的输出目录保存 `candidate.stl` 与 `reconstruction.json`。拒绝／失败不给出可用候选；读取和报告中明确区分候选成功、形状未确认、`trial_slice=not_run` 和 `print_ready=false`。公共命令退出 0 只能表示候选工作流成功，不表示可打印；专用 worker 退出状态和业务拒绝报告分开解释。
+
+默认 `parameters.close_open_boundaries=true`，与 GUI 的“包裹前尝试闭合开放边界”相同；`--reconstruction-no-close-open-boundaries` 显式关闭。该参数完整传递至 worker，旧内部请求缺字段时取默认 true。封闭副本必须通过完整检查才能用于包裹；有意开口可能被填上，仍要求风险确认。报告新增 `engine.boundary_closure` 与 `engine.metrics.open_surface_envelope_warning`，分别解释预闭合结果和原汤包裹的薄壳风险；不能仅因命令退出 0 推断墙/填充可生成。不改 `--check-model` v4 或旧 repair JSON。
 
 ## 修改与验证
 
 修改动作路由优先检查 run/export_models 和结果序列化；验证无参数启动、模型导出、分盘→切片和不合法参数。先查看本分支可用的 CLI 脚本，测试写入隔离输出目录。共享功能同时核对 GUI 的调用及生效配置，验证实际产物与错误语义一致；对应 GUI 步骤按[交接规范](../gui-validation.md) 提供，不能只凭 CLI 退出 0 结束验收。
 
 现有测试/工具范围：`tests/fff_print/test_gcode.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+独立重建另用 `scripts/test_cli_model_reconstruction.py --binary <当前应用可执行文件> --output-dir <全新证据目录>`，校验二进制／输入 hash、独立报告、候选 STL、输入与既有输出不变；脚本不构建、不试切片、不打印。运行身份与结果在[主记录](../validation/2026-10-04-smart-print-engine.md)，GUI 路径和具体对照在[交接清单](../validation/2026-10-05-reconstruction-gui.md)。
 
 ## 分支现状
 

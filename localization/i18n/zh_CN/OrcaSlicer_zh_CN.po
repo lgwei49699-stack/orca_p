@@ -18513,3 +18513,865 @@ msgstr "此处仅检查三角面边的配对关系，不代表网格已通过完
 #~ "填充图案通常被设计为自动处理旋转以确保正确打印并达到预期效果（例如，螺旋"
 #~ "体、立方体）。旋转当前的稀疏填充图案可能导致支撑不足。请谨慎操作并彻底检查"
 #~ "任何潜在的打印问题。您确定要启用此选项吗？"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp src/slic3r/GUI/GUI_ObjectList.cpp src/slic3r/GUI/GUI_Factories.cpp
+msgid "Reconstruct model"
+msgstr "重建修复"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "This creates an approximate outer shape. It may close holes, fill cavities, merge nearby surfaces or remove fine details. It does not restore precise holes, slots or internal cavities. The original model is kept until you explicitly apply a candidate."
+msgstr "此操作生成近似外形，可能封闭孔洞、填充内腔、合并邻近表面或移除精细细节，不能恢复精密孔槽或内部空腔。只有您明确采用候选后，原模型才会被替换。"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Wrap detail radius (mm)"
+msgstr "包裹细节半径（毫米）"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Surface offset (mm)"
+msgstr "表面偏移（毫米）"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Maximum sampled surface deviation (mm)"
+msgstr "采样表面偏差上限（毫米）"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Smaller detail radii can preserve more detail but require more time and memory. Values refer to the current model size in millimeters."
+msgstr "更小的细节半径可以保留更多细节，但需要更多时间和内存。各项数值均以模型当前实际尺寸的毫米单位计算。"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "I understand that reconstruction changes the model's shape."
+msgstr "我理解重建会改变模型形状。"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Generate candidate"
+msgstr "生成候选"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "The surface offset must not exceed one quarter of the detail radius or the sampled deviation limit."
+msgstr "表面偏移不得超过细节半径的四分之一，也不得超过采样偏差上限。"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Review reconstructed model"
+msgstr "检查重建候选"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Middle cross-sections at the same physical coordinates: dashed purple = original; solid teal = candidate. These three sections do not show every hole or internal feature."
+msgstr "相同物理坐标处的中截面对比：紫色虚线为原模型，青绿色实线为候选。这三个截面不能展示所有孔洞或内部特征。"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Original size:"
+msgstr "原模型尺寸："
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Candidate size:"
+msgstr "候选尺寸："
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Bottom height before / after (mm):"
+msgstr "重建前／后底面高度（毫米）："
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Sampled surface deviation limit (mm):"
+msgstr "采样表面偏差上限（毫米）："
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Sampled distance, original to candidate / candidate to original (mm):"
+msgstr "采样距离，原模型到候选／候选到原模型（毫米）："
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Bounding box deviation (mm):"
+msgstr "包围盒偏差（毫米）："
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Sampled distances are not a guaranteed maximum surface error."
+msgstr "采样距离不能保证覆盖实际最大的表面误差。"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "The original surface intersects itself. Its interior has not been verified. A closed candidate does not prove that the intended solid or cavities were preserved."
+msgstr "原表面存在自相交，其内部实体范围尚未验证。候选闭合不代表原设计的实体或内腔已被保留。"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Not available"
+msgstr "暂无数据"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Move the candidate in Z so its lowest point rests on the bed"
+msgstr "沿 Z 轴移动候选，使其最低点落在打印平台上"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Diagnostic slicing has not been run. Applying this candidate does not mean it is ready to print. Slice it with the current printer, filament and process settings, then inspect every layer before printing."
+msgstr "尚未执行诊断试切片。采用此候选不代表已可打印。请使用当前打印机、耗材和工艺设置重新切片，并在打印前逐层检查。"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Apply candidate"
+msgstr "采用候选"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Keep original"
+msgstr "保留原模型"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "Close the active editing tool and select one ordinary object in the Prepare view using an FFF printer."
+msgstr "请关闭当前编辑工具，选择 FFF 打印机，并在“准备”视图中选中一个普通对象。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "Select exactly one object for reconstruction."
+msgstr "请只选中一个对象进行重建。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "This object cannot be reconstructed:"
+msgstr "此对象暂不支持重建："
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "The source model or its settings changed. The reconstruction candidate was discarded."
+msgstr "源模型或其设置已改变，重建候选已丢弃。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "Reconstructing model"
+msgstr "正在重建模型"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "Generating and checking a separate candidate..."
+msgstr "正在生成并检查独立候选……"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "Reconstruction was canceled. The original model was kept."
+msgstr "重建已取消，原模型保持不变。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "Reconstruction did not produce an applicable candidate. The original model was kept."
+msgstr "重建未生成可采用的候选，原模型保持不变。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "Apply reconstructed model"
+msgstr "采用重建模型"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "The reconstructed candidate was applied. Diagnostic slicing is still pending. Slice again and inspect the layers before printing. Undo restores the previous model."
+msgstr "已采用重建候选，诊断试切片仍待执行。请重新切片并检查各层后再打印；撤销可恢复之前的模型。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "The model was applied, but the scene could not be fully refreshed. Save the project and reopen it before slicing."
+msgstr "模型已采用，但场景未能完全刷新。请保存工程并重新打开后再切片。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "Automatic backup could not be scheduled. Save the project manually."
+msgstr "无法安排自动备份，请手动保存工程。"
+
+#: src/slic3r/GUI/GUI_ObjectList.cpp
+msgid "Reconstruction could not be completed:"
+msgstr "无法完成重建："
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction requires one ordinary model part without modifiers or negative volumes."
+msgstr "重建仅支持一个普通模型部件，不能包含修改器或负体积。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction currently requires exactly one model instance."
+msgstr "当前重建仅支持恰好一个模型实例。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction does not support painted colors, supports, seams, or fuzzy skin."
+msgstr "重建暂不支持带有颜色、支撑、接缝或绒毛表面绘制的模型。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Remove layer profiles, custom brim points, and resin annotations before reconstruction."
+msgstr "请先移除变层高配置、自定义裙边点和树脂打印标注，再进行重建。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Cut connectors and editable text or embossed shapes are not supported by reconstruction."
+msgstr "重建暂不支持切割连接件、可编辑文字或浮雕形状。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Textured models are not supported by reconstruction."
+msgstr "重建暂不支持带纹理的模型。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "The model transform is invalid or singular."
+msgstr "模型变换无效或不可逆。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Another reconstruction is already running."
+msgstr "另一项重建任务正在运行。"
+
+#: src/libslic3r/ModelReconstruction.cpp src/libslic3r/ReconstructionProcess.cpp
+msgid "Reconstruction was canceled."
+msgstr "重建已取消。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "No model object selected for reconstruction."
+msgstr "未选择要重建的模型对象。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction input or output is empty."
+msgstr "重建的输入或输出为空。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction mesh exceeds the supported size limit."
+msgstr "重建网格超出支持的大小限制。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction mesh contains non-finite coordinates."
+msgstr "重建网格包含非有限坐标。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction mesh contains an invalid face index."
+msgstr "重建网格包含无效的面索引。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Could not write the reconstruction mesh."
+msgstr "无法写入重建网格。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction mesh is missing or is not a regular file."
+msgstr "重建网格文件缺失或不是普通文件。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction mesh file exceeds its size limit."
+msgstr "重建网格文件超出大小限制。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Invalid or truncated reconstruction mesh protocol."
+msgstr "重建网格数据格式无效或不完整。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Could not read the complete reconstruction mesh."
+msgstr "无法完整读取重建网格。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction report is missing or exceeds its size limit."
+msgstr "重建报告缺失或超出大小限制。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Invalid reconstruction report."
+msgstr "重建报告无效。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction report exceeds its size limit."
+msgstr "重建报告超出大小限制。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Could not write the reconstruction report."
+msgstr "无法写入重建报告。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Invalid reconstruction parameters or unsupported resource limits."
+msgstr "重建参数无效，或资源限制不受支持。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Could not create a private reconstruction directory."
+msgstr "无法创建独立的重建工作目录。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction worker failed."
+msgstr "重建子进程失败。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction worker returned a mismatched report."
+msgstr "重建子进程返回的报告与当前任务不匹配。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction output checksum does not match the validated candidate."
+msgstr "重建输出的校验值与已验证的候选不匹配。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction was canceled before candidate delivery."
+msgstr "重建在交付候选前已取消。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "The model transform loses too much precision for reconstruction."
+msgstr "模型变换造成的精度损失过大，无法采用重建结果。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction output did not round-trip exactly."
+msgstr "重建输出保存后重新读取的结果不一致。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The mesh is empty."
+msgstr "网格为空。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The triangle limit was exceeded."
+msgstr "三角面数量超过限制。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The vertex limit was exceeded."
+msgstr "顶点数量超过限制。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The mesh contains a non-finite coordinate."
+msgstr "网格包含非有限坐标。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The mesh contains an invalid triangle index."
+msgstr "网格包含无效的三角面索引。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Remove degenerate triangles before reconstruction."
+msgstr "请先移除退化三角面，再进行重建。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The triangle soup has duplicate, non-manifold, or inconsistently oriented faces."
+msgstr "三角面集合包含重复面、非流形面或朝向不一致的面。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The input does not define a valid surface graph."
+msgstr "输入未形成有效的表面拓扑结构。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Non-manifold vertices are not supported in this reconstruction version."
+msgstr "此版本的重建暂不支持非流形顶点。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "After exact coordinate welding and bounded opening analysis, the mesh does not define one supported shell. Separate solids, nested shells, and ambiguous disconnected fragments require manual preparation."
+msgstr "经过精确坐标焊接和受限开口分析，网格未形成单个受支持的壳体。独立实体、嵌套壳体和含义不明确的断开碎片需要先手动处理。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Meshes with handles or unresolved cavity topology are not supported."
+msgstr "暂不支持具有贯通孔洞或尚未厘清内腔拓扑的网格。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Too many openings prevent a reliable solid interpretation."
+msgstr "开口过多，无法可靠判断实体范围。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "An opening exceeds the bounded reference-closure budget."
+msgstr "某个开口超过参考封闭处理的资源限制。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "An opening is too large to distinguish a missing solid surface from an intentional open shell."
+msgstr "开口过大，无法区分实体表面缺失与有意设计的开放壳体。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "A small opening could not form a valid reference closure."
+msgstr "某个小开口无法形成有效的参考封闭表面。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The reference closure remains open."
+msgstr "参考表面仍未闭合。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Alpha wrapping exceeded the intermediate refinement budget."
+msgstr "Alpha 包裹的中间细化过程超出资源限制。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The reconstruction produced no surface."
+msgstr "重建未生成表面。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The reconstructed surface exceeds the output limit."
+msgstr "重建表面超出输出大小限制。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "A reconstructed coordinate cannot be represented safely."
+msgstr "某个重建坐标无法安全表示。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Reconstruction lost reference interior; a two-sided thin shell is not a restored solid."
+msgstr "重建丢失了参考内部空间；双面薄壳不能视为已恢复的实体。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "No reliable interior witness was found within the bounded sampling budget."
+msgstr "在受限采样预算内未找到可靠的内部验证点。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Source and candidate meshes must be distinct objects."
+msgstr "源网格与候选网格必须彼此独立。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Alpha, offset and maximum sampled deviation must be finite and positive."
+msgstr "细节半径、偏移和采样偏差上限必须为有限正数。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Offset must not exceed one quarter of alpha or the sampled deviation limit."
+msgstr "偏移不得超过细节半径的四分之一，也不得超过采样偏差上限。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Requested face limits exceed the supported reconstruction budget."
+msgstr "请求的面数限制超过重建所支持的资源预算。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The model is flat or too thin for the requested reconstruction offset."
+msgstr "模型为平面或相对于指定重建偏移过薄。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "An open self-intersecting mesh does not establish a reliable reference solid."
+msgstr "开放且自相交的网格无法确定可靠的参考实体。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The reference shell has reversed orientation or no positive algebraic volume."
+msgstr "参考壳体朝向相反，或没有正的代数体积。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The requested alpha exceeds the estimated surface refinement budget."
+msgstr "指定的细节半径将使表面细化超出预估资源预算。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The float reconstruction is not closed."
+msgstr "转为浮点存储后的重建网格未闭合。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The float reconstruction self-intersects."
+msgstr "转为浮点存储后的重建网格存在自相交。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The reconstructed surface does not bound an outward-oriented solid."
+msgstr "重建表面未形成朝外的封闭实体边界。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The reconstruction changes reference volume excessively or resembles a thin shell."
+msgstr "重建使参考体积变化过大，或结果近似薄壳。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The reconstruction changes dimensions excessively."
+msgstr "重建导致尺寸变化过大。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The sampled surface deviation exceeds the requested limit."
+msgstr "采样表面偏差超过指定上限。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The reconstruction engine failed with an unknown exception."
+msgstr "重建引擎因未知异常失败。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The worker exceeded its memory limit."
+msgstr "重建子进程超出内存预算。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The worker exited unsuccessfully."
+msgstr "重建子进程异常退出。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Reconstruction exceeded its time limit."
+msgstr "重建超出时间限制。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The worker was terminated by a signal."
+msgstr "重建子进程被系统信号终止。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Cannot observe reconstruction worker memory usage."
+msgstr "无法监测重建子进程的内存占用。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Reconstruction was canceled before starting the worker."
+msgstr "重建在启动子进程前已取消。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Reconstruction process limits are unsupported on this platform."
+msgstr "当前平台不支持重建所需的进程资源限制。"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+msgid "Experimental approximate candidate. Automatic diagnostic slicing, demonstrated repair benefit and cross-platform release validation are not yet complete."
+msgstr "实验性近似候选。自动诊断试切片、实际修复收益和跨平台发布验收尚未完成。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Unsupported reconstruction protocol."
+msgstr "不支持此重建通信协议。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Unsupported reconstruction memory limit."
+msgstr "不支持此重建内存限制。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Unsupported reconstruction time limit."
+msgstr "不支持此重建时间限制。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction input checksum mismatch."
+msgstr "重建输入的校验值不匹配。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Invalid reconstruction transform."
+msgstr "重建坐标变换无效。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction geometry became invalid after transforming to model coordinates."
+msgstr "重建几何变换回模型坐标后无效。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "STL input is missing or is not a regular file."
+msgstr "STL 输入文件缺失或不是普通文件。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "STL input is missing, empty, or larger than 64 MiB."
+msgstr "STL 输入文件缺失、为空或超过 64 MiB。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Could not read a stable, bounded STL input."
+msgstr "无法读取内容稳定且大小受限的 STL 输入。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "STL exceeds the reconstruction face limit."
+msgstr "STL 超出重建面数限制。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "STL contains a non-finite coordinate."
+msgstr "STL 包含非有限坐标。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Colored or extended binary STL is not supported by reconstruction."
+msgstr "重建不支持带颜色或扩展属性的二进制 STL。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Invalid or overlong ASCII STL line."
+msgstr "ASCII STL 包含无效或过长的行。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "An ASCII STL token exceeds the supported length."
+msgstr "ASCII STL 中的某个字段超过支持的长度。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Invalid or truncated ASCII STL triangle syntax."
+msgstr "ASCII STL 的三角面语法无效或不完整。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Missing ASCII STL coordinate."
+msgstr "ASCII STL 缺少坐标。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Invalid or non-finite ASCII STL coordinate."
+msgstr "ASCII STL 包含无效或非有限坐标。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Nested ASCII STL solids are not supported."
+msgstr "不支持 ASCII STL 中的嵌套实体。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Unexpected ASCII STL endsolid."
+msgstr "ASCII STL 出现非预期的 endsolid 结束标记。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Invalid ASCII STL input."
+msgstr "ASCII STL 输入无效。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "ASCII STL is incomplete or contains no triangles."
+msgstr "ASCII STL 不完整或不包含三角面。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Missing reconstruction option value."
+msgstr "缺少重建选项的值。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction options require finite positive numbers."
+msgstr "重建选项必须为有限正数。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction timeout must be 1 to 300 seconds."
+msgstr "重建超时时间必须为 1 至 300 秒。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction requires one STL, a new --outputdir, and --accept-reconstruction-risk."
+msgstr "重建需要一个 STL 文件、尚不存在的 --outputdir 输出目录，以及 --accept-reconstruction-risk 风险确认。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Standalone reconstruction currently accepts only an uncolored STL."
+msgstr "独立重建当前仅支持不含颜色的 STL。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction output must be a new directory under an existing parent."
+msgstr "重建输出必须是现有父目录中尚不存在的新目录。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Could not create reconstruction output directory."
+msgstr "无法创建重建输出目录。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Could not save reconstruction candidate STL."
+msgstr "无法保存重建候选 STL。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Exported reconstruction candidate could not be read back."
+msgstr "无法重新读取已导出的重建候选。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Exported reconstruction STL changed its validated triangles."
+msgstr "已导出的重建 STL 与通过验证的三角面不一致。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "An approximate reconstruction candidate is ready for manual comparison and trial slicing."
+msgstr "近似重建候选已生成，等待手动对比和试切片。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Final float mesh validation did not complete."
+msgstr "最终浮点网格验证未完成。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Final float mesh validation failed with an unknown exception."
+msgstr "最终浮点网格验证因未知异常失败。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Reconstruction did not complete."
+msgstr "重建未完成。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The final float surface passed geometric validation; restoration of design intent is not certified."
+msgstr "最终浮点表面通过几何验证，但这不能证明原始设计意图已恢复。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The final mesh face limit is invalid."
+msgstr "最终网格面数限制无效。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The float mesh contains a degenerate triangle."
+msgstr "浮点网格包含退化三角面。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The float mesh does not bound an outward-oriented solid."
+msgstr "浮点网格未形成朝外的封闭实体边界。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The float mesh has no finite positive solid volume."
+msgstr "浮点网格没有有限且为正的实体体积。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The float mesh is not closed."
+msgstr "浮点网格未闭合。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "The float mesh self-intersects."
+msgstr "浮点网格存在自相交。"
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "Volume comparison is heuristic; manual solid comparison and trial slicing are required."
+msgstr "体积对比仅为启发式检查，仍需手动对比实体并执行试切片。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The worker supervision deadline was exceeded."
+msgstr "重建子进程超出监督时限。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The worker could not continue resource monitoring."
+msgstr "重建子进程无法继续监测资源使用情况。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The worker executable path is not valid UTF-8."
+msgstr "重建子进程的可执行文件路径不是有效的 UTF-8 编码。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "A worker argument is not valid UTF-8."
+msgstr "重建子进程的某个参数不是有效的 UTF-8 编码。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The worker executable or arguments are invalid."
+msgstr "重建子进程的可执行文件或参数无效。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The worker executable path must be absolute."
+msgstr "重建子进程必须使用可执行文件的绝对路径。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The worker returned an unrecognized wait status."
+msgstr "重建子进程返回无法识别的等待状态。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Worker time and memory limits must be positive and representable."
+msgstr "重建子进程的时间和内存限制必须为可表示的正数。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The worker memory limit must be positive and representable."
+msgstr "重建子进程的内存限制必须为可表示的正数。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The reconstruction worker is not running in a memory-limited Job."
+msgstr "重建子进程未运行在受内存限制的 Windows 作业中。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The reconstruction worker Job does not enforce the requested memory limit."
+msgstr "重建子进程的 Windows 作业未执行所请求的内存限制。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The reconstruction worker already exceeds its memory budget."
+msgstr "重建子进程已超出内存预算。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "The worker memory limit exceeds the platform resource-limit range."
+msgstr "重建子进程的内存限制超出当前平台可设置的范围。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Reconstruction worker memory limits are unsupported on this platform."
+msgstr "当前平台不支持重建子进程的内存限制。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Invalid reconstruction worker supervision parameters."
+msgstr "重建子进程的监督参数无效。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Invalid reconstruction worker parent process ID."
+msgstr "重建子进程的父进程标识无效。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Cannot verify the reconstruction worker parent identity."
+msgstr "无法验证重建子进程的父进程身份。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Cannot install reconstruction worker parent-death protection."
+msgstr "无法设置重建子进程在父进程退出时的保护措施。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Worker supervision is unsupported on this platform."
+msgstr "当前平台不支持重建子进程监督。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction convex hull does not match the validated candidate."
+msgstr "重建凸包与已验证的候选模型不匹配。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Could not produce a valid bounded reconstruction convex hull."
+msgstr "未能在限制范围内生成有效的重建凸包。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction convex hull did not round-trip exactly."
+msgstr "重建凸包写入后重新读取的结果不完全一致。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid ""
+"Usage: --reconstruct-model INPUT.stl --outputdir NEW_DIRECTORY --accept-reconstruction-risk\n"
+"Options: --reconstruction-alpha MM --reconstruction-offset MM --reconstruction-max-deviation MM\n"
+"         --reconstruction-timeout SECONDS --reconstruction-no-close-open-boundaries\n"
+"Generates an approximate candidate only. Original input is never overwritten.\n"
+"STL units are millimeters. Shape, holes and cavities may change; colored STL is unsupported.\n"
+"Maximum deviation is a warning threshold, not a rejection limit. Up to three bounded wrap attempts.\n"
+"Open boundaries are closed before wrapping when a validated solid can be formed; this may fill intended openings.\n"
+"Use --reconstruction-no-close-open-boundaries to keep the original surface-wrapping behavior.\n"
+"Candidate requires shape confirmation and a separate slice; this command never prints.\n"
+msgstr ""
+"用法：--reconstruct-model INPUT.stl --outputdir NEW_DIRECTORY --accept-reconstruction-risk\n"
+"选项：--reconstruction-alpha MM --reconstruction-offset MM --reconstruction-max-deviation MM\n"
+"      --reconstruction-timeout SECONDS --reconstruction-no-close-open-boundaries\n"
+"仅生成近似候选模型，绝不覆盖原始输入。\n"
+"STL 单位为毫米；形状、孔洞和空腔可能改变，不支持彩色 STL。\n"
+"最大偏差参数为告警阈值，不是拒绝上限；最多尝试三档受限包裹。\n"
+"能够形成通过校验的实体时，先闭合开放边界再包裹；这可能填充原本需要的开口。\n"
+"使用 --reconstruction-no-close-open-boundaries 保留原来的表面包裹方式。\n"
+"候选需要确认外形并单独切片；此命令不会执行打印。\n"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Unsupported reconstruction option or extra input: "
+msgstr "不支持的重建选项或多余输入："
+
+#: src/libslic3r/MeshReconstruction.cpp
+msgid "An approximate candidate is ready, but the self-intersecting source interior remains unverified. Volume comparison is heuristic; manual solid comparison and trial slicing are required."
+msgstr "近似候选已生成，但原始自交模型的内部实体范围尚未验证。体积比较仅为启发式判断，仍须人工比较实体结构并试切片。"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid " failed (Windows error "
+msgstr "失败（Windows 错误 "
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Setting worker memory limits"
+msgstr "设置重建子进程内存限制"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Associating worker memory notifications"
+msgstr "关联重建子进程内存通知"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Reading worker memory notifications"
+msgstr "读取重建子进程内存通知"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Waiting for the worker"
+msgstr "等待重建子进程"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Cannot initialize worker attributes: "
+msgstr "无法初始化重建子进程属性："
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Cannot start reconstruction worker: "
+msgstr "无法启动重建子进程："
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Cannot wait for reconstruction worker: "
+msgstr "无法等待重建子进程："
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Identifying the worker parent"
+msgstr "识别重建子进程的父进程"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Querying worker memory limits"
+msgstr "查询重建子进程内存限制"
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Cannot read worker address-space limit: "
+msgstr "无法读取重建子进程地址空间限制："
+
+#: src/libslic3r/ReconstructionProcess.cpp
+msgid "Cannot set worker address-space limit: "
+msgstr "无法设置重建子进程地址空间限制："
+
+msgid "No non-degenerate triangles remain for reconstruction."
+msgstr "清理后没有可用于重建的非退化三角面。"
+
+msgid "The reconstructed surface contains non-manifold vertices."
+msgstr "重建后的表面仍存在非流形顶点。"
+
+msgid "The reconstructed mesh did not pass all complete model checks."
+msgstr "重建网格未通过全部完整模型检测。"
+
+msgid "Alpha, offset and deviation warning threshold must be finite and positive."
+msgstr "细节半径、表面偏移和偏差告警阈值必须为有限正数。"
+
+msgid "Offset must not exceed one quarter of alpha."
+msgstr "表面偏移不得超过细节半径的四分之一。"
+
+msgid "The model has no usable spatial extent."
+msgstr "模型没有可用的空间范围。"
+
+msgid "The model has no finite positive surface area."
+msgstr "模型没有有限且为正的表面积。"
+
+msgid "Reconstruction scales are not finite."
+msgstr "重建尺度不是有限数值。"
+
+msgid "The reconstructed surface comparison is not finite."
+msgstr "重建表面的比较结果不是有限数值。"
+
+msgid "The reconstructed mesh passed complete model checks. Shape and internal structure may have changed; trial slicing is still required."
+msgstr "重建网格已通过完整模型检测。形状和内部结构可能已改变，仍需试切片确认。"
+
+msgid "Surface deviation warning threshold (mm)"
+msgstr "表面偏差告警阈值（mm）"
+
+msgid "Smaller detail radii require more time and memory. Up to three progressively coarser attempts share the time budget. Surface deviation is reported as a warning, not a rejection. Values are in physical millimeters."
+msgstr "较小的细节半径需要更多时间和内存。最多尝试三档逐步加粗的重建尺度，共用时间预算。表面偏差仅作告警，不作为拒绝条件。数值单位为实际毫米。"
+
+msgid "The surface offset must not exceed one quarter of the detail radius."
+msgstr "表面偏移不得超过细节半径的四分之一。"
+
+msgid "Effective wrap radius / surface offset (mm):"
+msgstr "实际重建半径 / 表面偏移（mm）："
+
+msgid "Surface deviation exceeds the warning threshold. The candidate is valid, but its shape needs review."
+msgstr "表面偏差超过告警阈值。候选网格有效，但请检查形状变化。"
+
+msgid "Use positive values. The surface offset must not exceed one quarter of the detail radius."
+msgstr "请输入正数。表面偏移不得超过细节半径的四分之一。"
+
+msgid "Open boundary preparation exceeded its patch budget."
+msgstr "开放边界预处理超过补面预算。"
+
+msgid "Intersecting open surfaces cannot be closed by the boundary preparation step."
+msgstr "边界预处理不能封闭存在相交的开放表面。"
+
+msgid "An open boundary could not be closed within the patch budget."
+msgstr "未能在补面预算内闭合开放边界。"
+
+msgid "The closed input did not form a valid non-intersecting solid."
+msgstr "封口后的输入未形成有效且无自交的实体。"
+
+msgid "Try closing open boundaries before wrapping"
+msgstr "包裹前尝试闭合开放边界"
+
+msgid "Closing open boundaries can avoid a thin envelope around a broken surface, but may fill intended openings. Only a validated closed input is used. If closure fails, the original surface is wrapped and a warning is shown."
+msgstr "闭合开放边界可避免只在破损表面外生成薄壳，但可能填充原本需要的开口。仅使用通过校验的闭合输入；封口失败时仍包裹原表面，并显示告警。"
+
+msgid "Open boundaries were closed before wrapping. Review the added surfaces and any filled openings."
+msgstr "包裹前已闭合开放边界，请检查新增表面及被填充的开口。"
+
+msgid "Open boundaries remain in the wrapping input. The candidate may be a thin envelope with missing wall paths. Complete mesh checks do not establish printability; inspect the sliced result before use."
+msgstr "包裹输入仍有开放边界，候选可能成为薄壳并缺失墙体路径。完整网格检测通过不代表可打印，请在使用前检查切片结果。"

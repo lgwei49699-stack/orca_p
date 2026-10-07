@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model-repair",
-  "source_fingerprint": "sha256:8dc21150701c5bad40757ad157dbefd4176643a6cb2e80e4ede57e9130112646",
-  "reason": "核对共享 CGAL 阶段计时、局部拓扑预算/证明失败诊断，以及已确定拒绝时跳过距离计算；阈值、修复步骤、公共协议和 GUI/CLI 策略未变。补充诊断专项及当前交接，不沿用已撤回保守模式结论。"
+  "source_fingerprint": "sha256:629034c668e8b435ec4935bf7b082e56adbe2ac6a47249365c2f1f10d46e546d",
+  "reason": "针对开放模型包成薄壳增加可关闭、受预算限制的私有边界预闭合；完整浮点实体检查后才用于包裹，受控拒绝回原汤并告警，异常不吞掉。GUI/CLI共享，不改旧高级修复；同配置切片证明缺面方块路径恢复，不推广为任意模型可打印。"
 }
 -->
 
@@ -19,6 +19,9 @@
 - [FixModelByCgal.cpp](../../../src/slic3r/Utils/FixModelByCgal.cpp)：GUI 修复与工作线程/主模型之间的桥接。
 - [ModelCheckWorkflow.cpp](../../../src/libslic3r/ModelCheckWorkflow.cpp)：run_model_check_workflow 与业务结果投影。
 - [ModelInspection.cpp](../../../src/libslic3r/ModelInspection.cpp)：inspect_model_mesh 及受限基础清理计划。
+- [ModelReconstruction.cpp](../../../src/libslic3r/ModelReconstruction.cpp)：独立重建的适用性、源身份、稀疏候选副本、物理毫米变换、worker 协议及单文件 CLI；GUI／CLI 共用 `reconstruct_model_candidate`，此接口不采用候选。
+- [MeshReconstruction.cpp](../../../src/libslic3r/MeshReconstruction.cpp)：三角形汤基础清理、最多三档 CGAL Alpha Wrap、最终浮点网格完整七项检测与双向采样距离告警；不接入旧保形修复验收。
+- [ReconstructionProcess.cpp](../../../src/libslic3r/ReconstructionProcess.cpp)：直接启动当前应用的专用 worker、取消／超时／内存监测及退出回收，不复用 GUI 的 detached 启动路径。
 
 ## 核心流程
 
@@ -28,15 +31,33 @@ GUI 修复入口经 FixModelByCgal 调用模型修复核心。repair_model 创�
 
 局部拓扑准备记录 `soup_topology_result`：`face_limit`、`boundary_query_budget`、`boundary_split_limit`、`boundary_pass_limit`、`removed_face_limit`、`interior_contact_limit` 表示对应资源保护；`no_topology_change` 表示无适用修改；其余 `orientation_unproven`、`candidate_*`、`removed_face_*`、`float_output_invalid` 等说明几何证明/验收未通过。跳过本分支仍走既有后续处理，不把超限说成整个引擎不能修复；全部限制未改。
 
+独立重建由用户明确发起：先验证对象适用性并冻结源身份，复制选中对象，按 `instance × volume` 变换到毫米空间，再交给受限子进程。worker 清除精确零面积／重复三角形，直接对缺陷三角形汤生成近似外包表面；不要求输入先成为闭合、单壳、方向一致的实体。输出必须闭合、流形、无自交、围成方向正确的正体积，并通过共享 `inspect_model_mesh` 的完整七项检测；合法把手、分离实体及正确朝向的内腔不是输出缺陷。逆变换后的模型局部网格和重新变换到物理空间的浮点网格也须通过同样复检。父进程只接收大小受限、任务身份和校验值一致的候选。原模型保留，GUI 显式确认后才用既有原子提交／Undo／备份机制采用；CLI 仅保存新产物。
+
+开放面直接包裹可能只得到不可打印的薄壳。重建默认启用 `close_open_boundaries`：在私有副本上尝试封闭边界，必须先可转换为非自交流形、全部补面成功，再对实际 float 网格进行闭合、体积/壳体方向及完整七项检查，成功才替代包裹输入。最多 64 环、每环 512 边、合计 2048 边；新增面预算不超过 2048，仍受输出面上限及同一 worker 的时间/内存预算限制。使用固定 CGAL 支持的 iterator 补洞接口，禁止 cubic 回退。闭合输入不补面；失败的受控几何/预算检查回到原汤，检查引擎异常则停止，不伪装成可继续的几何缺陷。
+
+该步骤可能填上有意保留的开口，GUI 明确提示并可关闭，CLI 使用 `--reconstruction-no-close-open-boundaries` 关闭。`engine.boundary_closure` 记录边数、环数、补面数、是否采用及退出原因；原输入有开边但未采用封闭副本时，`engine.metrics.open_surface_envelope_warning=true`，提示候选可能仍是薄壳、需检查墙和实体路径。尺寸和双向距离仍与原汤比较，不用封口副本掩盖形状差异；这不是自动识别设计意图或自动可打印性验收。
+
+候选的 3D 凸包也在 worker 内计算、复检并以有界协议返回，主线程只验收和安装，不再执行 QHull；安装后清除体积二维投影及实例轮廓缓存，避免沿用原模型的排布范围。计时／内存预算覆盖 worker 的重建、严格几何检查和凸包处理，不包括主进程的有界读写、预览截面和导出，不能称整个 UI 操作具有同一个硬截止时间。
+
 ## 配置与约束
 
 几何是否需要修复、是否允许拆壳／删除非三维部件、是否允许清除绘制与能否保色是独立政策。GUI／CLI 的默认策略必须分别查看调用处，不能因为共用 CGAL 就认为都允许丢弃材质。相同修复选项下应按同一规则保留几何与属性；现存入口差异需记录原因／影响，新改动不能只更新一端。
 
 闭合候选及 polygon-soup 候选的形状验收先判断原有部件数、包围盒、面积/体积条件；已确定拒绝时不计算 Hausdorff 距离，日志 `distance_checked=false`，距离字段为未计算的 NaN，不代表零偏差。廉价条件通过时仍运行原有单向/双向距离检查，阈值、候选接受条件、保色、公开检测/修复 JSON 均不变。不增加保守模式、不改变取消架构或 20,000 面上限。
 
+重建首版限一个普通 `MODEL_PART` 和一个实例；阻断附加体积／负体积／修改器、面级颜色与支撑／接缝／绒毛绘制、变层高、手工裙边点、SLA 点位／排液孔、切割关联及可编辑文字／浮雕／纹理。只读拒绝，不清除属性后再继续。健康模型允许用户手动尝试；单个网格内的开放边界、非流形边、自交、方向冲突、多壳／嵌套壳和贯通孔允许进入重建，不与多个 ModelVolume 混淆。孤立非退化面可生成有厚度的壳，但不保证厚度可打印；全退化、越界索引、非有限坐标仍拒绝。清理计数写入报告，仅由已保留三角形计算包围盒，不让废弃顶点影响度量。
+
+默认细节半径 `alpha=0.5 mm`、表面偏移 `offset=0.05 mm`、偏差告警阈值 `0.25 mm`，输入最多 20 万面、输出最多 100 万面；三参数须有限正值，offset 不超过 alpha 的四分之一。`max_deviation_mm`／CLI 旧参数名保留，含义明确改为告警而非拒绝，报告 `deviation_policy=warning_only`。先尝试用户参数；估计／中间细分超限或候选几何不合格时，最多再尝试 alpha 与 offset 同时乘 2、4，并记录每轮结果及有效参数，不降低最终七项检查要求。
+
+三次尝试共用同一 worker 的默认 60 秒／1024 MiB 总预算。macOS 为采样 RSS watchdog，不是硬分配上限；Linux 使用 worker 内 RLIMIT_AS 加 RSS 监测，Windows 使用受内存限制并可整组结束的 Job。父进程监督之外，worker 内也监测父进程身份／存活、资源和截止时间，避免父进程退出或 GUI 事件回调停滞后无限运算；Linux 另设父进程退出信号保护。POSIX 父进程 RSS 查询失败时复查子进程退出状态，最多等待两个 20 ms 周期；连续第三次失败仍返回监测失败，不把未知内存当零，各周期仍检查取消／截止时间。平台实现存在不代表均已运行验收。
+
+双向距离为采样估计，不能表述为最大误差保证；超过阈值只告警。缺陷优先重建不以输入代数体积／内部见证点证明结构保持，`interior_check_status=not_preserved`、`reference_interior_check_complete=false`；原有孔、空腔和薄壁可能被填充、合并或加厚，GUI 必须提示并确认。独立 `model_reconstruction_v1` 区分 `candidate_ready`、几何检测、人工确认、采用与试切片；首版 `trial_slice=not_run`、`print_ready=false`，GUI 可明确采用为待试切片候选。网格七项通过不意味着无悬空或能生成首层路径；外部诊断试切片结果单独记录，不伪装为自动流程已执行。旧 check-model v4 与 repair JSON、旧高级修复策略不变。
+
 ## 失败与取消
 
 单体积失败或用户取消可导致整个事务回退；CGAL 单次内部操作不保证即时可中断。检查函数抛错不能转换成“需要修复”继续更重操作。成功写文件也不证明修复后的网格正确。
+
+上述线程取消约束属于旧高级修复；独立重建通过终止并回收专用子进程处理取消／超时。启动失败、内存预算、进程崩溃、引擎异常、报告／网格截断或校验不匹配均不得交付候选，不自动重启 worker。只有 worker 内受控的细分预算／候选不合格允许上述有界粗化尝试。GUI 等待／审阅期间源网格、体积元数据、变换或相关配置变化后丢弃旧候选，不覆盖现场。
 
 ## 修改与验证
 
@@ -45,6 +66,10 @@ GUI 修复入口经 FixModelByCgal 调用模型修复核心。repair_model 创�
 现有测试/工具范围：`tests/libslic3r/test_model_repair.cpp`；`tests/libslic3r/test_meshboolean.cpp`；`tests/libslic3r/test_saved_painting.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
 
 计时/退出原因专项标签为 `[ModelRepair][Diagnostics]`：覆盖成功、拒绝、异常、边界查询预算及面数上限，断言后续分支继续、拒绝不修改原网格；耗时仅要求非负，不使用脆弱的速度阈值。必要优化的构建、CLI 证据和 GUI 交接复用[执行记录](../validation/2026-10-04-smart-print-engine.md)的当前任务章节，后半部分已撤回方案不得作为现行行为。
+
+重建专项为 `[MeshReconstruction],[ModelReconstruction],[ReconstructionProcess],[ReconstructionWorkerGuard]`，对应 `test_mesh_reconstruction.cpp`、`test_model_reconstruction.cpp`、`test_reconstruction_process.cpp`；覆盖各类缺陷汤、清理计数、三档尝试、偏差只告警、最终七项完整通过、合法内腔与反向独立壳、浮点塌陷及快速进程退出。隐藏 `[ReconstructionIntegration]` 需指定当前应用的 `ORCA_RECONSTRUCTION_BINARY`，验证真实 worker 及已预热轮廓缓存的更新。CLI 用 `scripts/test_cli_model_reconstruction.py` 核对独立 schema、失败原件不变、中文路径、文件边界、实际导出网格及告警语义；自交样例通过网格检查仍不能升级成可打印结论。具体结果、压力测试异常及真实失败模型／试切片结果归同一[主记录](../validation/2026-10-04-smart-print-engine.md)，GUI 对比／采用／撤销／保存重开与待试切片边界见[重建 GUI 交接](../validation/2026-10-05-reconstruction-gui.md)。测试源码存在不表示已通过，不能以人工方块候选替代真实失败模型与打印流程验收。
+
+`[BoundaryClosure]` 专项覆盖正/反向缺面方块、关闭后薄壳复现、闭合方块/贯通孔/相交闭壳结果不变，以及平面、自交开放面和超预算环的回退。CLI 验证同一策略传至 worker；同一 GUI 工程配置的外部诊断切片验证墙、填充及顶底面，不只检查“层非空”。
 
 ## 分支现状
 

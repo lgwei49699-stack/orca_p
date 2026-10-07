@@ -58,6 +58,7 @@
 #include "libslic3r/Model.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/ModelRepair.hpp"
+#include "libslic3r/ModelReconstruction.hpp"
 #include "libslic3r/ModelCheckWorkflow.hpp"
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Exception.hpp"
@@ -1466,6 +1467,16 @@ int CLI::run(int argc, char **argv)
     #endif
         boost::nowide::cerr << text.c_str() << std::endl;
         return CLI_ENVIRONMENT_ERROR;
+    }
+
+    // Independent, headless reconstruction protocol. Never enter legacy repair,
+    // profile migration or GUI initialization in a resource-limited worker.
+    if (argc == 3 && std::string(argv[1]) == "--reconstruction-worker")
+        return Slic3r::run_model_reconstruction_worker(argv[2]);
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--reconstruct-model")
+            return Slic3r::run_model_reconstruction_cli(boost::dll::program_location().string(),
+                                                       std::vector<std::string>(argv + 1, argv + argc));
     }
 
     if (!this->setup(argc, argv))

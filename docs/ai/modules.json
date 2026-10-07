@@ -65,7 +65,8 @@
         "src/OrcaSlicer.hpp"
       ],
       "tests": [
-        "tests/fff_print/test_gcode.cpp"
+        "tests/fff_print/test_gcode.cpp",
+        "scripts/test_cli_model_reconstruction.py"
       ],
       "test_note": "修改动作路由优先检查 run/export_models 和结果序列化；验证无参数启动、模型导出、分盘→切片和不合法参数。使用隔离输出目录；共享业务按 validation.md 与 GUI 的有效配置、结果及失败语义对照。"
     },
@@ -134,6 +135,8 @@
         "src/slic3r/GUI/Gizmos/**",
         "src/slic3r/GUI/MeshUtils.cpp",
         "src/slic3r/GUI/MeshUtils.hpp",
+        "src/slic3r/GUI/ModelReconstructionDialog.cpp",
+        "src/slic3r/GUI/ModelReconstructionDialog.hpp",
         "src/slic3r/GUI/ObjColorDialog.cpp",
         "src/slic3r/GUI/ObjColorDialog.hpp",
         "src/slic3r/GUI/ObjectDataViewModel.cpp",
@@ -337,14 +340,20 @@
       "sources": [
         "src/libslic3r/MeshBoolean.cpp",
         "src/libslic3r/MeshBoolean.hpp",
+        "src/libslic3r/MeshReconstruction.cpp",
+        "src/libslic3r/MeshReconstruction.hpp",
         "src/libslic3r/MeshRepairOutcome.hpp",
         "src/libslic3r/ModelCheckWorkflow.cpp",
         "src/libslic3r/ModelCheckWorkflow.hpp",
         "src/libslic3r/ModelInspection.cpp",
         "src/libslic3r/ModelInspection.hpp",
         "src/libslic3r/ModelPreparation.cpp",
+        "src/libslic3r/ModelReconstruction.cpp",
+        "src/libslic3r/ModelReconstruction.hpp",
         "src/libslic3r/ModelRepair.cpp",
         "src/libslic3r/ModelRepair.hpp",
+        "src/libslic3r/ReconstructionProcess.cpp",
+        "src/libslic3r/ReconstructionProcess.hpp",
         "src/slic3r/Utils/FixModelByCgal.cpp",
         "src/slic3r/Utils/FixModelByCgal.hpp",
         "src/slic3r/Utils/ModelExportPolicy.hpp",
@@ -357,14 +366,21 @@
         "src/libslic3r/MeshBoolean.cpp",
         "src/slic3r/Utils/FixModelByCgal.cpp",
         "src/libslic3r/ModelCheckWorkflow.cpp",
-        "src/libslic3r/ModelInspection.cpp"
+        "src/libslic3r/ModelInspection.cpp",
+        "src/libslic3r/ModelReconstruction.cpp",
+        "src/libslic3r/MeshReconstruction.cpp",
+        "src/libslic3r/ReconstructionProcess.cpp"
       ],
       "tests": [
         "tests/libslic3r/test_model_repair.cpp",
         "tests/libslic3r/test_meshboolean.cpp",
-        "tests/libslic3r/test_saved_painting.cpp"
+        "tests/libslic3r/test_saved_painting.cpp",
+        "tests/libslic3r/test_mesh_reconstruction.cpp",
+        "tests/libslic3r/test_model_reconstruction.cpp",
+        "tests/libslic3r/test_reconstruction_process.cpp",
+        "scripts/test_cli_model_reconstruction.py"
       ],
-      "test_note": "改核心需检验健康模型、开边、退化／重复面、空体积、材质与绘制、失败原模型不变。按验证规范选 `[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]`，无匹配不能计为通过。"
+      "test_note": "旧修复按 `[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]` 回归；独立重建按 `[MeshReconstruction],[ModelReconstruction],[ReconstructionProcess]` 及 CLI 专项检查健康/不支持输入、变换后最终网格、候选不污染源、取消/超时/内存/异常输出。GUI 确认、Undo、备份和同参试切片按交接记录另验，无匹配不能计为通过。"
     },
     {
       "id": "geometry",
@@ -1625,7 +1641,9 @@
         "src/slic3r/GUI/DeviceTab/CMakeLists.txt",
         "version.inc"
       ],
-      "watch": [],
+      "watch": [
+        "deps/GMP/GMP.cmake"
+      ],
       "entrypoints": [
         "CMakeLists.txt",
         "src/CMakeLists.txt",
@@ -1633,7 +1651,8 @@
         "build_release_macos.sh"
       ],
       "tests": [
-        "scripts/tests/test_bundle_macos_zstd.py"
+        "scripts/tests/test_bundle_macos_zstd.py",
+        "scripts/tests/test_gmp_platform_selection.py"
       ],
       "test_note": "修改 CMake／打包脚本先静态检查，再按 validation.md 的长期分工构建受影响目标；缺少所需构建时由 AI 补齐。打包改动验证实际打包流程，跨平台 Python 测试不等于 Windows 安装包验收。"
     },
@@ -1648,6 +1667,7 @@
         "scripts/orca_filament_lib.py",
         "scripts/test_cli_model_check.py",
         "scripts/test_cli_model_color.py",
+        "scripts/test_cli_model_reconstruction.py",
         "scripts/test_cli_plate_names.py",
         "scripts/test_cli_repair_acceptance.py",
         "scripts/test_cli_repair_materials.py",
@@ -1655,6 +1675,7 @@
         "scripts/test_repair_acceptance_helpers.py",
         "scripts/tests/test_bundle_macos_zstd.py",
         "scripts/tests/test_check_ai_module_docs.py",
+        "scripts/tests/test_gmp_platform_selection.py",
         "scripts/validate_raft_stability.py",
         "tests/CLAUDE.md",
         "tests/CMakeLists.txt",
