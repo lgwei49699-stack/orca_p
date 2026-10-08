@@ -3,6 +3,7 @@
 
 #include "Model.hpp"
 #include "TriangleMesh.hpp"
+#include "Utils.hpp"
 #include "Format/STL.hpp"
 
 #include <boost/filesystem.hpp>
@@ -26,9 +27,9 @@ namespace {
 namespace fs                        = boost::filesystem;
 using json                          = nlohmann::json;
 constexpr size_t  MAX_REPORT_BYTES  = 256 * 1024;
-constexpr size_t  MAX_FILE_BYTES    = 64 * 1024 * 1024;
-constexpr size_t  INPUT_FACE_LIMIT  = 200000;
-constexpr size_t  OUTPUT_FACE_LIMIT = 1000000;
+constexpr size_t  MAX_FILE_BYTES    = 256 * 1024 * 1024;
+constexpr size_t  INPUT_FACE_LIMIT  = RECONSTRUCTION_MAX_INPUT_FACES;
+constexpr size_t  OUTPUT_FACE_LIMIT = RECONSTRUCTION_MAX_OUTPUT_FACES;
 constexpr char    MESH_MAGIC[8]     = {'O', 'R', 'C', 'A', 'R', 'C', '0', '1'};
 std::atomic<bool> reconstruction_running{false};
 
@@ -229,7 +230,7 @@ TriangleMesh read_reconstruction_stl(const fs::path& path)
         throw std::invalid_argument(L("STL input is missing or is not a regular file."));
     const auto file_bytes = fs::file_size(path);
     if (file_bytes < 15 || file_bytes > MAX_FILE_BYTES)
-        throw std::invalid_argument(L("STL input is missing, empty, or larger than 64 MiB."));
+        throw std::invalid_argument(L("STL input is missing, empty, or larger than 256 MiB."));
     // Parse one bounded snapshot. Do not validate a path and then reopen it with
     // an unrestricted importer, whose ASCII header scanner has smaller buffers.
     boost::nowide::ifstream in(path.string(), std::ios::binary);
@@ -362,6 +363,25 @@ TriangleMesh read_reconstruction_stl(const fs::path& path)
 }
 } // namespace
 
+ReconstructionProcessOptions model_reconstruction_process_options(size_t input_faces,
+                                                                  const ReconstructionProcessOptions& requested,
+                                                                  size_t physical_memory_bytes)
+{
+    auto resolved = requested;
+    if (resolved.timeout_ms == 0)
+        resolved.timeout_ms = input_faces > 1000000 ? 300000 : (input_faces > 200000 ? 180000 : 60000);
+    if (resolved.memory_limit_mb == 0) {
+        const size_t target_mb = input_faces > 1000000 ? 4096 : (input_faces > 200000 ? 2048 : 1024);
+        // Leave RAM for the caller's model, UI, other applications and the OS.
+        // Unknown RAM must not silently select the largest worker budget.
+        const size_t host_mb = physical_memory_bytes == 0 ? 1024 : physical_memory_bytes / (4 * 1024 * 1024);
+        resolved.memory_limit_mb = std::min(target_mb, std::max(size_t(128), host_mb));
+    }
+    if (resolved.timeout_ms > 300000 || resolved.memory_limit_mb < 128 || resolved.memory_limit_mb > 4096)
+        throw std::invalid_argument(L("Invalid reconstruction parameters or unsupported resource limits."));
+    return resolved;
+}
+
 std::string model_reconstruction_ineligibility(const ModelObject& object)
 {
     if (object.volumes.size() != 1 || !object.volumes.front() || !object.volumes.front()->is_model_part())
@@ -465,6 +485,12 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
             throw std::invalid_argument(error);
         }
         validate_mesh_storage(source_object.volumes.front()->mesh(), mesh_options.max_input_faces);
+        const auto process_options = model_reconstruction_process_options(source_object.volumes.front()->mesh().its.indices.size(),
+                                                                          options.process, total_physical_memory());
+        result.report["resource_limits"] = {{"timeout_ms", process_options.timeout_ms},
+                                             {"memory_limit_mb", process_options.memory_limit_mb},
+                                             {"max_input_faces", mesh_options.max_input_faces},
+                                             {"max_output_faces", mesh_options.max_output_faces}};
         const auto source_identity = model_reconstruction_source_identity(source_object);
         // All source object access is before the synchronous runner pumps GUI
         // events. After that, only the private staging copy is used.
@@ -484,12 +510,12 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
                                      {"parameters", parameters(mesh_options)},
                                      {"to_mm", std::vector<double>(matrix.data(), matrix.data() + 16)},
                                      {"parent_pid", reconstruction_process_id()},
-                                     {"timeout_ms", options.process.timeout_ms},
-                                     {"memory_limit_mb", options.process.memory_limit_mb}};
+                                     {"timeout_ms", process_options.timeout_ms},
+                                     {"memory_limit_mb", process_options.memory_limit_mb}};
         write_mesh(task.path / "input.mesh", source_mm, mesh_options.max_input_faces);
         write_json(task.path / "request.json", request);
         const auto process = run_reconstruction_process(options.executable, {"--reconstruction-worker", task.path.string()},
-                                                        options.process);
+                                                        process_options);
         if (process.status != ReconstructionProcessStatus::Success) {
             result.status = reconstruction_process_status_name(process.status);
             throw std::runtime_error(process.message.empty() ? L("Reconstruction worker failed.") : process.message);
@@ -498,6 +524,7 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
         if (report.value("schema", "") != "model_reconstruction_v1" || report.value("source_identity", "") != source_identity ||
             report.value("input_mesh_identity", "") != request.at("mesh_identity"))
             throw std::runtime_error(L("Reconstruction worker returned a mismatched report."));
+        report["resource_limits"]   = result.report.at("resource_limits");
         result.status               = report.value("status", "failed");
         result.message              = report.value("message", "");
         result.report               = std::move(report);
@@ -560,7 +587,7 @@ int run_model_reconstruction_worker(const std::string& task_directory)
         if (request.at("schema") != "reconstruction_worker_v1")
             throw std::runtime_error(L("Unsupported reconstruction protocol."));
         const size_t memory_limit = request.at("memory_limit_mb").get<size_t>();
-        if (memory_limit < 128 || memory_limit > 2048)
+        if (memory_limit < 128 || memory_limit > 4096)
             throw std::runtime_error(L("Unsupported reconstruction memory limit."));
         std::string limit_error;
         if (!apply_reconstruction_worker_limits(memory_limit, limit_error))
@@ -681,6 +708,9 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
                     "Maximum deviation is a warning threshold, not a rejection limit. Up to three bounded wrap attempts.\n"
                     "Open boundaries are closed before wrapping when a validated solid can be formed; this may fill intended openings.\n"
                     "Use --reconstruction-no-close-open-boundaries to keep the original surface-wrapping behavior.\n"
+                    "Input limits: 3000000 faces, 256 MiB STL. Output limit: 1000000 faces.\n"
+                    "Automatic worker budgets: 60/180/300 seconds and up to 1024/2048/4096 MiB by input size.\n"
+                    "Automatic memory is capped at one quarter of physical RAM; explicit timeout overrides the default.\n"
                     "Candidate requires shape confirmation and a separate slice; this command never prints.\n");
                 return 0;
             }

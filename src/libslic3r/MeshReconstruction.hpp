@@ -7,6 +7,10 @@
 namespace Slic3r {
 class TriangleMesh;
 
+// Shared hard bounds for GUI, standalone STL input, worker protocol and engine.
+inline constexpr std::size_t RECONSTRUCTION_MAX_INPUT_FACES  = 3000000;
+inline constexpr std::size_t RECONSTRUCTION_MAX_OUTPUT_FACES = 1000000;
+
 struct MeshReconstructionOptions
 {
     double alpha_mm  = 0.5;
@@ -16,8 +20,8 @@ struct MeshReconstructionOptions
     // Only within explicit reconstruction: try a validated closed input before
     // wrapping open surfaces. May fill intended openings; callers must disclose it.
     bool        close_open_boundaries = true;
-    std::size_t max_input_faces       = 200000;
-    std::size_t max_output_faces      = 1000000;
+    std::size_t max_input_faces       = RECONSTRUCTION_MAX_INPUT_FACES;
+    std::size_t max_output_faces      = RECONSTRUCTION_MAX_OUTPUT_FACES;
 };
 
 // Read-only validation of the actual float mesh, including degenerate faces,

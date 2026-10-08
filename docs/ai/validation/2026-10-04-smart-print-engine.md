@@ -2,6 +2,22 @@
 
 ## 当前执行状态
 
+- 10-08 提交前复核完成：用户主要使用自有云端打印，授权检查无阻塞后提交。基准 master / a7750c76c7 加本批大模型重建、缓存/悬空/层数、单多盘导出及传统发送修正。确认 GFD 的3MF打印原本已传明确盘号，不经过传统发送，纯G-code调度/登录/后端接口/云配置工程未改。没有发现阻塞本批入库的问题，按授权作为一笔提交；不新增算法或处理已暂缓的默认文件名问题。只纳入43个本任务源码、测试和对应文档，排除 result.json、日志/产物和无关教材文件，不推送。完整证据及未验证范围见下节；下方“未提交”等为各历史批次当时状态。
+- 10-07 当前盘发送修正完成（未提交）：基准 master / a7750c76c7，保留既有未提交改动。本批仅把 `send_gcode` 的 GUI 当前盘哨兵解析为具体盘号并同时用于任务/切片包，全部盘语义不变；不改重建、预设、云配置工程或暂缓的默认文件名问题。新增12组合格式回归，覆盖当前第一/第二盘、另一盘未切片/文件缺失/有效、单盘/全部盘；3MF 测试16用例555断言通过，六项实际应用 CLI 多盘用例符合预期（五项成功、一项显式选择禁用盘返回206）。测试验证共享导出契约，不直接执行 GUI 的 `send_gcode`。首轮测试编译的 `const char*` 传参错误已修为 `c_str()`，重建成功。构建命令 `cmake --build build/arm64 --config Release --target OrcaSlicer libslic3r_tests --parallel 2`，日志 `/tmp/orca-send-current-build-2.log`，测试 `/tmp/orca-send-current-3mf.log`，CLI `/tmp/orca-multiplate-ZrJhym/send-current-*`。直接应用 SHA `9911a0a131d5f4bd2ff41933e6cab3c9d9e1ef614d61f29752d3b99d1edf063e`，测试 `329adaf95bc66727e2b47e45411529bbe1a08d5e74c940d9367ec18563668455`，常用打包路径仍旧 `46fdfcf7...`，未覆盖用户正在用的程序。GUI传统发送、Windows/Linux、实机仍未验证，未上传/启动打印；下一步按[本轮交接](2026-10-05-reconstruction-gui.md#10-07-传统当前盘发送目标修正)验证入口，未暂存/提交/推送。
+- 10-07 当前层数修正：用户已自行修正温度配置，本轮仅修改共享 GCode.cpp 总层数口径及回归/文档。基准仍 master / a7750c76c7 加既有未提交改动；真实龙模型与新旧应用 CLI 对照均从实际 112/声明 113 改为统一 112，837178 条运动指令、配置块和层 Z 序列不变。应用已构建（32e2ab2b...），最终新增层数/缓存/悬空/筏层回归 90 用例、51450 断言通过。下一步为用户 GUI 重切导出；未动用户配置/模型/算法，未提交。
+- 10-07 19:11 用户 GUI 主流程回传通过：两条程序同为 `7e35b86b...`，采用重建后一次切片、首次导出刷新 apply=0/invalidated=0，桌面 `dragon222.gcode.3mf` 有完整 G-code/配置，ZIP/MD5 正常，112 个输出层均有模型挤出。实际 GUI 备份 197318 面/98539 顶点精确转 OBJ 复检七项完整为零；候选 XML 与此前完全一致，837077 条运动指令及配置与旧 GUI 切片一致。仍有热床 60℃≥耗材软化配置 45℃告警，以及既有计划 113/实际输出 112 的统计差异；未发现中间空层。证据 `planning/repair/dragon-gui-export-return-X13WPJ`。重复导出/修改后重切 GUI、跨平台/实机仍未由本次回传覆盖；只分析/补记录，无业务改动/构建/提交。
+- 10-07 首次导出失效源头已修正（未提交）：基准 master / a7750c76c7。网格替换并落床时 PartiallyValid 缓存沿用旧变换，导致下一次无改动 apply 失效；已补变换兼容检查，当前 apply 同步重建，不改重建算法/参数/守卫。真实龙模型生命周期修前 refresh=2、修后=0，切片/G-code 完成状态保留，837178 条运动指令及配置完全相同。缓存/悬空专项 2 用例 484 断言、格式/重建 34 用例 973 断言和 3 项应用 CLI 验证通过。直接应用 `7e35b86b...` 已构建；用户仍运行的打包路径是旧 `1f8bc14c...`，未操作其窗口。下一步按最新 GUI 交接验证“采用并落床→首次切片→立即导出”，不先重开工程掩盖生命周期；GUI、跨平台/实机待验。证据 `planning/repair/export-invalidation-ZSmYOV`，保留无关 result.json/教材文件，未暂存/提交/推送。
+- 10-07 18:18 用户新包回传（只分析）：常用包与直接程序现同为 `1f8bc14c...`，已包含本批守卫，不再是旧包。日志 `orca-user-gui-run-20261007-181817-398608.log` 确认 18:27:56 完成切片/写 G-code、slice_valid=1，18:28:03 点击导出前刷新后 apply_status=2、slice_valid=0，且 posSlice/Support/GCode 步骤均失效，新守卫正确阻止空包。实际缓存 23846577 字节仍存在；不是没切片或文件写出失败。GUI“正常切完直接导出”仍不通过，不能记已修复/可入库；全局配置 diff 日志未出现、changed_keys 只是归一化，具体对象/区域/变换或有效配置失效原因还需定向诊断，不去掉守卫/强用旧缓存。本轮仅更新证据文档，不改业务源码、不构建/提交。
+- 10-07 悬空误报/空切片包优化完成（未提交）：基准仍为 master / a7750c76c7。新直接应用 `1f8bc14c...` 已构建，实际 GUI 龙候选与原件同配置 CLI 均无本次微区悬空告警，分别 837178/1054174 条运动命令和导出配置与优化前完全相同；不改重建网格、不自动开支撑。共享切片包导出拒绝失效/缺失/空 G-code，普通工程仍可保存未切片模型。格式/重建 34 用例 973 断言、悬空专项 1 用例 24 断言通过；全量支撑 94 用例中 93 通过，1 个既有用例在摆放夹具阶段失败、未进入本次检测，详见下节。新 GUI、Windows/Linux、实机仍待验；常用打包路径仍旧 `ed22cf22...`，请按最新交接启动直接产物。保留 result.json/教材文件，未暂存/提交/推送。
+- 10-07 用户授权优化开始：仍为 master / a7750c76c7，保留既有大模型改动、result.json 和教材文件。本批先修 GUI/共享 3MF 导出对失效或缺失 G-code 的拦截，保持普通工程可保存未切片状态；再根据真实挤出路径核实龙模型微区告警，避免简单按面积屏蔽或改网格掩盖风险。拟补格式与支撑回归、最小应用/测试构建及同配置 CLI 对照；不提交/推送。当前尚未改业务源码，新验收待执行。
+- 10-07 本批实施/构建中：独立逐层探针确认候选三处及原件一处微区与真实 perimeters/fills 线宽覆盖交集均为零（不是只查路径端点）。仅在支撑必要性告警且周长墙/填充已完成时排除无挤出微区；真实小区域/填充/线宽接触及未完成路径仍保守告警，不修改重建网格或启用支撑。并行层检测改为分层结果归并，避免跨线程写共享降级开关与最大距离，日志区分区域数/时间预算。GUI 在刷新和文件框后复核目标盘，核心对 WithGcode+SkipModel 强制目标 G-code 有效/非空，并检查读写失败；普通工程允许无切片。新增格式与告警回归，`cmake --build build/arm64 --config Release --target OrcaSlicer libslic3r_tests fff_print_tests --parallel 2` 正在运行，日志 `planning/build/dragon-export-warning-build-1.log`，此时未宣称新代码通过。
+- 10-07 龙模型二次分析完成：同 `ed22cf22...` 应用、567 项相同导出配置复现原模型不告警/实际 GUI 重建网格告警。逐层诊断发现候选第 2/3 层新增三处约 0.015–0.023 mm² 的无下层承托截面；原模型相同低层没有，不能仅凭七项通过认定重建无打印影响，也未证明这些微区各自形成独立悬空挤出。原件较高层另有微区，被复杂度降级漏过，不能把无告警当完整通过。导出包实际有机型/耗材/工艺参数，无网格是 SkipModel 规则；无 G-code 却报成功才是确定缺陷。刷新失效的 GUI 状态差异仍未定位，同输入核心 apply 对照不失效。仅补诊断/验证文档，不改业务代码、不提交；下一步优先修导出拦截，再评估低层几何及实际路径验收，详见下节。
+- 10-07 16:19 用户重编译回传复核完成：当前两条应用路径同为 `ed22cf22...`；GUI 采用后的备份网格 197318 面，原始索引转 OBJ 后独立七项完整为零；当次缓存 112 层均有主体路径，支撑关闭。但桌面 `drago111n.gcode.3mf` 缺 G-code、网格为空，不能用于打印：16:29:35 切片有效，16:29:42 导出前刷新使结果失效，16:29:48 仍生成空切片包。`enable_prime_tower` 的 changed_keys 是归一化日志，不足以证明用户修改或该键导致失效；初查因果判断已纠正。悬空属于局部承托风险，不等于网格检查失败，具体位置和原件同配置对照仍未验证。仅补诊断产物/记录，不改业务源码/配置、不构建/提交；建议后续修正导出有效性拦截，详见本轮节。
+- 10-07 大模型优化完成（未提交）：最终直接应用 `4efcd19a...`、测试 `137ce662...`，225 核心用例/15360 断言、32 CLI、真实 worker 1 用例/22 断言通过。原龙模型 58.789 秒生成 197118 面，worker 采样峰值 1479.53 MiB，实际导出转为不清理面的 OBJ 再检测，七项完整为零；原文件 hash 不变。原生导入后的 1808822 面副本也在 57.739 秒生成完整检查通过的候选，但不等于 GUI 实操。仍有约 6.08 mm 采样形状告警、未试切片；新版 GUI/Windows/Linux/实机待验。旧打包副本仍 `89bed37f...`，使用新版须启动下面直接构建路径或重新打包。文档/差异检查通过；下一步按更新交接清单验证大模型 GUI，保留用户教材及既有文档改动，不自动提交。
+- 10-07 大模型支持首轮结果：共享输入上限已改为 300 万面，CLI 有界 STL 快照 256 MiB；按面数/物理 RAM 选择 60/180/300 秒与最高 1/2/4 GiB worker 预算，显式超时不被覆盖，GUI 显示相同预算。最终输出上限/完整检查不放宽；预闭合输入预算与输出预算分离。第一版 `b1f354b6...` 对原始龙模型 58.316 秒成功，197118 面候选，内部完整七项为零，但双向采样最大值约 6.076/0.561 mm、有形状告警，不能认定细节保持/可打印。后续补齐输入错误文案、预闭合回归、系统 RAM 查询失败保护，build-3 已完成，当前正在最终二进制复验与实际导出复检。225 核心用例/15360 断言、32 CLI 场景、真实 worker 集成已通过；证据 `planning/repair/dragon-reconstruction-wXTE1w`、构建 `planning/build/reconstruction-large-model-build-{1,2,3}.log`，GUI/Windows/Linux 未验，不提交。
+- 10-07 大模型支持实施开始：用户要求支持约 180 万面龙模型重建，基准 `master / a7750c76c7`。本批统一输入面数/文件门槛、按输入规模选择受限 worker 预算，GUI/CLI 共用；不改旧高级修复、不减面冒充原件、不跳过最终完整检测。先最小构建与真实龙模型实测，再补回归、文档和 GUI 交接；当前尚无新版通过结论，不提交/推送，保留已有文档及无关教材文件。
+- 10-07 大模型实例只读分析：`/Users/liwei/Downloads/dragon (1).stl`，原文件 SHA-256 `146b05aa43cce174aaa291be1a180eeecba878f81b097a560c0a66cc01471439`，1,808,823 面/90,441,234 字节。当前重建 CLI 实跑退出 2，在 64 MiB 文件门槛拒绝，未进入 AlphaWrap；也超过 20 万面限制。普通 `--check-model` 实跑约 11.03 秒、采样峰值 RSS 1099.25 MiB，检出非流形边 110、非流形顶点 227、自交记录 8215；七项各自完整但整体 check_complete=false、needs_repair，不能认作通过。仅独立产物写到 `planning/repair/dragon-analysis-z6AT4K`，原文件 hash 未变，未运行高级修复、减面或绕过限制重建。后续大模型优化应覆盖这种约 200 万面、实际有缺陷的密集输入，不能用更大超时或健康高面数样例代替验证。
+- 10-07 用户手动回传复核：当前 `master / a7750c76c7`，仅核对 CLI 报告、截图和 `/Users/liwei/Desktop/01-missing-top.gcode.3mf`，不改业务代码/预设、不构建、不提交。`planning/repair/manual-reconstruction-ko53bY` 默认重建及独立检测退出 0；候选 3650 面、七项完整为零，预闭合 1 环新增 2 面，一档 0.5/0.05 mm 成功。GUI 导出为 51 层、0.2 mm 层高，全部有主体挤出，包含墙/填充/顶底面，无检测到的 NaN/Inf；有效配置与先前默认基准一致。切片包不含三角网格，不能凭该包认定 GUI 候选独立网格检查、落床选择或撤销/重开通过。详见下面回传节。
 - 10-07 入库与手工交接：用户已授权将本批模型重建、关联 macOS 列表修正、GMP 平台修正及测试/文档作一笔中文提交，不推送。提交前基准仍为 `master / 34477d7411...`，不收教材文档、planning 产物或 result.json。本节随该笔提交归档，确切提交身份以包含本节的 Git 提交为准；以下“未提交/待授权”均是历史。沿用已验证 `89bed37f...` 包，不改业务代码或重复构建；[手动 GUI/CLI 快速清单](2026-10-05-reconstruction-gui.md#10-07-用户手动验证快速清单)新增实际输入、可复制命令及回传目录。自动化/已覆盖 GUI 已通过，Windows/Linux、实机及剩余 GUI 项仍待验，入库不等于发布验收完成。
 - 10-07 用户重新打包后复验：常用包与直接应用均为 `89bed37f...`，简中 MO 均 `09567746...`，测试仍 `8dcaaf7e...`，未重复构建。新包 CLI 27 项、真实 worker 1 用例/22 断言通过。CUA 已实操默认预闭合、封口风险提示、采用、菜单撤销/重做、正常退出重开及再次切片；两次实际保存网格七项完整为零，50 层完整主体路径，565 项导出有效配置相同。证据根 `planning/repair/reconstruction-boundary-postbuild-VtFcVD`；本轮只补验证/文档，不改业务源码、不提交。
 - 10-07 开放边界优化已实现并通过自动化：基准仍为 `master / 34477d7411...`，保留既有改动，未暂存/提交。重建新增默认可关闭的受限预闭合，封口副本完整检查通过才用于 AlphaWrap；受控拒绝回原汤并提示薄壳风险。旧高级修复、七项公开检查、用户配置不变。新直接应用 `89bed37f...`、测试 `8dcaaf7e...` 已构建；223 核心用例/15326 断言、27 重建 CLI、76 检测 CLI、真实 worker 1 用例/22 断言、21 样本实际导出复检通过；新专项连续 20 轮通过。同一 EP7 工程 567 项 G-code 配置一致，缺面方块由薄壳碎路径恢复为 50 层墙/填充/顶底面。
@@ -39,7 +55,301 @@
 - 当前任务（10-05 随后获授权）：仅收敛配置向导的全量 JSON 与逐耗材常规日志，保留数量/加载结果/异常，删除只为日志进行的重复序列化；不改预设解析、继承、选择、保存和网页传输，不处理其他低优先级报错，不自动提交。
 - 当前完成（10-05）：向导日志降噪已完成，Release arm64 应用构建及向导 4 用例/184 断言通过。用户随后完成打包，`src/Release` 和 `build/arm64/OrcaSlicer/` 两份应用哈希均为 `07fe16b6...`，源码哈希不变。Computer Use 已验证加载、EP3/EP7 搜索、取消重开及原选择确认；选中配置摘要哈希前后一致，日志降噪生效。新程序保留原工程停在准备页；本轮无需用户重复上述向导测试。取消机制、空间索引和修复策略重构仍暂缓，未提交。
 
-## 2026-10-07 用户重新打包：预闭合 GUI 与导出复验（最新）
+## 2026-10-08 本批入库复核
+
+复核基准为 `master / a7750c76c73142d720a25b6db128ebde0d199d95` 加本批工作区；这一轮只补复核记录，没有新增业务修改。提交按现有格式使用中文标题，一笔纳入本任务43文件，不纳入 `result.json`、教材文档、本地索引或测试产物，不推送。
+
+### 构建及自动化
+
+`cmake --build build/arm64 --config Release --target OrcaSlicer libslic3r_tests fff_print_tests --parallel 2` 退出0，仅需编码检查，无过期编译/链接任务，日志 `/tmp/orca-precommit-20261008-build.log`。直接应用 SHA-256 `9911a0a131d5f4bd2ff41933e6cab3c9d9e1ef614d61f29752d3b99d1edf063e`；libslic3r_tests `329adaf95bc66727e2b47e45411529bbe1a08d5e74c940d9367ec18563668455`；fff_print_tests `31edcf68f26f5b321c19c49746d6a149e283939afaceddba11a097577f24395e`。直接应用路径为 `build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`，常用打包目录仍旧，不将旧包当作当前程序。
+
+| 验证 | 实际结果 | 证据 |
+| --- | --- | --- |
+| 核心：`[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl],[MeshReconstruction],[ModelReconstruction],[ReconstructionProcess],[ReconstructionWorkerGuard],[3mf]` | 241用例/15915断言通过，退出0 | `/tmp/orca-precommit-20261008-core.log` |
+| 切片：`[LayerCount],[PrintApplyCache],[FloatingWarning],[Raft]` | 90用例/51380断言通过，退出0 | `/tmp/orca-precommit-20261008-fff.log` |
+| 实际 worker：`ORCA_RECONSTRUCTION_BINARY=<上述直接应用> libslic3r_tests '[ReconstructionIntegration]'` | 1用例/22断言通过，退出0 | `/tmp/orca-precommit-20261008-worker.log` |
+| 重建 CLI：`python3 scripts/test_cli_model_reconstruction.py --binary <上述直接应用> --output-dir /tmp/orca-precommit-20261008-reconstruction --timeout 360` | 32通过/0失败/0跳过，包含300万重复面读入边界、显式超时及超限拒绝；不是重复执行真实龙模型性能试验 | `/tmp/orca-precommit-20261008-cli.log`、输出目录 `summary.json` |
+| 切片包 CLI：`python3 /tmp/orca-multiplate-ZrJhym/probe.py precommit-20261008 <上述直接应用>` | 6场景符合预期，5成功/1显式选择禁用盘返回206；成功包CRC与盘/G-code成员正确 | `/tmp/orca-precommit-20261008-multiplate.log`、`/tmp/orca-multiplate-ZrJhym/precommit-20261008-*` |
+| 中英文资源、文档和差异 | `msgfmt --check --check-format`、模块全量检查、`git diff --check` 通过；选择性暂存后再检查模块暂存快照与 `git diff --cached --check` | 简中检查输出在 `/tmp/orca-precommit-20261008-zh_CN.mo`，不入库 |
+
+### 审查结论与剩余边界
+
+- 云打印：`start_gfd_print_export` 的3MF分支已使用实际盘号，并在导出失败时终止，不走传统当前盘哨兵；共享格式测试覆盖目标盘成功/其他盘未切片或缓存缺失。纯 G-code 调度、已导入包直传、登录与任务后端未改。这是代码/本地契约复核，没有调用真实云端或设备。
+- 普通流程：普通带模型工程可保存未切片模型，不套用切片包守卫；公开 check-model v4/旧修复策略、用户预设与切片参数未改。共享 Print 缓存、悬空告警及层数统计确实影响普通切片，已分别回归，不称所有改变只限重建。
+- 已回传 GUI：10-07 的龙模型采用候选、一次切片/首次导出及多盘产物证据按各轮实际身份保留。最新传统发送 GUI 尚未实测；用户主要使用自有云打印，不以此扩大为整条发送通过。操作清单继续见[已有交接](2026-10-05-reconstruction-gui.md)。Windows/Linux运行、云端真实下发、实机质量仍未验收。
+- 已知非本批阻塞：选中禁用盘时全部导出的默认文件名占位符问题按用户要求暂缓，未修；此前更广的 `[PrintGCode]` 有一个旧场景的10个分支在测试摆盘阶段报 `Objects could not fit on the bed`（`/tmp/orca-flow-impact-fff.log`），没有进入本批导出代码，不记为全量通过。本轮列出的专项全部通过，不代表整个仓库全部测试通过。
+- 没有发现阻塞本次提交的新问题；上述实验性重建/形状变化风险及验证边界保留，入库不等于商业发布或任意模型可打印保证。
+
+## 2026-10-07 输出层数一致性修正
+
+用户已自行解决问题 1（温度配置），本轮只授权修正问题 2（计划 113 与实际输出 112 的层数差异）。GUI/CLI 共用 `Print::export_gcode → GCode::_do_export → process_layers/process_layer`。工作区原有模型修复/导出/悬空修正、用户教材与 result.json 保留；没有重建模型、改温度/预设或提交。
+
+### 原因与修改边界
+
+- 原先 `m_layer_count` 在工具顺序生成前直接统计模型/支撑所有 Z，包含龙模型末端没有挤出路径的计划层；`process_layer` 会跳过 extruders 为空的层。文件头由后处理统计实际换层，故是 112；机器启动占位符与文件尾用了计划数，故是 113。
+- 改为工具顺序就绪后，复用实际将送入输出管线的层组，以与输出相同的条件计数，再展开机器启动占位符。逐层打印保留全盘 Z 合并；逐对象保留对象副本倍数，复用首对象工具顺序，其余对象每个只求一次计数。
+- 保留无输出层在原管线中的位置，不删模型层/支撑层，不改路径、冷却/支撑生成或现有空层检查；不是后处理字符串替换设备代码。支撑/筏层/擦料塔的有效输出不能只用模型 has_extrusions 判断。
+- `max_z_height` 仍是原有计划最高模型层信息，本样例仍可为 22.60 mm；实际输出末层为 22.40 mm。不修改安全抬升/尺寸，也不把此改动说成“多打印了一层”或“修复了几何”。
+
+### 验证与证据
+
+证据目录 `planning/repair/layer-count-6ZXTup`，忽略的诊断文件不入库。
+
+- 红测：`test-red.log` 在旧核心上 828 断言中 300 个层数断言失败；失败包括 10/9、39/36 等同类差异。此前 `build-red.log` 是测试夹具误调用 protected 方法的编译失败，已改为公开 apply 触发工具选择失效，不计为业务红测。
+- 新 `[LayerCount]` 45 个组合：健康、空尾层、中间空层、仅一个对象空尾层、仅支撑尾层 × 无筏/Legacy/Cura × 逐层/逐对象多副本/双材料擦料塔。核对真实换层标签、文件头/尾，以及启动、结束、每层的 total_layer_count 占位符。擦料塔须显式断言启用且发生换料，不能只设置开关就当已覆盖；实际输出层是其额外间隙层的计数依据。
+- 最终 `test-final-2.log`：`[LayerCount],[PrintApplyCache],[SupportMaterial][FloatingWarning],[Raft]` 90 用例、51450 断言全通过，包括上述 45 个新组合。测试源码 SHA `bd32a0ed19f6529ee177c715ef9fd0aa3e48b8099e6ca0b02f2628cb14ef1bf0`，测试程序 SHA `258d6c2a2ab88f842f29dbbffdfffec61953f217608d6a5470c593db4463f639`；新增用例已包含于此总数，不重复累计。此前完整 SupportMaterial 的旧摆放夹具失败不在本轮 Raft 子集内，不能写成全量支撑均通过。
+- `test-final.log` 中的 15 个失败是擦料塔夹具未真正启用；`test-tower-2.log` 的 8 个失败是夹具把重算后无输出的擦料塔间隙计划层计入期望，不是产品总层数断言失败。修正夹具后最终结果见下方补充；不以早期无启用断言的通过冒充完整擦料塔覆盖。
+- 真实模型生命周期对照：原件 apply→替换为既有候选/落床→切片→导出→刷新，`dragon-before/after.gcode` 从头112/机器113/尾113变为全部112；837178 条 G0/G1/G2/G3 指令逐条一致，运动 SHA `6765eef9fa7384d6bd9028ddb25a22843f5531279aaf538691ab179fcf280e6e`。层 Z 序列和 CONFIG_BLOCK 字节完全相同，导出后 refresh_apply=0 保持不变。
+- 应用 CLI 新/旧二进制对同一 `gui-rebuilt.3mf` 独立输出新切片包：两次 exit=0、ZIP CRC 正常，实际112层、机器总层数113→112，运动/配置/层 Z 相同。`validation-final.json` / `verify-final.log` 保存参数、身份与结果。该隔离工程的运动条数与先前 GUI 837077 条不同，不混作逐字相同输入；本轮结论是各自严格同输入前后不变。
+- 对照用历史工程含旧温度配置，仅作隔离回归，不覆盖用户已经修正的配置；校验用户 `dragon222.gcode.3mf`、根 result.json、输入工程与两份程序在 CLI 运行前后 hash 不变。诊断脚本首次只识别普通换层标签误报 emitted=0，已兼容此机型的 BBL `; CHANGE_LAYER` / `; Z_HEIGHT:`，见 `verify.log` 与后续成功记录。
+
+### 构建与交接
+
+arm64 Release 应用最小构建成功，新直接路径 `build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`，SHA `32e2ab2baa5595ef3a4e5c6ce44ea0e2a756c4dd1fbd379853526d219ad4f9cc`；GCode.cpp SHA `5667c4ac0135836665cd492dfa95e76db6c4fd15079b1c6497cdfc5b70692db9`。保留既有 unknown warning option、重复库及 zstd 最低系统版本链接警告，本轮没有新增依赖/平台代码，不能视作 Windows/Linux 构建验收。
+
+用户当前运行的 `build/arm64/OrcaSlicer/OrcaSlicer.app` 仍为旧 `7e35b86b...`，未替换/关闭窗口。GUI 本轮待重新启动新程序、切片、导出；不读取旧缓存文件证明新代码生效。操作见[层数 GUI 清单](2026-10-05-reconstruction-gui.md#10-07-层数统计一致性当前待验)。无新增文案/翻译需求；Windows/Linux 和实机打印未验证。
+
+完成检查：`python3 scripts/check_ai_module_docs.py --all` 35 模块/问题0，`git diff --check` 通过；模块正文/指纹已更新。没有暂存、提交、推送或操作用户 GUI，后续用户验证范围不扩大为重新修复或实机验收。
+
+## 2026-10-07 19:11 GUI 首次导出回传
+
+输入日志 `planning/debug/orca-user-gui-run-20261007-191103-298082.log`，用户文件 `/Users/liwei/Desktop/dragon222.gcode.3mf`。源码仍为 master / a7750c76c7 加既有未提交改动，本轮没有继续修改业务源码、构建或提交。证据保存于 `planning/repair/dragon-gui-export-return-X13WPJ`（`audit.py` / `audit.json` / `check/result.json` 及该 GUI 备份快照）；不操作用户窗口或修改原文件。
+
+### 首次导出链路：通过
+
+- 打包/直接程序 SHA 均为 `7e35b86bae79e16d3ed30bd616c02671cc7a724e06f1f9e2500bfb3218f896ee`，本次不是旧包。
+- 19:12:23.901 采用重建候选；19:12:26.965 开始第一次切片；19:12:30.723 完成切片；19:12:32.391 G-code 完成、status=0、slice_valid 0→1。切片加 G-code 约 5.43 秒，不包含重建等待时间。
+- 19:12:42.671 导出前刷新为 apply_status=0 / invalidated=0，slice_valid 与 has_valid_gcode 仍 true，没有上一轮的状态清除。
+- 19:12:48 开始单盘导出；19:12:49.303 写入 `Metadata/plate_1.gcode` 并完成 3MF。日志在采用到导出之间只有一次 reslice，没有先重开项目或再切一次绕过问题。
+
+### 包、G-code 与实际网格
+
+- 用户包 SHA `407da1713f63f2ba5164a8af8adbb19bf083d48696db9e0195c8e684349adb3b`；18 个成员、ZIP CRC 全部正常。G-code 23846577 字节，MD5 `957ee4ceeb163e2a1aeab70f40d1cd0d` 与内嵌值一致，也与本次 PID 54057 缓存 G-code 字节相同。
+- 包内工程/打印机/工艺/耗材配置和缩略图俱全。仍不含可编辑三角网格，这是 gcode.3mf 的 SkipModel 约定，不是再次丢模型；需要可编辑模型仍保存普通工程。
+- 当前有效配置 EP7 0.4 nozzle / QIDI PLA Rapido / 0.20mm Standard @EP7，层高与首层 0.2 mm、支撑关闭。112 个实际输出层从 Z=0.2 到22.4 mm 连续，每层都有模型挤出，未发现中间空层或非有限运动数值；墙/顶底面/稀疏及实心填充/桥接路径均存在。估时3h9m46s，耗材29.39g。此为文件级分析，不是实机成功承诺或所有薄细节都保留的证明。
+- 与旧 GUI `dragon-gui-review-Cpdefe/last-valid-before-export-refresh.gcode` 比较：837077 条运动指令和有效导出配置完全相同，运动 SHA `ccc19f112b51d8902a8811bfcf6c1b6b37b07d59c50bd2fd1ab685ef13e26cdd`。与独立重载工程探针的837178条不混比：后者存在重载变换/进度与尾部兼容配置口径差异，不能用它宣称本次 GUI 指令逐字节相同。
+- 本次 GUI 备份网格含98539顶点/197318面，候选 XML SHA `3c95a06808afa29bc7bb37603f5b5bce4f9156c3ef6f9b41d625f9cd3e853071`，与之前已验证候选 XML 完全相同。按原顶点/索引精确转 OBJ，不作 STL 面清理；同构建 `--check-model` 退出0，v4 `check_complete=true`、`mesh_status=passed`，边界/退化/重复面/非流形边/非流形点/方向/自交七项均 complete=true,count=0。原始 OBJ SHA `448e980a8f1ad17e13a969e386e0247b3cac0ef28fa0c685b6d578828172a242`。
+
+### 仍需区分的事项
+
+1. 包内只有热床相关 SliceWarning：`bed_temperature_too_high_than_filament` / `1000C001`。高温板首层/后续60℃，耗材 `temperature_vitrification=45`，共享 GCodeProcessor 在最高热床温度≥该值时发出告警。不是悬空或重建失败，不为消告警擅改温度/材料阈值；应由材料与设备配置核实。
+2. 存在既有统计差异：头部实际112层，但 `SET_PRINT_STATS_INFO TOTAL_LAYER=113` 和文件尾总层数113，计划最大Z=22.60。GCode导出按所有计划层统计，实际无挤出层可跳过，后处理头部按实际 Layer_Change 计数；输出层0.2–22.4连续，未见中间漏层，末端计划层未形成输出。旧 GUI 文件已有相同差异，不是本次缓存修正新增。主要影响总层数/设备进度一致性，应另列小范围优化；本轮不改代码。
+3. 启动日志3Dconnexion驱动缺失是可选3D鼠标支持不可用；`sync_config_orca HTTP 404`是预设在线更新接口请求失败。均不属于本次修复/切片/导出链路错误。主页导航/脚本消息被记为warning，并非实际失败。
+
+本轮可以将“实际龙模型采用→一次切片→首次单盘导出”标为 GUI 通过；没有收到重复导出/修改层高后拒绝及重切/Undo与重开等新操作证据，不扩写通过范围。Windows/Linux/实机仍待验。文档记录更新后按全量检查复核，不自动提交。
+
+## 2026-10-07 首次导出失效源头修正
+
+本轮用户授权“优化下”后实施；只新增 `PrintApply.cpp` 的区域缓存变换兼容检查及 `test_print.cpp` 回归。此前大模型、微区告警和切片包守卫改动保留，不新增重建策略、不改模型或工艺参数。
+
+### 根因与修正边界
+
+- 同次高级/重建网格替换产生新 volume ID，同时 Z 落床改变实例变换，区域缓存进入 `PartiallyValid`。原来的 `generate_print_object_regions` 仅检查旧层区非空就复用，遗漏变换有效性，导致新网格仍按旧 `trafo_bboxes` 生成体积边界。
+- 本次切片可完成，但下次导出前刷新缓存变成 `Valid`，走完整变换核对才发现旧 Z 不匹配，从而把已完成切片/G-code 全部失效。用户后续日志 18:32:40 再切、18:32:49 导出刷新为 0，与“一次性缓存收敛”一致；不是用户未切片，也不是擦料塔 changed_keys 本身的证据。
+- 修正是在复用部分有效缓存前调用与 Valid 路径相同的变换兼容判据。不兼容时清理体积边界/层区及已缓存体积 ID，在当前 apply 中按新变换生成。兼容的 XY 旋转等沿用原规则；不改全局变换判据，不无条件禁用缓存。
+- GUI 后台 apply 与 CLI 共用 `Print::apply`。GUI 首次采用/落床是本次主要触发入口；CLI 一次性加载已经重建的工程通常没有这段历史，但仍使用同一修正。真实变更继续失效；导出守卫继续拒绝无效/空 G-code，不能靠复用旧结果消除弹窗。
+
+### 红测、修后测试与真实模型
+
+证据目录 `planning/repair/export-invalidation-ZSmYOV`：
+
+1. `test-red-4.log`：原逻辑仅换网格通过，同时换网格并移 Z 后无变更 apply 返回 2，切层和填充完成状态清除；12 断言中 3 失败。前三轮是夹具未补相对挤出层间 G92 E0/使用错误局部坐标，不能当根因证据。
+2. 最终 `[PrintApplyCache]` 以显式平台、两体积（另一体积不变）、有/无层区、五种变换和两种后续真实修改组合，共 20 个路径/460 断言；比较区域边界与新建 Print 一致，完成真实 G-code 后两次无改动 apply 稳定，修改层高或 Z 仍失效。与 `[FloatingWarning]` 合计 2 用例/484 断言通过（`test-green-2.log`）。扩展夹具曾遗漏层区必需的 `layer_height`，LLDB 定位到 `layer_height_profile_from_ranges` 后补齐，不修改生产逻辑规避测试；保留 `test-green.log` 和 `test-backtrace-3.log`。
+3. `[3mf],[MeshReconstruction],[ModelReconstruction]` 在最终核心库重新链接后 34 用例/973 断言通过（`test-core.log`）。不把上一轮全量支撑的旧摆放夹具失败改写成通过；本轮未重跑整个支撑/FFF 集合。
+4. 独立 C++ 生命周期探针加载同配置原工程 1808822 面并 apply，然后在同一个对象上替换实际 GUI 候选 197318 面、赋新 volume ID 和候选变换，再切片/导出/刷新。修前缓存 Z=11.21160101890564，实际 Z=11.255092107476807，refresh=2；修后两者一致，refresh=0，slice/G-code done 都保持 true（`dragon-before.json` / `dragon-after.json`）。两次配置 diff 为空；837178 条运动指令 SHA `6765eef9fa7384d6bd9028ddb25a22843f5531279aaf538691ab179fcf280e6e` 完全一致，导出参数行也相同。保留已有机型 start G-code 含保留关键字的警告；不将它误判为本次缓存失败。
+5. 最终应用 CLI（`verify.py` / `validation.json`）：实际候选切片并导出成功，ZIP CRC 正常，含 `Metadata/plate_1.gcode` 23847764 字节与配置；未切片 `--min-save` 退出 243（-13）且无包；普通未切片工程保存退出 0 并保留网格。三项均按预期；输入和程序 SHA 前后不变。不覆盖原件和旧证据。
+
+### 构建身份与未验证项
+
+核对当前 master/arm64/Release、无并行用户构建后最小构建 `OrcaSlicer libslic3r_tests fff_print_tests`，日志 `build-final.log`；补齐测试夹具后只重建 fff 测试（`build-test-final.log`）。旧 warning option/重复库/zstd 最低系统版本告警仍在，不新增依赖或平台专用调用。
+
+- 直接应用 SHA-256：`7e35b86bae79e16d3ed30bd616c02671cc7a724e06f1f9e2500bfb3218f896ee`；路径 `build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`。
+- fff 测试：`03a5c69de385628d172414072071f0bf1f9746103559bc244deba3dc6ed45290`；libslic3r 测试：`bc972db39d2f8d72ccb5ca2c8fe9b8bbb1b16b564a2281d917741b46a7bad211`。
+- `PrintApply.cpp` SHA：`79cfd5d95c0929fc593b38d4438284b118c889f6266c6b41518443944e3db7c8`；`test_print.cpp`：`9358d2b40fa8a6f6b66aedfb6e9ef4e4513f29452e7596ec8423c56c25abd668`。
+- 用户的 `build/arm64/OrcaSlicer/OrcaSlicer.app` 打包副本仍为 `1f8bc14c...`，PID 42785 未操作/关闭。新 GUI 首次采用/切片/导出以及修改后重切交互仍待用户按[最新清单](2026-10-05-reconstruction-gui.md#10-07-首次导出失效源头修正后验证当前待验)执行；Windows/Linux 和实机打印未验证，不能由核心通过代替。CodeGraph 旧索引不作新源码依据，本批按模块和实际源码定位。
+- 同步 slicing/jobs/test-tools 正文与审核指纹及 GUI 交接链接后，`python3 scripts/check_ai_module_docs.py --all` 35 模块通过，`git diff --check` 通过。未暂存、未提交；不处理无关 result.json/教材文件。
+
+## 2026-10-07 18:18 新包导出守卫回传
+
+用户只要求分析。常用打包应用与直接应用 SHA-256 均为 `1f8bc14ce5f88ed63c9a5be435253744def9e79d0d0ccb752be700b0f790a41f`，与上一轮优化身份一致。日志为 `planning/debug/orca-user-gui-run-20261007-181817-398608.log`，含 NUL 字节，检索使用 `rg -a`，不因普通 rg 当二进制跳过而误认没有记录。
+
+| 时间 | 证据 |
+| --- | --- |
+| 18:27:47 | Apply reconstructed model 快照，已采用重建候选 |
+| 18:27:51 | 开始切片，背景处理成功启动 |
+| 18:27:54–56 | Slicing process finished；G-code 临时文件成功重命名；后台完成 status=0 |
+| 18:27:56 | 盘切片状态 0→1，预览已加载路径；导出/打印就绪为 true |
+| 18:28:01 | 导出模式 print_select 从 3 切为 2，切片仍有效 |
+| 18:28:03 | 导出前 update_background_process 调用 apply，返回 2（INVALIDATED）；重置 GcodeResult，盘切片 1→0，posSlice/posSupportMaterial/psGCodeExport 均变 0；没有启动重切，随后显示用户截图中的拒绝提示 |
+
+实际缓存 `/var/folders/yf/phh21zl17kq613y4x_6dc0n40000gn/T/orcaslicer_model/Wed_Oct_07/18_18_42#42785#88/Metadata/.42785.0.gcode` 仍存在，为 23846577 字节；配置中支撑关闭、层高/首层 0.2 mm。故不是没切片/缓存文件丢失/压缩写包失败；这次被挡在进入导出包流程之前。不能将该旧缓存直接复制当本次有效导出，因为状态差异未查清。
+
+源码链为 `export_gcode_3mf → update_restart_background_process → update_background_process → BackgroundSlicingProcess::apply → Print::apply → GCodeProcessorResult::reset`，随后 require_slices 拒绝。旧知识图谱基于 `60148c114`，只用于导航，当前源代码及用户日志为证据。此轮 apply 没有全局 print/object/region diff、full_config_diff 或 print object changed 日志；提示更接近未记录细因的对象/区域/变换或运行态配置失效分支，但不能凭排除法最终指定某一分支。`changed_keys=enable_prime_tower` 是 normalize_fdm_2 对输入配置的归一化输出，切片前也出现，不是前后差异的直接证据。
+
+结论：上一轮解决了“无路径空包仍成功”的安全缺陷，但没有解决本次稳定复现的导出前失效源头；GUI 正常导出验收仍失败，需要继续针对 Print::apply 的具体失效原因诊断，而不是要求用户反复切片、移除守卫或复用旧 G-code。这次没有重建/切片失败记录；超过 1M 面只是导入时复杂度建议，与弹窗不是同一问题。可选 3Dconnexion 驱动缺失和同步接口 HTTP 404 也不在这段失败链中。本轮未修改源码、运行新的修复/切片或提交。
+
+## 2026-10-07 悬空微区与切片包导出修正
+
+用户已授权实施。只修本次诊断确认的问题，保留既有大模型预算优化，不改重建算法、原高级修复、预设或原件。证据目录 `planning/repair/dragon-export-warning-validation`；本批 GUI 交接见 [此前清单](2026-10-05-reconstruction-gui.md#10-07-悬空微区与导出修正后验证此前交接)，后续源头修正另见文档顶部最新清单。
+
+### 行为与两端一致性
+
+- 在上一轮逐层探针中补上真实周长墙/填充的线宽覆盖相交检查，而不是只比较路径端点。`dragon-slice-compare-atRGYm/probe-gui-rebuilt.json` 三处低层微区（约 0.02318/0.01751/0.01535 mm²）与实际挤出覆盖面积均为零；原件高层那一处也为零。故本次是未实际打印的截面触发告警，不能再据此认定龙模型有这三处实际悬空挤出。
+- 共享 `TreeSupport::detect_overhangs(true)` 仅在周长墙和填充已完成时，对几何尖尾候选计算实际线宽覆盖；完全无挤出交集才不告警。真实小区域、GapFill、路径中心线在外但线宽相交仍告警；路径尚不可用则保留原几何判断。按候选层延迟计算，不给每层额外生成覆盖。支撑生成调用不启用该筛选，不改变挤出路径、面积阈值或网格。
+- 并行检测的共享降级标志/最大距离改为分层记录、结束归并，去掉线程竞争。超 100 区域/30 秒仍有界降级，日志改为区分 `region_budget`/`time_budget`；不承诺复杂模型已完整承托检测。并行期间不再因某一线程写全局开关随机跳过其他层，降级层不做详细尖尾/悬臂检查，后续尖尾延伸仍保守停用。
+- GUI `export_gcode_3mf` 固定目标盘，在刷新文件名和文件框返回后检查目标切片有效、文件存在且非空。共享 `bbs_3mf` 对非增量 `WithGcode + SkipModel` 再校验所选盘、回调后复检，读源文件、压缩、归档各步检查结果；并行结果用 atomic，成功才替换临时盘路径。零有效 G-code 不再成功。失败不覆盖已有目标文件。
+- GUI 与 CLI `--min-save` 共享切片包约束；单盘只要求该盘有效，全盘要求有内容的目标盘有效。普通带模型工程及增量备份不新增“必须切片”的要求。切片包继续省略可编辑网格，工程/机型/工艺/耗材参数保留；要模型请保存普通 `.3mf`，不把这点改成重建逻辑。
+- 原 GUI 导出前刷新为何触发 `Print::apply INVALIDATED` 的具体输入差异仍未隔离；本批保证失效不能输出成功空包，没有冒用旧缓存。若新 GUI 每次重切后仍要求重切，须回传日志/工程继续定位，而不能移除守卫。
+
+### 构建与自动化
+
+本工作目录 arm64 / Release，确认无并行用户构建后执行 `cmake --build build/arm64 --config Release --target OrcaSlicer libslic3r_tests fff_print_tests --parallel 2`。首轮测试夹具存在私有接口/include/类型编译问题，以及默认自动摆放、裸路径实体层级错误；已修正为显式有效平台和嵌套岛集合，不改生产接口满足测试。过程日志为 `planning/build/dragon-export-warning-build-{1..6}.log`，最终相关目标全部构建完成。保留编译器旧告警（重复链接库/枚举警告选项/zstd 最低系统版本），不冒充新发现的平台通过。
+
+最终身份：
+
+- 直接应用：`build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`，SHA-256 `1f8bc14ce5f88ed63c9a5be435253744def9e79d0d0ccb752be700b0f790a41f`。
+- libslic3r_tests：`5509b5a7d9da7bc96ffb8114b24b2da57854f3c0671452598c7671de26c75a27`；fff_print_tests：`73db6514133b80f6355fa002cf1506f9339da6b58c12f955524070f159c4fb3a`。
+- 简中 MO：`a463a01041040b26fbcb2bde19d47ec19f1ad3a257aff7109027861f050576f2`，`msgfmt --check-format` 通过；直接应用资源链接到仓库。常用打包副本仍为旧 `ed22cf22...`，不能用于证明本批通过。
+
+验证结果（聚焦项已包含于组合项，不累计重复计数）：
+
+| 项目 | 结果 |
+| --- | --- |
+| `[3mf],[MeshReconstruction],[ModelReconstruction]` | 34 用例/973 断言通过；涵盖有效/失效/缺失/空文件、空盘列表、单盘/全盘、导出中源消失、旧文件保护与普通工程保存 |
+| `[SupportMaterial][FloatingWarning]` | 1 用例/24 断言通过：无路径不报警，真实墙、GapFill、线宽相交仍报警 |
+| 完整 `[SupportMaterial]` | 94 用例中 93 通过；48993 断言中 3 失败，同一旧 `support_layers_z and contact_distance` 用例三种配置均在测试摆放抛 `Objects could not fit on the bed` |
+| 失败定位 | LLDB 首次抛异常栈为 `throw_if_out_of_bed → apply_arrange_polys → init_print`，尚未执行 Print.apply/process 或 TreeSupport；见 `support-fixture-backtrace.log`。未更改这条独立测试/摆放问题，也不记全量通过 |
+| 新 GUI / Windows / Linux / 实机打印 | 未验；自动化不代替这些项 |
+
+### 同配置真实龙模型 CLI 对照
+
+使用上一轮保存的 `gui-rebuilt.3mf` 与 `native-original.3mf`，保留 EP7/.4 喷嘴、0.2 mm 层高、关闭支撑和既有摆放。`verify.py` 和 `cli-results.json` 记录命令、hash、退出码、包 CRC 与比较；没有再次重建替代用户已采用候选。
+
+| 输入/动作 | 结果 |
+| --- | --- |
+| GUI 实际候选切片+最小包 | 退出 0，约 7.18 秒，无悬空告警；包内 G-code 23847764 字节、CRC 通过；837178 条 G0/G1/G2/G3 与修改前相同，CONFIG_BLOCK 相同 |
+| 原件切片+最小包 | 退出 0，约 12.58 秒，无悬空告警；包内 G-code 30527166 字节、CRC 通过；1054174 条运动命令与修改前相同，CONFIG_BLOCK 相同 |
+| 未切片 + `--min-save` | 退出 -13（shell 243），明确 Missing or invalid G-code，未产生包 |
+| 未切片普通工程导出 | 退出 0，包含模型/参数，无 G-code 是正常未切片状态 |
+
+CLI 测试脚本第一轮忘建输出目录造成普通工程临时文件无法打开；修正夹具目录后在全新 `*-final` 目录重跑四项，上表仅引用最终结果。无悬空误报/路径不变不等于形状保持或实机可打印：此前约 6 mm 的重建采样偏差告警仍保留，细节/孔/底面仍需检查。本批没有实现自动诊断试切片，也未把 trial_slice 改为 passed。
+
+工具：本轮 CodeGraph MCP 未暴露，实际 CLI 可用且增量 sync 14 文件成功；确认导出符号与当时源码相符，之后新改动以源码为准，不称索引始终完整。收尾 `python3 scripts/check_ai_module_docs.py --all` 为 35 模块/0 问题，`git diff --check` 通过，简中 msgfmt 格式检查通过。未暂存/提交/推送，不触碰无关 result.json 与教材文件。
+
+## 2026-10-07 龙模型二次分析：同配置悬空对照与导出语义
+
+用户要求只分析两部分，不扩大修复实现。基准 `master / a7750c76c7`；保留全部已有业务差异、无关教材与根目录 result.json。应用打包/直接路径 SHA-256 均为 `ed22cf22bdaf97fa279f7155645938c61a391652e8741055e0438f9a42c770da`，未重建应用/核心。证据根 `planning/repair/dragon-slice-compare-atRGYm`；`summary.json` 为简表，`compare.py`、`comparison.json`、两套 slice 日志/产物、`probe.cpp`、构建命令、`probe-runs.json` 和逐层报告用于复核。
+
+### 同配置比较及边界
+
+Downloads 下 `dragon.stl` 与 `dragon (1).stl` 均为 SHA-256 `146b05aa43cce174aaa291be1a180eeecba878f81b097a560c0a66cc01471439`。原件取此前原生导入后的 1808822 面 prepared.stl；候选取实际 GUI 自动备份的 197318 面网格，不重新重建代替用户结果。两份隔离普通 3MF 共用 GUI 备份配置，保留朝向/100% 缩放并落床；命令为当前应用 `--debug 3 --slice 0 --orient 0 --arrange 0 --export-model-transforms --outputdir <独立目录> <工程>`。
+
+| 检查 | 原生导入原件 | GUI 实际采用候选 |
+| --- | --- | --- |
+| CLI 切片 | 退出 0，无悬空告警 | 退出 0，floating regions 告警 |
+| 第 2 层（打印 Z=0.4 mm）无下层承托微区 | 无 | 1 处，约 0.02318 mm² |
+| 第 3 层（打印 Z=0.6 mm）无下层承托微区 | 无 | 2 处，约 0.01751/0.01535 mm² |
+| 更高层诊断 | 第 24 层 Z=4.8 mm 另有约 0.02339 mm² 微区 | 上述低层三处 |
+| 相同模型/配置在切片并导出后再次 apply | UNCHANGED，未使切片失效 | UNCHANGED，未使切片失效 |
+
+两份 G-code 的 CONFIG_BLOCK 内 567 项完全相同，支撑关闭、首层/层高 0.2 mm、喷嘴 0.4 mm、线宽 0.42 mm、象脚补偿 0.15 mm/1 层；未通过启用支撑消除告警。相较实际 GUI 缓存，只有 smooth_m73_progress（进度显示）及两个预设关系元数据字段不同。隔离工程重载含浮点序列化，原件/候选对照为 112/113 层，而实际 GUI 缓存为 112 层，不能把对照层数写成用户实际 GUI 层数，亦未隔离这一层差的精确原因。对比检查确认三个低层区域附近的实际 GUI 缓存与 CLI 外墙路径坐标一致。
+
+逐层诊断程序仅在 planning 内编译，链接当前 Release 核心静态库，不改生产检测器；顺序对实际 lslices_extrudable 重复 TreeSupport 的“向外扩 0.1 线宽仍不与下层重叠，向内缩 0.1 线宽不消失”判据，避免复杂度跳过，不冒充完整支撑求解器。三个微区宽高约 0.16–0.26 mm，小于喷嘴；附近存在外墙路径，但未证明每个微区都生成独立悬空挤出，不能据此保证会打印失败或强制加支撑。诊断器初版的编译/临时目录/枚举映射初始化问题已在独立脚本修正，最终两次退出 0；这些不是应用故障证据。
+
+原件日志的“takes more than 30 secs”实际 duration 约 0.0198 秒；当前源码同一分支也在过悬垂区域数 >100 时降级，日志文案不准确，不能说原件检测超时。该分支关闭后续部分尖尾/悬空检查，因此原件不告警不能证明不存在任何风险；这也不能否定重建新增了原件第 2/3 层没有的微区。上一轮七项完整为零仍成立，只证明网格有效；重建表面/底部变化对切片的影响、是否实际需要支撑尚不能判完整通过。
+
+### 导出包实际内容与确定缺陷
+
+桌面 `drago111n.gcode.3mf` 为 206274 字节、15 个 ZIP 条目，CRC 通过。它并非只有缩略图：project_settings.config、machine_settings_1.config、process_settings_1.config、filament_settings_1.config 均存在，含工程及打印机/工艺/耗材设置。缺少可编辑三角网格，是 GUI `export_gcode_3mf()` 明确传入 `WithGcode | SkipModel` 的现有语义；需要模型和参数应保存普通工程 3MF，不把切片包无网格误报为模型修复丢失。
+
+真正异常是 G-code 也缺失：用户日志 16:29:35 切片有效，16:29:42 导出前为更新文件名执行背景刷新，Print::apply 返回 INVALIDATED、slice_valid 从 1 变 0；16:29:48 仍打包。GUI 只拦截 UPDATE_BACKGROUND_PROCESS_INVALID 配置错误位，没有拦截切片失效；底层 `_add_gcode_file_to_archive()` 过滤掉无效盘后列表为空，仍返回 true，最终提示成功。slice_info 也只剩头部。这份文件不是可用打印切片包，不能使用缓存缩略图证明路径仍在包内。
+
+**尚未定位** GUI 刷新时究竟哪项模型/内部状态触发失效；同输入核心 apply 对照稳定，现有日志不足以再细分。enable_prime_tower 的 changed_keys 是配置归一化日志，不证明用户改了参数或它就是失效原因。后续修正应先阻止无有效目标盘 G-code 的成功导出，并在刷新及对话框后检查状态，再定向记录/复现失效输入差异；不能直接回用旧缓存路径掩盖潜在状态变化。
+
+本轮验收：两组当前应用 CLI 对照、两组最终逐层诊断通过执行；GUI 仅复核用户日志/真实备份/缓存，没有新一轮交互验收；Windows/Linux、实机未验证。建议优先处理空包成功导出，然后在重建后加入同有效配置的低层/路径风险比较，研究底面细节保护和检测降级的明确报告；不是本轮已经实施的功能，不一概关闭告警或自动加支撑。收尾原件/用户导出包 SHA-256 未变；文档全量检查 35 模块/0 问题，git diff --check 通过，未暂存/提交。
+
+## 2026-10-07 16:19 用户大模型 GUI 回传：网格、悬空与空导出包
+
+本轮为只读诊断；基准 `master / a7750c76c7` 加现有大模型优化，未改业务源码、用户模型或配置，未构建/提交。用户打包路径和直接构建路径的应用均为 SHA-256 `ed22cf22bdaf97fa279f7155645938c61a391652e8741055e0438f9a42c770da`，不沿用旧 `4efcd19a...` 作为本次 GUI 程序身份。证据在 `planning/repair/dragon-gui-review-Cpdefe`（诊断脚本、包清单与统计、缓存副本、备份网格和独立检测结果），不是待提交资产。
+
+### 实际结果
+
+- 日志 `planning/debug/orca-user-gui-run-20261007-161903-148935.log` 记录 16:29:24 采用重建候选，16:29:28 保存备份对象；从该会话临时目录 `16_19_15#27769#56/3D/Objects/dragon.stl_1.model` 提取唯一网格，98539 点、197318 面、局部尺寸约 93.914×98.748×22.510 mm。保留所有顶点/面索引转 OBJ，不去重、不修复，再用当前新包 `--check-model --outputdir <证据根>/gui-mesh-check <证据根>/gui-mesh-raw.obj` 检测：退出 0、check_complete=true、mesh_status=passed、七项各自完整且为零。这是实际 GUI 备份，不是把上轮 197118 面 CLI 候选冒充本轮结果；亦不证明普通工程保存/重开或撤销重做已验。
+- 16:29:35 当次 G-code 写出并标记有效；缓存 `.27769.0.gcode` 的 SHA-256 为 `4681fcf71e717d9932dfa1844a0fe882fa31fc621c21cf679f78d5524fca8029`、23846577 字节。112 层，层面 Z=0.2 至 22.4 mm、步长 0.2 mm，每层有主体 XY 挤出路径，含墙、填充、顶底面与桥接，未发现运动指令中的 NaN/Inf；估计 3h9m46s/29.39g。未发现整层丢失，不等于逐项细节/桥接可打印或实机验收。存在 G2/G3，诊断脚本的 endpoint_bbox 仅是挤出端点范围，不能冒充完整弧线边界证明。
+- 用户文件 `/Users/liwei/Desktop/drago111n.gcode.3mf` SHA-256 `5bf5dd32126665d3898e7ea69ab1e95c44b58c15f4358629160dd0dcd9e0ffb8`、206274 字节、15 个 ZIP 成员，CRC 无损坏；但没有任何 `.gcode`，`3D/3dmodel.model` resources/build 为空，`model_settings.config` 的 gcode_file 为空，slice_info 无盘切片信息。缩略图能显示龙不代表包内有可执行路径；这不是有效切片交付物，也不能当作带网格工程。
+
+### 导出失效与悬空分别解释
+
+16:29:41 选择导出模式后，16:29:42 `update_background_process` 的 apply_status=2、slice_valid 由 1 变 0，16:29:48 仍以 WithGcode/SkipModel 导出。源码 `Plater::export_gcode_3mf()` 在刷新后仅拦截配置 INVALID，并未拦截此次切片失效/未就绪；`_BBS_3MF_Exporter::_add_gcode_file_to_archive()` 跳过无效盘，零个有效盘仍返回 true。因此保留了图/配置而没有 G-code，并可能提示导出成功，属于应修正的导出有效性校验漏洞。当前未改实现，也未将无效缓存包修补后替交用户。
+
+注意：日志 `got changed_keys ... enable_prime_tower` 来自 `normalize_fdm_2()` 的内部归一化，不是实际配置差异的专门日志。工程配置为 1，单耗材切片有效配置为 0，属于源码允许的自动关闭；不能以该差异证明用户手动修改，更不能仅凭该条归因此次 apply_status=2。导出失效的具体触发差异尚未由本轮日志定位，后续修复需补同工程稳定复现和有效配置/模型状态对照，而非直接改擦料塔策略。
+
+实际 EP7 0.4 nozzle / QIDI PLA Rapido / 0.20mm Standard @EP7 配置为 enable_support=0、raft_layers=0、auto_brim；未生成支撑角色。`PrintObject::generate_support_material()` 在未启用支撑时执行承托风险检测；当前 `max_cantilever_dist=0` 排除长悬臂分支，结合用户的悬空提示更符合 SharpTail（floating regions）分支。其条件包含局部截面下方没有承托及尖端生长风险，不是公开七项网格缺陷，也不是整个模型未落床。首层有主体路径并不能保证其他局部均有承托；Z 落床只保证最低点位置。日志未记录具体点位，不能断言为龙角/爪子；也没有原件同配置切片，不能证明警告是原来就有或由重建引入。
+
+`Make overhang printable...` 在条件判断前输出，实际 make_overhang_printable=0，不表示此次启用了改形切片。日志唯一明确 error 是可选 3Dconnexion 鼠标驱动缺失，与重建无关；未见崩溃/worker 失败/内存耗尽记录。采用时间与导入时间之差包含用户操作，不能当重建耗时。
+
+后续：优先修正无效切片包导出拦截；人工检查局部悬空后决定摆放/局部支撑并重新切片，确认支撑实际生成，不能以开启支撑后不再检查/提示作为充分验收。另存普通工程 `.3mf` 和新导出文件，继续核对；Windows/Linux、实机、当前版大模型取消/Undo/重开仍未完成。
+
+## 2026-10-07 大模型重建支持与验收
+
+范围仅为用户要求的高面数重建支持。未修改旧高级修复、检测 v4、几何参数默认值、最终网格验收标准及预设。没有通过预减面或跳过检查换成功，也没有引入 Blender/AI/新依赖。
+
+### 实现和影响
+
+- `MeshReconstruction.hpp` 统一 GUI/CLI/worker/引擎输入上限为 300 万面；独立 STL 有界快照由 64 改为 256 MiB，二进制/ASCII 均保留面数、大小、有限坐标和颜色拒绝检查。输出仍最多 100 万面。
+- 共享资源解析按输入规模分三档：≤20 万面为 60 秒/1024 MiB；≤100 万面为 180 秒/2048 MiB；更大为 300 秒/4096 MiB。自动内存还受物理 RAM 四分之一约束，最低 128 MiB，查询未知时回退 1024 MiB；这不是空闲 RAM/容器限额探测。显式 CLI 超时优先，回调保持；GUI 显示并采用同一生效预算。独立报告 `resource_limits` 在 worker 失败时也可用于诊断。
+- 预闭合准备属于输入阶段，面数上限改为输入面数加最多 2048 补面，不能被 100 万的最终输出上限提前挡住。其他闭合环/边预算和完整复检保持不变。
+- 物理内存查询新增 Windows API 失败、Linux 页数/页大小失败或乘积溢出、macOS 非正数保护。正常返回不变；其 GUI 信息、OpenGL 内存档位及 Undo 内存调用已沿源码核对，无新增 UI 动作或预设迁移。Windows/Linux 尚无编译运行证据。
+- 使用 understand-diff 的影响检查流程；历史图谱为 `60148c114...`，缺少重建模块，函数调用边不足，只用于识别历史 utils 归属；业务结论以当前源码为准。保留旧 diff overlay，未据过期节点生成误导性新覆盖；未初始化或复制图谱。
+
+### 最终构建身份与自动化
+
+- 最小构建命令：`cmake --build build/arm64 --config Release --target OrcaSlicer libslic3r_tests --parallel 2`，最终 `planning/build/reconstruction-large-model-build-3.log` 退出 0。已有编译警告（未知 warning flag、旧模板/链接重复库、zstd 目标系统版本）未作为新功能验证通过依据；未升级依赖或打包。
+- 应用：`build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`，SHA-256 `4efcd19a31292e07f905b8ff1aba6e726d58235d47f3664da6c1e37f7aa63793`。
+- 测试：`build/arm64/tests/libslic3r/Release/libslic3r_tests.app/Contents/MacOS/libslic3r_tests`，SHA-256 `137ce66253be6dfa52c8ff8139c019603ae000a6fe7598b9528e6a7d025f55a3`。
+- 简中 MO 经 `msgfmt --check-format` 生成到本地 resources，SHA-256 `72acd8e86d45bb2dc8cca29b9dd2c6eaeff9d8857e7d7753fce6d0f67639369a`；直接应用 Resources 是该目录的链接。旧 `build/arm64/OrcaSlicer` 打包可执行文件仍为 `89bed37f...`，不能拿它验证新上限。
+- 证据根 `planning/repair/dragon-reconstruction-wXTE1w`：`core-final.log` 225 用例/15360 断言；`cli/summary.json` 32 通过/0 失败/0 跳过；`integration.log` 真实 worker 1 用例/22 断言。
+- 回归覆盖预算分界、低/未知 RAM、显式值和回调保持、输入不可越过硬上限、预闭合预算独立；CLI 包括 300 万重复面、超面数、超 256 MiB 文件、默认/显式超时。重复面只是 IO/清理门槛测试，不冒充真实密集几何性能；显式 1 秒用例的 worker 在截止前完成也允许成功，但报告必须保持 1000 ms，整体 CLI 时间还包含父级读写。
+
+### 真实龙模型结果
+
+原件 `/Users/liwei/Downloads/dragon (1).stl`，1,808,823 面、约 86.25 MiB，SHA-256 `146b05aa43cce174aaa291be1a180eeecba878f81b097a560c0a66cc01471439`；默认 0.5/0.05/0.25 mm，预闭合启用，未执行旧高级修复或减面。
+
+| 输入/验证 | 实际结果 |
+| --- | --- |
+| 原始 STL 重建 | `dragon-final-run.json`：退出 0，58.789 秒，首档生成 197118 面/98443 点候选；原件不变。worker 峰值 RSS 采样 1479.53 MiB，父级 538 MiB，同时总量峰值约 2016.53 MiB；不是硬峰值保证。 |
+| 完整检测 | worker 原物理网格、局部网格、物理往返、凸包均通过；独立实际导出检查也完整通过，七项均 complete=true/count=0。 |
+| 实际导出独立复检 | `dragon-final/candidate.stl` SHA-256 `c101280bc748f83be6d79c1eed70caf933e0f738aba10a1354aa72f710add0cb`；按原导出 float 三角形仅做精确坐标索引转 `dragon-candidate-raw.obj`，不删除面/翻面/补洞，`--check-model` 再验 passed。见 `independent-check-summary.json` / `independent-check-84bjtx80/result.json`。首次诊断脚本误按顶层读取 v4 的 model_checks 字段，断言 KeyError，已修正脚本并另开目录重验；不是模型检测失败，未改业务协议。 |
+| 形状与结构 | 原→候选采样距离约 6.076 mm、反向约 0.561 mm，bbox 最大坐标差约 0.0499 mm；明显超 0.25 mm 告警。检测报告为 1 外壳加 4 个方向合法的内腔壳，不是 5 个独立散件；这不能证明保留原设计内部结构。原汤存在非流形，预闭合受控拒绝，保留薄壳风险告警。没有把尺寸接近或七项零缺陷当细节保持/可打印。 |
+| 原生导入工作副本对照 | 既有 `prepared.stl` 为 1808822 面，SHA-256 `af01821b072dace1e617832817be669488745fe29c78bbc1ec5ceea0a35abfc4`；`dragon-prepared-run.json`：57.739 秒、197304 面、内部完整检查通过，worker 采样峰值 1635.08 MiB。原生导入改变了输入，输出不承诺逐字节相同；此项不是 GUI 手操证据。 |
+
+预算外包装器只监控自己启动的父子进程，340 秒/总 RSS 8 GiB 外部停止条件未触发。第一轮 `dragon-default-run.json` 只按进程组采样，native worker 自成组导致 worker 记录为 0，不能引用该值作内存证据；最终改按 PPID 跟踪，以上引用最终结果。
+
+尚未进行本批大模型 GUI 采用/取消/Undo/重开/切片，也未做 Windows/Linux 编译运行或实机打印。按[大模型交接](2026-10-05-reconstruction-gui.md#10-07-大模型优化后验证此前交接剩余项待验)继续，不自动提交/推送；超出预算仍允许安全失败，不承诺任何 300 万面模型都在五分钟内成功。
+
+## 2026-10-07 大模型实例：dragon 只读检测（优化前）
+
+当前 `master / a7750c76c7`，无业务源码差异，现有打包应用 SHA-256 `89bed37fcafd3ed31abf6494629a569e60ea3722ad062b29511abe0044b4387e`，未重复构建。原件 `/Users/liwei/Downloads/dragon (1).stl` 为标准长度二进制 STL，1,808,823 面，约 86.25 MiB；按当前软件毫米解释，包围盒尺寸约 93.837×98.662×22.423 mm。只读原始坐标统计未见非有限坐标或精确零面积面，不替代拓扑/自交检查。
+
+证据根 `planning/repair/dragon-analysis-z6AT4K` 含 `audit.py`、`input-stats.json`、两组运行元数据/日志和检测产物。受控命令分别为当前应用 `--reconstruct-model <原件> --outputdir <证据根>/reconstruction --accept-reconstruction-risk` 和 `--check-model --outputdir <证据根>/check <原件>`。诊断包装器设置外部 120 秒/4 GiB 采样 RSS 停止条件（重建拒绝验证为 20 秒）；均未触发，未改变产品默认预算。
+
+- 重建：退出 2、约 0.21 秒，在独立 CLI 的 64 MiB 文件读取上限拒绝；无候选，未发生 AlphaWrap 运算，不能据此说引擎尝试后修不好。即使放开文件限制，原输入仍约为 20 万面上限的 9.04 倍。GUI 已加载网格走面数限制，不把 CLI 文件门槛误称所有入口都有。
+- 检测：退出 0、约 11.03 秒，进程采样峰值 RSS 1099.25 MiB。`result.json` 的 boundary/degenerate/duplicate/orientation 均 0，nonmanifold_edge=110、nonmanifold_vertex=227、self_intersection=8215，七项各自 complete=true；mesh_status=needs_repair、check_complete=false、repair_status=not_requested。公开流程检查的是原生 STL 导入/序列化后的工作副本，不把这些计数说成完全绕过导入的原始 STL 检查。现有缺陷会阻断补充壳体包含关系确认，公开精简报告没有单独列出全部未完成原因；不把退出 0 当健康或完整通过。
+- 预算解释：此处 1099.25 MiB 是普通检测整个进程的采样峰值，不是重建 worker 的内存实测，不能据此推算重建必需内存或承诺 2 GiB 足够。输入尺寸不大但面数高，既有高面数又有拓扑/自交问题，不适合直接假设普通流形减面器可处理。
+- 范围：原文件前后 SHA-256 一致；没有修改模型、运行高级修复、减面、绕过重建限制或实际切片/打印。后续优化验收应加入约 200 万面档及该类真实缺陷输入，先统一入口/协议限制并实测资源，再判断直接重建或有条件的简化副本路线。不能将计划中的自适应参数/高预算支持记为已实现。
+
+## 2026-10-07 用户手动回传：CLI 与切片包复核
+
+输入是用户终端粘贴文本、三张参数/预览/采用提示截图，及 `/Users/liwei/Desktop/01-missing-top.gcode.3mf`。当前已提交源码为 `a7750c76c7`；本轮不启动应用或重新生成候选，只审阅实际回传，不把现有测试记录冒充新的运行。Understand 历史图谱仍为 `60148c114...`，不含重建新文件；CodeGraph MCP 未暴露、CLI 和 DB 存在，沿用模块导航与当前源码解释，不声称本轮验证了图谱完整性。
+
+- CLI 证据：`planning/repair/manual-reconstruction-ko53bY/closed/reconstruction.json` 为 `candidate_ready`、`mesh_validated=true`、`export_round_trip=passed`；独立 `closed-check/result.json` 为 v4、`check_complete=true`、七项 complete=true/count=0，用户终端两次退出码均 0。边界预闭合处理原 4 条开边、1 个环并新增 2 面；输出 3650 面/1827 点、约 1029.45328 mm³，首档 alpha/offset=0.5/0.05 mm 成功。报告 elapsed_ms=257 是生成候选调用的记录口径，不包含之后全部 CLI 导出/独立检测或 GUI 审阅时间。
+- 偏差解释：CLI 原件→候选采样约 0.05 mm、反向约 4.90131 mm；GUI 截图约 0.05/5.00025 mm，均超过 0.25 mm 告警阈值。新增顶面中心到原来四周边缘约 5 mm，所以反向距离大，不表示各轴扩大 5 mm；输出尺寸约 10.1 mm。采样位置/三角剖分不同可影响估计值，不是最大误差证明，也不要求 GUI/CLI 输出逐顶点相同。
+- Z 语义：GUI 预览底面约 0→-0.05 mm；勾选落床只在采用时沿 Z 平移到最低点 0，不缩放/改变 XY；不勾不主动消除下沉。CLI placement 明确 automatically_moved=false、建议上移约 0.05033 mm，没有公开落床参数。截图是采用前状态，不能证明实际采用时的勾选值。
+- GUI 切片包：ZIP CRC 与包内 G-code MD5（按大小写无关十六进制比较）一致；只有一份 `Metadata/plate_1.gcode`。实际 51 层，Z=0.2…10.2 mm；51 层均有模型挤出，首层墙/底面、中段墙/稀疏填充、末层外墙/顶面存在，无检查到的 NaN/Inf。正向带 XY/圆弧运动的模型挤出约 224.75712 mm（排除启停自定义/纯回抽恢复），统计 11m26s、0.73g、支撑关闭。这里是路径文件分析，不代表固件宏或实机通过。
+- 配置/告警：EP7 0.4 nozzle / QIDI PLA Rapido / 0.20mm Standard，classic、2 墙、15% 填充、首层和层高均 0.2 mm，导出配置与之前 `boundary-closed.gcode` 对照无差异。包内存在 `bed_temperature_too_high_than_filament`，热床 60℃、耗材软化温度配置 45℃；源码 `GCodeProcessor` 按热床不低于该配置触发，属于预设/环境提醒，不是几何修复失败。本轮不据此修改温度或阈值。
+- 范围限制：`3D/3dmodel.model` 的 resources/build 为空，此文件是切片包而非含网格工程；无法提取 GUI 最终候选做原始 OBJ 复检，无法还原实例变换确认 51 层相对先前 50 层的精确原因。0.2 mm 分层离散、外扩与落床会影响层数，不能只凭 51 层判失败或直接归因于用户勾选。若需补齐 GUI 网格/变换验证，应另存普通工程 3MF；本次不新增撤销、重开、取消或跨平台/实机通过结论。
+
+## 2026-10-07 用户重新打包：预闭合 GUI 与导出复验
 
 ### 身份和范围
 

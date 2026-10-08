@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "jobs",
-  "source_fingerprint": "sha256:a29df77a4c6885ee4351a00437e8d32167891775ce24413854cbdc0801f131db",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。"
+  "source_fingerprint": "sha256:54dca4908f1d0b43d89906efbcd73505e6e991856f1c7019a1fa6ee65edde01f",
+  "reason": "复核依赖的PrintApplyCache回归：修正共享Print区域变换缓存后，后台导出前无改动apply应保留已完成G-code；真实变更仍失效。未更改任务线程/取消实现，GUI交互与核心测试分开验收。"
 }
 -->
 
@@ -25,6 +25,8 @@ BackgroundSlicingProcess 的 apply/start/stop 管理 Print 的后台状态，`ca
 ## 配置与约束
 
 Print 步骤状态与 GUI 工作线程状态不同。模型／配置差异决定失效范围；只更新参数面板而没有失效会复用旧路径。跨线程函数不可返回仍持有栈引用的后台任务。
+
+后台 apply 依据共享 Print 的失效结果重置 G-code。网格替换并落床时，部分有效区域缓存的坐标必须在这一次 apply 同步更新，避免首次导出刷新误清完成结果；不能通过忽略 INVALIDATED 或回用旧 G-code 绕过问题。GUI/CLI 共享核心已补 `[PrintApplyCache]` 回归，后台导出实际交互仍以[GUI交接](../validation/2026-10-05-reconstruction-gui.md)为准。
 
 ## 失败与取消
 

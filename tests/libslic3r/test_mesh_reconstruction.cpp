@@ -430,6 +430,11 @@ TEST_CASE("Reconstruction validates options and resource budgets without touchin
         options.max_output_faces = std::numeric_limits<std::size_t>::max();
         require_rejected(source, "invalid_options", options);
     }
+    SECTION("Callers cannot exceed the supported input budget")
+    {
+        options.max_input_faces = RECONSTRUCTION_MAX_INPUT_FACES + 1;
+        require_rejected(source, "invalid_options", options);
+    }
 }
 
 TEST_CASE("Reconstruction rejects invalid data and protects aliased source", "[MeshReconstruction]")
@@ -512,6 +517,22 @@ TEST_CASE("Final reconstruction validation checks actual float geometry without 
     if (expected)
         CHECK(report.at("status") == "validated_mesh");
     require_unchanged(mesh, saved);
+}
+
+TEST_CASE("Boundary preparation uses the input budget, not the wrap output budget", "[MeshReconstruction][BoundaryClosure]")
+{
+    auto source = make_cube(2., 2., 2.);
+    source.its.indices.pop_back();
+    TriangleMesh candidate;
+    MeshReconstructionOptions options;
+    options.max_output_faces = 4;
+    nlohmann::json report;
+    REQUIRE_FALSE(reconstruct_mesh(source, candidate, report, options));
+    INFO(report.dump());
+    CHECK(report.at("boundary_closure").at("used_for_wrapping") == true);
+    CHECK(report.at("boundary_closure").at("added_faces") == 1);
+    CHECK(report.at("status") == "resource_limit");
+    CHECK(candidate.empty());
 }
 
 TEST_CASE("Small transform roundtrip error cannot approve collapsed float triangles", "[MeshReconstruction]")

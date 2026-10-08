@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "arrangement",
-  "source_fingerprint": "sha256:3c2301b631301420911ce1e47228472f44bff1532d7acaebbcfc213de7d32de6",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。补登记公共参数定义依赖；核对配置约束沿用本分支实现。"
+  "source_fingerprint": "sha256:00d43ed19ad7b045102febbfd432eca796d6c65553c3bcab6c191e675bffe38b",
+  "reason": "PartPlateList导出快照新增实际可打印实例状态供GUI/CLI共享筛盘；不改变摆放、盘归属、边界或实例printable。CLI仅全部切片跳过空盘/全禁用盘，启用但越界及显式指定盘仍走原校验。"
 }
 -->
 
@@ -22,6 +22,8 @@
 ## 核心流程
 
 GUI ArrangeJob 在主线程准备实例与锁定项，在工作线程调用 arrangement::arrange，finalize 再应用结果。CLI 经 ModelArrange 共用底层。PartPlate/PartPlateList 管理盘原点、排除区域、对象归属及名称，摆盘坐标与盘局部切片坐标要转换。
+
+`store_to_3mf_structure` 为每盘记录临时 `has_printable_instances` 快照，供 GUI/CLI 切片包导出共同判断目标盘；不能把对象成员非空等同于参与打印。快照不序列化、不改变实例打印开关或排布。CLI 全部切片跳过空盘和全部实例明确不打印的盘；显式指定该盘或启用但越界的模型仍走切片校验。
 
 ## 配置与约束
 

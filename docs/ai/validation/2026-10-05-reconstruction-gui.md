@@ -1,5 +1,212 @@
 # 独立重建候选：GUI 验证交接
 
+## 10-07 传统当前盘发送目标修正
+
+本轮仅修传统 `send_gcode_legacy → send_gcode → export_3mf` 的当前盘盘号，不改重建、有效切片配置或 GFD 云打印。以下为待执行 GUI 验证；没有连接设备、上传或启动打印，自动化通过不代表设备发送已通过。
+
+### 程序及输入
+
+基准 master / a7750c76c7 加当前未提交修改，arm64 Release 构建成功。新直接应用 SHA-256 `9911a0a131d5f4bd2ff41933e6cab3c9d9e1ef614d61f29752d3b99d1edf063e`；常用 `build/arm64/OrcaSlicer/OrcaSlicer.app` 仍旧 `46fdfcf7...`，未替换。保存当前工作并退出旧实例后启动：
+
+```sh
+cd /Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft
+send_current_run=$(mktemp -d /tmp/orca-send-current-gui-XXXXXX)
+set -o pipefail
+./build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer --debug 3 2>&1 | tee "$send_current_run/gui.log"
+```
+
+本机可复用 `/tmp/orca-multiplate-ZrJhym/both-enabled.3mf`：两盘各一个 8×8×2 mm 方块实例，两个均可打印，首盘中心 (90,90,1)，第二盘为对应盘内位置。CLI 对照使用工程内 EP7 0.4 / QIDI PLA Rapido / Standard 0.20 mm，层高与首层0.2 mm、无支撑、无新增对象覆盖，未覆盖用户预设。**该 EP7 工程直接点打印走 GFD 分支，不能证明传统入口已通过。**
+
+传统入口手测需在此工程副本选择用户已有的非 GFD、非 Bambu 网络的测试打印机预设及匹配耗材/工艺，保持0.4 mm喷嘴、0.2 mm层高/首层、无支撑，使用该设备有效平台和温度；不猜测真实设备温度或连接信息，不保存覆盖原预设。日志必须确认 `on_action_print_plate` 的 `is_gfd_printer=0` 且实际出现传统上传框。回传普通工程以固定完整有效配置；没有对应测试主机时此项保持待验，不用 EP7 代替。
+
+### 操作和预期
+
+1. 两盘均保持可打印，只选第一盘执行“切片单盘”，第二盘不切片。点击“打印”，进入传统发送框。**仅在用户允许向已有测试主机上传、且可选“仅上传”时确认；不要选择开始打印。** 没有此条件就取消，不能把打开弹框当成导出已通过。
+2. 预期第一盘正常生成发送包，不因第二盘未切片弹“异常打印文件数据，请重新切片”；发送包只包含 `Metadata/plate_1.gcode`，盘号映射保持原编号。网络上传失败与切片包生成失败分开判断。
+3. 重新打开未切片工程副本，只切第二盘并发送，预期仅含 `Metadata/plate_2.gcode`，不能误发第一盘。再做两盘均切片的全部盘导出对照，预期两个 G-code 均存在；未切片盘的全部盘导出仍应被拒绝或按钮不可用。取消上传不应启动打印或改变模型。
+4. 回传本轮 `gui.log`、用于手测的普通 `.3mf`、实际发送缓存包（若可取得），以及异常截图。不要回传凭据。尚未执行这些操作，也未验证 Windows/Linux 或实机打印。
+
+### 自动化与 CLI 已验
+
+- 最终3MF测试16用例555断言通过，含新增12组合：目标盘0/1，其他盘未切片/缓存文件缺失/有效，单盘/全部盘。单盘不连带校验其他盘，全部盘仍拒绝不完整数据；也检验包内容、重开映射和临时文件清理。它验证共享导出契约，不直接执行 GUI 哨兵转换。
+- 新应用实际 CLI 六场景符合预期：全部有效盘/显式单盘/另一盘禁用/第一盘禁用均导出正确成员，显式选择禁用盘返回206；成功包 CRC 正常。证据为 `/tmp/orca-multiplate-ZrJhym/send-current-*/run.log`、`result.json` 和 `export.3mf`（失败项无成功包）。复跑可使用 `python3 /tmp/orca-multiplate-ZrJhym/probe.py send-current-manual /Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`，标签应使用尚不存在的名字。
+
+## 10-07 层数统计一致性（当前待验）
+
+本轮只修“实际输出112、机器/文件尾声明113”的统计，不改温度、重建算法、路径或导出菜单。共享核心与应用 CLI 同输入前后已验证，总层数现在一致且运动指令/配置块不变；详情见[层数记录](2026-10-04-smart-print-engine.md#2026-10-07-输出层数一致性修正)。无需重复重建修复验收。
+
+### 程序、输入与参数
+
+master / a7750c76c7 加当前未提交改动。新程序 SHA `32e2ab2baa5595ef3a4e5c6ce44ea0e2a756c4dd1fbd379853526d219ad4f9cc`；打包路径仍旧 `7e35b86b...`。先保存当前工作并正常退出旧应用，用以下已构建直接路径，无需再编译；不要同时启动两个窗口混淆版本：
+
+```sh
+cd /Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft
+layer_count_run=$(mktemp -d "/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/planning/repair/layer-count-manual-XXXXXX")
+set -o pipefail
+./build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer --debug 3 2>&1 | tee "$layer_count_run/gui.log"
+```
+
+优先使用用户已保存的重建后普通工程及已修正的温度配置；没有保存时，可打开本机隔离候选工程 `/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/planning/repair/dragon-slice-compare-atRGYm/gui-rebuilt.3mf`（SHA `5424207daf1eda5838e15f0ff16573113bd838e8b1d8ab207253228f60db969f`）。后者为1盘/1对象/197318面，EP7 0.4 nozzle / QIDI PLA Rapido / 0.20mm Standard @EP7、首层及层高0.2mm、支撑关闭、100%尺寸和原摆放；它包含历史温度值，不要保存覆盖当前用户预设。可以把温度改为用户刚确认的值，但不要同时改层高或摆放。界面简中即可，本轮无翻译变更。
+
+### 操作与预期
+
+1. 打开普通工程后，确认准备页有模型；不要把只含切片的 `dragon222.gcode.3mf` 当作可重切的模型工程。点击“切片单盘”，等待完成，然后导出到新验证目录 `dragon-layer-count.gcode.3mf`。
+2. 相同模型、摆放、层高下，预览应仍为112层，最高实际输出22.4mm；包内 `Metadata/plate_1.gcode` 的文件头 `total layer number`、启动指令 `SET_PRINT_STATS_INFO TOTAL_LAYER`、文件尾 `total layers count` 均应为112。若采用了不同层高/摆放，不固定要求112，但三者必须等于实际输出层数。计划 `max_z_height` 不属于此三者。
+3. 不修改内容重复导出一次；两份文件的层数和模型运动应一致。此轮不需要连接打印机、上传或实机打印，也不用重新运行重建来验证统计。
+
+回传本次 `gui.log`、新切片包；若用当前自己的工程，请同时保存普通 `.3mf` 以核对有效配置/变换。当前这些 GUI 步骤尚未执行，历史首次导出通过不能替代本轮新程序验证。
+
+### 对应 CLI（AI 已完成）
+
+已完成新旧应用对照，命令与结果记录于 `planning/repair/layer-count-6ZXTup/validation-final.json`。用户无需重复；如需独立执行，使用新输出目录：
+
+```sh
+layer_count_cli=$(mktemp -d "/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/planning/repair/layer-count-cli-manual-XXXXXX")
+cd "$layer_count_cli"
+/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer --debug 3 --orient 0 --arrange 0 --outputdir "$layer_count_cli" --export-3mf dragon.gcode.3mf --slice 0 --min-save /Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/planning/repair/dragon-slice-compare-atRGYm/gui-rebuilt.3mf 2>&1 | tee "$layer_count_cli/cli.log"
+```
+
+## 历史验证（以下身份和待验状态按各轮时间解释）
+
+## 10-07 19:11 回传：首次导出主流程通过
+
+用户已重新打包，两条程序路径均为 `7e35b86b...`。日志 `orca-user-gui-run-20261007-191103-298082.log` 确认19:12:23采用候选、只切一次、19:12:42首次导出刷新apply=0/invalidated=0，19:12:49完成导出。桌面 `dragon222.gcode.3mf` 内有完整G-code、配置和缩略图，ZIP/MD5正常，不再是空切片包。
+
+实际GUI备份197318面/98539顶点，精确索引转OBJ后七项独立复检完整为零；网格与前次候选完全一致，837077条运动指令及导出参数与旧GUI切片相同。112个实际输出层均有主体挤出、Z=0.2–22.4mm连续，未见中间空层，支撑仍关闭且未再出现本次微区悬空告警。现有热床60℃/软化阈值45℃告警与计划113/输出112层统计差异分别记录，不当作模型修复失败。证据与边界见[本次回传记录](2026-10-04-smart-print-engine.md#2026-10-07-1911-gui-首次导出回传)。
+
+下节核心步骤1–2的正常流程已由用户回传覆盖；重复导出、修改层高后拒绝/重切等其余步骤尚无新回传，不能一并标为通过。无需为正常首次导出再重复测试；如需补齐本轮GUI状态保护，继续第3–4步即可。跨平台和实机打印仍未验收。
+
+## 10-07 首次导出失效源头修正后验证（当前待验）
+
+最新修正：模型替换并落床时，区域缓存坐标同步不完整，第一次导出刷新误使已完成切片失效。已在共享 `Print::apply` 修复并完成真实龙模型生命周期修前/后对照，G-code 运动指令/配置不变；缓存/悬空 2 用例 484 断言、格式/重建 34 用例 973 断言、3 项应用 CLI 验证通过。**19:11回传已通过首次切片/导出，其他手测项仍以文档顶部记录为准**；不是要求用户取消 Z 落床，也不绕过导出守卫。详情见[本轮证据](2026-10-04-smart-print-engine.md#2026-10-07-首次导出失效源头修正)。
+
+### 程序与输入
+
+基准 master / a7750c76c7 的当前工作区；新增业务修改仅 `PrintApply.cpp`，测试与模块文档已同步。直接应用已经构建，SHA-256 `7e35b86bae79e16d3ed30bd616c02671cc7a724e06f1f9e2500bfb3218f896ee`。资源仍使用本仓库，简中 MO 与上轮相同。本轮没有替换用户正运行的打包副本；`build/arm64/OrcaSlicer/OrcaSlicer.app` 仍是旧 `1f8bc14c...`。
+
+先保存并正常退出旧应用，再启动以下直接路径；无需为了本次手测再次编译。若自行重新打包，应重新核对程序身份。
+
+```sh
+cd /Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft
+export_cache_run=$(mktemp -d "/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/planning/repair/export-cache-manual-XXXXXX")
+set -o pipefail
+./build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer --debug 3 2>&1 | tee "$export_cache_run/gui.log"
+```
+
+打开 `/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/planning/repair/dragon-slice-compare-atRGYm/native-original.3mf`，SHA-256 `49e180bc3a94a77ea6dccee3b5a4a2d249e72ad59160e64bf7ea75b29519a543`。这是原龙模型导入后的隔离工程，1 对象/1 盘、1808822 面；保持 EP7 0.4 nozzle / QIDI PLA Rapido / 0.20mm Standard @EP7，层高与首层 0.2 mm、支撑关闭、100% 缩放及原变换。预设缺失/变化先记录，不随意替换。**不能只打开已经重建好的工程来验证本次问题，必须经过采用候选这一操作。**
+
+### GUI 操作与预期
+
+1. 准备页选择龙模型，右键“重建修复”；使用 0.5 mm 半径、0.05 mm 偏移、0.25 mm 告警阈值，勾选预闭合并确认形状风险，生成候选。候选仍须完整检测通过；偏差告警保留，不等于实机通过。
+2. 比较窗口勾选“沿 Z 轴移动候选，使其最低点落在打印平台上”，采用候选。**不要关闭/重开工程，也不要先重复切两次**。马上切片一次，等进度结束，直接导出为新验证目录的 `dragon-first.gcode.3mf`。预期第一次即能导出，不弹“没有有效的 G-code”；包内有非空 `Metadata/plate_1.gcode` 和切片参数。本次微小无挤出区域不应产生悬空告警，真实悬空仍可能告警。
+3. 不改任何内容，再导出一次 `dragon-repeat.gcode.3mf`，预期仍成功。保存普通工程 `dragon-rebuilt.3mf` 用于复核网格与有效配置；切片包省略可编辑网格是既有规则。
+4. 把层高改为 0.22 mm，不切片时不应允许导出有效切片包（按钮禁用/提示重切均可）。切片完成后导出 `dragon-changed.gcode.3mf`，预期成功。证明修正没有绕过真实参数修改的失效保护。
+5. 可选快速对照：新工程导入 `tests/data/model_repair_acceptance/01-missing-top.stl`，默认重建并落床、一次切片直接导出。保留 Z 不移动的对照已有核心回归，不要求为本次再跑全套历史 GUI 验收。
+
+回传新验证目录（`gui.log`、三个切片包、普通工程）及异常截图。若第 2 步失败，先保存日志与现场普通工程再回传，不反复重切掩盖首次状态。不覆盖原模型/旧文件，不连接打印机或上传。
+
+### CLI 对照范围
+
+AI 已用最新应用验证同配置候选切片包、缺 G-code 拒绝、普通工程保存；同对象“原件 apply→替换网格/落床→切片/导出→刷新”的关键历史由独立核心探针及自动化回归覆盖。CLI 单次打开现成候选不能代替 GUI 的第 1–2 步。用户可选执行下节 CLI 命令，但应使用本节最新程序身份；不需要重复 CLI 才能手测 GUI。Windows/Linux 与实机仍未验收。
+
+## 10-07 悬空微区与导出修正后验证（此前交接）
+
+**18:18 用户回传更新：守卫通过，正常导出仍未通过。** 用户已重新打包，两条程序路径均为下述 `1f8bc14c...`；本节“旧包”描述仅是交接时状态。18:27:56 已完成切片/写 G-code，18:28:03 导出前刷新再次使切片失效，因此出现重新切片提示。缓存文件仍在，不是用户未切片。本次不应反复按步骤 2 重试，也不能判 GUI 导出已修复；下一步先定位 Print::apply 的失效分支，详见[新包回传](2026-10-04-smart-print-engine.md#2026-10-07-1818-新包导出守卫回传)。
+
+本批基于 `master / a7750c76c7` 工作区改动，修正未实际打印微区的悬空告警和无 G-code 切片包误报导出成功，不改重建网格/支撑开关。自动化与同配置 CLI 已验证，以下 GUI 新交互未验；此前大模型 GUI 未覆盖项仍保留在后节。全量支撑另有旧摆放夹具失败，详情见[执行记录](2026-10-04-smart-print-engine.md#2026-10-07-悬空微区与切片包导出修正)。
+
+### 新程序与输入
+
+先保存并正常退出旧应用。**目前 `build/arm64/OrcaSlicer/OrcaSlicer.app` 仍是旧包**；无需再次编译即可使用已最小构建的以下直接路径。应用 SHA-256 `1f8bc14ce5f88ed63c9a5be435253744def9e79d0d0ccb752be700b0f790a41f`，简中 MO `a463a01041040b26fbcb2bde19d47ec19f1ad3a257aff7109027861f050576f2`；再次构建后需重新核对身份。
+
+```sh
+cd /Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft
+dragon_export_run=$(mktemp -d "/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/planning/repair/dragon-export-manual-XXXXXX")
+set -o pipefail
+./build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer --debug 3 2>&1 | tee "$dragon_export_run/gui.log"
+```
+
+输入为 `/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/planning/repair/dragon-slice-compare-atRGYm/gui-rebuilt.3mf`：从用户实际采用后的备份生成的隔离工程，197318 面；不用重新修复代替这个候选。保留工程参数：EP7 0.4 nozzle / QIDI PLA Rapido / 0.20mm Standard @EP7、首层与层高 0.2 mm、支撑关闭、100% 尺寸及原朝向。若加载提示缺失预设或有效参数有变，先记录，不替换为其他预设后直接比较。
+
+### 手动步骤与预期
+
+1. 打开上述普通工程，切片。预期不再出现这次由无路径微区引起的“浮空区域”提示；逐层仍有主体路径。这不是关闭所有悬空检测，也不是实机通过。原件对照工程为同目录 `native-original.3mf`。
+2. 导出到新验证目录的 `dragon-rebuilt.gcode.3mf`。预期导出成功后包内有 `Metadata/plate_1.gcode` 及工程/机型/工艺/耗材配置，可作为切片包重新加载。此种包不含可编辑三角网格是设计行为；另用“保存工程”为 `dragon-rebuilt.3mf` 才保留可编辑模型。
+3. 将层高改为 0.22 mm，但不重切，尝试导出。允许按钮禁用或明确提示重新切片；不允许产生仅缩略图/参数的成功包。重新切片后导出 `dragon-changed.gcode.3mf` 应成功。不要覆盖步骤 2 的文件。
+4. 若步骤 2 每次切片后仍在导出时要求重新切片，停止重复尝试，回传该普通工程与日志；导出前具体失效触发源尚未隔离，守卫不能当作这一源头已经消除。不要强制回用旧缓存。
+5. 可选多盘：新增有模型但未切片的第二盘。导出有效当前盘应可行；导出全部盘不能成功忽略第二盘。切完所有盘后全盘包应含各盘 G-code；空盘无需生成 G-code。
+
+回传验证目录、GUI 日志、普通工程、两个切片包和提示截图；不要覆盖原件/原文件，不连接打印机、不上传。无效目标保护和真实小挤出告警已有核心回归，但不将其写成上述 GUI 已通过。Windows/Linux 与实机仍单列待验。
+
+### 可选 CLI 手动对照
+
+GUI 退出后在同一终端执行；新目录中已有同名输出时请创建新父目录，不覆盖原证据。
+
+```sh
+mkdir "$dragon_export_run/cli"
+./build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer \
+  --debug 3 --slice 0 --orient 0 --arrange 0 --min-save \
+  --outputdir "$dragon_export_run/cli" --export-3mf dragon.gcode.3mf \
+  /Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/planning/repair/dragon-slice-compare-atRGYm/gui-rebuilt.3mf \
+  2>&1 | tee "$dragon_export_run/cli.log"
+unzip -l "$dragon_export_run/cli/dragon.gcode.3mf"
+```
+
+预期退出 0、有 `Metadata/plate_1.gcode`，无本次微区悬空告警；CLI 核心已用此输入验证，本步骤可选，不必重复才能开始 GUI。去掉 `--slice 0` 但保留 `--min-save` 时应拒绝缺 G-code；普通未切片工程导出则还必须去掉 `--min-save`。
+
+## 10-07 大模型优化后验证（此前交接，剩余项待验）
+
+本节覆盖新增大模型支持。源码基于 `master / a7750c76c7` 的未提交改动；原高级修复、预设、最终网格验收不变。225 核心用例、32 CLI 场景和真实 worker 已通过。10-07 16:19 用户新包回传已确认 GUI 采用网格 197318 面、独立七项完整为零，缓存 112 层均有主体路径；但导出前刷新使切片失效后仍生成了没有 G-code 的 `.gcode.3mf`，导出验收不通过。二次同配置对照复现原件不告警/候选告警，候选第 2/3 层新增三处微小无下层承托截面；尚未证明这些微区各自形成独立悬空挤出，不能用网格通过代替可打印，也不直接判定必须加支撑。导出包的参数仍在，缺网格属于切片包 SkipModel 规则，缺 G-code 才是异常。取消/Undo/重开及 Windows/Linux/实机仍待验，详见[二次分析记录](2026-10-04-smart-print-engine.md#2026-10-07-龙模型二次分析同配置悬空对照与导出语义)。
+
+### 启动与模型
+
+先保存并正常退出旧应用。10-07 16:19 用户已重新打包，`src/Release` 与 `build/arm64/OrcaSlicer` 两条应用路径现均为 SHA-256 `ed22cf22bdaf97fa279f7155645938c61a391652e8741055e0438f9a42c770da`；不再使用之前的 `4efcd19a...` / `89bed37f...` 身份说明当前 GUI。以下命令仍可使用直接构建路径。再次编译/打包后先核对应用/资源身份。
+
+```sh
+cd /Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft
+large_recon_bin="/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer"
+large_recon_run=$(mktemp -d "/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/planning/repair/large-recon-manual-XXXXXX")
+printf '验证目录：%s\n' "$large_recon_run"
+set -o pipefail
+"$large_recon_bin" --debug 3 2>&1 | tee "$large_recon_run/gui.log"
+```
+
+GUI 退出后继续在此终端使用上述变量；另一个终端需重新设置。测试不连接打印机、不上传、不覆盖原模型。
+
+### GUI 操作及回传
+
+1. 打开已有基准 `/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft/planning/repair/reconstruction-gui-20261007-mkXJqu/missing-top-original.3mf`，另存新验证目录中的 `dragon-before.3mf`。保留 EP7 0.4 nozzle / QIDI PLA Rapido / 0.20mm Standard @EP7，有效层高/首层 0.2 mm、classic 墙、支撑关闭、无后处理。若预设缺失先回传，不随意替换后比较。删除基准方块，导入 `/Users/liwei/Downloads/dragon (1).stl`，保持 100% 缩放，无绘制/修改器，不另执行旧高级修复，再保存基准副本。CLI 原始 1808823 面，原生导入可能变为 1808822 面，记录实际面数。
+2. 准备页选中这个普通对象，右键“重建修复”。默认半径 0.5、偏移 0.05、偏差告警 0.25 mm、预闭合勾选；在这台 64 GiB 机器应显示 **300 秒/4096 MiB**。这不是预期耗时；8 GiB 机器自动内存上限应为 2048 MiB。截图记录参数/预算，检查中英文和滚动区按钮可见。
+3. 确认形状风险→生成候选。预计出现完整检查通过、形状超偏差及需试切片说明；默认龙模型 CLI 约 59 秒，不能把这个时间当硬性 GUI 预期。约 6.08 mm 的采样距离告警不等于外形每处扩大 6 mm，需观察实际形状/内部变化；记录完整预览截图。
+4. 先选“保留原模型”，确认对象未替换，另存 `dragon-kept.3mf`。再生成一次，运算中点取消，确认原模型保留、界面恢复；另存 `dragon-canceled.3mf`，保留日志以核对子进程退出。不要关闭系统文件框时强制杀进程。
+5. 再生成并采用，记录是否勾“沿 Z 落床”（建议本次勾选以检查底部）；该选项只平移，不缩放。另存 `dragon-rebuilt.3mf`，菜单撤销后另存 `dragon-undo.3mf`，重做后另存 `dragon-redo.3mf`。这些必须是普通工程 3MF，不能只交不含网格的 gcode.3mf。
+6. 正常退出重开 `dragon-rebuilt.3mf`，用同一有效配置重新切片，逐层看主体连续、底面、薄处、孔/可动间隙、支撑需求和悬空告警；导出 `dragon.gcode` 或 `dragon.gcode.3mf`。如需加支撑，另存工程/配置和第二份 G-code，不能把不同配置路径差异全部归因重建。
+7. 小模型对照可用 `tests/data/model_repair_acceptance/01-missing-top.stl`，同样默认参数应显示 60 秒/1024 MiB（RAM≥4 GiB），仍能封顶生成候选。旧“修复模型”行为不在此批更改范围。
+
+回传新验证目录路径、参数/预览截图、上述普通 3MF、G-code、实际软件路径与预设变更情况。AI 收到后独立抽取保存的网格复检，并比较原件/保留/取消/撤销/重做和有效配置，不能只凭成功弹窗判通过。
+
+### CLI 对照
+
+关闭 GUI 后在同一终端运行；输出子目录需尚不存在，重复测试重新建父证据目录。默认预算自动选择，不用附加大模型参数，也不必先减面。
+
+```sh
+"$large_recon_bin" --reconstruct-model "/Users/liwei/Downloads/dragon (1).stl" \
+  --outputdir "$large_recon_run/cli" --accept-reconstruction-risk \
+  2>&1 | tee "$large_recon_run/cli.log"
+"$large_recon_bin" --check-model --outputdir "$large_recon_run/check" \
+  "$large_recon_run/cli/candidate.stl" 2>&1 | tee "$large_recon_run/check.log"
+```
+
+第一条预期退出 0、`candidate_ready`、`mesh_validated=true`，`resource_limits` 为 3000000/1000000 面、300000 ms、4096 MiB（本机）。默认约 197118 面，实际顺序/导入影响不要求逐字节固定。第二条检查 `model_checks[0]` 的 `check_complete=true`、七项完整为零，而不是只看退出码。这里 STL 复检含原生导入；本轮自动验收另已将实际导出的所有面精确索引转 OBJ、不清理面再复检，证据见主记录。
+
+形状告警、试切片未运行以及 `print_ready=false` 都是正常且必须保留的状态。有限资源内失败不得覆盖原件或残留可采用候选；不承诺任何 300 万面模型都能在预算内修好。
+
+## 10-07 用户手动回传结果
+
+基于已提交 `a7750c76c7`，收到三张参数/候选/采用截图、`manual-reconstruction-ko53bY` CLI 结果和桌面 `01-missing-top.gcode.3mf`。默认 CLI 重建/独立复检退出 0、七项完整为零，1 个开边环预闭合新增 2 面，首档 0.5/0.05 mm 成功。GUI 切片包校验一致，51 层均有主体路径，墙/填充/顶底面齐全，没有复现薄壳碎线；其有效配置与之前默认基准一致。
+
+包内热床告警来自 60℃ 热床与 45℃ 耗材软化温度配置，不是重建失败。该 `.gcode.3mf` 不含三角网格，尚不能从本次回传独立复检 GUI 最终网格或确认采用时的 Z 落床选择；如需补齐这两项，另存普通工程 `.3mf` 即可。截图中的 5 mm 反向采样偏差源于新增顶面到原开口边缘的距离，不等于模型扩大 5 mm；落床只沿 Z 平移，不缩放。细节见[主记录的用户手动回传节](2026-10-04-smart-print-engine.md#2026-10-07-用户手动回传cli-与切片包复核)。本轮仅分析和补记录，不改业务代码、预设或再次提交。
+
 ## 10-07 用户手动验证快速清单
 
 这是用户主动复验的操作清单，不要求重新构建。与本节同笔提交的业务源码已经在 macOS arm64 Release 验证；包路径如下，应用 SHA-256 为 `89bed37fcafd3ed31abf6494629a569e60ea3722ad062b29511abe0044b4387e`。Windows/Linux 与实机打印尚未验收。

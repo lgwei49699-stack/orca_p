@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "raft",
-  "source_fingerprint": "sha256:f39e99bc214f243df5076cbeed59ed0d3f68ab6ff8a2a048b877e58d4b4ba70e",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。补登记公共参数定义依赖；核对配置约束沿用本分支实现。"
+  "source_fingerprint": "sha256:bb6962749c01a00876160d55b02eb2b1532ba5322b4720181d4379428fcfb6fd",
+  "reason": "共用test_support_material新增微区告警用例，筏层实现/配置/原有用例未改，故正文沿用；全量SupportMaterial中筏层相关用例通过，另有旧支撑摆放夹具在检测前失败，详见主记录，不声称全量通过。"
 }
 -->
 

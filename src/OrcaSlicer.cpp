@@ -7071,6 +7071,13 @@ int CLI::run(int argc, char **argv)
                         start_time = (long long)Slic3r::Utils::get_current_time_utc();
                         //get the current partplate
                         Slic3r::GUI::PartPlate* part_plate = partplate_list.get_plate(index);
+                        // All-plate slicing, like the GUI, skips plates explicitly
+                        // excluded from printing. Do not skip enabled out-of-bounds
+                        // models or a plate explicitly requested by its index.
+                        if (plate_to_slice == 0 && (part_plate->empty() || part_plate->is_all_instances_unprintable())) {
+                            BOOST_LOG_TRIVIAL(info) << "Skip non-printing plate " << index + 1;
+                            continue;
+                        }
                         part_plate->get_print(&print, &gcode_result, &print_index);
 
                         print_fff = dynamic_cast<Print *>(print);

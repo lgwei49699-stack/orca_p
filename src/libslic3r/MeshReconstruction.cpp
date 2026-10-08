@@ -282,7 +282,9 @@ std::optional<Soup> prepare_closed_input(const Soup& source, const MeshReconstru
                 edge = surface.next(edge);
             } while (edge != border);
         }
-        const std::size_t face_limit = std::min(options.max_output_faces, source.faces.size() + MAX_BOUNDARY_EDGES);
+        // Preparation is still an input mesh. The smaller reconstructed-output
+        // budget must not reject a dense input before wrapping has reduced it.
+        const std::size_t face_limit = source.faces.size() + MAX_BOUNDARY_EDGES;
         for (const auto border : borders) {
             std::vector<Surface::Face_index> patch;
             // Use the iterator overload supported by the pinned CGAL on all
@@ -403,8 +405,9 @@ bool reconstruct_mesh(const TriangleMesh&              source_mm,
                     options.alpha_mm > 0 && options.offset_mm > 0 && options.max_deviation_mm > 0,
                 "invalid_options", L("Alpha, offset and deviation warning threshold must be finite and positive."));
         require(options.offset_mm <= options.alpha_mm * 0.25, "invalid_options", L("Offset must not exceed one quarter of alpha."));
-        require(options.max_input_faces >= 4 && options.max_output_faces >= 4 && options.max_input_faces <= 200000 &&
-                    options.max_output_faces <= 1000000,
+        require(options.max_input_faces >= 4 && options.max_output_faces >= 4 &&
+                    options.max_input_faces <= RECONSTRUCTION_MAX_INPUT_FACES &&
+                    options.max_output_faces <= RECONSTRUCTION_MAX_OUTPUT_FACES,
                 "invalid_options", L("Requested face limits exceed the supported reconstruction budget."));
         const Soup  source = read_soup(source_mm, options.max_input_faces, true);
         const Vec3d extent = source.maximum - source.minimum;

@@ -39,6 +39,60 @@
 using namespace Slic3r::Test;
 using namespace Slic3r;
 
+TEST_CASE("Floating warnings require actual extrusion but retain small printed regions", "[SupportMaterial][FloatingWarning]")
+{
+    const int mode = GENERATE(0, 1, 2, 3);
+    INFO("case=" << mode);
+    Print              print;
+    Model              model;
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set("enable_support", false);
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {200., 0.}, {200., 200.}, {0., 200.}}));
+    config.set_key_value("bed_exclude_area", new ConfigOptionPoints());
+    ModelObject* cube = model.add_object();
+    cube->name = "floating warning test";
+    cube->add_volume(make_cube(20., 20., 2.));
+    cube->add_instance()->set_offset(Vec3d(80., 80., 0.));
+    cube->ensure_on_bed();
+    print.auto_assign_extruders(cube);
+    print.apply(model, config);
+    print.set_status_silent();
+    print.process();
+    PrintObject* object = print.get_object(0);
+    REQUIRE(object->is_step_done(posPerimeters));
+    REQUIRE(object->is_step_done(posInfill));
+    Layer* layer = object->get_layer(1);
+    // A disconnected slice contour, far from the cube, has no printable path
+    // unless the case below explicitly supplies one. No area-based exemption.
+    layer->lslices.emplace_back(
+        Polygon{Points{Point::new_scale(50., 50.), Point::new_scale(51., 50.), Point::new_scale(51., 51.), Point::new_scale(50., 51.)}});
+    if (mode >= 1 && mode <= 3) {
+        auto* path = new ExtrusionPath(mode == 2 ? erGapFill : erExternalPerimeter, 0.08, 0.4, 0.2);
+        // Case 3 has its centerline outside the section; the line's width
+        // overlaps it and must still be treated as real deposited material.
+        const double x        = mode == 3 ? 49.9 : 50.5;
+        path->polyline.points = {Point::new_scale(x, 50.25), Point::new_scale(x, 50.75)};
+        auto* island = new ExtrusionEntityCollection();
+        island->entities.push_back(path);
+        if (mode == 2)
+            layer->regions().front()->fills.entities.push_back(island);
+        else
+            layer->regions().front()->perimeters.entities.push_back(island);
+    }
+    bool warned = false;
+    print.set_status_callback([&](const PrintBase::SlicingStatus& status) {
+        if (status.warning_step != -1 && status.text.find("floating regions") != std::string::npos)
+            warned = true;
+    });
+    config.set("support_threshold_angle", 31);
+    print.apply(model, config); // Rerun support checks without regenerating the test paths.
+    REQUIRE(object->is_step_done(posPerimeters));
+    REQUIRE(object->is_step_done(posInfill));
+    REQUIRE_FALSE(object->is_step_done(posSupportMaterial));
+    print.process();
+    REQUIRE(warned == (mode != 0));
+}
+
 namespace {
 DynamicPrintConfig raft_bed_test_config()
 {

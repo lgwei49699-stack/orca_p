@@ -5258,6 +5258,10 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 		PlateData* plate_data_item = new PlateData();
 		plate_data_item->locked = m_plate_list[i]->m_locked;
 		plate_data_item->plate_index = m_plate_list[i]->m_plate_index;
+
+        // Both GUI and CLI export through this snapshot. Object membership alone
+        // does not tell whether a plate participates in printing.
+        plate_data_item->has_printable_instances = m_plate_list[i]->has_printable_instances();
 		plate_data_item->plate_name = m_plate_list[i]->get_plate_name();
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% before load, width %2%, height %3%, size %4%!")
 			%(i+1) %m_plate_list[i]->thumbnail_data.width %m_plate_list[i]->thumbnail_data.height %m_plate_list[i]->thumbnail_data.pixels.size();

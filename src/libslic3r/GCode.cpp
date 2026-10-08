@@ -1959,50 +1959,9 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     
     m_writer.set_is_bbl_machine(is_bbl_printers);
 
-    // How many times will be change_layer() called?
-    // change_layer() in turn increments the progress bar status.
+    // Count emitted layers after tool ordering is available, before expanding
+    // machine_start_gcode. Planned layers may contain no printable paths.
     m_layer_count = 0;
-    if (print.config().print_sequence == PrintSequence::ByObject) {
-        // Add each of the object's layers separately.
-        for (auto object : print.objects()) {
-            std::vector<coordf_t> zs;
-            zs.reserve(object->layers().size() + object->support_layers().size());
-            for (auto layer : object->layers())
-                zs.push_back(layer->print_z);
-            for (auto layer : object->support_layers())
-                zs.push_back(layer->print_z);
-            std::sort(zs.begin(), zs.end());
-            //BBS: merge numerically very close Z values.
-            auto end_it = std::unique(zs.begin(), zs.end());
-            unsigned int temp_layer_count = (unsigned int)(end_it - zs.begin());
-            for (auto it = zs.begin(); it != end_it - 1; it++) {
-                if (abs(*it - *(it + 1)) < EPSILON)
-                    temp_layer_count--;
-            }
-            m_layer_count += (unsigned int)(object->instances().size() * temp_layer_count);
-        }
-    } else {
-        // Print all objects with the same print_z together.
-        std::vector<coordf_t> zs;
-        for (auto object : print.objects()) {
-            zs.reserve(zs.size() + object->layers().size() + object->support_layers().size());
-            for (auto layer : object->layers())
-                zs.push_back(layer->print_z);
-            for (auto layer : object->support_layers())
-                zs.push_back(layer->print_z);
-        }
-        if (!zs.empty())
-        {
-            std::sort(zs.begin(), zs.end());
-            //BBS: merge numerically very close Z values.
-            auto end_it = std::unique(zs.begin(), zs.end());
-            m_layer_count = (unsigned int)(end_it - zs.begin());
-            for (auto it = zs.begin(); it != end_it - 1; it++) {
-                if (abs(*it - *(it + 1)) < EPSILON)
-                    m_layer_count--;
-            }
-        }
-    }
     print.throw_if_canceled();
 
     m_enable_cooling_markers = true;
@@ -2292,6 +2251,36 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             // Otherwise same order as the object list
             : sort_object_instances_by_model_order(print);
     }
+    // Reuse precisely the layer groups consumed by process_layers(), including
+    // support/raft and wipe-tower-only layers. Testing has_extrusions() on model
+    // layers alone would undercount these; counting all planned Zs overcounts
+    // empty tips. Keep empty groups in the pipeline for its existing semantics.
+    std::vector<std::pair<coordf_t, std::vector<LayerToPrint>>> layers_to_print;
+    std::map<const PrintObject*, std::vector<LayerToPrint>>     sequential_layers_to_print;
+    if (print.config().print_sequence == PrintSequence::ByObject && !has_wipe_tower) {
+        const PrintObject* first_object = (*print_object_instance_sequential_active)->print_object;
+        for (const PrintObject* object : print.objects()) {
+            print.throw_if_canceled();
+            ToolOrdering other_ordering;
+            if (object != first_object)
+                other_ordering = ToolOrdering(*object, initial_extruder_id);
+            const ToolOrdering& ordering = object == first_object ? tool_ordering : other_ordering;
+            if (ordering.first_extruder() == static_cast<unsigned int>(-1))
+                continue;
+            auto& layers     = sequential_layers_to_print[object];
+            layers           = collect_layers_to_print(*object);
+            const auto count = std::count_if(layers.begin(), layers.end(), [&ordering](const LayerToPrint& layer) {
+                return !ordering.tools_for_layer(layer.print_z()).extruders.empty();
+            });
+            m_layer_count += static_cast<unsigned int>(count * object->instances().size());
+        }
+    } else {
+        layers_to_print = collect_layers_to_print(print);
+        m_layer_count   = static_cast<unsigned int>(
+            std::count_if(layers_to_print.begin(), layers_to_print.end(),
+                            [&tool_ordering](const auto& layer) { return !tool_ordering.tools_for_layer(layer.first).extruders.empty(); }));
+    }
+
     if (initial_extruder_id == (unsigned int)-1) {
         // Nothing to print!
         initial_extruder_id = 0;
@@ -2696,7 +2685,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                 // Process all layers of a single object instance (sequential mode) with a parallel pipeline:
                 // Generate G-code, run the filters (vase mode, cooling buffer), run the G-code analyser
                 // and export G-code into file.
-                this->process_layers(print, tool_ordering, collect_layers_to_print(object), *print_object_instance_sequential_active - object.instances().data(), file, prime_extruder);
+                this->process_layers(print, tool_ordering, sequential_layers_to_print.at(&object),
+                                     *print_object_instance_sequential_active - object.instances().data(), file, prime_extruder);
                 //BBS: close powerlost recovery
                 {
                     if (is_bbl_printers && m_second_layer_things_done) {
@@ -2713,7 +2703,6 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         } else {
             // Sort layers by Z.
             // All extrusion moves with the same top layer height are extruded uninterrupted.
-            std::vector<std::pair<coordf_t, std::vector<LayerToPrint>>> layers_to_print = collect_layers_to_print(print);
             // Prusa Multi-Material wipe tower.
             if (has_wipe_tower && ! layers_to_print.empty()) {
                 m_wipe_tower.reset(new WipeTowerIntegration(print.config(), print.get_plate_index(), print.get_plate_origin(), * print.wipe_tower_data().priming.get(), print.wipe_tower_data().tool_changes, *print.wipe_tower_data().final_purge.get()));

@@ -27,7 +27,7 @@ FACES = [(0, 1, 2), (0, 2, 3), (4, 5, 6), (4, 6, 7),
          (0, 4, 7), (0, 7, 1), (1, 7, 6), (1, 6, 2),
          (2, 6, 5), (2, 5, 3), (4, 0, 3), (4, 3, 5)]
 PARAMETERS = {"alpha_mm": 0.5, "offset_mm": 0.05, "max_deviation_mm": 0.25, "close_open_boundaries": True,
-              "max_input_faces": 200000, "max_output_faces": 1000000}
+              "max_input_faces": 3000000, "max_output_faces": 1000000}
 
 
 def save_json(path, value):
@@ -105,6 +105,25 @@ def create_fixtures(directory):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         result[key] = path
+    # Exercise the inclusive input bound AND the old 64 MiB file gate without
+    # storing a huge fixture in Git. Repeated triangles test IO/cleanup, not the
+    # performance of a genuinely dense model (which needs a separate real trial).
+    face_limit = PARAMETERS["max_input_faces"]
+    repeated = directory / "at_input_limit.stl"
+    with repeated.open("wb") as stream:
+        stream.write(b"Large input regression".ljust(80, b" ") + struct.pack("<I", face_limit))
+        block = binary_stl()[84:] * 1000
+        for _ in range(face_limit // (len(FACES) * 1000)):
+            stream.write(block)
+    assert repeated.stat().st_size == 84 + 50 * face_limit
+    result["large_input"] = repeated
+    for name, count, size in (("too_many_faces", face_limit + 1, 84 + 50 * (face_limit + 1)),
+                              ("too_many_bytes", 0, 256 * 1024 * 1024 + 1)):
+        path = directory / (name + ".stl")
+        with path.open("wb") as stream:
+            stream.write(b"Oversized input regression".ljust(80, b" ") + struct.pack("<I", count))
+            stream.truncate(size)
+        result[name] = path
     return result
 
 
@@ -153,7 +172,7 @@ class Suite:
 
     def run(self, name, source, *, expectation="rejected", flags=(), risk=True, existing_output=None,
             allowed_statuses=None, message_contains=None, worker=False, expect_ambiguous_interior=False,
-            expect_closure=None):
+            expect_closure=None, automatic_budget=False, expected_timeout_ms=None):
         case = self.output / name
         case.mkdir()
         cwd = case / "working-directory"
@@ -164,8 +183,9 @@ class Suite:
         if worker:
             command = [str(self.binary), "--reconstruction-worker", str(source)]
         else:
-            command = [str(self.binary), "--reconstruct-model", "--reconstruction-timeout", "10",
-                       "--outputdir", str(export)]
+            command = [str(self.binary), "--reconstruct-model", "--outputdir", str(export)]
+            if not automatic_budget:
+                command.extend(("--reconstruction-timeout", "10"))
             if risk:
                 command.append("--accept-reconstruction-risk")
             command.extend(flags)
@@ -190,6 +210,9 @@ class Suite:
             save_json(case / "report.json", report)
             record["reported_status"] = report.get("status")
             check_report_contract(report)
+            if expected_timeout_ms is not None:
+                assert report["resource_limits"]["timeout_ms"] == expected_timeout_ms, report
+                assert report["resource_limits"]["max_input_faces"] == PARAMETERS["max_input_faces"], report
             if message_contains is not None:
                 assert message_contains.lower() in report["message"].lower(), report
             if allowed_statuses is not None:
@@ -334,6 +357,14 @@ def main():
     suite.run("open_surface_wrap_opt_out", fixtures["open"], expectation="candidate",
               flags=("--reconstruction-no-close-open-boundaries",), expect_closure=False)
     suite.run("two_solids", fixtures["two_solids"], expectation="candidate")
+    suite.run("automatic_small_budget", fixtures["binary"], expectation="candidate",
+              automatic_budget=True, expected_timeout_ms=60000)
+    suite.run("large_input_at_limit", fixtures["large_input"], expectation="candidate",
+              automatic_budget=True, expected_timeout_ms=300000)
+    suite.run("large_input_explicit_timeout", fixtures["large_input"], expectation="candidate_or_rejected",
+              flags=("--reconstruction-timeout", "1"), allowed_statuses={"candidate_ready", "timed_out"}, expected_timeout_ms=1000)
+    suite.run("over_input_face_limit", fixtures["too_many_faces"], message_contains="face limit")
+    suite.run("over_input_file_limit", fixtures["too_many_bytes"], message_contains="256 MiB")
     for name in ("color_attribute", "color_header", "nan_binary", "nan_ascii", "truncated", "overlong_name"):
         suite.run(name, fixtures[name])
     suite.run("missing_risk_acceptance", fixtures["binary"], risk=False)

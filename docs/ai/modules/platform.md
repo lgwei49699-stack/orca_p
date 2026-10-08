@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "platform",
-  "source_fingerprint": "sha256:e6e9b13fd226a4e99826c6df832507cbe0cc2d6df951dbedabcaa3371ac72fec",
-  "reason": "macOS 原生列表可编辑查询改为无副作用；将实际编辑回调移到编辑请求，并为对象列表显式接入单击图标/双击名称。当前 arm64 构建、辅助功能重开及正常操作已回归，CLI 不涉及此原生交互。"
+  "source_fingerprint": "sha256:5e7820f7932f0ca9da750f5e4689e0a38b2eeb5d58c4e0e2447ef62afe1371b3",
+  "reason": "重建分档预算复用total_physical_memory，补Windows查询失败/未初始化读取与Linux sysconf失败/乘积溢出保护，macOS只接受正值。正常查询行为不变，未知RAM返回0交调用方回退；macOS实跑，Windows/Linux未运行验收。"
 }
 -->
 
@@ -28,6 +28,8 @@
 AppKit 的 `shouldEditTableColumn` 同时会被辅助功能读取，必须是只读的行列/模式/启用状态判断。对象列表图标/耗材单击、名称双击，以及实际 `editColumn` 请求才转发编辑回调；自定义 wx 编辑器 veto 原生编辑的行为保留。不要将模型修改放回辅助功能查询。CLI 不存在此原生列表交互，不要求增加对应命令。
 
 ## 配置与约束
+
+`total_physical_memory` 供重建自动预算作为物理内存上限参考，不代表剩余可用内存。Windows 的 `GlobalMemoryStatusEx` 失败返回 0，不能读取未初始化结果；Linux 的页数/页大小须正值且乘积无溢出，macOS sysctl 结果须正值。未知值交重建核心回退小预算，正常返回语义和其他调用方不变。这里只补查询失败保护，不改变各平台 worker 的 RSS/地址空间/Job 监督方式。
 
 UTF-8、文件系统路径、数字 locale、线程生命周期和平台宏是重要约束。不要依赖用户语言解析配置数值，不能把本机绝对路径固化到预设或文档。
 

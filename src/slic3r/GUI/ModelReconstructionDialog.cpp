@@ -217,6 +217,11 @@ bool show_model_reconstruction_settings(wxWindow* parent, ModelReconstructionOpt
         _L("Smaller detail radii require more time and memory. Up to three progressively coarser attempts share the time budget. "
            "Surface deviation is reported as a warning, not a rejection. Values are in physical millimeters."),
         570);
+    add_wrapped_text(*content, *content_sizer,
+                     wxString::Format(_L("Worker budget: %u seconds, %u MiB. Chosen for the input size and physical RAM; "
+                                         "this is a limit, not a completion estimate. The original model is kept on timeout or memory exhaustion."),
+                                      options.process.timeout_ms / 1000, static_cast<unsigned>(options.process.memory_limit_mb)),
+                     570);
     auto* consent = new wxCheckBox(content, wxID_ANY, _L("I understand that reconstruction changes the model's shape."));
     content_sizer->Add(consent, 0, wxALL, dialog.FromDIP(12));
     auto* buttons  = dialog.CreateStdDialogButtonSizer(wxOK | wxCANCEL);

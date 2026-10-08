@@ -16110,6 +16110,33 @@ void Plater::export_gcode_3mf(bool export_all)
     if (p->process_completed_with_error == p->partplate_list.get_curr_plate_index())
         return;
 
+    const int  export_plate_idx = export_all ? PLATE_ALL_IDX : p->partplate_list.get_curr_plate_index();
+    const auto require_slices   = [&]() {
+        bool found_plate = false;
+        bool ready       = true;
+        for (int i = 0; i < p->partplate_list.get_plate_count(); ++i) {
+            if (!export_all && i != export_plate_idx)
+                continue;
+            PartPlate* plate = p->partplate_list.get_plate(i);
+            const auto* result = plate->get_slice_result();
+            // Match the shared exporter: keep loaded G-code-only plates too.
+            if (export_all && !plate->has_printable_instances() &&
+                !(plate->empty() && (plate->is_slice_result_valid() || (result && !result->filename.empty()))))
+                continue;
+            found_plate                      = true;
+            boost::system::error_code ec;
+            if (!plate->is_slice_result_valid() || result == nullptr || result->filename.empty() ||
+                !fs::is_regular_file(result->filename, ec) || ec || fs::file_size(result->filename, ec) == 0 || ec) {
+                ready = false;
+                break;
+            }
+        }
+        if (found_plate && ready)
+            return true;
+        show_error(this, _L("The selected plates do not have valid G-code. Please slice them again before exporting."));
+        return false;
+    };
+
     // calc default_output_file, get default output file from background process
     fs::path    default_output_file;
     AppConfig&  appconfig = *wxGetApp().app_config;
@@ -16119,6 +16146,9 @@ void Plater::export_gcode_3mf(bool export_all)
         // Also if there is something wrong with the current configuration, a pop-up dialog will be shown and the export will not be performed.
         unsigned int state = this->p->update_restart_background_process(false, false);
         if (state & priv::UPDATE_BACKGROUND_PROCESS_INVALID)
+            return;
+        // Updating the filename placeholders may invalidate a previously completed slice.
+        if (!require_slices())
             return;
         default_output_file = this->p->background_process.output_filepath_for_project("");
     } catch (const Slic3r::PlaceholderParserError& ex) {
@@ -16149,6 +16179,9 @@ void Plater::export_gcode_3mf(bool export_all)
     }
 
     if (!output_path.empty()) {
+        // Modal dialogs may process queued model/configuration changes.
+        if (!require_slices())
+            return;
         // BBS do not set to removable media path
         bool path_on_removable_media = false;
         p->notification_manager->new_export_began(path_on_removable_media);
@@ -16156,12 +16189,9 @@ void Plater::export_gcode_3mf(bool export_all)
         // BBS do not save last output path
         p->last_output_path     = output_path.string();
         p->last_output_dir_path = output_path.parent_path().string();
-        int plate_idx           = get_partplate_list().get_curr_plate_index();
-        if (export_all)
-            plate_idx = PLATE_ALL_IDX;
         const int export_result =
             export_3mf(output_path, SaveStrategy::Silence | SaveStrategy::SplitModel | SaveStrategy::WithGcode | SaveStrategy::SkipModel,
-                       plate_idx); // BBS: silence
+                       export_plate_idx); // BBS: silence
         if (export_result < 0) {
             p->exporting_status = ExportingStatus::NOT_EXPORTING;
             show_error(this, _L("Failed to export the 3MF file."));
@@ -17767,12 +17797,11 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn, bool us
 int Plater::send_gcode(int plate_idx, Export3mfProgressFn proFn)
 {
     int result = 0;
-    /* generate 3mf */
-    if (plate_idx == PLATE_CURRENT_IDX) {
-        p->m_print_job_data.plate_idx = get_partplate_list().get_curr_plate_index();
-    } else {
-        p->m_print_job_data.plate_idx = plate_idx;
-    }
+    // Resolve the GUI-only "current plate" sentinel before entering the shared
+    // exporter, where negative indices select all plates. Keep the job and
+    // package on the same concrete target; PLATE_ALL_IDX remains unchanged.
+    const int export_plate_idx = plate_idx == PLATE_CURRENT_IDX ? get_partplate_list().get_curr_plate_index() : plate_idx;
+    p->m_print_job_data.plate_idx = export_plate_idx;
 
     PartPlate* plate = get_partplate_list().get_curr_plate();
     try {
@@ -17791,7 +17820,7 @@ int Plater::send_gcode(int plate_idx, Export3mfProgressFn proFn)
         strategy = SaveStrategy::Silence | SaveStrategy::SplitModel | SaveStrategy::WithGcode;
 #endif
 
-    result = export_3mf(p->m_print_job_data._3mf_path, strategy, plate_idx, proFn);
+    result = export_3mf(p->m_print_job_data._3mf_path, strategy, export_plate_idx, proFn);
 
     return result;
 }

@@ -5649,6 +5649,8 @@ void ObjectList::reconstruct_model()
             notify(_L("The source model or its settings changed. The reconstruction candidate was discarded."));
         };
         ModelReconstructionOptions options;
+        options.process = model_reconstruction_process_options(original->volumes.front()->mesh().its.indices.size(), options.process,
+                                                                total_physical_memory());
         if (!show_model_reconstruction_settings(parent, options))
             return;
         if (!source_is_current()) {

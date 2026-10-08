@@ -18,6 +18,39 @@ Model reconstruction_model()
 }
 } // namespace
 
+TEST_CASE("Reconstruction budgets scale without overriding explicit limits", "[ModelReconstruction]")
+{
+    const auto automatic = ModelReconstructionOptions{}.process;
+    const size_t ram = size_t(16) * 1024 * 1024 * 1024;
+    for (const auto faces : {12u, 200000u, 200001u, 1000000u, 1000001u, 1808823u, 3000000u}) {
+        const auto budget = model_reconstruction_process_options(faces, automatic, ram);
+        CHECK(budget.timeout_ms == (faces > 1000000 ? 300000 : faces > 200000 ? 180000 : 60000));
+        CHECK(budget.memory_limit_mb == (faces > 1000000 ? 4096 : faces > 200000 ? 2048 : 1024));
+    }
+    CHECK(model_reconstruction_process_options(1808823, automatic, ram / 2).memory_limit_mb == 2048);
+    CHECK(model_reconstruction_process_options(1808823, automatic, 0).memory_limit_mb == 1024);
+    CHECK(model_reconstruction_process_options(1808823, automatic, 1024 * 1024 * 1024).memory_limit_mb == 256);
+    auto requested = automatic;
+    requested.timeout_ms = 1000;
+    requested.memory_limit_mb = 512;
+    int ticks = 0;
+    requested.is_canceled = [] { return true; };
+    requested.on_tick = [&] { ++ticks; };
+    const auto explicit_budget = model_reconstruction_process_options(1808823, requested, ram);
+    CHECK(explicit_budget.timeout_ms == 1000);
+    CHECK(explicit_budget.memory_limit_mb == 512);
+    CHECK(explicit_budget.is_canceled());
+    explicit_budget.on_tick();
+    CHECK(ticks == 1);
+    requested.timeout_ms = 300001;
+    CHECK_THROWS(model_reconstruction_process_options(12, requested, ram));
+    requested.timeout_ms = 0;
+    requested.memory_limit_mb = 4097;
+    CHECK_THROWS(model_reconstruction_process_options(12, requested, ram));
+    requested.memory_limit_mb = 127;
+    CHECK_THROWS(model_reconstruction_process_options(12, requested, ram));
+}
+
 TEST_CASE("Reconstruction eligibility never clears unsupported data", "[ModelReconstruction]")
 {
     Model model  = reconstruction_model();

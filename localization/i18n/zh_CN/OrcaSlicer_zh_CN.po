@@ -290,6 +290,10 @@ msgstr "重映射"
 msgid "Cancel"
 msgstr "取消"
 
+#: src/slic3r/GUI/Plater.cpp
+msgid "The selected plates do not have valid G-code. Please slice them again before exporting."
+msgstr "所选打印盘没有有效的 G-code，请重新切片后再导出。"
+
 msgid "Shortcut Key "
 msgstr "快捷键 "
 
@@ -18995,8 +18999,8 @@ msgid "STL input is missing or is not a regular file."
 msgstr "STL 输入文件缺失或不是普通文件。"
 
 #: src/libslic3r/ModelReconstruction.cpp
-msgid "STL input is missing, empty, or larger than 64 MiB."
-msgstr "STL 输入文件缺失、为空或超过 64 MiB。"
+msgid "STL input is missing, empty, or larger than 256 MiB."
+msgstr "STL 输入文件缺失、为空或超过 256 MiB。"
 
 #: src/libslic3r/ModelReconstruction.cpp
 msgid "Could not read a stable, bounded STL input."
@@ -19236,6 +19240,9 @@ msgid ""
 "Maximum deviation is a warning threshold, not a rejection limit. Up to three bounded wrap attempts.\n"
 "Open boundaries are closed before wrapping when a validated solid can be formed; this may fill intended openings.\n"
 "Use --reconstruction-no-close-open-boundaries to keep the original surface-wrapping behavior.\n"
+"Input limits: 3000000 faces, 256 MiB STL. Output limit: 1000000 faces.\n"
+"Automatic worker budgets: 60/180/300 seconds and up to 1024/2048/4096 MiB by input size.\n"
+"Automatic memory is capped at one quarter of physical RAM; explicit timeout overrides the default.\n"
 "Candidate requires shape confirmation and a separate slice; this command never prints.\n"
 msgstr ""
 "用法：--reconstruct-model INPUT.stl --outputdir NEW_DIRECTORY --accept-reconstruction-risk\n"
@@ -19246,7 +19253,15 @@ msgstr ""
 "最大偏差参数为告警阈值，不是拒绝上限；最多尝试三档受限包裹。\n"
 "能够形成通过校验的实体时，先闭合开放边界再包裹；这可能填充原本需要的开口。\n"
 "使用 --reconstruction-no-close-open-boundaries 保留原来的表面包裹方式。\n"
+"输入上限：300 万面、256 MiB STL。输出上限：100 万面。\n"
+"按输入规模自动分配子进程预算：60/180/300 秒，内存最多 1024/2048/4096 MiB。\n"
+"自动内存预算不超过物理内存的四分之一；显式超时参数覆盖默认值。\n"
 "候选需要确认外形并单独切片；此命令不会执行打印。\n"
+
+#: src/slic3r/GUI/ModelReconstructionDialog.cpp
+#, c-format
+msgid "Worker budget: %u seconds, %u MiB. Chosen for the input size and physical RAM; this is a limit, not a completion estimate. The original model is kept on timeout or memory exhaustion."
+msgstr "子进程预算：%u 秒、%u MiB。根据输入规模与物理内存选择；这是上限，不是预计耗时。超时或内存不足时保留原模型。"
 
 #: src/libslic3r/ModelReconstruction.cpp
 msgid "Unsupported reconstruction option or extra input: "

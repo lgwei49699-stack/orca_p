@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "adhesion",
-  "source_fingerprint": "sha256:07b61f9d669d3c5d6a0791659a10a31ad27330ca780123dbbe57af8af46daada",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。补登记公共参数定义依赖；核对配置约束沿用本分支实现。"
+  "source_fingerprint": "sha256:5e8f4e7b1a61855c822daf27f73bd1451337a57c2ad0c31a0a1ce574062afeb6",
+  "reason": "共享支撑测试文件只新增无路径微区告警回归；不改Brim/Skirt/附着参数或生成实现，故无需正文改动。龙模型同配置运动命令未变，全量支撑旧摆放夹具失败单列，不能据此证明实机附着。"
 }
 -->
 

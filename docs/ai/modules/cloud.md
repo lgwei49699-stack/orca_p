@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cloud",
-  "source_fingerprint": "sha256:cc07a5ab49638e7646e19e9c8cef2a34bd026823795791cfd0ceeba42ecb9323",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。"
+  "source_fingerprint": "sha256:5f7a8e7e1c6eab0cbbea8855131cc3f7100f36e87338a4f6edf4d8abd9f494b2",
+  "reason": "提交前确认GFD打印的3MF路径原本已传明确盘号，共享导出只校验目标盘，失败不进入上传；纯G-code调度及完整云配置工程、登录/后端协议不变。传统send_gcode补当前盘解析，未执行云端或设备发送，不将格式测试当作云回归。"
 }
 -->
 
@@ -23,6 +23,8 @@
 ## 核心流程
 
 GFDAuthManager 管理会话并包装需要认证的请求；GFDConfig 提供环境、地址和设备按钮配置。下载器／ModelMall 获取模型，设备选择和耗材映射对话框组织云任务；参数导入和上传的可用入口随版本分支不同。
+
+GFD 当前盘打印的 `start_gfd_print_export` 在 3MF 模式向共享 `export_3mf` 传明确零基盘号和 `WithGcode + SkipModel`，不经过传统 `send_gcode_legacy`。新切片包校验仅要求目标盘有效且 G-code 非空，其他盘未切片不应拦截单盘；导出失败不会进入上传。纯 G-code 调度、已导入切片文件直传、完整云配置工程导出及后端接口没有随此批修改。共享文件回归不等于真实云端/设备下发已验证。
 
 ## 配置与约束
 

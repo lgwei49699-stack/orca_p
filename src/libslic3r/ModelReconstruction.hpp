@@ -16,9 +16,17 @@ class ModelObject;
 struct ModelReconstructionOptions
 {
     MeshReconstructionOptions    mesh;
-    ReconstructionProcessOptions process;
+    // Zero selects a size-aware budget. Positive caller overrides are retained.
+    // These sentinels are resolved before invoking the generic process runner.
+    ReconstructionProcessOptions process{0, 0, {}, {}};
     std::string                  executable;
 };
+
+// Resolves only resource limits, preserving cancellation/tick callbacks. Physical
+// RAM is an upper bound for automatic budgets, not an estimate of free memory.
+ReconstructionProcessOptions model_reconstruction_process_options(std::size_t input_faces,
+                                                                  const ReconstructionProcessOptions& requested,
+                                                                  std::size_t physical_memory_bytes);
 
 struct ModelReconstructionResult
 {

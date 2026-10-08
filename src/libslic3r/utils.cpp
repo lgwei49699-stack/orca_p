@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <locale>
+#include <limits>
 #include <ctime>
 #include <cstdarg>
 #include <stdio.h>
@@ -1449,9 +1450,10 @@ size_t total_physical_memory()
 #elif defined(_WIN32)
 	// Windows. -------------------------------------------------
 	// Use new 64-bit MEMORYSTATUSEX, not old 32-bit MEMORYSTATUS
-	MEMORYSTATUSEX status;
+	MEMORYSTATUSEX status{};
 	status.dwLength = sizeof(status);
-	GlobalMemoryStatusEx( &status );
+	if (!GlobalMemoryStatusEx( &status ))
+		return 0;
 	return (size_t)status.ullTotalPhys;
 #elif defined(__unix__) || defined(__unix) || defined(unix) || (defined(__APPLE__) && defined(__MACH__))
 	// UNIX variants. -------------------------------------------
@@ -1467,7 +1469,7 @@ size_t total_physical_memory()
 #endif
 	int64_t size = 0;               // 64-bit
 	size_t len = sizeof( size );
-	if ( sysctl( mib, 2, &size, &len, NULL, 0 ) == 0 )
+	if ( sysctl( mib, 2, &size, &len, NULL, 0 ) == 0 && size > 0 )
 		return (size_t)size;
 	return 0L;			// Failed?
 
@@ -1477,13 +1479,17 @@ size_t total_physical_memory()
 
 #elif defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
 	// FreeBSD, Linux, OpenBSD, and Solaris. --------------------
-	return (size_t)sysconf( _SC_PHYS_PAGES ) *
-		(size_t)sysconf( _SC_PAGESIZE );
+	const long pages = sysconf(_SC_PHYS_PAGES), page_size = sysconf(_SC_PAGESIZE);
+	if (pages <= 0 || page_size <= 0 || size_t(pages) > std::numeric_limits<size_t>::max() / size_t(page_size))
+		return 0;
+	return size_t(pages) * size_t(page_size);
 
 #elif defined(_SC_PHYS_PAGES) && defined(_SC_PAGE_SIZE)
 	// Legacy. --------------------------------------------------
-	return (size_t)sysconf( _SC_PHYS_PAGES ) *
-		(size_t)sysconf( _SC_PAGE_SIZE );
+	const long pages = sysconf(_SC_PHYS_PAGES), page_size = sysconf(_SC_PAGE_SIZE);
+	if (pages <= 0 || page_size <= 0 || size_t(pages) > std::numeric_limits<size_t>::max() / size_t(page_size))
+		return 0;
+	return size_t(pages) * size_t(page_size);
 
 #elif defined(CTL_HW) && (defined(HW_PHYSMEM) || defined(HW_REALMEM))
 	// DragonFly BSD, FreeBSD, NetBSD, OpenBSD, and OSX. --------

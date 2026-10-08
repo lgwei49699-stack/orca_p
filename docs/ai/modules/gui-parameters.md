@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-parameters",
-  "source_fingerprint": "sha256:761de41395dcbd67fca531e1733bd90a97f123b261b25330b934835940787d7d",
-  "reason": "按 2026-10-04 用户约定补齐 GUI／CLI 同步检查、必要构建与测试分工、GUI 验证交接；只改维护规则，源码指纹及既有测试证据未变。"
+  "source_fingerprint": "sha256:c8da6d2696cd3d1df0fd1fb76f5a1065233d279906e0002f38dae2f1e3d75760",
+  "reason": "本轮Plater新增差异仅是send_gcode的当前盘哨兵解析，不改变配置合成、参数面板、预设或对象覆盖；保留既有切片与导出改动，本模块正文无需修改。"
 }
 -->
 

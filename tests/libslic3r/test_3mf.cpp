@@ -345,11 +345,12 @@ bool store_bbs_project(const std::string          &path,
     return store_bbs_3mf(params);
 }
 
-bool store_bbs_gcode_project(const std::string&  path,
-                             DynamicPrintConfig& config,
-                             const std::string&  gcode_path,
-                             bool                with_thumbnail   = true,
-                             int                 export_plate_idx = -1)
+bool store_bbs_gcode_project(const std::string&                       path,
+                             DynamicPrintConfig&                      config,
+                             const std::string&                       gcode_path,
+                             bool                                     with_thumbnail   = true,
+                             int                                      export_plate_idx = -1,
+                             const std::function<void(StoreParams&)>& configure        = {})
 {
     attach_enum_vector_serialization_maps(config);
 
@@ -388,6 +389,8 @@ bool store_bbs_gcode_project(const std::string&  path,
     params.thumbnail_data  = {&plate.plate_thumbnail};
     params.export_plate_idx = export_plate_idx;
     params.strategy = SaveStrategy::Zip64 | SaveStrategy::Silence | SaveStrategy::WithGcode | SaveStrategy::WithSliceInfo;
+    if (configure)
+        configure(params);
     return store_bbs_3mf(params);
 }
 
@@ -1234,6 +1237,231 @@ TEST_CASE("BBS 3MF readers gate unknown required features by artifact type",
     REQUIRE_FALSE(future_raft_plate.plate_thumbnail.pixels.empty());
     REQUIRE(std::string(future_raft_plate.plate_thumbnail.pixels.begin(), future_raft_plate.plate_thumbnail.pixels.end()) ==
             archived_thumbnail);
+}
+
+TEST_CASE("Sliced-only 3MF requires every selected plate's G-code", "[3mf][bbs][SlicedExport]")
+{
+    Temporary3mfPath  archive("orca-sliced-export");
+    TemporaryFilePath gcode("orca-sliced-export", ".gcode");
+    const std::string text = "; slice fixture\nG1 X10 Y10 E1\n";
+    {
+        std::ofstream output(gcode.path());
+        output << text;
+    }
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    const auto         mode   = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+    INFO("case=" << mode);
+    PlateData other;
+    other.plate_index     = 1;
+    other.is_sliced_valid = false;
+    bool       expected   = mode == 0 || mode == 6 || mode == 7 || mode == 8;
+    const bool result     = store_bbs_gcode_project(archive.path(), config, gcode.path(), true, 0, [&](StoreParams& params) {
+        params.strategy = params.strategy | SaveStrategy::SkipModel;
+        if (mode == 1)
+            params.plate_data_list.front()->is_sliced_valid = false;
+        if (mode == 2)
+            params.plate_data_list.front()->gcode_file += ".missing";
+        if (mode == 3) {
+            std::ofstream empty(gcode.path(), std::ios::trunc);
+        }
+        if (mode == 4)
+            params.plate_data_list.clear();
+        if (mode == 5)
+            params.export_plate_idx = 5;
+        if (mode >= 6 && mode <= 9) {
+            params.plate_data_list.push_back(&other);
+            if (mode == 6 || mode == 9)
+                other.objects_and_instances.emplace_back(0, 0);
+            if (mode >= 7)
+                params.export_plate_idx = -2;
+            if (mode == 8) {
+                other.objects_and_instances.emplace_back(0, 0);
+                other.gcode_file      = gcode.path();
+                other.is_sliced_valid = true;
+            }
+        }
+    });
+    REQUIRE(result == expected);
+    REQUIRE(boost::filesystem::exists(archive.path()) == expected);
+    REQUIRE_FALSE(boost::filesystem::exists(archive.path() + ".tmp"));
+    if (expected) {
+        REQUIRE(read_zip_entry_text(archive.path(), "Metadata/plate_1.gcode") == text);
+        REQUIRE_FALSE(read_zip_entry_text(archive.path(), "Metadata/project_settings.config").empty());
+        if (mode == 8)
+            REQUIRE(read_zip_entry_text(archive.path(), "Metadata/plate_2.gcode") == text);
+    }
+}
+
+TEST_CASE("Sliced export selects printable plates without retaining skipped G-code references", "[3mf][bbs][SlicedExport]")
+{
+    Temporary3mfPath  archive("orca-sliced-selection");
+    TemporaryFilePath gcode("orca-sliced-selection", ".gcode");
+    const std::string text = "; fixture\nG1 X10 Y10 E1\n";
+    {
+        std::ofstream output(gcode.path());
+        output << text;
+    }
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    const int          mode   = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+    CAPTURE(mode);
+    PlateData other;
+    other.plate_index      = 1;
+    other.plate_name       = "not printed";
+    other.printer_model_id = "not printed";
+    other.objects_and_instances.emplace_back(0, 0);
+    other.has_printable_instances = false;
+    // Disabled, disabled+stale cache, disabled+valid cache, unknown, printable,
+    // G-code-only, missing G-code-only, explicit unsliced, all disabled,
+    // ordinary editable project, explicit selection with another valid plate,
+    // all-plate export with the first plate disabled, and selecting plate 2 only.
+    const bool expected = mode == 0 || mode == 1 || mode == 2 || mode == 5 || mode >= 9;
+    const bool result = store_bbs_gcode_project(archive.path(), config, gcode.path(), true, -2, [&](StoreParams& params) {
+        params.strategy = params.strategy | SaveStrategy::SkipModel;
+        params.plate_data_list.push_back(&other);
+        if (mode == 1 || mode == 2 || mode == 5 || mode == 6 || mode >= 9) {
+            other.is_sliced_valid = true;
+            other.gcode_file = (mode == 1 || mode == 6) ? gcode.path() + ".missing" : gcode.path();
+        }
+        if (mode == 3)
+            other.has_printable_instances.reset();
+        if (mode == 4 || mode == 10 || mode == 11)
+            other.has_printable_instances = true;
+        if (mode == 5 || mode == 6)
+            other.objects_and_instances.clear();
+        if (mode == 7 || mode == 12)
+            params.export_plate_idx = 1;
+        if (mode == 8 || mode == 11)
+            params.plate_data_list.front()->has_printable_instances = false;
+        if (mode == 9)
+            params.strategy = SaveStrategy::Silence | SaveStrategy::WithGcode | SaveStrategy::WithSliceInfo;
+        if (mode == 10)
+            params.export_plate_idx = 0;
+    });
+    REQUIRE(result == expected);
+    REQUIRE(boost::filesystem::exists(archive.path()) == expected);
+    REQUIRE_FALSE(boost::filesystem::exists(archive.path() + ".tmp"));
+    if (!expected)
+        return;
+    if (mode == 11 || mode == 12)
+        CHECK_THROWS(read_zip_entry_text(archive.path(), "Metadata/plate_1.gcode"));
+    else
+        REQUIRE(read_zip_entry_text(archive.path(), "Metadata/plate_1.gcode") == text);
+    const bool include_other = mode == 5 || mode == 9 || mode == 11 || mode == 12;
+    const auto metadata = read_zip_entry_text(archive.path(), "Metadata/model_settings.config");
+    const auto slice_info = read_zip_entry_text(archive.path(), "Metadata/slice_info.config");
+    const auto relations = read_zip_entry_text(archive.path(), "Metadata/_rels/model_settings.config.rels");
+    CHECK((metadata.find("not printed") != std::string::npos) == include_other);
+    CHECK((metadata.find("plate_2.gcode") != std::string::npos) == include_other);
+    CHECK((relations.find("plate_2.gcode") != std::string::npos) == include_other);
+    CHECK((slice_info.find("not printed") != std::string::npos) == include_other);
+    CHECK(metadata.find(gcode.path()) == std::string::npos);
+    if (include_other) {
+        CHECK(read_zip_entry_text(archive.path(), "Metadata/plate_2.gcode") == text);
+    } else {
+        CHECK_THROWS(read_zip_entry_text(archive.path(), "Metadata/plate_2.gcode"));
+        CHECK_THROWS(read_zip_entry_text(archive.path(), "Metadata/plate_2.gcode.md5"));
+    }
+    {
+        // Original plate IDs remain readable with empty slots for excluded
+        // plates. Never renumber G-code independently of its metadata.
+        std::ifstream archive_stream(archive.path(), std::ios::binary);
+        Model loaded_model;
+        ModelBackupPathGuard backup_guard(loaded_model);
+        BbsLoadArtifacts loaded;
+        Semver version;
+        attach_enum_vector_serialization_maps(config);
+        REQUIRE(load_gcode_3mf_from_stream(archive_stream, &config, &loaded_model, &loaded.plates, &version));
+        REQUIRE(loaded.plates.size() == 2);
+        CHECK(loaded.plates[0]->plate_index == 0);
+        CHECK(loaded.plates[1]->plate_index == 1);
+        CHECK(loaded.plates[0]->gcode_file == (mode == 11 || mode == 12 ? "" : "Metadata/plate_1.gcode"));
+        CHECK(loaded.plates[1]->gcode_file == (include_other ? "Metadata/plate_2.gcode" : ""));
+    }
+}
+
+TEST_CASE("Sending a concrete plate does not require other plates to be sliced", "[3mf][bbs][SlicedExport]")
+{
+    Temporary3mfPath  archive("orca-send-current-plate");
+    TemporaryFilePath gcode("orca-send-current-plate", ".gcode");
+    const std::string text = "; selected plate\nG1 X10 Y10 E1\n";
+    {
+        std::ofstream output(gcode.path());
+        output << text;
+    }
+    const int  selected    = GENERATE(0, 1);
+    const int  other_state = GENERATE(0, 1, 2); // Unsliced, missing file, valid.
+    const bool all_plates  = GENERATE(false, true);
+    CAPTURE(selected, other_state, all_plates);
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    PlateData other;
+    other.plate_index             = 1;
+    other.has_printable_instances = true;
+    other.objects_and_instances.emplace_back(0, 0);
+    const bool result = store_bbs_gcode_project(archive.path(), config, gcode.path(), false, all_plates ? -2 : selected,
+                                               [&](StoreParams& params) {
+        params.strategy = params.strategy | SaveStrategy::SkipModel;
+        params.plate_data_list.push_back(&other);
+        for (PlateData* plate : params.plate_data_list) {
+            plate->has_printable_instances = true;
+            plate->is_sliced_valid = plate->plate_index == selected || other_state != 0;
+            plate->gcode_file = plate->plate_index == selected || other_state == 2 ? gcode.path() :
+                               other_state == 1 ? gcode.path() + ".missing" : "";
+        }
+    });
+    REQUIRE(result == (!all_plates || other_state == 2));
+    REQUIRE(boost::filesystem::exists(archive.path()) == result);
+    REQUIRE_FALSE(boost::filesystem::exists(archive.path() + ".tmp"));
+    if (!result)
+        return;
+
+    std::ifstream archive_stream(archive.path(), std::ios::binary);
+    Model loaded_model;
+    ModelBackupPathGuard backup_guard(loaded_model);
+    BbsLoadArtifacts loaded;
+    Semver version;
+    REQUIRE(load_gcode_3mf_from_stream(archive_stream, &config, &loaded_model, &loaded.plates, &version));
+    REQUIRE(loaded.plates.size() == 2);
+    for (int i = 0; i < 2; ++i) {
+        const std::string name = "Metadata/plate_" + std::to_string(i + 1) + ".gcode";
+        if (all_plates || i == selected) {
+            CHECK(read_zip_entry_text(archive.path(), name.c_str()) == text);
+            CHECK(loaded.plates[i]->gcode_file == name);
+        } else {
+            CHECK_THROWS(read_zip_entry_text(archive.path(), name.c_str()));
+            CHECK(loaded.plates[i]->gcode_file.empty());
+        }
+    }
+}
+
+TEST_CASE("Failed sliced export preserves an existing file and ordinary project saving", "[3mf][bbs][SlicedExport]")
+{
+    Temporary3mfPath  archive("orca-sliced-preserve");
+    TemporaryFilePath gcode("orca-sliced-preserve", ".gcode");
+    const std::string previous = "previous user file";
+    {
+        std::ofstream output(archive.path());
+        output << previous;
+    }
+    {
+        std::ofstream output(gcode.path());
+        output << "; fixture\nG1 X10 Y10 E1\n";
+    }
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    REQUIRE_FALSE(store_bbs_gcode_project(archive.path(), config, gcode.path(), true, 0, [&](StoreParams& params) {
+        params.strategy = params.strategy | SaveStrategy::SkipModel;
+        params.proFn    = [&](int stage, int, int, bool&) {
+            if (stage == EXPORT_STAGE_ADD_GCODE) {
+                boost::system::error_code error;
+                boost::filesystem::remove(gcode.path(), error);
+            }
+        };
+    }));
+    std::ifstream input(archive.path());
+    REQUIRE(std::string(std::istreambuf_iterator<char>(input), {}) == previous);
+    REQUIRE_FALSE(boost::filesystem::exists(archive.path() + ".tmp"));
+    REQUIRE(store_bbs_gcode_project(archive.path(), config, gcode.path(), false, -1,
+                                    [](StoreParams& params) { params.plate_data_list.front()->is_sliced_valid = false; }));
+    REQUIRE_FALSE(read_zip_entry_text(archive.path(), "3D/3dmodel.model").empty());
 }
 
 TEST_CASE("G-code 3MF only references thumbnails present in the archive", "[3mf][bbs][PNG][Thumbnails]")
