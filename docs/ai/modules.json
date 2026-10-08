@@ -1657,6 +1657,7 @@
       ],
       "tests": [
         "scripts/tests/test_bundle_macos_zstd.py",
+        "scripts/tests/test_macos_build_compatibility.py",
         "scripts/tests/test_gmp_platform_selection.py"
       ],
       "test_note": "修改 CMake／打包脚本先静态检查，再按 validation.md 的长期分工构建受影响目标；缺少所需构建时由 AI 补齐。打包改动验证实际打包流程，跨平台 Python 测试不等于 Windows 安装包验收。"
@@ -1679,6 +1680,7 @@
         "scripts/test_raft_stability_helpers.py",
         "scripts/test_repair_acceptance_helpers.py",
         "scripts/tests/test_bundle_macos_zstd.py",
+        "scripts/tests/test_macos_build_compatibility.py",
         "scripts/tests/test_check_ai_module_docs.py",
         "scripts/tests/test_gmp_platform_selection.py",
         "scripts/validate_raft_stability.py",

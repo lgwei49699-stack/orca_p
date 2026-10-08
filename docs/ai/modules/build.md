@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:19ef73a5601a19330befb04aee3dfb3f4fb2b4b1a782d3fd9561bdc22605ae2e",
-  "reason": "复核现有重建目标集成，并将GMP配方纳入watch；仅Darwin arm64目标固定升级6.3.0避开保留寄存器x18，其他目标保留6.2.1补丁或MSVC预编译库；补真实CMake条件矩阵，不以配置测试代替跨平台运行。"
+  "source_fingerprint": "sha256:d0c438b6f5795f7769897b0a7054f58406109aef23d063f9e373146947348fbc",
+  "reason": "Mac构建入口显式选择固定版兼容zstd，并在主程序/校验工具/双架构应用整理时携带运行库、许可和其他用户可读的实体资源、校验临时签名。枚举和重复库告警按工具链能力启用，不改变链接顺序。增加原生构建入口回归；复核补齐独立的新旧编译器版本/能力分支测试，生产策略不变。实际应用/打包验证与旧系统未验范围见10-08记录，GMP不变。"
 }
 -->
 
@@ -18,6 +18,7 @@
 - [CMakeLists.txt](../../../src/CMakeLists.txt)：装配应用可执行目标、链接依赖和平台资源。
 - [version.inc](../../../version.inc)：定义应用名称、标识及版本；由 CMake 引入，产品版本与资源包版本分开维护。
 - [build_release_macos.sh](../../../build_release_macos.sh)：macOS 的依赖、架构、构建配置和打包命令入口；按[验证规范](../validation.md)选择必要目标并确认脚本的依赖／打包范围。
+- [build_macos_zstd.sh](../../../scripts/build_macos_zstd.sh) 与 [bundle_macos_zstd.sh](../../../scripts/bundle_macos_zstd.sh)：固定运行库构建、架构/最低系统验证与包内重定位；构建入口和独立 DMG 入口共用。
 
 ## 核心流程
 
@@ -31,6 +32,22 @@
 
 架构、生成器、Release 配置和依赖前缀必须匹配。应用版本与资源包版本独立。Windows 动态库、macOS rpath/zstd 和 Linux 分发标识是不同打包责任，不能只改一个文件名推定完成。
 
+Mac 应用构建先在 `build/<arch>/macos-zstd/<最低系统版本>` 构建既有固定版本 zstd 1.5.7，
+每次校验源码压缩包 SHA256，保留已解压源码时间戳以支持增量编译；未改 Homebrew 或第三方快照。
+配置显式传 `zstd_DIR:PATH`，避免 Boost iostreams 的传递依赖再发现高系统版本 Homebrew 库。
+离线仍可用 `WISEBEGINNER_ZSTD_ARCHIVE`。`-b` 只接受已选择对应兼容库的缓存，否则要求去掉
+`-b` 重新配置。直接调用 CMake 的新构建目录仍需显式选择兼容 zstd 前缀，不自动下载。
+
+生成的 `build/<arch>/OrcaSlicer/*.app` 将 zstd 复制到 Frameworks，改用包内引用并带许可；
+先把 Resources 软链接变为副本，资源根目录为 0755 以便其他用户读取，避免修改仓库资源，
+再对完整包做 ad-hoc 签名及严格完整性检查。
+universal 的两次应用编译共用包含双架构的库，lipo 合并后重新验证和签名。独立 DMG 打包仍可
+处理旧的外部绝对路径依赖，并验证已经包内化的库；临时签名不等于 Developer ID 签名或公证。
+
+`CompilerWarningCompatibility.cmake` 先探测枚举诊断支持，支持才给 C++ 添加降级选项；
+Apple ld 的重复库告警通过链接器探测后才关闭，不重排或删除传递静态库，其他警告继续保留。
+旧 CMake（低于 3.18）不尝试该链接选项；非 Apple 平台不施加 Apple 链接器选项。
+
 旧 arm64 依赖缓存不会因 `build_release_macos.sh -s`（仅应用）自动升级，须先在对应依赖构建目录执行 `cmake --build deps/build/arm64 --target dep_GMP`，再重新链接应用/测试，或走包含依赖的完整构建。现有 universal 脚本按 arm64/x86_64 分开构建后合并；本次只验证 arm64 产物，没有验证 universal 打包。
 
 ## 失败与取消
@@ -38,6 +55,12 @@
 编译成功、链接成功、打包成功和目标系统可运行分开记录；警告不能冒充构建失败，旧二进制也不能证明新源码通过。用户已有新构建时复用；缺少当前验证所需产物时由 AI 补齐必要目标，详见[验证规范](../validation.md)。
 
 ## 修改与验证
+
+`test_macos_build_compatibility.py` 以小型原生 Mach-O 测构建入口、缓存、校验工具、双架构与签名，
+并实际探测 CMake 告警选项；替换昂贵的源码/应用构建，不把夹具通过视为完整应用各架构验收。
+实际工具链编译与配置阶段的版本/能力模拟分开：覆盖 AppleClang 14、15 的门槛、15.0.1/16、
+Clang 支持/不支持及非 Clang 拒绝分支；模拟选项不用于编译，不冒充旧工具链真机验证。
+真实 arm64 构建、包内路径/最低系统、CLI 和剩余限制见 [Mac 验证记录](../validation/2026-10-08-macos-runtime.md)。
 
 修改 CMake／打包脚本先静态检查，再按当前分工构建受影响目标；打包改动需要验证实际打包流程，普通业务改动不默认执行全平台打包。交给用户 GUI 验证的应用路径与资源必须匹配本次构建；跨平台 Python 脚本测试不等于 Windows 安装包验收。
 
@@ -47,7 +70,8 @@
 
 ## 分支现状
 
-本分支保留 OrcaSlicer 品牌和现有打包规则，Windows 动态库/CGAL 处理与用户版并不全同；本次不改依赖链接选项。
+本分支保留 OrcaSlicer 品牌；Windows 动态库/CGAL 处理与用户版并不全同。本次仅调整
+Mac zstd 选择/打包和可选诊断选项，不修改 Windows/Linux 的运行库版本及平台打包脚本。
 
 ## 关联模块
 

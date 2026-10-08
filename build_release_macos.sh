@@ -155,6 +155,16 @@ function pack_deps() {
 }
 
 function build_slicer() {
+    # Boost iostreams may otherwise discover a Homebrew runtime requiring a
+    # newer OS than the app. Use one pinned prefix for all slices of universal.
+    local runtime_architectures="$ARCH"
+    if [ "$ARCH" = "universal" ]; then
+        runtime_architectures="x86_64 arm64"
+    fi
+    MACOS_ZSTD_DIR="$PROJECT_DIR/build/$ARCH/macos-zstd/$OSX_DEPLOYMENT_TARGET"
+    bash "$PROJECT_DIR/scripts/build_macos_zstd.sh" "$runtime_architectures" "$OSX_DEPLOYMENT_TARGET" "$MACOS_ZSTD_DIR"
+    local zstd_config_dir="$MACOS_ZSTD_DIR/install/lib/cmake/zstd"
+
     # iterate over two architectures: x86_64 and arm64
     for _ARCH in x86_64 arm64; do
         # if ARCH is universal or equal to _ARCH
@@ -176,6 +186,7 @@ function build_slicer() {
                     -DORCA_TOOLS=ON \
                     ${ORCA_UPDATER_SIG_KEY:+-DORCA_UPDATER_SIG_KEY="$ORCA_UPDATER_SIG_KEY"} \
                     -DCMAKE_PREFIX_PATH="$DEPS/usr/local" \
+                    -Dzstd_DIR:PATH="$zstd_config_dir" \
                     -DCMAKE_INSTALL_PREFIX="$PWD/OrcaSlicer" \
                     -DCMAKE_BUILD_TYPE="$BUILD_CONFIG" \
                     -DCMAKE_MACOSX_RPATH=ON \
@@ -183,6 +194,9 @@ function build_slicer() {
                     -DCMAKE_MACOSX_BUNDLE=ON \
                     -DCMAKE_OSX_ARCHITECTURES="${_ARCH}" \
                     -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}"
+            elif ! grep -Fqx "zstd_DIR:PATH=$zstd_config_dir" CMakeCache.txt; then
+                echo "error: cached zstd does not match the portable runtime; rerun without -b" >&2
+                exit 1
             fi
             cmake --build . --config "$BUILD_CONFIG" --target "$SLICER_BUILD_TARGET"
         )
@@ -202,20 +216,14 @@ function build_slicer() {
             rm -rf ./OrcaSlicer.app
             # fully copy newly built app
             cp -pR "../src$BUILD_DIR_CONFIG_SUBDIR/OrcaSlicer.app" ./OrcaSlicer.app
-            # fix resources
-            resources_path=$(readlink ./OrcaSlicer.app/Contents/Resources)
-            rm ./OrcaSlicer.app/Contents/Resources
-            cp -R "$resources_path" ./OrcaSlicer.app/Contents/Resources
-            # delete .DS_Store file
-            find ./OrcaSlicer.app/ -name '.DS_Store' -delete
+            finalize_macos_app "$PWD/OrcaSlicer.app"
             
             # Copy OrcaSlicer_profile_validator.app if it exists
             if [ -f "../src$BUILD_DIR_CONFIG_SUBDIR/OrcaSlicer_profile_validator.app/Contents/MacOS/OrcaSlicer_profile_validator" ]; then
                 echo "Copying OrcaSlicer_profile_validator.app..."
                 rm -rf ./OrcaSlicer_profile_validator.app
                 cp -pR "../src$BUILD_DIR_CONFIG_SUBDIR/OrcaSlicer_profile_validator.app" ./OrcaSlicer_profile_validator.app
-                # delete .DS_Store file
-                find ./OrcaSlicer_profile_validator.app/ -name '.DS_Store' -delete
+                finalize_macos_app "$PWD/OrcaSlicer_profile_validator.app"
             fi
         )
 
@@ -232,6 +240,32 @@ function build_slicer() {
 
     fi
     done
+}
+
+function finalize_macos_app() {
+    local app="$1"
+    # A generated Resources symlink must not let license copying/signing mutate
+    # repository resources. The app copy is the only writable packaging target.
+    if [ -L "$app/Contents/Resources" ]; then
+        local resources_path
+        resources_path="$(readlink "$app/Contents/Resources")"
+        if [[ "$resources_path" != /* ]]; then
+            resources_path="$app/Contents/$resources_path"
+        fi
+        local resources_stage
+        resources_stage="$(mktemp -d "$app/Contents/Resources.XXXXXX")"
+        cp -R "$resources_path/." "$resources_stage/"
+        # mktemp defaults to 0700, which would hide resources from other users.
+        chmod 755 "$resources_stage"
+        rm "$app/Contents/Resources"
+        mv "$resources_stage" "$app/Contents/Resources"
+    fi
+    find "$app/" -name '.DS_Store' -delete
+    bash "$PROJECT_DIR/scripts/bundle_macos_zstd.sh" "$app"
+    mkdir -p "$app/Contents/Resources/licenses"
+    cp "$MACOS_ZSTD_DIR/install/zstd-LICENSE.txt" "$app/Contents/Resources/licenses/zstd-LICENSE.txt"
+    codesign --force --deep --sign - "$app"
+    codesign --verify --deep --strict "$app"
 }
 
 function build_universal() {
@@ -255,6 +289,9 @@ function build_universal() {
         "$PROJECT_DIR/build/x86_64/OrcaSlicer/OrcaSlicer.app/$BINARY_PATH" \
         "$PROJECT_DIR/build/arm64/OrcaSlicer/OrcaSlicer.app/$BINARY_PATH" \
         -output "$UNIVERSAL_APP/$BINARY_PATH"
+    # The copied runtime already contains both slices. Revalidate both and
+    # refresh the app signature after lipo changes the main executable.
+    finalize_macos_app "$UNIVERSAL_APP"
         
     echo "Universal binary created at $UNIVERSAL_APP"
     
@@ -274,6 +311,7 @@ function build_universal() {
             "$PROJECT_DIR/build/x86_64/OrcaSlicer/OrcaSlicer_profile_validator.app/$VALIDATOR_BINARY_PATH" \
             "$PROJECT_DIR/build/arm64/OrcaSlicer/OrcaSlicer_profile_validator.app/$VALIDATOR_BINARY_PATH" \
             -output "$UNIVERSAL_VALIDATOR_APP/$VALIDATOR_BINARY_PATH"
+        finalize_macos_app "$UNIVERSAL_VALIDATOR_APP"
             
         echo "Universal binary for OrcaSlicer_profile_validator created at $UNIVERSAL_VALIDATOR_APP"
     fi
