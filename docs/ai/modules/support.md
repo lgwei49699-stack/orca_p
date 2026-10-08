@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "support",
-  "source_fingerprint": "sha256:bec81e6e035f15bfbd711b8b5c1912199792fc51bece44595cf8dd7843a10e5b",
-  "reason": "悬空告警在周长墙/填充完成时按真实线宽覆盖排除未挤出微区，实际小路径仍告警；支撑生成不启用此筛选。并行结果逐层归并避免共享状态竞争，区分区域数/时间降级；补回归与龙模型同参CLI对照，全量旧摆放夹具失败单列记录。"
+  "source_fingerprint": "sha256:d02b3f537f6522c24f05684cb48ad5894cba9e856b37456a6bde921ae12cd1a5",
+  "reason": "共享测试新增增强筏层阶梯凹口裁断回归；普通支撑、悬空告警及SupportCommon安全裁剪实现未改，新增端点限制只由RaftMerge无墙增强分支设置，正文沿用。筏层/填充专项通过，不宣称全量普通支撑或实机验收。"
 }
 -->
 

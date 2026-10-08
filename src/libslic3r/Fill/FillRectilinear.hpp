@@ -18,6 +18,11 @@ public:
     Polylines fill_surface(const Surface *surface, const FillParams &params) override;
     bool is_self_crossing() override { return false; }
 
+    // Maximum extension from the turn contour towards the outer contour, in mm.
+    // Negative keeps the normal infill/perimeter overlap. A standalone raft
+    // without walls needs both contours inside its printable centerline region.
+    double max_endpoint_overlap{-1.};
+
 protected:
     // Fill by single directional lines, interconnect the lines along perimeters.
 	bool fill_surface_by_lines(const Surface *surface, const FillParams &params, float angleBase, float pattern_shift, Polylines &polylines_out);

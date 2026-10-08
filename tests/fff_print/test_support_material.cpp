@@ -22,6 +22,7 @@
 #include "libslic3r/GCode/ConflictChecker.hpp"
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/Fill/FillBase.hpp"
+#include "libslic3r/Fill/FillRectilinear.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/Print.hpp"
@@ -4729,6 +4730,84 @@ TEST_CASE("Connected raft turns preserve holes cuts bed limits and exported chun
     REQUIRE(std::any_of(object.support_layers().begin(), object.support_layers().end(),
                         [](const SupportLayer* layer) { return layer->support_fills.items_count() > layer->support_islands.size(); }));
     require_raft_gcode_completes_each_chunk(print);
+}
+
+TEST_CASE("Standalone raft zigzags stay connected through stepped centerline notches",
+          "[SupportMaterial][Raft][Geometry][Continuity][EndpointOverlap]")
+{
+    std::ifstream input((boost::filesystem::path(TEST_DATA_DIR) / "raft_geometry" / "benchy-stepped-raft.json").string());
+    REQUIRE(input.good());
+    const auto fixture = nlohmann::json::parse(input);
+    const auto polygon = [](const nlohmann::json& points) {
+        Points result;
+        for (const auto& point : points)
+            result.emplace_back(point[0].get<coord_t>(), point[1].get<coord_t>());
+        return Polygon(std::move(result));
+    };
+    size_t legacy_splits = 0;
+    for (const auto& layer : fixture.at("layers")) {
+        ExPolygons areas;
+        for (const auto& entry : layer.at("areas")) {
+            ExPolygon area(polygon(entry.at("contour")));
+            for (const auto& hole : entry.at("holes"))
+                area.holes.push_back(polygon(hole));
+            areas.push_back(std::move(area));
+        }
+        const Point origin = get_extents(areas).center();
+        translate(areas, -origin);
+        const double width = layer.at("width");
+        // Test both hatch directions, multiple widths and densities, not only
+        // the one phase/parity visible in the original GUI screenshot.
+        for (double angle : {0., PI / 4., PI / 2., 3. * PI / 4.}) {
+            FillZigZag filler;
+            filler.set_bounding_box(get_extents(areas));
+            filler.angle   = float(angle);
+            filler.spacing = layer.at("spacing");
+            filler.overlap = std::min(0., 0.5 * filler.spacing - (0.5 * width + 0.003));
+            FillParams params;
+            params.density      = layer.at("density");
+            params.dont_adjust  = true;
+            params.pattern      = ipZigZag;
+            const auto generate = [&] {
+                Polylines paths;
+                for (const ExPolygon& area : closing_ex(areas, float(SCALED_EPSILON))) {
+                    const Surface surface(stInternal, area);
+                    append(paths, filler.fill_surface(&surface, params));
+                }
+                return paths;
+            };
+            const Polylines  legacy = generate();
+            const ExPolygons bounds = offset_ex(areas, -scale_(0.5 * width + 0.001));
+            legacy_splits += intersection_pl(legacy, bounds).size() > legacy.size();
+            filler.max_endpoint_overlap = 0.001;
+            Polylines paths             = generate();
+            CAPTURE(width, angle, params.density, paths.size());
+            REQUIRE_FALSE(paths.empty());
+            REQUIRE(diff_pl(paths, bounds).empty());
+            const double              height = width > 0.5 ? 0.3 : 0.2;
+            ExtrusionEntityCollection collection;
+            extrusion_entities_append_paths(collection.entities, std::move(paths), erSupportMaterialInterface, 0.1, float(width),
+                                            float(height));
+            ExtrusionPaths before;
+            getExtrusionPathsFromEntity(&collection, before);
+            clip_raft_paths_to_area(collection, to_polygons(areas), true);
+            ExtrusionPaths after;
+            getExtrusionPathsFromEntity(&collection, after);
+            REQUIRE(after.size() == before.size());
+            for (size_t i = 0; i < before.size(); ++i) {
+                REQUIRE(after[i].polyline == before[i].polyline);
+                REQUIRE(after[i].width == before[i].width);
+                REQUIRE(after[i].height == before[i].height);
+                REQUIRE(after[i].mm3_per_mm == before[i].mm3_per_mm);
+            }
+            // This is an opt-in property: reusing the ordinary filler restores
+            // its original output, without changing all support/model infill.
+            filler.max_endpoint_overlap = -1.;
+            REQUIRE(generate() == legacy);
+        }
+    }
+    // The fixture must expose the old failure, not just be a passing rectangle.
+    REQUIRE(legacy_splits > 0);
 }
 
 TEST_CASE("Raft base cleanup distinguishes detached remnants from useful narrow and original regions",

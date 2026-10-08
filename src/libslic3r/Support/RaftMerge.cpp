@@ -2,7 +2,7 @@
 #include "RaftGeometry.hpp"
 
 #include "../ClipperUtils.hpp"
-#include "../Fill/FillBase.hpp"
+#include "../Fill/FillRectilinear.hpp"
 #include "../GCode/ConflictChecker.hpp"
 #include "../I18N.hpp"
 #include "../Print.hpp"
@@ -291,13 +291,14 @@ void generate_shared_paths(MergedLayer& result, const BoundingBox& bounds, const
         });
         fill_areas   = std::move(path_regions.fill_regions);
         if (walls == 0 && pattern == ipZigZag) {
-            // ZigZag turns follow the filler's inner contour, half a pattern
-            // spacing from its input. Keep that contour inside the final
-            // half-width + 0.001 mm clip, with one extra micron of allowance.
-            // Otherwise clipping removes every turn and leaves isolated lines.
-            // Only move the turns as much as needed; retain the hatch spacing
-            // and let the final clip trim the open ends of each continuous path.
-            filler->overlap = std::min(0., 0.5 * filler->spacing - (0.5 * double(flow.width()) + 0.002));
+            // There are no walls to overlap here. Both the turn contour AND
+            // the outer hatch contour must fit inside the final half-width +
+            // 0.001 mm clip. Otherwise a hatch chord may cross a concave notch
+            // in the centerline region and get split by the safety clip.
+            // Leave 0.001 mm between contours and another micron for rounding;
+            // preserve the requested hatch spacing, density and phase.
+            filler->overlap = std::min(0., 0.5 * filler->spacing - (0.5 * double(flow.width()) + 0.003));
+            static_cast<FillZigZag*>(filler.get())->max_endpoint_overlap = 0.001;
         }
         if (path_regions.omitted_regions > 0)
             BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] omitted collapsed path regions=" << path_regions.omitted_regions

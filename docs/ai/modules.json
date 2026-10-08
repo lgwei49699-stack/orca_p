@@ -629,7 +629,9 @@
       ],
       "tests": [
         "tests/fff_print/test_fill.cpp",
-        "tests/fff_print/test_extrusion_entity.cpp"
+        "tests/fff_print/test_extrusion_entity.cpp",
+        "tests/fff_print/test_support_material.cpp",
+        "tests/data/raft_geometry/benchy-stepped-raft.json"
       ],
       "test_note": "修改 pattern 应覆盖实心、稀疏、带孔、窄区、旋转、多层方向和短线。与墙共同验证两种同心路径及首层／其他层最小线宽。"
     },
@@ -688,6 +690,8 @@
       "watch": [
         "src/libslic3r/Print.cpp",
         "src/libslic3r/Layer.hpp",
+        "src/libslic3r/Fill/FillRectilinear.cpp",
+        "src/libslic3r/Fill/FillRectilinear.hpp",
         "src/libslic3r/Support/SupportMaterial.cpp",
         "src/libslic3r/Support/SupportCommon.cpp",
         "src/libslic3r/Support/TreeSupport.cpp",
@@ -702,7 +706,8 @@
         "src/libslic3r/Support/RaftMerge.cpp"
       ],
       "tests": [
-        "tests/fff_print/test_support_material.cpp"
+        "tests/fff_print/test_support_material.cpp",
+        "tests/data/raft_geometry/benchy-stepped-raft.json"
       ],
       "test_note": "验证按阶段检查实际线宽、挤出覆盖、空移／跨缝、边界和普通支撑。模型路径应单独比较，筏层改变导致总时长变化不证明模型改变。实机跨缝可靠性仍由模型师验证。"
     },

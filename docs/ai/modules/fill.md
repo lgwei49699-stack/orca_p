@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "fill",
-  "source_fingerprint": "sha256:3ba5d6ae81838683fdcef61f1c462e7d8767c7630f23001b29889f9d7affc477",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。补登记公共参数定义依赖；核对配置约束沿用本分支实现。"
+  "source_fingerprint": "sha256:91a924234795e1b722b18cacac9b9cbbf09706cd1741e379c663537814f7b3cc",
+  "reason": "增加默认不启用的扫描端点延伸上限，仅增强无墙筏层设置；旧负值分支保持原偏移表达式。补阶梯凹口回归、四角度与两种线宽/密度，登记共享测试和夹具依赖；筏层/填充92用例通过，模型路径与关闭增强输出另作CLI对照，GUI平滑0导出一致，其余交接场景待验。"
 }
 -->
 
@@ -23,6 +23,11 @@ LayerRegion 的表面分类和桥接结果进入 Fill；不同 pattern 生成多
 
 ## 配置与约束
 
+FillRectilinear 默认在折返内轮廓与外侧扫描轮廓之间保留搭墙延伸。内部属性 `max_endpoint_overlap`
+以毫米限制该延伸，负值保留原表达式和默认行为；不是新用户配置项。仅 RaftMerge 的增强筏层
+无墙 ZigZag 设置为 0.001 mm，使凹口附近扫描线也在安全中心线域内，避免生成后裁断。
+模型填充、普通支撑、有墙筏层及关闭增强的旧路径不启用此限制。
+
 密度、间距、角度、线宽、连接及实心／稀疏角色一起决定结果；模型坐标与 pattern 原点要稳定。no_sort 集合表达保序意图，下游不能扁平化后任意重排。
 
 当前分支可检索的配置键：`sparse_infill_pattern`、`sparse_infill_density`、`internal_solid_infill_pattern`、`top_surface_pattern`、`bottom_surface_pattern`、`infill_direction`。定义与默认值集中于 PrintConfig；实际生效仍要读取对象覆盖后的值。
@@ -36,6 +41,10 @@ LayerRegion 的表面分类和桥接结果进入 Fill；不同 pattern 生成多
 修改 pattern 应覆盖实心、稀疏、带孔、窄区、旋转、多层方向和短线。与墙共同验证两种同心路径及首层／其他层最小线宽。
 
 现有测试/工具范围：`tests/fff_print/test_fill.cpp`；`tests/fff_print/test_extrusion_entity.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+`test_support_material.cpp` 的 `[EndpointOverlap]` 使用捕获的阶梯轮廓验证四个方向、两种线宽/密度、
+原模式能复现裁断、限制后裁剪前后逐点不变、流量属性保持及恢复原模式输出。
+GUI/CLI 共享入口与验收见[筏层进度及交接](../../../doc/print_settings/support/raft_geometry_trial_progress.md#2026-10-08-当前调查ep3-plus-复杂轮廓断开与平滑对照)。
 
 ## 关联模块
 

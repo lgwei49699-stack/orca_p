@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:9b20a5bfc7661be993eeb1192e554b48aa6e711e07c4c64c0d18b04cb656e396",
-  "reason": "保留既有修复/切片回归；SlicedExport再增12组合，覆盖选首/次盘，其他盘未切片/缺缓存/有效，单盘与全部盘的不同接受条件，成功包读回。GUI哨兵到盘号的接入仍需独立手测，不以核心测试代替。"
+  "source_fingerprint": "sha256:48c08edc0ddc24f66e64da8b187920eabda6afe380b49ce7837ad2facd4b1b4d",
+  "reason": "增加筏层阶梯凹口坐标夹具和EndpointOverlap回归，证明原外侧延伸被裁断、限制后路径/流量保持及默认恢复；完整Raft与Fill合计92用例51689断言通过，不与聚焦统计叠加。CLI模型路径/旧分支对照、GUI平滑0导出一致及其余待验场景独立记录。"
 }
 -->
 
@@ -43,6 +43,11 @@ CLI 脚本要求显式 `--binary` 和父目录已存在、自身尚不存在的 
 0=文档检查通过，1=需复核/缺失/未归属，2=工具或清单错误。脚本不生成正文、不自动记录审核、不暂存、不提交；日期和 mtime 不参与指纹；旧 blob 早于当前换行属性时，字节相同保持原身份，修改后按 Git 当前规范化规则计算。
 
 ## 修改与验证
+
+筏层 `[EndpointOverlap]` 使用 `tests/data/raft_geometry/benchy-stepped-raft.json` 捕获轮廓，
+不依赖完整用户 3MF 或本机路径。先证明旧搭墙延伸会被安全裁断，再检查限制后的路径、
+实际宽度/厚度/单位长度流量及恢复默认输出；CLI 另用用户同参模型验证，不以二维夹具代替
+完整切片。专项结果与 GUI 待验见[筏层主记录](../../../doc/print_settings/support/raft_geometry_trial_progress.md#2026-10-08-当前调查ep3-plus-复杂轮廓断开与平滑对照)。
 
 `[SlicedExport]` 的多盘回归使用临时 G-code 和 3MF，断言被跳过盘不残留 G-code/MD5/切片元数据/关系引用或本机绝对路径；model_settings 仅保留其编号空槽。禁用盘有/无缓存、未知状态、纯 G-code 盘、全部禁用、单盘选择和普通工程分开验证。所有成功包均经 `load_gcode_3mf_from_stream` 读回，包括首盘禁用和单独选择第二盘，避免只查 ZIP 文件名而遗漏索引错误。
 

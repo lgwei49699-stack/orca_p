@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "adhesion",
-  "source_fingerprint": "sha256:5e8f4e7b1a61855c822daf27f73bd1451337a57c2ad0c31a0a1ce574062afeb6",
-  "reason": "共享支撑测试文件只新增无路径微区告警回归；不改Brim/Skirt/附着参数或生成实现，故无需正文改动。龙模型同配置运动命令未变，全量支撑旧摆放夹具失败单列，不能据此证明实机附着。"
+  "source_fingerprint": "sha256:49f2de97b398e4b69379f2ede743ba0c02d8876f34d053a73566015f16f81b07",
+  "reason": "共享支撑测试新增无墙筏层阶梯凹口回归，不改Brim/Skirt参数或生成算法；半线宽安全裁剪保持，故无需附着正文变更。筏层路径测试不替代实机附着验收。"
 }
 -->
 
