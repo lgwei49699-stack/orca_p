@@ -142,13 +142,28 @@ class BundleZstdTests(unittest.TestCase):
         resources = self.app / "Contents/Resources"
         resources.mkdir()
         (resources / "example.txt").write_text("test resource")
+        # A developer tool beside the app must not enter a normal user DMG.
+        shutil.copytree(self.app, self.root / "OrcaSlicer_profile_validator.app")
         original_binary = self.binary.read_bytes()
         output = self.root / "output"
+        # The guide may describe manual commands, but packaging must never
+        # execute them or change the developer's security settings.
+        security_tools = self.root / "security-tools"
+        security_tools.mkdir()
+        security_log = self.root / "security-command.log"
+        for name in ("spctl", "xattr", "sudo"):
+            command = security_tools / name
+            command.write_text('#!/bin/sh\nprintf "%s\\n" "$0" >> "$PACKAGING_SECURITY_COMMAND_LOG"\nexit 1\n')
+            command.chmod(0o755)
+        environment = {**os.environ,
+                       "PATH": str(security_tools) + os.pathsep + os.environ["PATH"],
+                       "PACKAGING_SECURITY_COMMAND_LOG": str(security_log)}
         result = subprocess.run(
             ["bash", str(SCRIPT.with_name("package_macos_dmg.sh")),
              "--app", str(self.app), "--name", app_name, "--output-dir", str(output)],
-            text=True, capture_output=True, timeout=90)
+            env=environment, text=True, capture_output=True, timeout=90)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(security_log.exists(), "packaging must not execute security-setting commands")
         self.assertIn("LOCAL TEST PACKAGE ONLY", result.stdout)
         dmg = next(output.glob("*.dmg"))
         self.assertTrue(Path(str(dmg) + ".sha256").is_file())
@@ -161,13 +176,26 @@ class BundleZstdTests(unittest.TestCase):
         subprocess.run(["hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint",
                         str(mount), str(dmg)], check=True, capture_output=True)
         try:
+            self.assertEqual({entry.name for entry in mount.iterdir() if not entry.name.startswith(".")},
+                             {f"{app_name}.app", "Applications", "安装与首次启动说明.txt"})
             self.assertFalse((mount / "Diagnose-macOS.command").exists())
             guide = (mount / "安装与首次启动说明.txt").read_text(encoding="utf-8")
             template = SCRIPT.with_name("macos-install-guide.txt").read_text(encoding="utf-8")
             self.assertEqual(guide, template.replace("@APP_NAME@", app_name).replace("@APP_DISPLAY_NAME@", "智小白切片软件" if app_name == "WiseBeginnerSlicer" else app_name))
             self.assertIn(f'xattr -dr com.apple.quarantine "/Applications/{app_name}.app"', guide)
             self.assertNotIn("Diagnose-macOS", guide)
-            self.assertEqual(sum(line.startswith(("1.", "2.")) for line in guide.splitlines()), 2)
+            self.assertIn("sudo spctl --global-disable", guide)
+            self.assertIn("仍需回到系统设置", guide)
+            self.assertNotIn("恢复保护", guide)
+            self.assertIn("不必开启", guide)
+            headings = [line for line in guide.splitlines() if line.startswith(("1.", "2.", "3."))]
+            self.assertEqual(len(headings), 3)
+            self.assertEqual(headings[0], "1. 开启“任何来源”")
+            self.assertTrue(headings[1].startswith("2. 在系统设置中允许打开"))
+            self.assertTrue(headings[2].startswith("3. 若仍被下载隔离标记阻止"))
+            self.assertNotIn("First launch", guide)
+            self.assertNotIn("Restore protection", guide)
+            self.assertNotIn("@APP_", guide)
             bundle = mount / f"{app_name}.app"
             verified = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)],
                                       capture_output=True, text=True)
