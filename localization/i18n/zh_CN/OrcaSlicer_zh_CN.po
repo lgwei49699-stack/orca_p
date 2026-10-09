@@ -19390,3 +19390,187 @@ msgstr "包裹前已闭合开放边界，请检查新增表面及被填充的开
 
 msgid "Open boundaries remain in the wrapping input. The candidate may be a thin envelope with missing wall paths. Complete mesh checks do not establish printability; inspect the sliced result before use."
 msgstr "包裹输入仍有开放边界，候选可能成为薄壳并缺失墙体路径。完整网格检测通过不代表可打印，请在使用前检查切片结果。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Fast"
+msgstr "快速"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Fine"
+msgstr "精细"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Confirm save"
+msgstr "确认保存"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "New scheme"
+msgstr "新建方案"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Choose cloud scheme..."
+msgstr "选择云端方案…"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "New scheme: Standard profile required"
+msgstr "新建方案：请先上传标准档"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Not uploaded"
+msgstr "未上传"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Embedded parameters"
+msgstr "内嵌参数"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Apply profile"
+msgstr "设置此参数"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+#, c-format
+msgid "Save changes to cloud scheme \"%s\" (%s)? Other qualities will be preserved."
+msgstr "确认将修改保存到云端方案“%s”的%s档？其他档位将保留。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "The account changed. Refresh the cloud list."
+msgstr "账号已切换，请刷新云端列表。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "The account or environment changed. Select the cloud scheme again."
+msgstr "账号或环境已切换，请重新选择云端方案。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Invalid cloud configuration profiles."
+msgstr "云端配置的档位数据格式无效。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Invalid or duplicate cloud configuration quality."
+msgstr "云端配置的档位无效或重复。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Unknown cloud configuration quality."
+msgstr "无法识别云端配置的档位。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "The cloud configuration file is missing."
+msgstr "缺少云端配置文件。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Upload a Standard profile before adding other qualities."
+msgstr "请先上传标准档，再添加其他档位。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Could not read the latest cloud scheme. Nothing was saved."
+msgstr "无法读取最新的云端方案，未执行保存。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "The save request was sent, but its result could not be verified. Refresh the cloud list before retrying."
+msgstr "保存请求已发送，但无法确认结果。请刷新云端列表检查后再重试。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "The server did not confirm all quality profiles. Refresh the cloud list before retrying."
+msgstr "服务端未确认全部档位已保存。请刷新云端列表检查后再重试。"
+
+#: src/slic3r/GUI/MainFrame.cpp
+msgid "Choose cloud scheme"
+msgstr "选择云端方案"
+
+#: src/slic3r/GUI/Plater.cpp
+msgid "Save cloud configuration"
+msgstr "保存云端配置"
+
+#: src/slic3r/GUI/Plater.cpp
+#, c-format
+msgid "Cloud scheme: %s"
+msgstr "云端方案：%s"
+
+#: src/slic3r/GUI/Plater.cpp
+msgid "Save the current parameters to the selected quality. Other qualities will be preserved."
+msgstr "将当前参数保存到所选类型，其他类型的配置将保留。"
+
+#: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
+msgid "Profile type"
+msgstr "配置类型"
+
+#: src/slic3r/GUI/MainFrame.cpp
+#, c-format
+msgid "The %s profile already exists and will be replaced."
+msgstr "%s配置已存在，确认后将覆盖该类型的文件。"
+
+#: src/slic3r/GUI/MainFrame.cpp
+#, c-format
+msgid "The %s profile will be added to this scheme."
+msgstr "将向此方案新增%s配置。"
+
+#: src/slic3r/GUI/MainFrame.cpp
+msgid "Name and remarks are shared by all profiles in this scheme."
+msgstr "名称和备注由整个方案共用，修改后对所有类型生效。"
+
+#: src/slic3r/Utils/GFDCloudConfig.hpp
+msgid "Invalid cloud scheme details."
+msgstr "云端方案的名称或备注无效。"
+
+#: src/slic3r/GUI/Plater.cpp
+msgid "The server did not confirm the scheme name or remarks. Refresh the cloud list before retrying."
+msgstr "服务端未确认方案名称或备注已保存，请刷新云端列表检查后再重试。"
+
+#: src/slic3r/GUI/MainFrame.cpp
+msgid "Upload to existing scheme"
+msgstr "上传到已有方案"
+
+#: src/slic3r/GUI/MainFrame.cpp
+msgid "Add another profile type to an existing scheme, or replace an uploaded type."
+msgstr "为已有方案补充快速、精细等类型，也可替换已上传的类型。"
+
+#: src/slic3r/GUI/MainFrame.cpp
+msgid "Choose an existing scheme to upload to"
+msgstr "选择要上传到的已有方案"
+
+msgid "Preparing configuration..."
+msgstr "正在准备配置..."
+
+msgid "Could not start the cloud configuration upload. Please try again."
+msgstr "无法启动云端配置上传，请稍后重试。"
+
+msgid "Upload configuration"
+msgstr "上传配置"
+
+msgid "Failed to upload configuration."
+msgstr "上传配置失败。"
+
+#, c-format
+msgid "Uploaded the %s profile to cloud scheme “%s” successfully."
+msgstr "已成功上传%s配置到云端方案“%s”。"
+
+#, c-format
+msgid "Saved the %s profile to cloud scheme “%s” successfully."
+msgstr "已成功保存%s配置到云端方案“%s”。"
+
+msgid "Checking login..."
+msgstr "正在检查登录状态..."
+
+msgid "Preparing configuration file..."
+msgstr "正在准备配置文件..."
+
+msgid "Requesting upload permission..."
+msgstr "正在获取上传授权..."
+
+msgid "Uploading configuration file..."
+msgstr "正在上传配置文件..."
+
+#, c-format
+msgid "Uploading configuration file: %d%%"
+msgstr "正在上传配置文件：%d%%"
+
+msgid "Reading cloud scheme..."
+msgstr "正在读取云端方案..."
+
+msgid "Saving cloud configuration..."
+msgstr "正在保存云端配置..."
+
+msgid "Verifying saved configuration..."
+msgstr "正在核对保存结果..."
+
+msgid "Success"
+msgstr "成功"

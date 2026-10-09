@@ -12,6 +12,8 @@
 #include <wx/notebook.h>
 
 #include "Selection.hpp"
+#include "GFDCloudConfigDialog.hpp"
+#include "slic3r/Utils/GFDCloudConfig.hpp"
 
 #include "libslic3r/enum_bitmask.hpp"
 #include "libslic3r/Preset.hpp"
@@ -77,7 +79,24 @@ struct GFDCloudConfigInfo
     std::string default_process_conf;
     std::string info;
     bool        system_config{false};
+    std::string    fineness{"standard"};
+    nlohmann::json scheme = nlohmann::json::object();
+
+    GFDCloudConfigInfo for_quality(const std::string& quality) const
+    {
+        GFDCloudConfigInfo selected   = *this;
+        selected.fineness             = quality;
+        const auto profile            = GFD::cloud_profile(scheme, quality);
+        selected.config_file_url      = GFD::cloud_string(profile, "configFileUrl");
+        selected.config_file_name     = GFD::cloud_string(profile, "configFileName");
+        selected.default_process_conf = GFD::cloud_string(profile, "defaultProcessConf");
+        return selected;
+    }
+
+    bool has_file() const { return !config_file_url.empty() || !default_process_conf.empty(); }
 };
+
+wxString gfd_cloud_quality_label(const std::string& quality);
 
 struct GFDCloudConfigFetchResult
 {
@@ -117,15 +136,7 @@ struct GFDAsyncRequestResult
     std::string error_message;
 };
 
-struct GFDConfigUploadResult
-{
-    bool        ok{false};
-    bool        auth_failed{false};
-    std::string error_message;
-};
-
 using GFDDynamicRequestFinishedFn = std::function<void(GFDAsyncRequestResult, bool)>;
-using GFDConfigUploadFinishedFn   = std::function<void(GFDConfigUploadResult, bool)>;
 
 class MainFrame;
 class ConfigOptionsGroup;
@@ -526,11 +537,14 @@ public:
     int send_gcode(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
     void send_gcode_legacy(int plate_idx = -1, Export3mfProgressFn proFn = nullptr, bool use_3mf = false);
     int  export_config_3mf(int plate_idx = -1, Export3mfProgressFn proFn = nullptr, bool sanitize_cloud_preset_metadata = false);
-    bool upload_current_config_to_cloud(const std::string& config_name, const std::string& remarks = std::string());
-    bool save_active_imported_cloud_config();
-    bool upload_current_config_to_cloud_async(const std::string& config_name,
-                                              const std::string& remarks,
-                                              GFDConfigUploadFinishedFn finished);
+    bool upload_current_config_to_cloud_async(const std::string&        config_name,
+                                              const std::string&        remarks,
+                                              GFDConfigUploadFinishedFn finished,
+                                              const std::string&        fineness         = "standard",
+                                              const std::string&        cloud_config_id  = {},
+                                              const nlohmann::json&     metadata_changes = nlohmann::json::object(),
+                                              GFDConfigUploadProgressFn progress         = {},
+                                              wxWindow*                 dialog_parent    = nullptr);
     bool save_active_imported_cloud_config_async(GFDConfigUploadFinishedFn finished);
     bool fetch_cloud_configs(const std::string& device_type, std::vector<GFDCloudConfigInfo>& configs, std::string& error_message);
     static GFDCloudConfigFetchResult fetch_cloud_configs_with_token(const std::string& device_type,
@@ -926,11 +940,15 @@ private:
                                         uint64_t                    read_generation,
                                         GFDDynamicRequestFinishedFn finished);
 
-    bool start_gfd_config_upload_async(const std::string&       config_name,
-                                       const std::string&       remarks,
-                                       const std::string&       save_mode,
-                                       const std::string&       cloud_config_id,
-                                       GFDConfigUploadFinishedFn finished);
+    bool start_gfd_config_upload_async(const std::string&        config_name,
+                                       const std::string&        remarks,
+                                       const std::string&        save_mode,
+                                       const std::string&        cloud_config_id,
+                                       GFDConfigUploadFinishedFn finished,
+                                       const std::string&        fineness,
+                                       const nlohmann::json&     metadata_changes = nlohmann::json::object(),
+                                       GFDConfigUploadProgressFn progress         = {},
+                                       wxWindow*                 dialog_parent    = nullptr);
 
     // Set true during PopupMenu() tracking to suppress immediate error message boxes.
     // The error messages are collected to m_tracking_popup_menu_error_message instead and these error messages

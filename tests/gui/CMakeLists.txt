@@ -17,3 +17,22 @@ target_link_libraries(gfd_modal_dialog_tests PRIVATE ${wxWidgets_LIBRARIES})
 set_property(TARGET gfd_modal_dialog_tests PROPERTY FOLDER "tests")
 add_test(NAME gui:gfd_modal_dialog COMMAND gfd_modal_dialog_tests)
 set_tests_properties(gui:gfd_modal_dialog PROPERTIES LABELS "gui" TIMEOUT 45)
+
+add_executable(gfd_cloud_config_dialog_tests
+    test_gfd_cloud_config_dialog.cpp
+    ../../src/slic3r/GUI/GFDCloudConfigDialog.cpp
+)
+target_include_directories(gfd_cloud_config_dialog_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_include_directories(gfd_cloud_config_dialog_tests SYSTEM PRIVATE ${wxWidgets_INCLUDE_DIRS})
+target_compile_options(gfd_cloud_config_dialog_tests PRIVATE ${wxWidgets_CXX_FLAGS})
+target_compile_definitions(gfd_cloud_config_dialog_tests PRIVATE
+    ${wxWidgets_DEFINITIONS}
+    "$<$<CONFIG:Debug>:${wxWidgets_DEFINITIONS_DEBUG}>"
+)
+if (SLIC3R_STATIC)
+    target_compile_definitions(gfd_cloud_config_dialog_tests PRIVATE wxDEBUG_LEVEL=0)
+endif()
+target_link_libraries(gfd_cloud_config_dialog_tests PRIVATE ${wxWidgets_LIBRARIES})
+set_property(TARGET gfd_cloud_config_dialog_tests PROPERTY FOLDER "tests")
+add_test(NAME gui:gfd_cloud_config_dialog COMMAND gfd_cloud_config_dialog_tests)
+set_tests_properties(gui:gfd_cloud_config_dialog PROPERTIES LABELS "gui" TIMEOUT 45)

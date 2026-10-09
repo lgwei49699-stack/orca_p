@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:46e2cbc152bdfd4e5daea139c1454fa8239eaa13f531d81b342067eceefcd6d7",
-  "reason": "更新 SoftFever_VERSION 为2.3.2.2-Release，保留内部兼容版本01.10.01.50；核对GUI/CLI版本头及应用/安装包生成入口。GFDModalDialog注册既有GUI库，独立GUI回归仍默认关闭；不改依赖、打包流程或运行中的打包副本。Mac本次版本构建与Windows待验分别记录。 两个诊断CMD用路径级eol=crlf保证Git检出后的Windows启动格式。"
+  "source_fingerprint": "sha256:276bbc8e6d5b532510ca8e5df2491377987347a75c25bf56da36b0dbba7ee47b",
+  "reason": "登记三档纯协议及共享云配置表单测试目标；提交前因Plater接口和会话边界改动最小重建当前Mac arm64 Release应用/测试，命令和结果见云方案记录；工具链/版本/域名不变。"
 }
 -->
 
@@ -83,6 +83,10 @@ Clang 支持/不支持及非 Clang 拒绝分支；模拟选项不用于编译，
 本分支保留 OrcaSlicer 品牌；Windows 动态库/CGAL 处理与用户版并不全同。本次仅调整
 Mac zstd 选择/打包和可选诊断选项，不修改 Windows/Linux 的运行库版本及平台打包脚本。
 
+`gfd_cloud_config_tests` 注册在 tests/slic3rutils，只包含纯JSON协议及Catch入口、链接 test_common/nlohmann_json，无需链接GUI库或启动桌面。应用增加头文件GFDCloudConfig.hpp，域名、版本号、打包配置不变。构建和界面待验见[云方案记录](../validation/2026-10-09-cloud-config-quality-analysis.md)。
+
 ## 关联模块
 
 [公共运行时与平台辅助](platform.md)、[测试基础设施与维护工具](test-tools.md)、[中英文与翻译资源](localization.md)、[打印机、耗材与工艺资源](resource-profiles.md)。
+
+`GFDCloudConfigDialog.cpp/.hpp` 编入现有GUI库，复用保存/上传进度和模态收尾。`SLIC3R_GUI_TESTS=ON` 新增独立 `gfd_cloud_config_dialog_tests`，仅链接wx core/base；需要桌面，不连接云端。第六批Mac arm64 Release应用及辅助测试构建通过，第六批36项生命周期检查与CLI --help通过；提交前重登边界修改另按云方案记录重建验证；实际表单/云写入及Windows待验，见[云方案记录](../validation/2026-10-09-cloud-config-quality-analysis.md)。

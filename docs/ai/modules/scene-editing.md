@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "scene-editing",
-  "source_fingerprint": "sha256:01053680f2f022bf704191921abadc13851a4e8ba6be9ea9ba321a8e54885b04",
-  "reason": "保留既有重建预算/原件保护及多盘筛选；本轮Plater仅解析send_gcode的当前盘发送目标，不改选择状态、对象变换、打印开关或Undo事务，场景正文无需新增行为。"
+  "source_fingerprint": "sha256:b04e1fa01675efaed069e98f0aff936a2d90ad82c651b5a68f9bd221b333ccd8",
+  "reason": "提交前复核Plater/MainFrame云配置差异仅涉及三档管理、表单与重登保护；未更改场景编辑、对象操作或3MF导出算法，正文无需修改。"
 }
 -->
 

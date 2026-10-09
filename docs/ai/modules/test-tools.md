@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:ff3fd8ed2ec50418ecd90d0e7f941bfb7a6a16f3333ff4bc4f4f3dfc28f9f5dc",
-  "reason": "新增可选wx模态回归，覆盖正常内外层关闭、隐藏、嵌套退出、取消、早期结束和重复打开，Mac共8组65检查通过；版本更新后源码与测试程序身份一致，复用此结果。新增Windows窗口采集与活动日志复制及双击入口，核对现场核心路径、编码和CRLF检出；未验证分支及Windows原生InitDialog/焦点验收另列，不由Mac结果替代。"
+  "source_fingerprint": "sha256:16d9d9eb1ae5729287d6f710ff5d95eeba6f13c45974299e0a0c13d0de32f15b",
+  "reason": "Add cloud profile protocol tests (10 cases / 89 assertions) and standalone wx form lifecycle tests (43 checks). Reviewed account/environment guards after reauthentication, nested login ownership, single submission and modal completion. No cloud writes or Windows GUI validation; unrelated Thingi10K work is excluded."
 }
 -->
 
@@ -15,6 +15,7 @@
 ## 入口与调用
 
 - [CMakeLists.txt](../../../tests/CMakeLists.txt)：注册测试子目录和目标；SLA 目录存在不等于在此启用。`SLIC3R_GUI_TESTS` 默认关闭，避免普通无桌面测试默认启动 GUI。
+- [test_gfd_cloud_config_dialog.cpp](../../../tests/gui/test_gfd_cloud_config_dialog.cpp)：保存/上传共用表单生命周期的独立wx测试，覆盖进度、异步完成、重复提交、忙时取消/关闭、启动/异常/服务端失败、取消结果及迟到回调。结果处理前要求原表单隐藏、模态退栈、父窗口可用；Cocoa原生模态不假定wx禁用标记变化。提交前增加嵌套登录返回检查，Mac arm64共43检查通过，不代表真实云写入或Windows视觉通过。
 - [test_gfd_modal_dialog.cpp](../../../tests/gui/test_gfd_modal_dialog.cpp)：独立 wx GUI 回归程序，不链接切片／云端业务，也不下发打印。正常结束、内层提示先结束再结束外层、提前隐藏、嵌套期间结束、关闭取消、进入循环时结束、连续重开，以及 Windows 的 InitDialog 结束路径，均检查窗口状态与退出结果；5 秒看门狗使循环残留明确失败。
 - [check_ai_module_docs.py](../../../scripts/check_ai_module_docs.py)：模块清单与 Git 工作区/暂存/提交快照检查。
 - [capture_windows_gui_state.ps1](../../../scripts/capture_windows_gui_state.ps1)：Windows 下独立采集 OrcaSlicer 顶层窗口、线程输入与程序身份，辅助区分禁用窗口、隐藏弹窗、输入捕获和消息处理异常。
@@ -92,6 +93,8 @@ Windows GUI 采集在 2026-10-09 收到同事现场 JSON：64 位 Windows PowerS
 现有测试/工具范围：`scripts/tests/test_check_ai_module_docs.py`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
 
 重建自动化和 CLI 结果统一回填[主记录](../validation/2026-10-04-smart-print-engine.md)，交互对比、采用／撤销／保存重开见[GUI 交接](../validation/2026-10-05-reconstruction-gui.md)。首版明确没有诊断试切片；报告 `trial_slice=not_run` 及 `print_ready=false` 是契约的一部分，不能将这些测试通过写成完整商用或打印质量验收。`[ReconstructionWorkerGuard]` 通过独立 `reconstruction_worker_test_helper` 检验正常销毁、错误父身份、worker 自身超时/RSS 与父退出；不在测试主进程触发退出或收紧内存限制。显式 `[ReconstructionIntegration]` 需 `ORCA_RECONSTRUCTION_BINARY` 指向同源码应用，验证非均匀缩放/镜像后的候选、局部/物理复检和原件不变。
+
+`gfd_cloud_config_tests` 是云方案JSON协议的独立Catch目标，覆盖旧标准档、三档互不覆盖、坏数据拒绝和回读识别丢档；旧来源缺类型／null／空串默认标准到保存payload的连贯校验，并验证明确快速／精细类型不回退到标准。元数据回归验证只修改名称时保留最新备注、明确清空备注、ID禁止被元数据补丁修改，以及回读未保存字段时不能确认成功。提交前增加重登不可跨账号/环境继续写旧目标、仅新建首次登录可建立账号的边界回归。无需账号或桌面，不能代替真实云服务验收，见[云方案记录](../validation/2026-10-09-cloud-config-quality-analysis.md)。
 
 ## 关联模块
 

@@ -307,6 +307,8 @@ std::string Config::config_add_url(const AppConfig* config) { return current_env
 
 std::string Config::config_update_url(const AppConfig* config) { return current_environment(config).api_base_url + PATH_CONFIG_UPDATE; }
 
+std::string Config::config_detail_url(const AppConfig* config) { return current_environment(config).api_base_url + PATH_CONFIG_DETAIL; }
+
 std::string Config::device_query_url(const AppConfig* config)
 {
     const auto environment = current_environment(config);

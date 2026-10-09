@@ -214,6 +214,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/GFDDeviceSelectionDialog.hpp
     GUI/GFDModalDialog.cpp
     GUI/GFDModalDialog.hpp
+    GUI/GFDCloudConfigDialog.cpp
+    GUI/GFDCloudConfigDialog.hpp
     GUI/GFDAuthManager.cpp
     GUI/GFDAuthManager.hpp
     GUI/GFDLoginDialog.cpp
@@ -549,6 +551,7 @@ set(SLIC3R_GUI_SOURCES
     Utils/FontConfigHelp.hpp
     Utils/GFDConfig.cpp
     Utils/GFDConfig.hpp
+    Utils/GFDCloudConfig.hpp
     Utils/HexFile.cpp
     Utils/HexFile.hpp
     Utils/Http.cpp

@@ -73,6 +73,7 @@ public:
     static constexpr const char* PATH_VERIFY            = "/manager/auth/login/tfaCode";
     static constexpr const char* PATH_OBS_TOKEN         = "/app/print3d/api/v1/obs/token";
     static constexpr const char* PATH_CONFIG_ADD        = "/app/print3d/manage/v1/slice-param-config/add";
+    static constexpr const char* PATH_CONFIG_DETAIL     = "/app/print3d/manage/v1/slice-param-config/detail";
     static constexpr const char* PATH_CONFIG_UPDATE     = "/app/print3d/manage/v1/slice-param-config/edit";
     static constexpr const char* PATH_DEVICE_QUERY      = "/app/print3d/manage/v1/md/query";
     static constexpr const char* PATH_DEVICE_FILAMENT_INFO = "/app/print3d/manage/v1/device/filamentInfo";
@@ -93,6 +94,7 @@ public:
     static std::string obs_token_url(const AppConfig* config);
     static std::string config_add_url(const AppConfig* config);
     static std::string config_update_url(const AppConfig* config);
+    static std::string config_detail_url(const AppConfig* config);
     static std::string device_query_url(const AppConfig* config);
     static std::string device_filament_info_url(const AppConfig* config);
     static std::string device_slice_type_url(const AppConfig* config);

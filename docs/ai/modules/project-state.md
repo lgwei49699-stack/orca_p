@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "project-state",
-  "source_fingerprint": "sha256:5968d0b28a8c4ececef39e5ec90c7c92d5022a617b46606696ce96c9713e2927",
-  "reason": "保留普通工程不筛盘和导出失败保护；本轮仅明确send_gcode发送盘号并补格式回归，不改普通保存、备份、云配置工程、Undo或脏标记，正文边界继续适用。"
+  "source_fingerprint": "sha256:742772e323510ad00ae7e93a8c6dcc05357b98a930656ea04440a8b1fbb7c660",
+  "reason": "提交前核对云来源档位/账号/环境持久化、旧数据默认标准及重登不跨账号写旧目标；未改工程保存、Undo或恢复规则。"
 }
 -->
 
@@ -38,6 +38,8 @@ UndoRedo 记录模型与选择相关快照，ProjectDirtyStateManager 汇总模�
 改保存逻辑需测试另存为、覆盖保存、关闭取消、崩溃恢复、中文盘名和重开一致性。检查文件实际路径和 ZIP 内容，通知文字不是持久化证据。
 
 现有测试/工具范围：`tests/libslic3r/test_3mf.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+云方案来源记录 `user/gfd_cloud_process_records.json` 增加档位及新记录的环境／账号；旧记录无档位、null或空串按 standard 解释，未知类型拒绝，无环境／账号沿用历史当前会话语义。保存窗口默认来源类型，可改选目标类型；成功回读确认后记录实际保存档位，用于下次保存和重启恢复。它用于GUI云端保存目标识别，不等同工程保存或Undo快照，详见[云模块](cloud.md)。
 
 ## 关联模块
 
