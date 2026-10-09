@@ -1242,7 +1242,9 @@
         "src/slic3r/GUI/WebUserLoginDialog.cpp",
         "src/slic3r/GUI/WebUserLoginDialog.hpp",
         "src/slic3r/Utils/GFDConfig.cpp",
-        "src/slic3r/Utils/GFDConfig.hpp"
+        "src/slic3r/Utils/GFDConfig.hpp",
+        "src/slic3r/GUI/GFDModalDialog.cpp",
+        "src/slic3r/GUI/GFDModalDialog.hpp"
       ],
       "watch": [
         "src/slic3r/GUI/Plater.cpp",
@@ -1255,7 +1257,9 @@
         "src/slic3r/GUI/Downloader.cpp",
         "src/slic3r/Utils/GFDConfig.cpp"
       ],
-      "tests": [],
+      "tests": [
+        "tests/gui/test_gfd_modal_dialog.cpp"
+      ],
       "test_note": "改认证／导入时测试失效会话、坏响应、取消、同名预设和机型不兼容；云服务不可用时仍能编辑本地工程。用户版已关闭的同步入口不能在文档中写成存在。"
     },
     {
@@ -1667,6 +1671,10 @@
       "title": "测试基础设施与维护工具",
       "doc": "docs/ai/modules/test-tools.md",
       "sources": [
+        "scripts/capture_windows_gui_state.cmd",
+        "scripts/capture_windows_gui_state.ps1",
+        "scripts/copy_windows_active_log.cmd",
+        "scripts/copy_windows_active_log.ps1",
         "scripts/check_ai_module_docs.py",
         "scripts/generate_repair_fixtures.py",
         "scripts/orca_extra_profile_check.py",
@@ -1695,7 +1703,8 @@
         "tests/libslic3r/**",
         "tests/sla_print/**",
         "tests/slic3rutils/**",
-        "tests/test_utils.hpp"
+        "tests/test_utils.hpp",
+        "tests/gui/**"
       ],
       "watch": [],
       "entrypoints": [

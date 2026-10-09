@@ -225,12 +225,12 @@ GFDDeviceSelectionDialog::GFDDeviceSelectionDialog(wxWindow*                pare
                                                    std::string              default_device_type,
                                                    std::vector<std::string> allowed_device_types,
                                                    PrintHandler             print_handler)
-    : wxDialog(parent,
-               wxID_ANY,
-               _L("打印机选择"),
-               wxDefaultPosition,
-               wxDefaultSize,
-               wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
+    : GFDDeviceSelectionDialogBase(parent,
+                                   wxID_ANY,
+                                   _L("打印机选择"),
+                                   wxDefaultPosition,
+                                   wxDefaultSize,
+                                   wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
     , m_gcode_path(std::move(gcode_path))
     , m_default_device_type(std::move(default_device_type))
     , m_allowed_device_types(std::move(allowed_device_types))
@@ -266,6 +266,26 @@ GFDDeviceSelectionDialog::~GFDDeviceSelectionDialog()
         m_device_worker->cancel_all();
         m_device_worker->wait_for_idle();
     }
+}
+
+int GFDDeviceSelectionDialog::ShowModal()
+{
+    m_modal_ending = false;
+    BOOST_LOG_TRIVIAL(info) << "GFD device selection modal begin";
+    const int ret_code = GFDDeviceSelectionDialogBase::ShowModal();
+    BOOST_LOG_TRIVIAL(info) << "GFD device selection modal returned"
+                            << ", return_code=" << ret_code << ", shown=" << IsShown() << ", modal=" << IsModal()
+                            << ", parent_enabled=" << (GetParent() != nullptr && GetParent()->IsEnabled());
+    return ret_code;
+}
+
+void GFDDeviceSelectionDialog::EndModal(int ret_code)
+{
+    BOOST_LOG_TRIVIAL(info) << "GFD device selection modal end requested"
+                            << ", return_code=" << ret_code << ", shown=" << IsShown() << ", modal=" << IsModal()
+                            << ", already_ending=" << m_modal_ending;
+    m_modal_ending = true;
+    GFDDeviceSelectionDialogBase::EndModal(ret_code);
 }
 
 void GFDDeviceSelectionDialog::build()
@@ -677,8 +697,8 @@ void GFDDeviceSelectionDialog::reset_filters()
 
 void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
 {
-    if (m_print_submitting) {
-        BOOST_LOG_TRIVIAL(warning) << "GFD device selection confirm ignored: print submission already in progress";
+    if (m_print_submitting || m_modal_ending) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD device selection confirm ignored: print submission in progress or dialog ending";
         return;
     }
 

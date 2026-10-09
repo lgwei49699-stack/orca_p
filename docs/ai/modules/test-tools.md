@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:f3150c06dd8b0614e946a8210590a4540c36dad1b1c57efea5144806a03b721e",
-  "reason": "按用户最新要求精简说明，断言首步标题无版本括注且删去恢复保护段落；中文三步顺序、占位符、默认包三项内容及不执行安全设置命令的检查保留。生产构建与切片源码不变。"
+  "source_fingerprint": "sha256:ff3fd8ed2ec50418ecd90d0e7f941bfb7a6a16f3333ff4bc4f4f3dfc28f9f5dc",
+  "reason": "新增可选wx模态回归，覆盖正常内外层关闭、隐藏、嵌套退出、取消、早期结束和重复打开，Mac共8组65检查通过；版本更新后源码与测试程序身份一致，复用此结果。新增Windows窗口采集与活动日志复制及双击入口，核对现场核心路径、编码和CRLF检出；未验证分支及Windows原生InitDialog/焦点验收另列，不由Mac结果替代。"
 }
 -->
 
@@ -14,8 +14,12 @@
 
 ## 入口与调用
 
-- [CMakeLists.txt](../../../tests/CMakeLists.txt)：注册 Catch2 测试子目录和目标；SLA 目录存在不等于在此启用。
+- [CMakeLists.txt](../../../tests/CMakeLists.txt)：注册测试子目录和目标；SLA 目录存在不等于在此启用。`SLIC3R_GUI_TESTS` 默认关闭，避免普通无桌面测试默认启动 GUI。
+- [test_gfd_modal_dialog.cpp](../../../tests/gui/test_gfd_modal_dialog.cpp)：独立 wx GUI 回归程序，不链接切片／云端业务，也不下发打印。正常结束、内层提示先结束再结束外层、提前隐藏、嵌套期间结束、关闭取消、进入循环时结束、连续重开，以及 Windows 的 InitDialog 结束路径，均检查窗口状态与退出结果；5 秒看门狗使循环残留明确失败。
 - [check_ai_module_docs.py](../../../scripts/check_ai_module_docs.py)：模块清单与 Git 工作区/暂存/提交快照检查。
+- [capture_windows_gui_state.ps1](../../../scripts/capture_windows_gui_state.ps1)：Windows 下独立采集 OrcaSlicer 顶层窗口、线程输入与程序身份，辅助区分禁用窗口、隐藏弹窗、输入捕获和消息处理异常。
+- [capture_windows_gui_state.cmd](../../../scripts/capture_windows_gui_state.cmd)：双击入口，定位同目录 PS1，启用交互选择进程及采集后打开结果文件夹；保留退出码与错误文字，不自动提权或永久更改执行策略。
+- [copy_windows_active_log.cmd](../../../scripts/copy_windows_active_log.cmd) / [copy_windows_active_log.ps1](../../../scripts/copy_windows_active_log.ps1)：双击选择正在使用的日志，以兼容读写共享的只读句柄复制到桌面，保留源程序及原文件。
 - [test_check_ai_module_docs.py](../../../scripts/tests/test_check_ai_module_docs.py)：临时 Git 仓库的文档工具回归。
 - [test_cli_model_reconstruction.py](../../../scripts/test_cli_model_reconstruction.py)：针对已有应用创建隔离 STL 夹具、逐例目录和独立重建协议审计；保存二进制／输入 hash、stdout/stderr、报告及汇总，不构建、不切片、不打印。
 - [test_gmp_platform_selection.py](../../../scripts/tests/test_gmp_platform_selection.py)：在临时 CMake 脚本中执行 GMP 配方、捕获 ExternalProject/复制参数，验证目标架构对应的版本、校验值及旧补丁/预编译路径；不修改真实构建目录，不等于目标系统编译运行。
@@ -25,6 +29,8 @@
 Catch2 公共配置连接 libslic3r_tests、fff_print_tests、slic3rutils 等目标；Python／CLI 工具组织隔离输入、输出与结果审计。模块文档检查独立读取 Git 快照，不调用切片、网络或 CodeGraph。
 
 现有 C++ 测试源统一归本模块维护基础设施；各业务模块在清单 tests 中依赖相关用例，所以修改用例也会触发对应业务文档复核。scripts 平铺目录逐文件登记，新脚本不会自动归类。
+
+Windows GUI 采集脚本使用 PowerShell 5.1 与内嵌 C# P/Invoke，默认延迟 8 秒后采集 3 次，方便切回故障窗口；先读窗口及线程输入状态，再逐窗口发送限时 250ms 的 WM_NULL。自动匹配唯一 OrcaSlicer 进程，多进程可显式 `-OrcaProcessId`，双击入口以 `-Interactive` 提供进程 Id 输入；桌面 JSON 记录可执行文件路径/版本/SHA256、顶层窗口标题/位置/owner/启用/可见状态、焦点/捕获句柄及探测结果。脚本不改变 Orca 启用/显示状态、不注入点击、不读取配置、不触发切片或打印；标题可能包含工程名。`-OpenOutputFolder` 仅在全部采样落盘后打开资源管理器，打开失败不丢弃已有报告。中文提示的 PS1 保持 UTF-8 BOM 以兼容 Windows PowerShell 5.1，CMD 使用 CRLF、带引号的绝对脚本路径并禁用 delayed expansion，避免空格或感叹号目录损坏路径。快照不是原子采集，句柄可能在读取中失效；探测返回失败可能是超时、权限或窗口已销毁，不能统一判断为死锁。仅采集拥有顶层窗口的线程输入信息，不包含调用栈或 wx 模态循环状态。运行步骤及判断边界见[下发卡住调查](../validation/2026-10-08-print-ui-freeze-log-analysis.md#第四轮重启恢复与现场采集)。
 
 模型修复 `[ModelRepair][Diagnostics]` 使用作用域日志接收器，恢复原日志级别，不改生产接口或注入测试策略。验证阶段耗时为非负、同一次调用 ID 一致及唯一汇总，并覆盖成功/拒绝/异常和资源超限原因；超限样例还必须证明后续分支继续且原网格未被失败候选修改。运行记录与 GUI 手测见[必要优化记录](../validation/2026-10-04-smart-print-engine.md)。
 
@@ -43,6 +49,10 @@ CLI 脚本要求显式 `--binary` 和父目录已存在、自身尚不存在的 
 0=文档检查通过，1=需复核/缺失/未归属，2=工具或清单错误。脚本不生成正文、不自动记录审核、不暂存、不提交；日期和 mtime 不参与指纹；旧 blob 早于当前换行属性时，字节相同保持原身份，修改后按 Git 当前规范化规则计算。
 
 ## 修改与验证
+
+Windows GUI 采集在 2026-10-09 收到同事现场 JSON：64 位 Windows PowerShell 5.1 下完成三次窗口／线程输入枚举及 249 次消息探测，均返回成功。它证明该环境下采集核心路径已执行；不替代多进程交互、错误处理、双击启动器或 Orca 修复验收。应用故障结论见[现场记录](../validation/2026-10-08-print-ui-freeze-log-analysis.md)。
+
+正在使用日志复制工具由 CMD 以 STA 启动 PowerShell 5.1，文件选择窗口禁用会提前拦截共享冲突的校验，随后由只读 FileStream 按 `ReadWrite | Delete` 共享方式实际打开；已有句柄不允许读取或文件权限不足时仍会失败，不宣称解除独占锁。源日志允许继续写入／轮换，仅复制打开句柄时已有长度，按 1 MiB 分块读取，避免追赶持续追加；中途截短报错并保留 `.partial`，成功关闭句柄后才改为原日志名并计算副本 SHA256。桌面独立目录使用新 GUID，输出文件 CreateNew，不替换已有文件；`copy-info.json` 记录源路径、长度、复制字节数、时间与异常信息。读取不是原子快照，也不刷新源程序缓冲。静态审阅和 ZIP/编码一致性检查已通过；同事已返回 PID 19568 的活动日志副本及 copy-info，578,681 字节与 SHA256 一致，共享读取核心路径在 Windows 实测成功。文件选择、取消、读取失败、截短等其他分支未全部验收。
 
 `test_macos_build_compatibility.py` 使用隔离目录、真实 clang/lipo/签名工具，替换主应用和上游库
 耗时构建后执行实际构建入口；包含 `-b` 缓存一致性、资源软链接保护/其他用户可读权限、
@@ -86,3 +96,5 @@ CLI 脚本要求显式 `--binary` 和父目录已存在、自身尚不存在的 
 ## 关联模块
 
 [构建、打包与平台集成](build.md)、[应用入口与 CLI](cli.md)、[FFF 切片步骤与层状态](slicing.md)、[模型检测、修复与保色](model-repair.md)。
+
+GFD 模态回归使用真实 wx 窗口和事件循环，保留其他已禁用窗口；同一源码可在 Mac 运行公共循环场景，但生产设备选择仅在 Windows 接入新基类。Windows 原生 InitDialog／焦点／Alt+Tab 的验收状态单列，见[调查与修复记录](../validation/2026-10-08-print-ui-freeze-log-analysis.md)。

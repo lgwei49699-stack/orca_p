@@ -212,6 +212,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/GFDConsumableMappingDialog.hpp
     GUI/GFDDeviceSelectionDialog.cpp
     GUI/GFDDeviceSelectionDialog.hpp
+    GUI/GFDModalDialog.cpp
+    GUI/GFDModalDialog.hpp
     GUI/GFDAuthManager.cpp
     GUI/GFDAuthManager.hpp
     GUI/GFDLoginDialog.cpp

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:0d0b0220aaac2b3751b0e792754897ad17c4e89e2bc6ac3554eec790e30ef124",
-  "reason": "按用户要求保留纯中文三步，将任何来源放首步并删除指定的版本括注与恢复保护段落；测试同步核对精简文字。默认包内容及不执行安全设置的断言保留，构建脚本和GUI/CLI业务未改。"
+  "source_fingerprint": "sha256:46e2cbc152bdfd4e5daea139c1454fa8239eaa13f531d81b342067eceefcd6d7",
+  "reason": "更新 SoftFever_VERSION 为2.3.2.2-Release，保留内部兼容版本01.10.01.50；核对GUI/CLI版本头及应用/安装包生成入口。GFDModalDialog注册既有GUI库，独立GUI回归仍默认关闭；不改依赖、打包流程或运行中的打包副本。Mac本次版本构建与Windows待验分别记录。 两个诊断CMD用路径级eol=crlf保证Git检出后的Windows启动格式。"
 }
 -->
 
@@ -29,6 +29,8 @@
 10-06 缺陷优先重建压力测试复现 GMP 6.2.1/macOS arm64 汇编 x18 兼容异常。获用户授权后，[GMP 配方](../../../deps/GMP/GMP.cmake)仅针对 macOS arm64 目标固定使用官方 GMP 6.3.0 源码，SHA-256 `a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898`。按 `CMAKE_OSX_ARCHITECTURES` 选择，未指定时才取 `CMAKE_SYSTEM_PROCESSOR`，因此 Intel→arm64 也升级、arm64→Intel 不升级。Linux 和 macOS x86_64 仍为原 6.2.1 URL/hash/GCC15 补丁，Windows MSVC 仍复制原 `.lib/.dll`；不升级系统 Homebrew、不复制其库到项目，也不改变几何策略。6.3.0 在当前 Apple Clang/static 配置下使用未打补丁的上游源码；未泛化到其他编译器或 universal 构建。复现、正式构建和回归状态见[主记录](../validation/2026-10-04-smart-print-engine.md)最新节。
 
 ## 配置与约束
+
+公开产品版本由 `version.inc` 的 `SoftFever_VERSION` 更新为 `2.3.2.2-Release`，用于本次 Windows GFD 模态退出修复；内部兼容版本 `SLIC3R_VERSION=01.10.01.50` 保持不变。此次更新需重新生成版本头及应用元数据，旧运行／打包副本不会自动变为新版本。Mac 用户日志已确认取消及下发成功后的模态收尾；Windows 系统验收仍待同步新源码后执行。
 
 架构、生成器、Release 配置和依赖前缀必须匹配。应用版本与资源包版本独立。Windows 动态库、macOS rpath/zstd 和 Linux 分发标识是不同打包责任，不能只改一个文件名推定完成。
 
@@ -59,6 +61,8 @@ Apple ld 的重复库告警通过链接器探测后才关闭，不重排或删�
 ## 失败与取消
 
 编译成功、链接成功、打包成功和目标系统可运行分开记录；警告不能冒充构建失败，旧二进制也不能证明新源码通过。用户已有新构建时复用；缺少当前验证所需产物时由 AI 补齐必要目标，详见[验证规范](../validation.md)。
+
+Windows GFD 设备选择的循环辅助实现注册在 `src/slic3r/CMakeLists.txt`，仍编入现有 GUI 库。`SLIC3R_GUI_TESTS=ON` 额外注册独立 `gfd_modal_dialog_tests`，仅编译辅助实现并链接 wx core/base；不为测试链接整套切片／云端业务。该开关默认关闭，运行需交互桌面。`.gitattributes` 仅为本次两个 Windows 诊断 CMD 固定 `eol=crlf`，保证同步代码后的启动器换行格式，不改变其他文件的检出规则。
 
 ## 修改与验证
 

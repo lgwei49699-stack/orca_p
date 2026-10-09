@@ -1,5 +1,9 @@
 # Set the default behavior, in case people don't have core.autocrlf set.
 * text=auto
 
+# Keep the Windows diagnostic launchers usable after checkout on any host.
+/scripts/capture_windows_gui_state.cmd text eol=crlf
+/scripts/copy_windows_active_log.cmd text eol=crlf
+
 # Preserve the original Markdown hard-break spaces in this verbatim archive.
 /docs/ai/history/claude-before-module-docs.md whitespace=-blank-at-eol

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include <wx/dialog.h>
+#include "GFDModalDialog.hpp"
 #include <wx/timer.h>
 
 class Button;
@@ -35,7 +35,7 @@ struct GFDDeviceInfo
     std::string device_id;
 };
 
-class GFDDeviceSelectionDialog : public wxDialog
+class GFDDeviceSelectionDialog : public GFDDeviceSelectionDialogBase
 {
 public:
     using PrintHandler = std::function<void(GFDDeviceSelectionDialog*,
@@ -48,6 +48,9 @@ public:
                              std::vector<std::string> allowed_device_types = {},
                              PrintHandler             print_handler = {});
     ~GFDDeviceSelectionDialog() override;
+
+    int  ShowModal() override;
+    void EndModal(int ret_code) override;
 
     const std::vector<GFDDeviceInfo>& selected_devices() const { return m_selected_devices; }
     const std::string&                gcode_path() const { return m_gcode_path; }
@@ -107,6 +110,7 @@ private:
     bool                              m_loading{false};
     bool                              m_loading_determinate{false};
     bool                              m_print_submitting{false};
+    bool                              m_modal_ending{false};
     bool                              m_use_3mf_file{false};
 
     wxTextCtrl*   m_mac_input{nullptr};
