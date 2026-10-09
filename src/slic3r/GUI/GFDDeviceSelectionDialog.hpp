@@ -15,7 +15,6 @@ class Button;
 class wxChoice;
 class wxGauge;
 class wxListCtrl;
-class wxPanel;
 class wxStaticText;
 class wxTextCtrl;
 
@@ -75,9 +74,6 @@ private:
     void update_table_column_widths();
     void set_tip_message(const wxString& message, bool is_error = false);
     void set_loading_state(bool loading);
-    void build_loading_panel();
-    void update_loading_panel_style();
-    void position_loading_panel();
 
     std::string build_query_url() const;
     bool        parse_devices(const std::string& body, std::vector<GFDDeviceInfo>& devices, std::string& error_message) const;
@@ -119,8 +115,6 @@ private:
     wxChoice*     m_status_choice{nullptr};
     wxListCtrl*   m_device_list{nullptr};
     wxStaticText* m_tip_label{nullptr};
-    wxPanel*      m_loading_panel{nullptr};
-    wxStaticText* m_loading_text{nullptr};
     wxGauge*      m_loading_gauge{nullptr};
     Button*       m_search_button{nullptr};
     Button*       m_reset_button{nullptr};

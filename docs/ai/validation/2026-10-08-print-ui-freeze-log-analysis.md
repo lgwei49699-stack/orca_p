@@ -2,14 +2,14 @@
 
 ## 当前执行状态
 
-- 目标／边界：分析日志与转储后，用户已授权开始编码。修复 Windows 设备选择框隐藏后模态循环残留；不下发真实打印。用户提供 Mac 手测日志，并授权日志无阻塞问题后更新为 2.3.2.2-Release 并提交。本轮分析日志、更新版本、完成检查并提交；不推送、不操作虚拟机。
-- 源码基准：`master` / `563f30abc97a5add8a73f1e7b1a01b82aa769d22`。开始时已有 `result.json` 修改及未跟踪 `2026-10-04-study-textbook.md`，均不改动。
+- 目标／边界：前次隐藏模态循环修复已随 2.3.2.2-Release 提交；加载闪烁优化后，用户提供 12:57 Mac 日志并授权无阻塞问题即提交。本轮复核日志并提交，不下发真实打印、不改打印协议、不再次改版本号、不推送。
+- 调查起始基准：`master` / `563f30abc97a5add8a73f1e7b1a01b82aa769d22`；本轮提交基准为 dd50c5f977。开始时已有 `result.json` 修改及未跟踪 `2026-10-04-study-textbook.md`，均不改动。
 - 输入：原日志包、10 月 9 日窗口 JSON、目标 PID 19568 日志及 copy-info、10:21:40 的 `orca-slicer.DMP`。日志和转储 PID／主线程／启动时间对应；转储包含关键二进制映像，已核对相关函数实际机器码。故障在同事 Windows，当前 Mac 仅分析端；精确构建提交和私有 PDB 尚缺。
 - 已确认：打印机选择框 HWND 0x55131c 已隐藏，returnCode=wxID_OK、m_print_submitting=false，但自身 ShowModal 未返回；活动 wxModalEventLoop 仍 insideRun=true、shouldExit=false，wxWindowDisabler 仍存活并生效。主窗口 HWND 0x505CE 的 wx enabled=false 与先前原生 disabled 快照吻合。模态循环残留导致输入持续禁用的机制已确认；无法从事后快照证明具体哪一次隐藏／活动循环变化触发了退出遗漏。
-- 当前步骤：Mac 日志确认取消与成功下发两次模态窗口均正常返回、parent_enabled=true；运行包包含本次日志，Mach-O UUID 与已验证构建一致。SoftFever_VERSION 已更新为 2.3.2.2-Release，Mac arm64 Release 构建和程序版本检查通过；本提交包含源码、回归测试、诊断工具、版本与相关文档。
+- 当前步骤：本轮基准 master / dd50c5f977021daa26802641021198ee2f8c9044。底部固定状态区、移除覆盖面板及重复布局／同步重绘已完成；Mac arm64 Release 构建通过，12:57 用户日志确认连续两次成功下发与模态恢复。本提交仅包含选择框 cpp/hpp、cloud 模块和本调查记录，all/staged 文档检查与暂存差异检查通过。
 - 工具：会话未暴露 CodeGraph MCP，CLI 不在 PATH 但绝对路径可用。旧索引声称最新，实际 Plater、bbs_3mf 哈希过期；执行一次增量 sync（新增 5、修改 16，退出码 0），随后 8 个目标文件 SHA256 全部匹配；使用 context/callers 辅助定位，动态事件绑定回读源码。
-- 未验证：Windows 原生运行与同事现场尚未回归；当前 Mac 可以构建及运行公共 wx 循环测试，但不能代替 Windows 验收。CLI 没有这组模态窗口，共享导出／上传业务不变。
-- 下一步：Windows 同步本提交后构建并完成原生回归，按下文清单验证嵌套弹窗、取消、切换应用与下发收尾。result.json、教材记录、原始日志与转储不在本提交范围；本轮不推送。
+- 验证边界：新收到的 Windows 虚拟机日志确认一次成功下发后模态退出、主窗口恢复启用；同事原机偶现场景及完整 Windows 回归仍未完成。此次进度／列表闪烁没有逐帧记录或绘制消息跟踪，源码机制与现场因果分开表述。CLI 没有这组模态窗口，共享导出／上传业务不变。
+- 下一步：按文末清单在含本次源码的新 Windows 构建中验证首次加载、查找、下发、取消与失败恢复；源码与文档检查已完成，result.json、教材记录及原始日志未改动。
 
 
 ## 证据与判断
@@ -480,3 +480,97 @@ Win32 依据：[IsWindowEnabled](https://learn.microsoft.com/en-us/windows/win32
 - 对照 gfd-modal-review-identity.json，8 项相关源码／测试／CMake 文件以及 GUI 测试程序的 SHA256 均未变化；复用已通过的 8 组／65 checks。公开版本更新不改模态逻辑，不重复弹出测试窗口。
 - 两个 Windows CMD 启动器加入路径级 eol=crlf 属性；使用 core.autocrlf=false 从 Git 暂存区检出后仍为 CRLF，PS1 的 UTF-8 BOM 已核对。只验证了脚本格式与既有 Windows 采集证据，不将全部脚本分支写为运行通过。
 - 按本次 19 个文件选择性暂存；工作区与暂存区模块文档检查、暂存差异空白检查通过。CLI 没有这组模态交互，共享导出／下发逻辑未修改；Mac 实际取消和成功收尾有证据，主窗口退出与 Windows 原生场景仍待验证。
+
+## Windows 虚拟机：加载进度条与设备列表闪烁（只分析）
+
+用户确认闪烁位于打印机选择框内的进度条和设备列表区域。通过 Parallels 的只读命令取得正在运行的 PID 4484 对应日志快照；未操作 GUI、未触发打印、未修改产品源码或虚拟机配置。本轮只更新调查记录，不构建／提交。
+
+### 输入与版本身份
+
+- Windows 仓库 `C:\WindowsCode\orca-slicer`，master / `dd50c5f977021daa26802641021198ee2f8c9044`，Git status 无输出；日志版本 2.3.2.2-Release。
+- 输入 `planning/debug/orca-user-gui-run-20261009-123420-584944.log`；快照 378,586 字节、1,815 行，末条时间 12:39:46.392461，SHA256 `ad5c05a52ac812329eed8aeed8ea09f0afa2d05c704e7dd99688cd7b30c080e1`。日志仍可能追加，结论以此快照为界。
+- Windows 选择框、模态辅助、Plater、version.inc 的 SHA256 与 Mac 文件转换为 CRLF 后一致；运行 EXE SHA256 `c92fcac153177928291e9740423236f3273929c4f6856197465ce4dfbf1e962f`，DLL SHA256 `1edf007dc1e1ba9b37f03c56932e89f887947a752dd333c5464fa25b1690e0fb`。版本与状态日志支持已运行新修复；未以版本号单独证明全部编译输入。
+- 虚拟机依赖目录 `deps/build/dep_wxWidgets-prefix/src/dep_wxWidgets` 下的 msw/window.cpp、gauge.cpp、listctrl.cpp 与本地依赖快照规范化换行后 SHA256 一致，本文 Windows 实现核对有对应源码。
+- CodeGraph MCP 未暴露，CLI 可用；本次初查选择框 cpp/hpp 过期、模态辅助缺失，Plater 匹配。一次 sync 新增 7／修改 3 后，上述四个目标文件哈希一致。context 提供布局相关入口；callers 未找到 update_print_progress，不能解释为无调用，已直接阅读 Plater 的 lambda 回调。
+- 原始快照和身份元数据仅位于 ignored 的 build/diagnostics/windows-flicker-20261009-*，不将认证／设备信息复制进本文。
+
+### 日志确认的流程
+
+| 时间 | 事件 | 结论 |
+| --- | --- | --- |
+| 12:36:08.125–13.605 | 选择框打开、查询设备任务完成；任务 process 5336ms / finalize 101ms | 首次设备加载约 5.4 秒，等待期间有较长的动画显示时间 |
+| 12:36:33.639 | 点击确认，use_3mf_file=false | 本次普通 G-code 路径，不是 3MF 导出进度回调 |
+| 12:36:33.743 | 导出完成、异步下发开始 | 导出已完成 |
+| 12:36:33.903–34.266 | 上传 3,127,884 字节，HTTP 200 | 上传约 363ms，未卡在上传 |
+| 12:36:34.692 | 下发 HTTP 200、code=0、data=true | 服务接受下发 |
+| 12:36:41.303–.320 | EndModal(5100) 后 returned；shown=false、modal=false、parent_enabled=true | 本次成功路径未发生前次隐藏模态循环残留 |
+
+仅有三次 calc_exclude_triangles 错误，均发生于 12:34 启动阶段。日志没有 WM_PAINT／WM_ERASEBKGND／UpdateWindow 记录，也没有逐次进度回调计数；不能据此测出闪烁频率或确认具体哪一条绘制消息造成某一帧闪烁。
+
+### 源码中确认的风险路径
+
+1. **同级窗口叠放**：GFDDeviceSelectionDialog.cpp:342 创建 wxListCtrl(this)，:998 创建 wxPanel(this)。两者属于同一父窗口；:1036 按列表位置计算面板位置，:980–982 显示并 Raise，使 360×56 DIP 的加载面板盖在仍可见、仅被禁用的列表中央。Disable 不代表隐藏，也不阻止绘制。这是重叠控件结构，不是列表给加载内容预留独立布局空间。
+2. **上传进度触发较大范围更新**：:811 的 update_print_progress 每次调用 set_tip_message；后者 :945–952 修改文案并对整个对话框 Layout。随后进度回调更新文本、SetRange(100)、SetValue，再执行加载面板 Layout → Refresh() → Update()（:830–833）。Refresh 默认要求擦背景，Windows 实现发 RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE；Update 立即 UpdateWindow 并 GdiFlush。中间绘制结果更容易暴露，不能当成只更新进度条的一小段像素。
+3. **已有百分比过滤，但没有时间合并**：Plater.cpp:10729–10737 仅当上传百分比变化时上报，:11391–11395 又按约 2% 步长过滤。因此不能称“每一个网络回调都重绘”；但快速上传仍可能在很短时间内连续投递多次主线程布局／同步重绘。日志没有回调次数，本轮不虚构实测次数。
+4. **初次加载另有动画路径**：:986 的 120ms 定时器仅在 m_loading && !m_loading_determinate 时调用 Gauge::Pulse（:453–458），并不每 120ms 调用整窗 Layout/Refresh。Windows Pulse 使用 PBS_MARQUEE / PBM_STEPIT 的原生进度条动画。进入确定百分比后定时器条件不成立，不能把上传阶段的持续闪烁统一归为 120ms 整页刷新。
+5. **双缓冲已存在**：构造函数 :246 对整个对话框、:999 对加载面板均 SetDoubleBuffered(true)，Windows 实现对应 WS_EX_COMPOSITED。wxListCtrl 在 comctl32 v6 下还启用 LVS_EX_DOUBLEBUFFER。因此“补一个 SetDoubleBuffered 就能修好”不是成立的分析；更应检查同级覆盖、合成层级与强制同步重绘的组合。
+
+Win32 的 [WS_CLIPSIBLINGS 说明](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-styles) 明确指出，同级子窗口重叠且缺少相互裁剪时，一个窗口可能画入另一个区域。本地与 VM 匹配的 wx MSW window.cpp:1530 默认不添加该样式，注释明确不支持重叠子窗口。当前没有现场 HWND 样式／绘制跟踪，不能把默认源码推断写成实测样式。双缓冲的 [WS_EX_COMPOSITED 语义](https://learn.microsoft.com/en-us/windows/win32/winmsg/extended-window-styles) 与 [RedrawWindow 的擦背景／子窗口标志](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-redrawwindow) 分别核对。
+
+### 分析结论与边界
+
+当前首要嫌疑是原生设备列表与加载面板重叠时的绘制／合成冲突，上传阶段每次进度的布局、擦背景和立即绘制进一步放大现象。位置与用户报告吻合，但没有绘制跟踪或隔离对照，仍属于有源码依据的主因判断，不称已证明唯一根因。
+
+上述加载结构、120ms 动画以及 Layout/Refresh/Update 在 dd50c5f977 之前已经存在；本次模态修复未改这些函数。新旧 Windows 事件循环均使用 wxGUIEventLoop 的消息分发，修复主要改变结束与窗口禁用恢复。现有证据不支持把闪烁直接归为卡死修复引入，但未经相同环境的新旧绘制对照，也不完全排除时序影响。虚拟机可能改变绘制时序，当前没有虚拟显卡错误或帧跟踪可证明虚拟机是根因。
+
+后续若授权修复，优先让列表与加载内容使用互斥／独立布局，避免同级原生窗口覆盖；其次只在文案／数值实际改变时更新，并按时间合并进度，减少每次回调的全窗 Layout、擦背景 Refresh 和同步 Update。先保留业务及模态收尾，再用设备查询加载与实际上传两个阶段分别验证。本轮未实施这些变更。
+
+## 加载闪烁优化实施
+
+用户随后授权“优化下”。基准 master / dd50c5f977；已有调查 MD 改动、result.json 及教材记录保留。仅修改 GFDDeviceSelectionDialog.cpp/hpp 的 GUI 显示，不改网络请求、任务状态、导出、模态循环或版本号；CLI 无此加载控件，不涉及共享业务变更。
+
+已移除列表中央的覆盖面板和重复状态文字，将既有底部提示作为唯一状态文字，在其下增加预留 12 DIP 高度的原生进度条行。状态文字使用 NO_AUTORESIZE 和末尾省略，进度条隐藏仍保留布局空间；显示／隐藏及进度变化都不移动设备列表。删除加载面板 Raise、位置跟踪、进度回调 Layout/Refresh/Update 和重复 SetRange；相同状态文字／颜色／进度值不重复设置。状态切换仍禁用／恢复原有控件，失败恢复后可重试；120ms 计时器只推进不确定进度动画，百分比模式保持既有语义。
+
+采用固定布局与增量更新，不新增进度合并队列或新的节流状态，保留上传层已有百分比过滤，避免将简单绘制修正扩展为任务调度变更。沿用既有翻译字符串，未新增文案。修改行已用 Xcode clang-format 格式化。
+
+构建前已确认本地无其他 cmake/ninja/clang 构建在运行，复用 Mac arm64 / Release / SLIC3R_GUI_TESTS=ON 的现有缓存。运行 `/Applications/CMake.app/Contents/bin/cmake --build build/arm64 --config Release --target OrcaSlicer --parallel 8`，日志 build/diagnostics/gfd-progress-layout-build.log；源码身份保存于 gfd-progress-layout-source-identity.json。此处先记录开始，结果随后回填；不覆盖用户运行中的打包副本。
+
+复核时发现 3MF 导出等待使用 YieldFor(UI | USER_INPUT)，不完整分发 wx 定时器；因此保留不确定进度回调中的 Gauge::Pulse，不单独依赖 120ms 定时器。移除的是全窗布局和同步重绘，UI 绘制仍由导出等待已有的消息泵执行。后续最小重建日志为 gfd-progress-layout-build-final.log，退出 0；程序 --help 退出 0，仍为 2.3.2.2-Release。最终源码／二进制 SHA256 与 UUID 见 build/diagnostics/gfd-progress-layout-final-identity.json。
+
+实际新程序为 `build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`；旧 `build/arm64/OrcaSlicer/OrcaSlicer.app` 打包副本未更新。Windows 工作区未自动修改，仍需同步本轮未提交源码并重新构建后才包含此优化；同版本号不能证明包含本次改动。
+
+验证范围：人工复核初始加载 → 查询完成、同状态重复调用、确定／不确定进度切换、失败恢复、再次提交和成功退出的状态转换；查阅 wx 的 NO_AUTORESIZE 和 RESERVE_SPACE_EVEN_IF_HIDDEN 实现以确认布局缓存／隐藏占位语义。没有为本次小范围显示改动添加复制布局实现的测试。GFDModalDialog.cpp/hpp、原模态测试源码／CMake／程序共 6 项 SHA256 与原 8 组／65 检查通过记录一致，因此保留该模态测试结论；它不覆盖本次加载布局，不计为闪烁回归通过。CLI 无对应控件，未运行与本次无关的切片或打印业务测试。
+
+GUI 验证交接（待用户，优先 Windows）：使用 12:36 虚拟机测试时的同一工程、当前打印盘与打印机，机型／喷嘴／平台／耗材／工艺及语言保持原值；先保存工程并退出旧 Orca，再启动包含本次源码的新构建。以下步骤不要求故意制造网络故障或重复实机打印。
+
+| 场景 | 操作 | 预期 | 状态 |
+| --- | --- | --- | --- |
+| 首次加载与查找 | 打开打印机选择；观察加载到设备出现，再点查找 | 状态文字和进度条位于列表下方；列表中央没有覆盖框，不应反复闪白，列表高度不跳动 | 待 Windows GUI |
+| 空结果与取消 | 输入不会匹配设备的筛选内容，查找；清除筛选并重查；关闭选择框后重开 | 空结果提示可读；查找后控件恢复，设备再次显示；主窗口可操作 | 待 Windows GUI |
+| 上传进度 | 按用户现有获准的打印测试流程执行一次普通 G-code 下发，观察百分比变化并确认成功提示 | 只更新底部状态／进度；选中设备列表保持显示，无连续闪白；成功后选择框关闭、主界面启用 | 待 Windows GUI |
+| 3MF 动画与恢复 | 需测试 3MF 的机型沿用原有测试流程；若出现导出、查询或上传失败，关闭原有错误提示再重试 | 导出等待仍有不确定进度动画；完整错误在原有提示中可读，失败后进度条隐藏并可再次操作 | 待相关机型／失败场景 |
+| 显示边界 | 加载期间调整窗口大小、切出再回来；分别使用常用亮暗主题和 Windows 缩放比例 | 列表和进度条无重叠；状态文字不过界，按钮可见，无残留覆盖块 | 待 Windows GUI |
+
+回传证据：沿用已有 PowerShell Tee-Object 方式记录本次运行，记下首次加载／确认下发时间；若仍闪烁，补充闪烁区域和阶段。实际绘制结论以新构建运行观察为准，不由构建成功替代。
+
+## 12:57 Mac 实际运行复核与提交
+
+用户提供 `planning/debug/orca-user-gui-run-20261009-125749-441590.log`，要求分析无问题后提交，并询问进度条放在下方是否更适合。对于这组设备选择与下发任务，固定底部状态区使选中设备持续可见，加载显示／隐藏不挤动列表，且规避同级原生窗口重叠；这是选择此布局的理由，不能仅凭位置改变宣称 Windows 已无闪烁。
+
+日志快照截至 12:59:54.789607，298,405 字节、1,525 行、1 个 NUL，SHA256 `dd513feb4c1117661cce1a13780c64edc55d728d755da6aa59f75c1bba3dd2ea`。解析只在内存跳过 NUL，未改原文件。脱敏摘要与本次身份记录分别为 build/diagnostics/mac-progress-layout-125749-summary.json、mac-progress-layout-125749-identity.json；原日志不入库。
+
+本轮实际运行的打包副本已由用户更新，不能沿用上一轮“该副本未更新”的结论。直接构建程序 mtime 12:57:17、SHA256 `a1465d53122b79e2f3479898b98e01344b2bcfd3153c0075fd551980beeed056`；打包程序 mtime 12:57:40、SHA256 `92151095c8f736235a84c37a686ed5617e009d60ac59853de36145d10d9327a6`。两者 arm64 Mach-O UUID 均为 `A2DF2F8D-63EE-3CC0-919E-6520EC7AA850`，支持同次链接身份；本次用户重建后的 UUID 不同于前次 AI 构建，分别记录，不能混用字节哈希。
+
+选择框 cpp/hpp、模态辅助 cpp/hpp 和原测试源码共 5 项 SHA256 与上一轮最终审阅身份一致。现有 Ninja 日志及对象时间对应本次源码构建；提交前 dry-run 只有两个常驻编码检查目标，无待编译／链接任务。当前打包程序 --help 退出 0，显示 2.3.2.2-Release。日志中的 2.3.2.1-Release 是加载工程的元数据版本，启动第 7 行明确为 2.3.2.2-Release，不是启动了旧包。
+
+| 路径 | 日志证据 | 判断 |
+| --- | --- | --- |
+| 第一次普通 G-code 下发 | 12:58:03.553 打开；15.029 确认；15.776 上传 HTTP 200；16.131 下发 HTTP 200 / code=0 / data=true；19.637 modal returned | 服务接受下发，shown=false / modal=false / parent_enabled=true，临时文件清理完成 |
+| 第二次普通 G-code 下发 | 12:58:44.693 重开；53.620 确认；54.972 上传 HTTP 200；55.402 下发 HTTP 200 / code=0 / data=true；58.073 modal returned | 同一进程可重新打开并再次成功收尾，主窗口恢复启用 |
+| 启动阶段错误 | 12:57:54 可选 3Dconnexion 框架缺失；12:57:54–57 三次 calc_exclude_triangles 失败 | 均发生于下发前，后续两次导出／上传／命令／模态退出成功；没有本次优化的阻塞证据，但不称整份日志零错误 |
+
+10 条 warning 为首页导航／网页消息、网络插件版本查询及工程预设已存在等；未见崩溃断言或本次下发失败记录。进程仍在周期处理消息，没有应用正常退出证据；本轮也没有取消／失败重试、3MF 下发以及逐帧闪烁观察，以上仍不能记为通过。两次服务接受不等于设备物理打印完成。
+
+结论：Mac 日志没有加载布局优化的提交阻塞项；按用户授权提交选择框 cpp/hpp、cloud 模块及本记录，共四个文件，版本保持 2.3.2.2-Release。既有模态辅助、测试源码／CMake／程序六项身份一致，复用原 8 组／65 检查，仅证明其原有范围；不重复构建或运行无变化的目标，不把模态测试当作加载绘制验证。Windows 仍需同步本次提交后按上一节 GUI 清单验证闪烁改善。排除 result.json、教材记录、所有原始日志及 ignored 诊断文件；不推送。
+
+提交检查：check_ai_module_docs.py --all 复核 35 模块、12,878 个归属文件、0 问题；--staged 复核受影响 cloud 模块、0 问题；git diff --cached --check 通过。GUI／CLI 边界与 Windows 待验清单已记录，不将未执行场景标为通过。
