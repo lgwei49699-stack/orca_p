@@ -311,11 +311,14 @@ std::string Config::config_detail_url(const AppConfig* config) { return current_
 
 std::string Config::device_query_url(const AppConfig* config)
 {
-    const auto environment = current_environment(config);
-    if (environment.name == ENV_PRODUCTION)
-        return PRODUCTION_DEVICE_QUERY_URL;
+    // Both environments query the model center's registered test devices.
+    // The print service's md/query endpoint returns a different device set.
+    return current_environment(config).name == ENV_QA ? QA_DEVICE_QUERY_URL : PRODUCTION_DEVICE_QUERY_URL;
+}
 
-    return environment.api_base_url + PATH_DEVICE_QUERY;
+std::string Config::device_status_url(const AppConfig* config)
+{
+    return current_environment(config).api_base_url + "/app/pmc/api/v1/deviceCmd/deviceStatus";
 }
 
 std::string Config::device_filament_info_url(const AppConfig* config)

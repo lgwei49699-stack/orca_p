@@ -1,6 +1,6 @@
 {
     "name":  "Custom Printer",
-    "version":  "02.03.02.79",
+    "version":  "02.03.02.81",
     "force_update":  "0",
     "description":  "My configurations",
     "machine_model_list":  [
@@ -47,6 +47,10 @@
                                {
                                    "name":  "EP7",
                                    "sub_path":  "machine/EP7.json"
+                               },
+                               {
+                                   "name": "Advancer3",
+                                   "sub_path": "machine/Advancer3.json"
                                }
                            ],
     "process_list":  [
@@ -313,6 +317,54 @@
                          {
                              "name":  "0.40mm Standard @EP7 0.8 nozzle",
                              "sub_path":  "process/0.40mm Standard @EP7 0.8 nozzle.json"
+                         },
+                         {
+                             "name": "0.16mm Standard @Advancer3",
+                             "sub_path": "process/0.16mm Standard @Advancer3.json"
+                         },
+                         {
+                             "name": "0.20mm Standard @Advancer3",
+                             "sub_path": "process/0.20mm Standard @Advancer3.json"
+                         },
+                         {
+                             "name": "0.24mm Draft @Advancer3",
+                             "sub_path": "process/0.24mm Draft @Advancer3.json"
+                         },
+                         {
+                             "name": "0.30mm Standard @Advancer3 0.6 nozzle",
+                             "sub_path": "process/0.30mm Standard @Advancer3 0.6 nozzle.json"
+                         },
+                         {
+                             "name": "0.10mm Standard @Advancer3 0.25 nozzle",
+                             "sub_path": "process/0.10mm Standard @Advancer3 0.25 nozzle.json"
+                         },
+                         {
+                             "name": "0.12mm Standard @Advancer3 0.25 nozzle",
+                             "sub_path": "process/0.12mm Standard @Advancer3 0.25 nozzle.json"
+                         },
+                         {
+                             "name": "0.14mm Standard @Advancer3 0.25 nozzle",
+                             "sub_path": "process/0.14mm Standard @Advancer3 0.25 nozzle.json"
+                         },
+                         {
+                             "name": "0.18mm Fine @Advancer3 0.6 nozzle",
+                             "sub_path": "process/0.18mm Fine @Advancer3 0.6 nozzle.json"
+                         },
+                         {
+                             "name": "0.40mm Standard @Advancer3 0.8 nozzle",
+                             "sub_path": "process/0.40mm Standard @Advancer3 0.8 nozzle.json"
+                         },
+                         {
+                             "name": "0.42mm Draft @Advancer3 0.6 nozzle",
+                             "sub_path": "process/0.42mm Draft @Advancer3 0.6 nozzle.json"
+                         },
+                         {
+                             "name": "0.24mm Fine @Advancer3 0.8 nozzle",
+                             "sub_path": "process/0.24mm Fine @Advancer3 0.8 nozzle.json"
+                         },
+                         {
+                             "name": "0.56mm Draft @Advancer3 0.8 nozzle",
+                             "sub_path": "process/0.56mm Draft @Advancer3 0.8 nozzle.json"
                          }
                      ],
     "filament_list":  [
@@ -627,6 +679,30 @@
                           {
                               "name":  "QIDI PLA-CF @EP7 0.8 nozzle",
                               "sub_path":  "filament/EP7/QIDI PLA-CF @EP7 0.8 nozzle.json"
+                          },
+                          {
+                              "name": "Generic PLA @Advancer3",
+                              "sub_path": "filament/Generic PLA @Advancer3.json"
+                          },
+                          {
+                              "name": "Generic PETG @Advancer3",
+                              "sub_path": "filament/Generic PETG @Advancer3.json"
+                          },
+                          {
+                              "name": "Generic ABS @Advancer3",
+                              "sub_path": "filament/Generic ABS @Advancer3.json"
+                          },
+                          {
+                              "name": "Generic PLA @Advancer3 0.25 nozzle",
+                              "sub_path": "filament/Generic PLA @Advancer3 0.25 nozzle.json"
+                          },
+                          {
+                              "name": "Generic PETG @Advancer3 0.25 nozzle",
+                              "sub_path": "filament/Generic PETG @Advancer3 0.25 nozzle.json"
+                          },
+                          {
+                              "name": "Generic ABS @Advancer3 0.25 nozzle",
+                              "sub_path": "filament/Generic ABS @Advancer3 0.25 nozzle.json"
                           }
                       ],
     "machine_list":  [
@@ -733,6 +809,22 @@
                          {
                              "name":  "EP7 0.8 nozzle",
                              "sub_path":  "machine/EP7 0.8 nozzle.json"
+                         },
+                         {
+                             "name": "Advancer3 0.4 nozzle",
+                             "sub_path": "machine/Advancer3 0.4 nozzle.json"
+                         },
+                         {
+                             "name": "Advancer3 0.25 nozzle",
+                             "sub_path": "machine/Advancer3 0.25 nozzle.json"
+                         },
+                         {
+                             "name": "Advancer3 0.6 nozzle",
+                             "sub_path": "machine/Advancer3 0.6 nozzle.json"
+                         },
+                         {
+                             "name": "Advancer3 0.8 nozzle",
+                             "sub_path": "machine/Advancer3 0.8 nozzle.json"
                          }
                      ]
 }

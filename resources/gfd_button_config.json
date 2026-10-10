@@ -88,6 +88,15 @@
                                      "print_device_types":  [
                                                                 "EPONEPlus"
                                                             ]
-                                 }
+                                 },
+                    "Advancer3": {
+                        "cloud_import": true,
+                        "dynamic_params": true,
+                        "upload_config": true,
+                        "save_config": true,
+                        "print": true,
+                        "print_3mf": false,
+                        "print_device_types": ["Advancer3"]
+                    }
                 }
 }

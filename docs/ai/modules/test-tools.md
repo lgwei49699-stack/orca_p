@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:16d9d9eb1ae5729287d6f710ff5d95eeba6f13c45974299e0a0c13d0de32f15b",
-  "reason": "Add cloud profile protocol tests (10 cases / 89 assertions) and standalone wx form lifecycle tests (43 checks). Reviewed account/environment guards after reauthentication, nested login ownership, single submission and modal completion. No cloud writes or Windows GUI validation; unrelated Thingi10K work is excluded."
+  "source_fingerprint": "sha256:19a35614bfec665e54e1d3df56b17a0c5577c534b9ea90bbcb5c89b7b8d636e1",
+  "reason": "增加默认开启和显式关闭调平协议回归，7 用例 87 断言；wx 回归加入原生、自管、嵌套模态下 owner 关闭和退栈后销毁，87 检查通过；保留 GUI 与 Windows 待验边界。"
 }
 -->
 
@@ -26,6 +26,8 @@
 - [test_gmp_platform_selection.py](../../../scripts/tests/test_gmp_platform_selection.py)：在临时 CMake 脚本中执行 GMP 配方、捕获 ExternalProject/复制参数，验证目标架构对应的版本、校验值及旧补丁/预编译路径；不修改真实构建目录，不等于目标系统编译运行。
 
 ## 核心流程
+
+`gfd_modal_dialog_tests` 补充 MainFrame→子面板→栈上原生／自管模态的关闭回归：模态期间退出被否决，嵌套同样保护，非关联窗口不阻塞；结束模态并退出作用域后允许 owner 正常销毁。本轮 Mac arm64 87 项检查通过；15:29 用户日志进一步验证设备框下两次退出拦截、取消恢复和应用正常析构。嵌套打印设置和 Windows 仍按 [Advancer3 续修交接](../validation/2026-10-09-adv3-custom-feasibility.md) 验收。
 
 Catch2 公共配置连接 libslic3r_tests、fff_print_tests、slic3rutils 等目标；Python／CLI 工具组织隔离输入、输出与结果审计。模块文档检查独立读取 Git 快照，不调用切片、网络或 CodeGraph。
 
@@ -96,8 +98,14 @@ Windows GUI 采集在 2026-10-09 收到同事现场 JSON：64 位 Windows PowerS
 
 `gfd_cloud_config_tests` 是云方案JSON协议的独立Catch目标，覆盖旧标准档、三档互不覆盖、坏数据拒绝和回读识别丢档；旧来源缺类型／null／空串默认标准到保存payload的连贯校验，并验证明确快速／精细类型不回退到标准。元数据回归验证只修改名称时保留最新备注、明确清空备注、ID禁止被元数据补丁修改，以及回读未保存字段时不能确认成功。提交前增加重登不可跨账号/环境继续写旧目标、仅新建首次登录可建立账号的边界回归。无需账号或桌面，不能代替真实云服务验收，见[云方案记录](../validation/2026-10-09-cloud-config-quality-analysis.md)。
 
+新增 `tests/libslic3r/test_advancer3_presets.cpp` 并注册到现有 libslic3r_tests，标签 `[Advancer3]`：验证向导元数据、Custom 独立加载、与 AD5X 有效参数等价及多品牌共存。测试只写临时目录，运行身份和 CLI 对照结果见[执行记录](../validation/2026-10-09-adv3-custom-feasibility.md)。
+
 ## 关联模块
 
 [构建、打包与平台集成](build.md)、[应用入口与 CLI](cli.md)、[FFF 切片步骤与层状态](slicing.md)、[模型检测、修复与保色](model-repair.md)。
 
 GFD 模态回归使用真实 wx 窗口和事件循环，保留其他已禁用窗口；同一源码可在 Mac 运行公共循环场景，但生产设备选择仅在 Windows 接入新基类。Windows 原生 InitDialog／焦点／Alt+Tab 的验收状态单列，见[调查与修复记录](../validation/2026-10-08-print-ui-freeze-log-analysis.md)。
+
+Advancer3 专项扩展为四喷嘴、12 工艺和六耗材的有效配置与兼容关系测试。网页测试 `node --test tests/web/guide_filaments.test.cjs` 同时载入首次向导和耗材管理脚本，验证完整身份、精确型号过滤、默认材料和桥接提交；运行结果见同一 Advancer3 记录，不代替实际 GUI。
+
+Advancer3 下发协议专项目标 `gfd_print_options_tests` 位于 `tests/slic3rutils`，只链接 test_common 与 nlohmann_json，不发起网络或打印。覆盖实际 PMC 槽位结构、非法数据、ms／调平和旧机型载荷保持；验证身份和 GUI 交接见[Advancer3 记录](../validation/2026-10-09-adv3-custom-feasibility.md)。

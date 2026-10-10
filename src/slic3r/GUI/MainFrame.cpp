@@ -55,6 +55,7 @@
 #include <string_view>
 
 #include "GUI_App.hpp"
+#include "GFDModalDialog.hpp"
 #include "UnsavedChangesDialog.hpp"
 #include "MsgDialog.hpp"
 #include "Notebook.hpp"
@@ -3361,6 +3362,10 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     // declare events
     Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& event) {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< ": mainframe received close_widow event";
+        if (veto_close_with_modal_dialog(this, event)) {
+            BOOST_LOG_TRIVIAL(info) << "Main frame close deferred until the active modal dialog returns";
+            return;
+        }
         if (event.CanVeto() && m_plater != nullptr && m_plater->is_3mf_export_in_progress()) {
             event.Veto();
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": cancelled while a 3MF export is in progress";

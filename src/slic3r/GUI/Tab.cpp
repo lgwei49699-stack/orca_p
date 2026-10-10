@@ -1832,8 +1832,11 @@ void Tab::update_changed_ui()
 
     decorate();
 
-    wxTheApp->CallAfter([this]() {
-        if (parent()) //To avoid a crash, parent should be exist for a moment of a tree updating
+    // Detached editors (e.g. dynamic material parameters) can be destroyed
+    // before this refresh runs. Queue it on the tab so wx removes pending
+    // refreshes with their owner; a non-null parent pointer is not a lifetime guard.
+    CallAfter([this]() {
+        if (!IsBeingDeleted() && m_tabctrl != nullptr && !m_tabctrl->IsBeingDeleted())
             update_changed_tree_ui();
     });
     // BBS:

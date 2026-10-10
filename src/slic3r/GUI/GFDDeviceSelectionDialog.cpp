@@ -785,7 +785,7 @@ void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
     EndModal(wxID_OK);
 }
 
-void GFDDeviceSelectionDialog::complete_print_submission(bool success)
+void GFDDeviceSelectionDialog::complete_print_submission(bool success, bool cancelled)
 {
     if (!m_print_submitting)
         return;
@@ -797,7 +797,10 @@ void GFDDeviceSelectionDialog::complete_print_submission(bool success)
     }
 
     set_loading_state(false);
-    set_tip_message(_L("打印文件未成功下发，请检查提示后重试。"), true);
+    if (cancelled)
+        set_tip_message(_L("Print submission cancelled."));
+    else
+        set_tip_message(_L("打印文件未成功下发，请检查提示后重试。"), true);
     Raise();
 }
 

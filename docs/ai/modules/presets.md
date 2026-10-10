@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:99002d6747e03f4d590ae945b0a7c8b793ff2ea4470b436c77fd19fe47a2e9ae",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。"
+  "source_fingerprint": "sha256:c557d4e6bec76e199d703762fe87a896a5c98e05a2aa39d5ca4d3db6288bea78",
+  "reason": "共享加载测试扩展为 Advancer3 四喷嘴、12 工艺、六耗材，对照 AD5X 有效参数及兼容关系；预设核心未改，10例1681断言及四规格 CLI 指令等价通过。"
 }
 -->
 
@@ -44,6 +44,8 @@ PresetUpdater 在重载前经 check_and_save_current_preset_changes 处理未保
 改键/默认值需测试序列化、合法 0、继承、旧工程兼容及资源升级；修改资源包元信息时审查 version 与实际差异，不能顺便改打印参数。
 
 现有测试/工具范围：`tests/libslic3r/test_config.cpp`；`tests/libslic3r/test_epone_presets.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+Advancer3 资源通过共享 PresetBundle 验证：仅安装 Custom 与 OrcaFilamentLibrary 时即可加载，不要求 Flashforge；与 Flashforge 同时安装时也验证无重名错误。测试覆盖全部四规格，比较解析后的机器／工艺／耗材全部打印参数，只排除身份、默认预设及兼容引用；见 `tests/libslic3r/test_advancer3_presets.cpp` 和[执行记录](../validation/2026-10-09-adv3-custom-feasibility.md)。
 
 ## 关联模块
 

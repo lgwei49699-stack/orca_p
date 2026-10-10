@@ -113,14 +113,18 @@
         "src/slic3r/GUI/UserNotification.hpp"
       ],
       "watch": [
-        "src/slic3r/GUI/Plater.hpp"
+        "src/slic3r/GUI/Plater.hpp",
+        "src/slic3r/GUI/GFDModalDialog.hpp",
+        "src/slic3r/GUI/GFDModalDialog.cpp"
       ],
       "entrypoints": [
         "src/slic3r/GUI/GUI_App.cpp",
         "src/slic3r/GUI/MainFrame.cpp",
         "src/slic3r/GUI/Plater.cpp"
       ],
-      "tests": [],
+      "tests": [
+        "tests/gui/test_gfd_modal_dialog.cpp"
+      ],
       "test_note": "改菜单、页面切换或启动时，验证首次启动、已有配置启动、打开项目和关闭取消；按 gui-validation.md 交付具体步骤并记录结果，涉及共享业务时核对 CLI。"
     },
     {
@@ -954,7 +958,8 @@
       ],
       "tests": [
         "tests/libslic3r/test_config.cpp",
-        "tests/libslic3r/test_epone_presets.cpp"
+        "tests/libslic3r/test_epone_presets.cpp",
+        "tests/libslic3r/test_advancer3_presets.cpp"
       ],
       "test_note": "改键/默认值需测试序列化、合法 0、继承、旧工程兼容及资源升级；修改资源包元信息时审查 version 与实际差异，不能顺便改打印参数。"
     },
@@ -987,7 +992,9 @@
         "src/libslic3r/GuideMachineMetadata.hpp"
       ],
       "tests": [
-        "tests/libslic3r/test_epone_presets.cpp"
+        "tests/libslic3r/test_epone_presets.cpp",
+        "tests/libslic3r/test_advancer3_presets.cpp",
+        "tests/web/guide_filaments.test.cjs"
       ],
       "test_note": "验证直接值、继承、多级覆盖、坏项及 EP3 Plus／EPONE Pro／Plus；源码测试不等于向导 GUI 已验证，需隔离配置目录检查首次及升级启动。"
     },
@@ -1247,7 +1254,8 @@
         "src/slic3r/GUI/GFDModalDialog.hpp",
         "src/slic3r/GUI/GFDCloudConfigDialog.cpp",
         "src/slic3r/GUI/GFDCloudConfigDialog.hpp",
-        "src/slic3r/Utils/GFDCloudConfig.hpp"
+        "src/slic3r/Utils/GFDCloudConfig.hpp",
+        "src/slic3r/Utils/GFDPrintOptions.hpp"
       ],
       "watch": [
         "src/slic3r/GUI/Plater.cpp",
@@ -1265,7 +1273,8 @@
       "tests": [
         "tests/gui/test_gfd_modal_dialog.cpp",
         "tests/gui/test_gfd_cloud_config_dialog.cpp",
-        "tests/slic3rutils/test_gfd_cloud_config.cpp"
+        "tests/slic3rutils/test_gfd_cloud_config.cpp",
+        "tests/slic3rutils/test_gfd_print_options.cpp"
       ],
       "test_note": "改认证／导入时测试失效会话、坏响应、取消、同名预设和机型不兼容；云服务不可用时仍能编辑本地工程。用户版已关闭的同步入口不能在文档中写成存在。"
     },
@@ -1528,7 +1537,8 @@
         "resources/profiles/Custom/machine/EPONE Plus.json"
       ],
       "tests": [
-        "tests/libslic3r/test_epone_presets.cpp"
+        "tests/libslic3r/test_epone_presets.cpp",
+        "tests/libslic3r/test_advancer3_presets.cpp"
       ],
       "test_note": "改资源用 profile validator 和本分支 epone_presets 测试；差异范围要列出，用户预设覆盖保持。资源升级需要隔离配置目录，不能拿清空后的新安装替代旧配置升级。"
     },
@@ -1580,7 +1590,9 @@
         "resources/web/guide/index.html",
         "src/slic3r/GUI/WebViewDialog.cpp"
       ],
-      "tests": [],
+      "tests": [
+        "tests/web/guide_filaments.test.cjs"
+      ],
       "test_note": "改消息协议先核对原生接收分支和网页发送字段，再测向导保存、取消、登录与离线页面。原生单元测试无法证明页面渲染和桥接时序。"
     },
     {
@@ -1711,7 +1723,8 @@
         "tests/sla_print/**",
         "tests/slic3rutils/**",
         "tests/test_utils.hpp",
-        "tests/gui/**"
+        "tests/gui/**",
+        "tests/web/**"
       ],
       "watch": [],
       "entrypoints": [

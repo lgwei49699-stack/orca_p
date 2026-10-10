@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "guide",
-  "source_fingerprint": "sha256:3b89b2911f40ebb8e672386b38604c6278eaa6d821fdff9f94360f04b913e449",
-  "reason": "核对网页向导日志降噪：不再输出完整配置/消息，仅为日志生成的两次 dump 删除；逐耗材正常信息降为 debug，info 保留数量/加载/保存摘要，error 原样保留。配置解析、继承、选择、保存和网页业务载荷不变；CLI 不提供此界面，专项与 GUI 交接另行记录。"
+  "source_fingerprint": "sha256:0fe0fd07b4a13053d144905199cea4d15c492d1ec75c582b2d42e601825914ee",
+  "reason": "Advancer3 四喷嘴目录测试及 22/23 两耗材入口同步复核；共用完整名列表，精确保存预设 key，修复首次向导丢失选择与跨机型合并；12 网页用例通过，GUI 已确认四喷嘴与六种标识。"
 }
 -->
 
@@ -48,6 +48,10 @@ GuideFrame 读取品牌目录，组织机型、喷嘴、耗材 JSON 供向导网
 
 本分支使用独立 GuideMachineMetadataResolver，在当前品牌机器清单递归解析父项，子项覆盖；检测缺父项/循环、喷嘴必须有限正数，保留字符串 1.0 等有效拼写；坏机器单项跳过。它不读取当前选中的机器。
 
+Advancer3 在 Custom 目录声明 0.25／0.4／0.6／0.8 mm 喷嘴，使用本品牌内完整参数，无跨品牌机器继承。`tests/libslic3r/test_advancer3_presets.cpp` 检查目录解析和床／封面资源；首次添加、旧配置升级及重启后选择保持见[GUI 交接](../validation/2026-10-09-adv3-custom-feasibility.md)。
+
 ## 关联模块
 
 [配置定义、预设继承与资源更新](presets.md)、[打印机、耗材与工艺资源](resource-profiles.md)、[内嵌网页与原生消息桥](web-assets.md)、[GUI 生命周期与主工作台](gui-shell.md)。
+
+首次向导（22）与耗材管理（23）共用完整预设名称列表，保留 @Advancer3 等机型身份并精确保存选择；不再按同名 Generic 简称跨机型合并。`node --test tests/web/guide_filaments.test.cjs` 覆盖过滤、默认值、选择保持及两个入口的桥接数据。

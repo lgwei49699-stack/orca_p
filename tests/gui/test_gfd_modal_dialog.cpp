@@ -7,6 +7,8 @@
 
 #include <wx/app.h>
 #include <wx/frame.h>
+#include <wx/panel.h>
+#include <wx/weakref.h>
 #include <wx/timer.h>
 
 using Slic3r::GUI::GFDModalDialog;
@@ -188,6 +190,51 @@ private:
                 watchdog.Stop();
                 check(parent.IsEnabled(), "repeated modal call restores parent");
             }
+        }
+
+        std::printf("CASE: app quit while native and custom modal dialogs are on the stack\n");
+        std::fflush(stdout);
+        for (bool custom : {false, true}) {
+            auto*              owner = new wxFrame(nullptr, wxID_ANY, "Owner close regression");
+            wxWeakRef<wxFrame> owner_alive(owner);
+            owner->Show();
+            auto* child = new wxPanel(owner); // Like MainFrame -> Plater -> stack dialog.
+            owner->Bind(wxEVT_CLOSE_WINDOW, [owner](wxCloseEvent& event) {
+                if (!Slic3r::GUI::veto_close_with_modal_dialog(owner, event))
+                    event.Skip();
+            });
+            {
+                wxDialog       native(child, wxID_ANY, "Native stack dialog");
+                GFDModalDialog managed(child, wxID_ANY, "Custom stack dialog");
+                wxDialog&      outer = custom ? static_cast<wxDialog&>(managed) : native;
+                outer.CallAfter([&]() {
+                    check(!owner->Close(), "app quit is vetoed while outer modal is active");
+                    check(owner_alive.get() != nullptr, "owner remains alive under modal loop");
+                    wxDialog inner(&outer, wxID_ANY, "Nested stack dialog");
+                    inner.CallAfter([&]() {
+                        check(!owner->Close(), "app quit is also vetoed under a nested modal");
+                        check(outer.IsModal() && inner.IsModal(), "quit does not prematurely end either modal");
+                        wxCloseEvent unrelated(wxEVT_CLOSE_WINDOW);
+                        check(!Slic3r::GUI::veto_close_with_modal_dialog(&disabled, unrelated),
+                              "another window's dialog does not block an unrelated owner");
+                        wxCloseEvent forced(wxEVT_CLOSE_WINDOW);
+                        forced.SetCanVeto(false);
+                        check(!Slic3r::GUI::veto_close_with_modal_dialog(owner, forced),
+                              "forced OS shutdown retains non-vetoable semantics");
+                        inner.EndModal(wxID_CANCEL);
+                    });
+                    check(inner.ShowModal() == wxID_CANCEL, "nested modal returns normally after quit was rejected");
+                    outer.EndModal(wxID_CANCEL);
+                });
+                watchdog.StartOnce(5000);
+                check(outer.ShowModal() == wxID_CANCEL, "outer modal returns normally after quit was rejected");
+                watchdog.Stop();
+                wxCloseEvent modeless(wxEVT_CLOSE_WINDOW);
+                check(!Slic3r::GUI::veto_close_with_modal_dialog(owner, modeless), "existing non-modal dialogs do not block normal close");
+            }
+            check(owner->Close(), "normal close succeeds after modal stack unwinds");
+            wxYield();
+            check(!owner_alive, "normal close destroys owner after dialogs unwind");
         }
 
         std::printf("%d checks, %d failures\n", m_checks, m_failures);

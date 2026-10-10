@@ -16,6 +16,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <wx/checkbox.h>
 #include <wx/dcbuffer.h>
 #include <wx/graphics.h>
 #include <wx/panel.h>
@@ -271,9 +272,15 @@ wxString slot_position_text(int slot_no)
     return wxString::Format("%d%c", slot_no / 4 + 1, static_cast<wxChar>('A' + slot_no % 4));
 }
 
-wxString slot_display_text(const GFDDeviceFilamentSlot& slot)
+wxString slot_title_text(int slot_no, bool numeric)
 {
-    wxString text = _L("槽位 ") + slot_position_text(slot.slot_no) + wxString::Format(_L("（%d）"), slot.slot_no);
+    return numeric ? wxString::Format(_L("Slot %d"), slot_no) :
+                     _L("槽位 ") + slot_position_text(slot_no) + wxString::Format(_L("（%d）"), slot_no);
+}
+
+wxString slot_display_text(const GFDDeviceFilamentSlot& slot, bool numeric)
+{
+    wxString text = slot_title_text(slot.slot_no, numeric);
     if (!slot.color_title.empty())
         text += wxString::FromUTF8(" · ") + from_u8(slot.color_title);
     if (!slot.category_first_name.empty())
@@ -345,13 +352,14 @@ wxString slot_detail_text(const GFDDeviceFilamentSlot& slot)
 class GFDSlotPickerDialog final : public DPIDialog
 {
 public:
-    GFDSlotPickerDialog(wxWindow*                                parent,
+    GFDSlotPickerDialog(wxWindow*                                 parent,
                         const std::vector<GFDDeviceFilamentSlot>& slots,
-                        size_t                                   selected_index,
-                        const wxString&                          logical_filament_text)
+                        size_t                                    selected_index,
+                        const wxString&                           logical_filament_text,
+                        bool                                      numeric_slots)
         : DPIDialog(parent,
                     wxID_ANY,
-                    _L("选择打印机耗材槽位"),
+                    (numeric_slots ? _L("Select printer material slot") : _L("选择打印机耗材槽位")),
                     wxDefaultPosition,
                     wxDefaultSize,
                     wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
@@ -362,12 +370,15 @@ public:
         SetMinSize(wxSize(FromDIP(660), FromDIP(400)));
 
         auto* main_sizer = new wxBoxSizer(wxVERTICAL);
-        auto* title      = new wxStaticText(this, wxID_ANY, _L("选择实体耗材槽位"));
+        auto* title      = new wxStaticText(this, wxID_ANY, (numeric_slots ? _L("Select a loaded material slot") : _L("选择实体耗材槽位")));
         title->SetFont(Label::Head_16);
         main_sizer->Add(title, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(20));
 
-        m_subtitle = new wxStaticText(
-            this, wxID_ANY, _L("正在为 ") + logical_filament_text + _L(" 选择槽位。当前槽位以绿色描边标识，点击其他槽位即可替换。"));
+        m_subtitle = new wxStaticText(this, wxID_ANY,
+                                      numeric_slots ? wxString::Format(_L("Choose a slot for %s. The current slot has a green outline."),
+                                                                       logical_filament_text) :
+                                                      _L("正在为 ") + logical_filament_text +
+                                                          _L(" 选择槽位。当前槽位以绿色描边标识，点击其他槽位即可替换。"));
         m_subtitle->SetForegroundColour(secondary_text_color());
         m_subtitle->Wrap(FromDIP(620));
         main_sizer->Add(m_subtitle, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP | wxBOTTOM, FromDIP(20));
@@ -391,14 +402,11 @@ public:
             card->SetBorderWidth(selected ? FromDIP(2) : FromDIP(1));
             card->SetBorderColorNormal(selected ? wxColour("#009688") : card_border_color());
             card->SetBackgroundColorNormal(background);
-            card->SetToolTip(slot_display_text(slot) + _L("\n色值：") + color_values);
+            card->SetToolTip(slot_display_text(slot, numeric_slots) + (numeric_slots ? _L("\nColor: ") : _L("\n色值：")) + color_values);
 
             auto* card_sizer = new wxBoxSizer(wxVERTICAL);
             auto* top_sizer = new wxBoxSizer(wxHORIZONTAL);
-            auto* slot_title = new wxStaticText(card,
-                                                wxID_ANY,
-                                                _L("槽位 ") + slot_position_text(slot.slot_no) +
-                                                    wxString::Format(_L("（%d）"), slot.slot_no));
+            auto* slot_title = new wxStaticText(card, wxID_ANY, slot_title_text(slot.slot_no, numeric_slots));
             slot_title->SetFont(Label::Head_13);
             top_sizer->Add(slot_title, 0, wxALIGN_CENTER_VERTICAL);
             top_sizer->AddStretchSpacer(1);
@@ -412,7 +420,7 @@ public:
             auto* swatch = new GFDColorSwatch(card, colors);
             swatch->SetMinSize(wxSize(FromDIP(46), FromDIP(46)));
             swatch->SetMaxSize(wxSize(FromDIP(46), FromDIP(46)));
-            swatch->SetToolTip(_L("实体耗材色值：") + color_values);
+            swatch->SetToolTip((numeric_slots ? _L("Loaded material color: ") : _L("实体耗材色值：")) + color_values);
             content_sizer->Add(swatch, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
 
             auto* detail_sizer = new wxBoxSizer(wxVERTICAL);
@@ -453,7 +461,8 @@ public:
                                      static_cast<wxWindow*>(color_value)}) {
                 target->SetCursor(wxCURSOR_HAND);
                 target->Bind(wxEVT_LEFT_DOWN, choose_slot);
-                target->SetToolTip(slot_display_text(slot) + _L("\n色值：") + color_values);
+                target->SetToolTip(slot_display_text(slot, numeric_slots) + (numeric_slots ? _L("\nColor: ") : _L("\n色值：")) +
+                                   color_values);
             }
             cards->Add(card, 0, wxALL, FromDIP(7));
         }
@@ -464,7 +473,7 @@ public:
 
         auto* button_sizer = new wxBoxSizer(wxHORIZONTAL);
         button_sizer->AddStretchSpacer(1);
-        m_cancel_button = new Button(this, _L("取消"), "", 0, 0, wxID_CANCEL);
+        m_cancel_button = new Button(this, (numeric_slots ? _L("Cancel") : _L("取消")), "", 0, 0, wxID_CANCEL);
         apply_list_button_style(m_cancel_button, false);
         m_cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_CANCEL); });
         button_sizer->Add(m_cancel_button, 0);
@@ -613,19 +622,21 @@ std::vector<size_t> match_gfd_filaments_to_slots(const std::vector<FilamentInfo>
     return result;
 }
 
-GFDConsumableMappingDialog::GFDConsumableMappingDialog(wxWindow*                         parent,
+GFDConsumableMappingDialog::GFDConsumableMappingDialog(wxWindow*                          parent,
                                                        const std::string&                 device_mac,
                                                        std::vector<FilamentInfo>          logical_filaments,
                                                        std::vector<GFDDeviceFilamentSlot> slots,
-                                                       std::vector<size_t>                default_slot_indices)
+                                                       std::vector<size_t>                default_slot_indices,
+                                                       bool                               advancer3)
     : DPIDialog(parent,
                 wxID_ANY,
-                _L("多色耗材槽位确认"),
+                advancer3 ? _L("Advancer3 print settings") : _L("多色耗材槽位确认"),
                 wxDefaultPosition,
                 wxDefaultSize,
                 wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
     , m_logical_filaments(std::move(logical_filaments))
     , m_slots(std::move(slots))
+    , m_advancer3(advancer3)
 {
     const wxColour background = StateColor::darkModeColorFor(*wxWHITE);
     SetBackgroundColour(background);
@@ -633,14 +644,13 @@ GFDConsumableMappingDialog::GFDConsumableMappingDialog(wxWindow*                
 
     auto* main_sizer = new wxBoxSizer(wxVERTICAL);
     auto* title_sizer = new wxBoxSizer(wxHORIZONTAL);
-    auto* title      = new wxStaticText(this,
-                                        wxID_ANY,
-                                        _L("确认 3MF 耗材映射"));
+    auto* title       = new wxStaticText(this, wxID_ANY, advancer3 ? _L("Advancer3 print settings") : _L("确认 3MF 耗材映射"));
     title->SetFont(Label::Head_16);
     title_sizer->Add(title, 0, wxALIGN_CENTER_VERTICAL);
     title_sizer->AddStretchSpacer(1);
 
-    const wxString device_text = device_mac.empty() ? _L("当前打印机") : _L("打印机 MAC · ") + from_u8(device_mac);
+    const wxString device_text  = device_mac.empty() ? (m_advancer3 ? _L("Current printer") : _L("当前打印机")) :
+                                                       (m_advancer3 ? _L("Printer MAC · ") : _L("打印机 MAC · ")) + from_u8(device_mac);
     auto*          device_label = new wxStaticText(this, wxID_ANY, device_text);
     device_label->SetFont(Label::Body_12);
     device_label->SetForegroundColour(secondary_text_color());
@@ -653,16 +663,17 @@ GFDConsumableMappingDialog::GFDConsumableMappingDialog(wxWindow*                
     m_tip_panel->SetBackgroundColorNormal(wxColour("#F8F8F8"));
     m_tip_panel->SetMinSize(wxSize(-1, FromDIP(52)));
     auto* tip_sizer = new wxBoxSizer(wxVERTICAL);
-    m_tip_text = new wxStaticText(m_tip_panel,
-                                  wxID_ANY,
-                                  _L("左侧展示 3MF 模型中的逻辑耗材与模型色值，右侧展示打印机已装载的实体槽位、耗材和色值。"
-                                     "系统已按颜色自动匹配，点击右侧槽位可重新选择。"));
+    m_tip_text      = new wxStaticText(m_tip_panel, wxID_ANY,
+                                  advancer3 ? _L("Select a loaded device slot for each material. Click a slot to change it.") :
+                                                   _L("左侧展示 3MF 模型中的逻辑耗材与模型色值，右侧展示打印机已装载的实体槽位、耗材和色值。"
+                                                           "系统已按颜色自动匹配，点击右侧槽位可重新选择。"));
     m_tip_text->Wrap(FromDIP(820));
     tip_sizer->Add(m_tip_text, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
-    m_tool_tip_text = new wxStaticText(
-        m_tip_panel,
-        wxID_ANY,
-        _L("T0/T1 是切片文件中的逻辑工具编号，不是打印机槽位号；确认后将按 T 编号映射并继续上传、下发。"));
+    m_tool_tip_text =
+        new wxStaticText(m_tip_panel, wxID_ANY,
+                         (m_advancer3 ?
+                              _L("T0/T1 are G-code tool IDs, not physical slots. Confirming will upload the file and start printing.") :
+                              _L("T0/T1 是切片文件中的逻辑工具编号，不是打印机槽位号；确认后将按 T 编号映射并继续上传、下发。")));
     m_tool_tip_text->SetFont(Label::Body_11);
     m_tool_tip_text->SetForegroundColour(secondary_text_color());
     tip_sizer->Add(m_tool_tip_text, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP | wxBOTTOM, FromDIP(12));
@@ -671,22 +682,12 @@ GFDConsumableMappingDialog::GFDConsumableMappingDialog(wxWindow*                
 
     auto* column_sizer = new wxBoxSizer(wxHORIZONTAL);
     column_sizer->AddSpacer(FromDIP(14));
-    m_logical_header = new wxStaticText(this,
-                                        wxID_ANY,
-                                        _L("3MF 逻辑耗材 / 模型颜色"),
-                                        wxDefaultPosition,
-                                        wxSize(FromDIP(MAPPING_LOGICAL_COLUMN_WIDTH), -1));
-    m_mapping_header = new wxStaticText(this,
-                                        wxID_ANY,
-                                        _L("映射"),
-                                        wxDefaultPosition,
-                                        wxSize(FromDIP(MAPPING_ARROW_COLUMN_WIDTH), -1),
-                                        wxALIGN_CENTER_HORIZONTAL);
-    m_slot_header = new wxStaticText(this,
-                                     wxID_ANY,
-                                     _L("打印机实体槽位 / 耗材颜色"),
-                                     wxDefaultPosition,
-                                     wxSize(FromDIP(MAPPING_SLOT_COLUMN_WIDTH), -1));
+    m_logical_header = new wxStaticText(this, wxID_ANY, advancer3 ? _L("G-code material / model color") : _L("3MF 逻辑耗材 / 模型颜色"),
+                                        wxDefaultPosition, wxSize(FromDIP(MAPPING_LOGICAL_COLUMN_WIDTH), -1));
+    m_mapping_header = new wxStaticText(this, wxID_ANY, (m_advancer3 ? _L("Mapping") : _L("映射")), wxDefaultPosition,
+                                        wxSize(FromDIP(MAPPING_ARROW_COLUMN_WIDTH), -1), wxALIGN_CENTER_HORIZONTAL);
+    m_slot_header    = new wxStaticText(this, wxID_ANY, (m_advancer3 ? _L("Device slot / loaded color") : _L("打印机实体槽位 / 耗材颜色")),
+                                        wxDefaultPosition, wxSize(FromDIP(MAPPING_SLOT_COLUMN_WIDTH), -1));
     m_logical_header->SetFont(Label::Head_12);
     m_mapping_header->SetFont(Label::Head_12);
     m_slot_header->SetFont(Label::Head_12);
@@ -729,20 +730,19 @@ GFDConsumableMappingDialog::GFDConsumableMappingDialog(wxWindow*                
         auto* logical_swatch = new GFDColorSwatch(logical_panel, logical_colors);
         logical_swatch->SetMinSize(wxSize(FromDIP(48), FromDIP(48)));
         logical_swatch->SetMaxSize(wxSize(FromDIP(48), FromDIP(48)));
-        logical_swatch->SetToolTip(_L("3MF 模型色值：") + logical_color_values);
+        logical_swatch->SetToolTip((advancer3 ? _L("Model color: ") : _L("3MF 模型色值：")) + logical_color_values);
         m_color_swatches.push_back(logical_swatch);
         logical_sizer->Add(logical_swatch, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
 
         auto* logical_text_sizer = new wxBoxSizer(wxVERTICAL);
         auto* tool_label = new wxStaticText(logical_panel, wxID_ANY, wxString::Format("T%d", filament.id));
         tool_label->SetFont(Label::Head_14);
-        const wxString material_name = filament.type.empty() ? _L("未设置材料") : from_u8(filament.type);
-        auto* logical_detail = new wxStaticText(logical_panel,
-                                                wxID_ANY,
-                                                wxString::Format(_L("3MF 耗材 %d · "), filament.id + 1) + material_name,
-                                                wxDefaultPosition,
-                                                wxSize(FromDIP(220), -1),
-                                                wxST_ELLIPSIZE_END);
+        const wxString material_name  = filament.type.empty() ? (m_advancer3 ? _L("Material not set") : _L("未设置材料")) :
+                                                                from_u8(filament.type);
+        auto*          logical_detail = new wxStaticText(logical_panel, wxID_ANY,
+                                                         wxString::Format(advancer3 ? _L("Material %d · ") : _L("3MF 耗材 %d · "), filament.id + 1) +
+                                                             material_name,
+                                                         wxDefaultPosition, wxSize(FromDIP(220), -1), wxST_ELLIPSIZE_END);
         logical_detail->SetFont(Label::Body_12);
         m_logical_detail_labels.push_back(logical_detail);
         auto* logical_color_value = new wxStaticText(logical_panel,
@@ -771,7 +771,7 @@ GFDConsumableMappingDialog::GFDConsumableMappingDialog(wxWindow*                
                                        wxSize(FromDIP(MAPPING_ARROW_COLUMN_WIDTH), -1), wxALIGN_CENTER_HORIZONTAL);
         arrow->SetFont(Label::Head_18);
         arrow->SetForegroundColour(wxColour("#009688"));
-        auto* mapping_text = new wxStaticText(mapping_panel, wxID_ANY, _L("映射到"), wxDefaultPosition,
+        auto* mapping_text = new wxStaticText(mapping_panel, wxID_ANY, (m_advancer3 ? _L("Map to") : _L("映射到")), wxDefaultPosition,
                                               wxSize(FromDIP(MAPPING_ARROW_COLUMN_WIDTH), -1), wxALIGN_CENTER_HORIZONTAL);
         mapping_text->SetFont(Label::Body_10);
         mapping_text->SetForegroundColour(secondary_text_color());
@@ -814,7 +814,7 @@ GFDConsumableMappingDialog::GFDConsumableMappingDialog(wxWindow*                
         slot_text_sizer->Add(slot_color_value, 0, wxEXPAND | wxTOP, FromDIP(2));
         slot_sizer->Add(slot_text_sizer, 1, wxALIGN_CENTER_VERTICAL);
 
-        auto* change_label = new wxStaticText(slot_card, wxID_ANY, _L("更换  ›"));
+        auto* change_label = new wxStaticText(slot_card, wxID_ANY, m_advancer3 ? _L("Change  ›") : _L("更换  ›"));
         change_label->SetFont(Label::Body_12);
         change_label->SetForegroundColour(wxColour("#009688"));
         slot_sizer->Add(change_label, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(10));
@@ -844,15 +844,21 @@ GFDConsumableMappingDialog::GFDConsumableMappingDialog(wxWindow*                
     m_mapping_scroll->FitInside();
     main_sizer->Add(m_mapping_scroll, 1, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(8));
 
+    if (advancer3) {
+        m_leveling = new wxCheckBox(this, wxID_ANY, _L("Level before printing"));
+        m_leveling->SetValue(GFD::Advancer3PrintSettings{}.leveling_before_print);
+        main_sizer->Add(m_leveling, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(20));
+    }
+
     auto* button_sizer = new wxBoxSizer(wxHORIZONTAL);
     button_sizer->AddStretchSpacer(1);
 
-    auto* confirm_button = new Button(this, _L("确认映射并下发"), "", 0, 0, wxID_OK);
+    auto* confirm_button = new Button(this, advancer3 ? _L("Confirm and print") : _L("确认映射并下发"), "", 0, 0, wxID_OK);
     apply_list_button_style(confirm_button, true);
     confirm_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_OK); });
     button_sizer->Add(confirm_button, 0, wxRIGHT, FromDIP(8));
 
-    auto* cancel_button = new Button(this, _L("取消"), "", 0, 0, wxID_CANCEL);
+    auto* cancel_button = new Button(this, (m_advancer3 ? _L("Cancel") : _L("取消")), "", 0, 0, wxID_CANCEL);
     apply_list_button_style(cancel_button, false);
     cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_CANCEL); });
     button_sizer->Add(cancel_button, 0);
@@ -878,8 +884,9 @@ void GFDConsumableMappingDialog::select_slot_for_filament(size_t filament_index)
         return;
 
     const FilamentInfo& filament = m_logical_filaments[filament_index];
-    const wxString      logical_text = wxString::Format(_L("耗材 %d（T%d）"), filament.id + 1, filament.id);
-    GFDSlotPickerDialog dialog(this, m_slots, m_selected_slot_indices[filament_index], logical_text);
+    const wxString      logical_text = wxString::Format((m_advancer3 ? _L("Material %d (T%d)") : _L("耗材 %d（T%d）")), filament.id + 1,
+                                                        filament.id);
+    GFDSlotPickerDialog dialog(this, m_slots, m_selected_slot_indices[filament_index], logical_text, m_advancer3);
     if (dialog.ShowModal() != wxID_OK)
         return;
 
@@ -903,10 +910,10 @@ void GFDConsumableMappingDialog::refresh_mapping_card(size_t filament_index)
     const GFDDeviceFilamentSlot& slot     = m_slots[slot_index];
     const std::vector<wxColour> slot_colors = parse_colors(slot.color);
     const wxString              color_values = color_value_text(slot_colors);
-    const wxString              title = _L("槽位 ") + slot_position_text(slot.slot_no) + wxString::Format(_L("（%d）"), slot.slot_no);
+    const wxString               title        = slot_title_text(slot.slot_no, m_advancer3);
     const wxString              material = slot_detail_text(slot);
-    const wxString tooltip = wxString::Format(wxString::FromUTF8("T%d → "), filament.id) + slot_display_text(slot) +
-                             _L("\n实体耗材色值：") + color_values;
+    const wxString tooltip = wxString::Format(wxString::FromUTF8("T%d → "), filament.id) + slot_display_text(slot, m_advancer3) +
+                             (m_advancer3 ? _L("\nLoaded material color: ") : _L("\n实体耗材色值：")) + color_values;
 
     m_slot_color_swatches[filament_index]->set_colors(slot_colors);
     m_slot_title_labels[filament_index]->SetLabel(title);
@@ -946,6 +953,22 @@ std::vector<int> GFDConsumableMappingDialog::selected_consumables() const
     }
 
     return consumable;
+}
+
+GFD::Advancer3PrintSettings GFDConsumableMappingDialog::selected_advancer3_settings() const
+{
+    GFD::Advancer3PrintSettings settings;
+    settings.leveling_before_print = m_leveling != nullptr && m_leveling->GetValue();
+    for (size_t index = 0; index < m_logical_filaments.size(); ++index) {
+        const auto&       filament = m_logical_filaments[index];
+        const auto&       slot     = m_slots.at(m_selected_slot_indices.at(index));
+        const std::string color    = !filament.color.empty()  ? filament.color :
+                                     !filament.colors.empty() ? filament.colors.front() :
+                                                                std::string();
+        settings.mappings.push_back({filament.id, slot.slot_no, filament.type, slot.color, color});
+    }
+    GFD::validate_advancer3_settings(settings);
+    return settings;
 }
 
 void GFDConsumableMappingDialog::on_dpi_changed(const wxRect&)

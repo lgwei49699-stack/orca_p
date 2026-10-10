@@ -47,7 +47,9 @@ public:
     static constexpr const char* ENV_QA                   = "qa";
     static constexpr const char* PRODUCTION_AUTH_BASE_URL = "https://dcenter.kfb-1.com";
     static constexpr const char* PRODUCTION_API_BASE_URL  = "https://print.wisebeginner3d.com";
-    static constexpr const char* PRODUCTION_DEVICE_QUERY_URL = "https://3dmodelcenter.wisebeginner3d.com/app/print3dModel/manage/v1/md/query";
+    static constexpr const char* PRODUCTION_DEVICE_QUERY_URL =
+        "https://3dmodelcenter.wisebeginner3d.com/app/print3dModel/manage/v1/md/query";
+    static constexpr const char* QA_DEVICE_QUERY_URL = "https://qa-3dmodelcenter.wisebeginner3d.com/app/print3dModel/manage/v1/md/query";
     static constexpr const char* QA_AUTH_BASE_URL         = "https://qa-datacenter.gongfudou.com";
     static constexpr const char* QA_API_BASE_URL          = "https://qa-appgw-hwsh.gongfudou.com";
 
@@ -75,7 +77,6 @@ public:
     static constexpr const char* PATH_CONFIG_ADD        = "/app/print3d/manage/v1/slice-param-config/add";
     static constexpr const char* PATH_CONFIG_DETAIL     = "/app/print3d/manage/v1/slice-param-config/detail";
     static constexpr const char* PATH_CONFIG_UPDATE     = "/app/print3d/manage/v1/slice-param-config/edit";
-    static constexpr const char* PATH_DEVICE_QUERY      = "/app/print3d/manage/v1/md/query";
     static constexpr const char* PATH_DEVICE_FILAMENT_INFO = "/app/print3d/manage/v1/device/filamentInfo";
     static constexpr const char* PATH_DEVICE_SLICE_TYPE = "/app/print3d/manage/v1/slice-param-config/device-and-slice-type";
     static constexpr const char* PATH_FILAMENT_TEMPERATURE_LIST = "/app/print3d/manage/v1/filamentTemperature/list";
@@ -96,6 +97,7 @@ public:
     static std::string config_update_url(const AppConfig* config);
     static std::string config_detail_url(const AppConfig* config);
     static std::string device_query_url(const AppConfig* config);
+    static std::string device_status_url(const AppConfig* config);
     static std::string device_filament_info_url(const AppConfig* config);
     static std::string device_slice_type_url(const AppConfig* config);
     static std::string filament_temperature_list_url(const AppConfig* config);

@@ -40,14 +40,6 @@ function HandleStudio(pVal)
 	}
 }
 
-function GetFilamentShortname( sName )
-{
-	let sShort=sName.split('@')[0].trim();
-	
-	return sShort;
-}
-
-
 function SortUI()
 {
 	var ModelList=new Array();
@@ -62,6 +54,10 @@ function SortUI()
 	}
 	
 
+    $('#MachineList .CValues label:gt(0)').remove();
+    $('#FilatypeList .CValues label:gt(0)').remove();
+    $('#VendorList .CValues label:gt(0)').remove();
+    $('#MachineList').show();
 	//model
 	let HtmlMode='';
 	nMode=ModelList.length;
@@ -79,125 +75,7 @@ function SortUI()
 		$('#MachineList').hide();
 	}
 	
-	//Filament - Create sorted array with generic vendor first
-	let FilamentArray=new Array();
-	let GenericFilamentArray=new Array();
-	for( let key in m_ProfileItem['filament'] )
-	{
-		let OneFila=m_ProfileItem['filament'][key];
-		if(OneFila['vendor'].toLowerCase() === 'generic')
-			GenericFilamentArray.push({key: key, data: OneFila});
-		else
-			FilamentArray.push({key: key, data: OneFila});
-	}
-	// Combine arrays with generic filaments first
-	let SortedFilamentArray = GenericFilamentArray.concat(FilamentArray);
-	
-	let HtmlFilament='';
-	let SelectNumber=0;
-
-	var TypeHtmlArray={};
-    var VendorHtmlArray={};
-	for( let n=0; n<SortedFilamentArray.length; n++ )
-	{
-		let filamentItem = SortedFilamentArray[n];
-		let key = filamentItem.key;
-		let OneFila = filamentItem.data;
-		
-		//alert(JSON.stringify(OneFila));
-		
-		let fWholeName=OneFila['name'].trim();
-		let fShortName=GetFilamentShortname( OneFila['name'] );
-		let fVendor=OneFila['vendor'];
-		let fType=OneFila['type'];
-		let fSelect=OneFila['selected'];
-		let fModel=OneFila['models']
-		
-        let bFind=false;		
-		//let bCheck=$("#MachineList input:first").prop("checked");
-		if( fModel=='')
-		{
-			bFind=true;
-		}
-		else
-		{
-			//check in modellist		    
-		    let nModelAll=ModelList.length;
-		    for(let m=0;m<nModelAll;m++)
-		    {
-	    		let sOne=ModelList[m];
-			
-				let OneName=sOne['model'];
-				let NozzleArray=sOne["nozzle_selected"].split(';');
-				
-				let nNozzle=NozzleArray.length;
-				
-				for( let b=0;b<nNozzle;b++ )
-				{
-					let nowModel= OneName+"++"+NozzleArray[b];
-					if(fModel.indexOf(nowModel)>=0)
-					{
-						bFind=true;
-						break;
-					}
-				}
-			}
-		}
-		
-		if(bFind)
-		{
-			//Type
-			let LowType=fType.toLowerCase();
-		    if(!TypeHtmlArray.hasOwnProperty(LowType))
-		    {
-				/* ORCA use label tag to allow checkbox to toggle when user ckicked to text */
-			    let HtmlType='<label><input type="checkbox" filatype="'+fType+'" onChange="FilaClick()"   /><span>'+fType+'</span></label>';
-			
-				TypeHtmlArray[LowType]=HtmlType;
-		    }
-			
-			//Vendor
-			let lowVendor=fVendor.toLowerCase();
-			if(!VendorHtmlArray.hasOwnProperty(lowVendor))
-		    {
-				/* ORCA use label tag to allow checkbox to toggle when user ckicked to text */
-			    let HtmlVendor='<label><input type="checkbox" vendor="'+fVendor+'"  onChange="VendorClick()" /><span>'+fVendor+'</span></label>';
-				
-				VendorHtmlArray[lowVendor]=HtmlVendor;
-		    }
-			
-			//Filament
-			let pFila=$("#ItemBlockArea input[vendor='"+fVendor+"'][filatype='"+fType+"'][name='"+fShortName+"']");
-	        if(pFila.length==0)
-		    {
-				/* ORCA use label tag to allow checkbox to toggle when user ckicked to text */
-			    let HtmlFila='<label class="MItem"><input type="checkbox" vendor="'+fVendor+'"  filatype="'+fType+'" filalist="'+fWholeName+';'+'"  model="'+fModel+'" name="'+fShortName+'" /><span>'+fShortName+'</span></label>';
-			
-			    $("#ItemBlockArea").append(HtmlFila);
-		    } 
-			else
-			{
-				let strModel=pFila.attr("model");
-				let strFilalist=pFila.attr("filalist");
-				
-				if(strModel == '' || fModel == '')
-					pFila.attr("model", '');
-				else
-					pFila.attr("model", strModel+fModel);
-				pFila.attr("filalist", strFilalist+fWholeName+';');
-			}
-			
-		    if(fSelect*1==1)
-			{
-				//alert( fWholeName+' - '+fShortName+' - '+fVendor+' - '+fType+' - '+fSelect+' - '+fModel );
-					
-				$("#ItemBlockArea input[vendor='"+fVendor+"'][filatype='"+fType+"'][name='"+fShortName+"']").prop("checked",true);
-				SelectNumber++;
-			}
-//			else
-//				$("#ItemBlockArea input[vendor='"+fVendor+"'][model='"+fModel+"'][filatype='"+fType+"'][name='"+key+"']").prop("checked",false);			
-		}
-	} 
+    const {SelectNumber, TypeHtmlArray, VendorHtmlArray} = RenderFilamentRows(m_ProfileItem);
 
 	//Sort TypeArray
 	let TypeAdvNum=FilamentPriority.length;
@@ -491,15 +369,7 @@ function ResponseFilamentResult()
 	let FilaArray=new Array();
 	for(let n=0;n<nAll;n++)
 	{
-		let sName=FilaSelectedList[n].getAttribute("name");
-		
-	    for( let key in m_ProfileItem['filament'] )
-	    {
-			let FName=GetFilamentShortname(key);
-			
-			if(FName==sName)
-				FilaArray.push(key);
-		}
+        FilaArray.push(FilaSelectedList[n].getAttribute("name"));
 	}
 	
 	var tSend={};

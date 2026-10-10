@@ -5,6 +5,10 @@
 
 namespace Slic3r { namespace GUI {
 
+// Prevent a normal app/owner close from deleting a stack-owned modal dialog
+// before ShowModal() returns. Forced OS shutdown remains non-vetoable.
+bool veto_close_with_modal_dialog(wxWindow* owner, wxCloseEvent& event);
+
 // The Windows device picker owns its modal loop so ending it does not depend
 // on visibility or on which nested event loop is currently active.
 class GFDModalDialog : public wxDialog

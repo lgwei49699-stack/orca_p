@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "project-state",
-  "source_fingerprint": "sha256:742772e323510ad00ae7e93a8c6dcc05357b98a930656ea04440a8b1fbb7c660",
-  "reason": "提交前核对云来源档位/账号/环境持久化、旧数据默认标准及重登不跨账号写旧目标；未改工程保存、Undo或恢复规则。"
+  "source_fingerprint": "sha256:6d76749a03009237ed94c24568f2f5c35cd418cd4ea83490c435bf174377c343",
+  "reason": "本轮 Plater 取消收尾不改变工程保存、撤销、备份或云方案来源；主窗口模态退出保护先于清理，不改变弹窗结束后的原保存询问；详细行为记 GUI 模块。"
 }
 -->
 

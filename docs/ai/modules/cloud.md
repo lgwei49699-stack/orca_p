@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cloud",
-  "source_fingerprint": "sha256:8ec255774b15fc83fa4acbdaebb74e83608a11f96b69559c13ec4da2eb82f894",
-  "reason": "提交前审查完整三档及UI差异；补齐初次登录恢复和401重登后的账号/环境检查，业务重放前拒绝会话切换，并以当前表单作为登录父窗口。三档合并、回读核对与模态收尾保留；协议/生命周期及应用验证见交接记录，真实云写入/Windows待验。"
+  "source_fingerprint": "sha256:be283efd3b4d0a48f0d3db033cd4476ca52653c8c3eea7bd9ce8975386bd7e98",
+  "reason": "Advancer3 调平默认开启，保留主动关闭及其他机型协议；区分映射与命令发送前取消、失败及结果未知；共用关闭守卫防止主窗口销毁栈上模态。更新正文与日志分析、测试及 GUI 交接。"
 }
 -->
 
@@ -27,11 +27,21 @@ GFDAuthManager 管理会话并包装需要认证的请求；GFDConfig 提供环�
 
 GFD 当前盘打印的 `start_gfd_print_export` 在 3MF 模式向共享 `export_3mf` 传明确零基盘号和 `WithGcode + SkipModel`，不经过传统 `send_gcode_legacy`。新切片包校验仅要求目标盘有效且 G-code 非空，其他盘未切片不应拦截单盘；导出失败不会进入上传。纯 G-code 调度、已导入切片文件直传、完整云配置工程导出及后端接口没有随此批修改。共享文件回归不等于真实云端/设备下发已验证。
 
+仅 `deviceType=Advancer3` 的普通 G-code 下发会先请求 PMC `/app/pmc/api/v1/deviceCmd/deviceStatus?deviceId=<MAC>`，从 `matlStationInfo.slotInfos` 读取 1～4 号已装载槽位及真实材料／颜色。共享映射窗口在这一分支显示“打印前调平”（默认开启，可在本次下发取消勾选），按当前盘实际使用的零基 T 编号逐项映射；查询失败、空槽列表或不完整数据均阻止上传，不使用通用耗材接口的空列表跳过确认。新协议解析／校验／请求构造位于 [GFDPrintOptions.hpp](../../../src/slic3r/Utils/GFDPrintOptions.hpp)。
+
+Advancer3 请求使用 MAC 作为 `deviceId`，发送 `levelingBeforePrint`、`ms[{slot,tNum,mt,sRgb,tRgb}]`、不含扩展名的 `fileName` 和 `source=slicer`；实体颜色为 sRgb，切片颜色为 tRgb，保留稀疏 T 编号和多个 T 映射同槽。此确认仅支持单台 Advancer3 的 G-code；其他机型（含 AD5X）的普通 G-code／3MF 入口和 `consumable` 数组协议保持原逻辑。重登重试继续使用同一请求 ID／选项；在确认框取消不启动上传，完成回调仍检查窗口存活与 submission ID。CLI 没有此云端打印命令，因此仅 GUI 接入；CLI 切片结果和 G-code 生成规则未修改。
+
 ## 配置与约束
 
 认证 token、已保存登录信息、环境和用户本地预设分属不同数据。云端 preset ID 与本地名称／继承不能简单互换；导入时必须绑定当前目标机型并保留用户可审阅的替换流程。
 
+打印设备列表在 QA／正式环境均使用 modelcenter 的 `/app/print3dModel/manage/v1/md/query`，由 `device_query_url` 单独选择地址。不得改回通用业务网关的 `/app/print3d/manage/v1/md/query`：二者返回不同设备集合，仅将旧网关域名换成 qa-print 也无法补齐设备。认证、云方案、动态耗材、耗材槽位、上传授权及打印命令继续使用各自原有地址；本次只读对照和目标设备字段检查见[Advancer3 记录](../validation/2026-10-09-adv3-custom-feasibility.md)。CLI 无此云设备选择功能。
+
 ## 失败与取消
+
+打印设置取消单独返回中性“已取消打印下发”状态，恢复选择与确认按钮；导出／查询／上传在命令发出前取消也走此状态，不再显示下发失败或错误弹窗。已经发送命令但响应不明／已有部分成功仍按原逻辑提示并关闭选择框，避免重复打印。主窗口退出守卫在子模态仍运行时否决普通退出，先完成弹窗退栈再销毁父窗口，见 [GUI 生命周期](gui-shell.md)。
+
+动态耗材参数窗口复用独立的 TabFilament；切换机型／耗材会重新加载当前预设，脏状态延迟刷新归属 Tab 自身。关闭对话框时除取消网络请求，也必须避免界面延迟回调引用已销毁页签。Advancer3 保持自身云端类型；响应中没有对应动态参数时使用当前本地参数，不借用 AD5X 的云端数据。HTTP 200 只表示请求完成，不保证后续 UI 回调安全，调查和验证边界见[Advancer3 记录](../validation/2026-10-09-adv3-custom-feasibility.md)。
 
 认证失败可能触发重试或重新登录，普通请求失败不能无限重登。取消／关闭对话框后的完成回调应先检查存活状态，日志不能带敏感凭据。
 

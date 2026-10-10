@@ -56,7 +56,7 @@ public:
     bool                              use_3mf_file() const { return m_use_3mf_file; }
     std::shared_ptr<std::atomic_bool> lifetime_token() const { return m_alive; }
     void                              update_print_progress(const wxString& message, int percent = -1);
-    void                              complete_print_submission(bool success);
+    void                              complete_print_submission(bool success, bool cancelled = false);
 
 private:
     void build();

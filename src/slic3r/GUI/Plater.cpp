@@ -4015,7 +4015,7 @@ struct Plater::priv
     enum class GFDPrintStartResult { Failed, Pending };
     GFDPrintStartResult start_gfd_print_export();
     void                show_gfd_device_selection_dialog();
-    void                     complete_gfd_print_submission(GFDDeviceSelectionDialog* dialog, uint64_t submission_id, bool success);
+    void complete_gfd_print_submission(GFDDeviceSelectionDialog* dialog, uint64_t submission_id, bool success, bool cancelled = false);
     bool                     ensure_gfd_login(wxWindow* parent = nullptr);
     std::string              gfd_auth_token() const;
     bool                     gfd_request_obs_token(const std::string& suffix,
@@ -4068,23 +4068,23 @@ struct Plater::priv
     nlohmann::json gfd_load_cloud_process_records() const;
     void           gfd_save_cloud_process_records(const nlohmann::json& records) const;
     std::vector<FilamentInfo> gfd_current_plate_filaments();
-    bool                      gfd_prepare_multicolor_consumable(const GFDDeviceInfo&         device,
-                                                                const GFDDeviceFilamentInfo& filament_info,
-                                                                std::vector<int>&            consumable,
-                                                                bool&                        cancelled,
-                                                                std::string&                 error_message,
-                                                                wxWindow*                    dialog_parent = nullptr);
+    bool                      gfd_prepare_print_options(const GFDDeviceInfo&         device,
+                                                        const GFDDeviceFilamentInfo& filament_info,
+                                                        GFD::PrintOptions&           options,
+                                                        bool&                        cancelled,
+                                                        std::string&                 error_message,
+                                                        wxWindow*                    dialog_parent = nullptr);
     bool                      gfd_start_print_submission(const std::vector<GFDDeviceInfo>& devices, const std::string& print_file_path);
     bool                      gfd_is_current_print_submission(GFDDeviceSelectionDialog*                dialog,
                                                               const std::shared_ptr<std::atomic_bool>& dialog_alive,
                                                               uint64_t                                 submission_id) const;
-    bool                      gfd_queue_print_upload(const std::vector<GFDDeviceInfo>& devices,
-                                                     const std::string&                print_file_path,
-                                                     const std::vector<int>&           consumable,
-                                                     const std::string&                auth_token,
-                                                     GFDDeviceSelectionDialog*         dialog,
-                                                     std::shared_ptr<std::atomic_bool> dialog_alive,
-                                                     uint64_t                          submission_id,
+    bool                      gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&           devices,
+                                                     const std::string&                          print_file_path,
+                                                     const GFD::PrintOptions&                    options,
+                                                     const std::string&                          auth_token,
+                                                     GFDDeviceSelectionDialog*                   dialog,
+                                                     std::shared_ptr<std::atomic_bool>           dialog_alive,
+                                                     uint64_t                                    submission_id,
                                                      std::shared_ptr<GFDOwnedTemporaryPrintFile> owned_temporary_file);
     void        on_action_export_gcode(SimpleEvent&);
     void        on_action_send_gcode(SimpleEvent&);
@@ -8973,7 +8973,7 @@ void Plater::priv::on_process_completed(SlicingProcessCompletedEvent& evt)
         GFDDeviceSelectionDialog* const dialog        = gfd_active_device_dialog;
         const uint64_t                  submission_id = gfd_print_export_submission_id;
         gfd_print_export_scheduled = false;
-        complete_gfd_print_submission(dialog, submission_id, false);
+        complete_gfd_print_submission(dialog, submission_id, false, !has_error && evt.cancelled());
         gfd_print_owned_temporary_file.reset();
     }
 
@@ -10523,33 +10523,18 @@ bool Plater::priv::gfd_upload_file_with_token(const std::string&              fi
                                            timeout_seconds);
 }
 
-static nlohmann::json gfd_build_print_command_request(const GFDDeviceInfo&  device,
-                                                      const std::string&    file_url,
-                                                      const std::string&    file_type,
-                                                      const std::string&    request_id,
-                                                      const std::vector<int>& consumable)
-{
-    nlohmann::json request_json;
-    request_json["url"]       = file_url;
-    request_json["deviceId"]  = device.device_id;
-    request_json["printSn"]   = request_id;
-    request_json["requestId"] = request_id;
-    request_json["fileType"]  = file_type;
-    if (!consumable.empty())
-        request_json["consumable"] = consumable;
-    return request_json;
-}
-
 static GFDHttpResult gfd_send_print_command_once(const std::string&        print_cmd_url,
                                                  const std::string&        token,
                                                  const GFDDeviceInfo&      device,
                                                  const std::string&        file_url,
                                                  const std::string&        file_type,
+                                                 const std::string&        file_name,
                                                  const std::string&        request_id,
-                                                 const std::vector<int>&   consumable,
+                                                 const GFD::PrintOptions&  options,
                                                  const GFDRequestCancelFn& cancel_callback = {})
 {
-    const nlohmann::json request_json = gfd_build_print_command_request(device, file_url, file_type, request_id, consumable);
+    const nlohmann::json request_json = GFD::build_print_command(device.device_type, device.device_id, device.mac, file_url, file_type,
+                                                                 file_name, request_id, options);
     const std::string    request_body = request_json.dump();
     BOOST_LOG_TRIVIAL(info) << "GFD send print command request"
                             << ", url=" << print_cmd_url
@@ -10558,7 +10543,6 @@ static GFDHttpResult gfd_send_print_command_once(const std::string&        print
                             << ", device_id=" << device.device_id
                             << ", file_url=" << file_url
                             << ", file_type=" << file_type
-                            << ", consumable=" << nlohmann::json(consumable).dump()
                             << ", body=" << request_body;
     GFDHttpResult result;
     bool          cancellation_requested = false;
@@ -10641,8 +10625,24 @@ static GFDFilamentQueryResult gfd_fetch_device_filament_info_once(const std::str
 
     if (cancellation_requested && !result.http.ok && result.http.error_message.empty())
         result.http.error_message = "操作已取消";
-    if (result.http.ok && !parse_gfd_device_filament_info(result.http.body, result.filament_info, result.error_message))
+    if (result.http.ok && GFD::is_advancer3(device.device_type)) {
+        try {
+            for (const auto& slot : GFD::parse_advancer3_slots(result.http.body, device.mac)) {
+                GFDDeviceFilamentSlot loaded;
+                loaded.slot_no       = slot.slot;
+                loaded.material_name = slot.material;
+                loaded.color         = slot.color;
+                result.filament_info.slots.push_back(std::move(loaded));
+            }
+        } catch (const std::exception& error) {
+            BOOST_LOG_TRIVIAL(warning) << "Advancer3 slot query rejected: " << error.what();
+            result.http.ok       = false;
+            result.error_message = into_u8(
+                _L("Could not read loaded Advancer3 slots. Check the printer and its materials, then try again."));
+        }
+    } else if (result.http.ok && !parse_gfd_device_filament_info(result.http.body, result.filament_info, result.error_message)) {
         result.http.ok = false;
+    }
     if (result.error_message.empty())
         result.error_message = result.http.error_message;
     return result;
@@ -10742,16 +10742,43 @@ std::vector<FilamentInfo> Plater::priv::gfd_current_plate_filaments()
     return result;
 }
 
-bool Plater::priv::gfd_prepare_multicolor_consumable(const GFDDeviceInfo&         device,
-                                                     const GFDDeviceFilamentInfo& filament_info,
-                                                     std::vector<int>&            consumable,
-                                                     bool&                        cancelled,
-                                                     std::string&                 error_message,
-                                                     wxWindow*                    dialog_parent)
+bool Plater::priv::gfd_prepare_print_options(const GFDDeviceInfo&         device,
+                                             const GFDDeviceFilamentInfo& filament_info,
+                                             GFD::PrintOptions&           options,
+                                             bool&                        cancelled,
+                                             std::string&                 error_message,
+                                             wxWindow*                    dialog_parent)
 {
-    consumable.clear();
+    options   = {};
     cancelled = false;
 
+    if (GFD::is_advancer3(device.device_type)) {
+        auto logical_filaments = gfd_current_plate_filaments();
+        if (logical_filaments.empty() || filament_info.slots.empty()) {
+            error_message = into_u8(_L("No sliced materials or loaded Advancer3 slots are available."));
+            return false;
+        }
+        const auto                 matches = match_gfd_filaments_to_slots(logical_filaments, filament_info.slots);
+        GFDConsumableMappingDialog dialog(dialog_parent != nullptr ? dialog_parent : q, device.mac, std::move(logical_filaments),
+                                          filament_info.slots, matches, true);
+        if (dialog.ShowModal() != wxID_OK) {
+            cancelled = true;
+            return false;
+        }
+        try {
+            options.advancer3 = dialog.selected_advancer3_settings();
+        } catch (const std::exception& error) {
+            BOOST_LOG_TRIVIAL(warning) << "Advancer3 print settings rejected: " << error.what();
+            error_message = into_u8(_L("The material mapping is incomplete. Check the sliced material types, colors and device slots."));
+            return false;
+        }
+        BOOST_LOG_TRIVIAL(info) << "Advancer3 print settings confirmed, device_mac=" << device.mac
+                                << ", leveling=" << options.advancer3->leveling_before_print
+                                << ", mapped_tools=" << options.advancer3->mappings.size();
+        return true;
+    }
+
+    auto& consumable = options.consumable;
     // mulColorFlag is the backend's capability result. A multicolor device with only
     // one installed internal spool must still enter the multicolor confirmation flow.
     if (!filament_info.mul_color_flag) {
@@ -10928,7 +10955,13 @@ bool Plater::priv::gfd_start_print_submission(const std::vector<GFDDeviceInfo>& 
         return false;
     }
 
-    if (!use_3mf_file)
+    const bool has_advancer3 = std::any_of(devices.begin(), devices.end(),
+                                           [](const GFDDeviceInfo& device) { return GFD::is_advancer3(device.device_type); });
+    if (has_advancer3 && (devices.size() != 1 || use_3mf_file)) {
+        show_error(dialog, _L("For Advancer3, select one printer and send a G-code file."));
+        return false;
+    }
+    if (!use_3mf_file && !has_advancer3)
         return gfd_queue_print_upload(devices, print_file_path, {}, auth_token, dialog, dialog_alive, submission_id, owned_temporary_file);
 
     const GFDDeviceInfo device = devices.front();
@@ -10937,7 +10970,9 @@ bool Plater::priv::gfd_start_print_submission(const std::vector<GFDDeviceInfo>& 
         return false;
     }
 
-    const std::string request_url   = GFD::Config::device_filament_info_url(wxGetApp().app_config) + "?mac=" + Http::url_encode(device.mac);
+    const std::string request_url = (has_advancer3 ? GFD::Config::device_status_url(wxGetApp().app_config) + "?deviceId=" :
+                                                     GFD::Config::device_filament_info_url(wxGetApp().app_config) + "?mac=") +
+                                    Http::url_encode(device.mac);
     auto              query_result  = std::make_shared<GFDFilamentQueryResult>();
     auto              request_token = std::make_shared<std::string>(auth_token);
     dialog->update_print_progress(_L("正在查询打印机耗材槽位，请稍候..."), 5);
@@ -10970,8 +11005,7 @@ bool Plater::priv::gfd_start_print_submission(const std::vector<GFDDeviceInfo>& 
                 return;
 
             if (canceled) {
-                show_error(dialog, _L("打印下发任务已取消。"));
-                complete_gfd_print_submission(dialog, submission_id, false);
+                complete_gfd_print_submission(dialog, submission_id, false, true);
                 return;
             }
 
@@ -10991,21 +11025,21 @@ bool Plater::priv::gfd_start_print_submission(const std::vector<GFDDeviceInfo>& 
                 return;
             }
 
-            std::vector<int> consumable;
+            GFD::PrintOptions options;
             bool             mapping_cancelled = false;
             std::string      error_message;
-            const bool       mapping_ready = gfd_prepare_multicolor_consumable(devices.front(), query_result->filament_info, consumable,
-                                                                               mapping_cancelled, error_message, dialog);
+            const bool mapping_ready = gfd_prepare_print_options(devices.front(), query_result->filament_info, options, mapping_cancelled,
+                                                                 error_message, dialog);
             if (!gfd_is_current_print_submission(dialog, dialog_alive, submission_id))
                 return;
             if (!mapping_ready) {
                 if (!mapping_cancelled)
                     show_error(dialog, from_u8(error_message.empty() ? "准备多色耗材槽位失败" : error_message));
-                complete_gfd_print_submission(dialog, submission_id, false);
+                complete_gfd_print_submission(dialog, submission_id, false, mapping_cancelled);
                 return;
             }
 
-            if (!gfd_queue_print_upload(devices, print_file_path, consumable, *request_token, dialog, dialog_alive, submission_id,
+            if (!gfd_queue_print_upload(devices, print_file_path, options, *request_token, dialog, dialog_alive, submission_id,
                                         owned_temporary_file)) {
                 show_error(dialog, _L("无法启动打印上传任务，请稍后重试。"));
                 complete_gfd_print_submission(dialog, submission_id, false);
@@ -11019,7 +11053,7 @@ bool Plater::priv::gfd_start_print_submission(const std::vector<GFDDeviceInfo>& 
 
 bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&           devices,
                                           const std::string&                          print_file_path,
-                                          const std::vector<int>&                     consumable,
+                                          const GFD::PrintOptions&                    options,
                                           const std::string&                          auth_token,
                                           GFDDeviceSelectionDialog*                   dialog,
                                           std::shared_ptr<std::atomic_bool>           dialog_alive,
@@ -11035,6 +11069,15 @@ bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&     
     const std::string obs_token_url = GFD::Config::obs_token_url(wxGetApp().app_config) +
                                       "?ruleCode=print3dPermanently&suffix=" + file_suffix;
     const std::string print_cmd_url = GFD::Config::device_print_cmd_url(wxGetApp().app_config);
+
+    try {
+        for (const auto& device : devices)
+            GFD::build_print_command(device.device_type, device.device_id, device.mac, {}, file_type,
+                                     fs::path(print_file_path).filename().string(), {}, options);
+    } catch (const std::exception& error) {
+        BOOST_LOG_TRIVIAL(warning) << "Print options rejected before upload: " << error.what();
+        return false;
+    }
 
     std::vector<GFDPrintDeviceRequest> device_requests;
     device_requests.reserve(devices.size());
@@ -11053,7 +11096,7 @@ bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&     
     return queue_job(
         m_gfd_print_worker,
         [this, task_result, device_requests = std::move(device_requests), print_file_path, file_type, obs_token_url, print_cmd_url,
-         auth_token, consumable, dialog, dialog_alive, submission_id](Job::Ctl& ctl) {
+         auth_token, options, dialog, dialog_alive, submission_id](Job::Ctl& ctl) {
             auto post_progress = [this, dialog, dialog_alive, submission_id, &ctl](int percent, int stage, size_t current, size_t total) {
                 ctl.call_on_main_thread([this, dialog, dialog_alive, submission_id, percent, stage, current, total]() {
                     if (!gfd_is_current_print_submission(dialog, dialog_alive, submission_id))
@@ -11148,9 +11191,10 @@ bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&     
                 const GFDPrintDeviceRequest& request  = device_requests[index];
                 const int                    progress = 85 + static_cast<int>((14 * index) / std::max<size_t>(device_requests.size(), 1));
                 post_progress(progress, 2, index + 1, device_requests.size());
-                GFDHttpResult     print_result = gfd_send_print_command_once(print_cmd_url, active_auth_token, request.device,
-                                                                             task_result->file_url, file_type, request.request_id, consumable,
-                                                                             [&ctl]() { return ctl.was_canceled(); });
+                GFDHttpResult print_result = gfd_send_print_command_once(print_cmd_url, active_auth_token, request.device,
+                                                                         task_result->file_url, file_type,
+                                                                         fs::path(print_file_path).filename().string(), request.request_id,
+                                                                         options, [&ctl]() { return ctl.was_canceled(); });
                 if (!print_result.ok && ctl.was_canceled())
                     task_result->unknown_outcome = true;
                 const std::string device_label = !request.device.mac.empty()       ? request.device.mac :
@@ -11162,8 +11206,8 @@ bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&     
                     if (gfd_refresh_auth_token_for_worker(ctl, q, failed_token, active_auth_token, login_error)) {
                         task_result->request_auth_token = active_auth_token;
                         print_result = gfd_send_print_command_once(print_cmd_url, active_auth_token, request.device, task_result->file_url,
-                                                                   file_type, request.request_id, consumable,
-                                                                   [&ctl]() { return ctl.was_canceled(); });
+                                                                   file_type, fs::path(print_file_path).filename().string(),
+                                                                   request.request_id, options, [&ctl]() { return ctl.was_canceled(); });
                         if (!print_result.ok && ctl.was_canceled())
                             task_result->unknown_outcome = true;
                     } else if (!login_error.empty()) {
@@ -11267,8 +11311,7 @@ bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&     
                                           "为避免重复打印，设备列表将关闭，请先检查设备状态。"));
                     complete_gfd_print_submission(dialog, submission_id, true);
                 } else {
-                    show_error(dialog, _L("打印下发任务已取消。"));
-                    complete_gfd_print_submission(dialog, submission_id, false);
+                    complete_gfd_print_submission(dialog, submission_id, false, true);
                 }
                 return;
             }
@@ -11295,7 +11338,7 @@ bool Plater::priv::gfd_queue_print_upload(const std::vector<GFDDeviceInfo>&     
         });
 }
 
-void Plater::priv::complete_gfd_print_submission(GFDDeviceSelectionDialog* dialog, uint64_t submission_id, bool success)
+void Plater::priv::complete_gfd_print_submission(GFDDeviceSelectionDialog* dialog, uint64_t submission_id, bool success, bool cancelled)
 {
     if (dialog == nullptr || gfd_active_device_dialog != dialog || gfd_print_submission_id != submission_id)
         return;
@@ -11307,7 +11350,11 @@ void Plater::priv::complete_gfd_print_submission(GFDDeviceSelectionDialog* dialo
     gfd_print_owned_temporary_file.reset();
     if (success)
         gfd_active_device_dialog = nullptr;
-    dialog->complete_print_submission(success);
+    BOOST_LOG_TRIVIAL(info) << "GFD print submission completed, submission_id=" << submission_id << ", result="
+                            << (success   ? "closed" :
+                                cancelled ? "cancelled" :
+                                            "failed");
+    dialog->complete_print_submission(success, cancelled);
 }
 
 void Plater::priv::show_gfd_device_selection_dialog()

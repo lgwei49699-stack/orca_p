@@ -18,6 +18,7 @@ add_executable(${_TEST_NAME}_tests
 	test_clipper_utils.cpp
 	test_config.cpp
 	test_epone_presets.cpp
+	test_advancer3_presets.cpp
 	test_thumbnail.cpp
 	test_png_decode.cpp
 	test_elephant_foot_compensation.cpp

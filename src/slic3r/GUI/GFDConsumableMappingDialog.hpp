@@ -2,6 +2,7 @@
 #define slic3r_GFDConsumableMappingDialog_hpp_
 
 #include "GUI_Utils.hpp"
+#include "slic3r/Utils/GFDPrintOptions.hpp"
 
 #include "libslic3r/ProjectTask.hpp"
 
@@ -9,6 +10,7 @@
 #include <string>
 #include <vector>
 
+class wxCheckBox;
 class wxStaticText;
 class wxScrolledWindow;
 class StaticBox;
@@ -48,14 +50,16 @@ std::vector<size_t> match_gfd_filaments_to_slots(const std::vector<FilamentInfo>
 class GFDConsumableMappingDialog : public DPIDialog
 {
 public:
-    GFDConsumableMappingDialog(wxWindow*                         parent,
+    GFDConsumableMappingDialog(wxWindow*                          parent,
                                const std::string&                 device_mac,
                                std::vector<FilamentInfo>          logical_filaments,
                                std::vector<GFDDeviceFilamentSlot> slots,
-                               std::vector<size_t>                default_slot_indices);
+                               std::vector<size_t>                default_slot_indices,
+                               bool                               advancer3 = false);
 
     // The PMC contract uses the zero-based logical T id as the array index; missing T ids are -1.
     std::vector<int> selected_consumables() const;
+    GFD::Advancer3PrintSettings selected_advancer3_settings() const;
 
 protected:
     void on_dpi_changed(const wxRect& suggested_rect) override;
@@ -67,6 +71,8 @@ private:
     std::vector<FilamentInfo>          m_logical_filaments;
     std::vector<GFDDeviceFilamentSlot> m_slots;
     std::vector<size_t>                m_selected_slot_indices;
+    bool                               m_advancer3{false};
+    wxCheckBox*                        m_leveling{nullptr};
     wxScrolledWindow*                  m_mapping_scroll{nullptr};
     StaticBox*                         m_tip_panel{nullptr};
     wxStaticText*                      m_tip_text{nullptr};

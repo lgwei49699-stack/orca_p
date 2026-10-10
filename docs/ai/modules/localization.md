@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:738ef9889bc3b83cf716782824f201d9f495f49e593d040c1c600d7067060fd6",
-  "reason": "审查本次英文原文和简中翻译，补齐成功标题Success的中文；保留原翻译和其他语言。msgfmt格式校验及本地MO生成通过，实际中英文窗口排版待GUI验收。"
+  "source_fingerprint": "sha256:0e469798209c8f7946699a1994c4cc8aaa7f0822097ce37e9b4dd355892370bd",
+  "reason": "新增取消独立中性状态英文源串与简中翻译，设备选择源文件加入 gettext 提取清单；msgfmt 校验通过，不改其他语言。"
 }
 -->
 
@@ -19,6 +19,8 @@
 - [I18N.cpp](../../../src/slic3r/GUI/I18N.cpp)：`L_str` 把 UTF-8 字符串交给 `wxGetTranslation`，不承担语言包生成。
 
 ## 核心流程
+
+打印下发主动取消使用英文源串 `Print submission cancelled.` 与简中“已取消打印下发。”，设备选择源文件纳入 gettext 清单；取消状态不沿用失败文案或错误颜色。
 
 代码用英文原文及翻译标记，gettext 提取到模板再更新 po，构建／打包使用编译后的语言资源。提示文本可能来自 PrintConfig、GUI 控件或网页，修改前先区分来源。
 
@@ -53,3 +55,5 @@
 [参数面板与对象覆盖](gui-parameters.md)、[配置定义、预设继承与资源更新](presets.md)、[图标、着色器及静态辅助资源](resource-ui.md)、[内嵌网页与原生消息桥](web-assets.md)。
 
 云配置第六批新增准备、上传百分比、服务端保存/回读阶段与带方案名/类型的成功提示，中英文同时维护；新上传窗口标题改用英文原文。中文msgfmt格式检查及本地MO生成通过；其他语言沿用回退英文。实际对话框中英文排版待用户验收。
+
+Advancer3 打印设置及槽位选择沿用 gettext，`GFDConsumableMappingDialog.cpp` 已加入提取清单；新分支使用英文原文、简中补译，旧机型文案不变。

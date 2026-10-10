@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "resource-profiles",
-  "source_fingerprint": "sha256:2cdc1a7ca07c3b9402367b73dbf6fce32640e05e5b2d16c696e578de799ad189",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。"
+  "source_fingerprint": "sha256:b433ee0997e4d1a2152ada123a76319645b32046f857c561a5c7c3b323811982",
+  "reason": "Custom 升至02.03.02.81，Advancer3 补齐 AD5X 四喷嘴、12工艺、六耗材，完整展开本品牌继承，独立 cloud identity 仍为Advancer3；validator、全规格有效参数、CLI 等价通过，GUI 显示已核查，Windows/实机未验。"
 }
 -->
 
@@ -38,7 +38,9 @@ Custom 包版本、预设内部 version、name、setting_id、renamed_from、com
 
 ## 分支现状
 
-当前 Custom 资源版本 02.03.02.79；三个 EP3 耗材移除了误复制的 My Generic PLA @MyToolChanger 别名，真实 Generic PLA 保留映射，EP3 名称、ID 与参数不变。EP3/EPONE 系列封面及 EPONE Plus 已同步指定范围，没有整分支同步其他品牌行为。
+当前 Custom 资源版本 02.03.02.80；三个 EP3 耗材移除了误复制的 My Generic PLA @MyToolChanger 别名，真实 Generic PLA 保留映射，EP3 名称、ID 与参数不变。EP3/EPONE 系列封面及 EPONE Plus 已同步指定范围，没有整分支同步其他品牌行为。
+
+Advancer3 已加入 Custom，提供 0.25／0.4／0.6／0.8 mm 喷嘴，共 4 个机器、12 个工艺及 6 个 PLA/PETG/ABS 预设；有效参数取自本仓库 Flashforge AD5X 预设并展开继承，使用独立名称和兼容列表，不依赖安装 Flashforge。默认工艺按喷嘴分别为 0.12／0.20／0.30／0.40mm Standard，默认耗材为对应 PLA；0.25 使用专用耗材，0.4／0.6／0.8 共用普通耗材；封面、床及热端资源复用 AD5X 的本地副本。后端只读实测标识为 `Advancer3`，云配置及打印白名单使用此精确值，不使用口头简称 adv3，也不映射到 AD5X。实施与 GUI 交接见[执行记录](../validation/2026-10-09-adv3-custom-feasibility.md)。
 
 ## 关联模块
 

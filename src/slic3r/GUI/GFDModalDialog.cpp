@@ -8,6 +8,37 @@
 
 namespace Slic3r { namespace GUI {
 
+bool veto_close_with_modal_dialog(wxWindow* owner, wxCloseEvent& event)
+{
+    if (owner == nullptr || !event.CanVeto())
+        return false;
+
+    wxDialog* active_dialog = nullptr;
+    size_t    active_depth  = 0;
+    for (wxWindow* window : wxTopLevelWindows) {
+        auto* dialog = dynamic_cast<wxDialog*>(window);
+        if (dialog == nullptr || !dialog->IsModal())
+            continue;
+        size_t depth = 0;
+        for (wxWindow* parent = dialog->GetParent(); parent != nullptr; parent = parent->GetParent()) {
+            ++depth;
+            if (parent == owner) {
+                if (depth > active_depth) {
+                    active_dialog = dialog;
+                    active_depth  = depth;
+                }
+                break;
+            }
+        }
+    }
+    if (active_dialog == nullptr)
+        return false;
+
+    event.Veto();
+    active_dialog->Raise();
+    return true;
+}
+
 struct GFDModalDialog::ModalSession : wxGUIEventLoop
 {
     explicit ModalSession(GFDModalDialog& dialog) : dialog(dialog), disabler(std::make_unique<wxWindowDisabler>(&dialog))

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "scene-editing",
-  "source_fingerprint": "sha256:b04e1fa01675efaed069e98f0aff936a2d90ad82c651b5a68f9bd221b333ccd8",
-  "reason": "提交前复核Plater/MainFrame云配置差异仅涉及三档管理、表单与重登保护；未更改场景编辑、对象操作或3MF导出算法，正文无需修改。"
+  "source_fingerprint": "sha256:c4e9aeeb6723c58e87302b6e19e1f8b61b8b7a132d82ea47a25a7fa37b3a426e",
+  "reason": "本轮 Plater 仅区分云打印取消与失败并记录结束状态，不改变场景、模型、变换或编辑业务；相关正文无需修改，保留先前 Advancer3 下发改动。"
 }
 -->
 

@@ -19574,3 +19574,123 @@ msgstr "正在核对保存结果..."
 
 msgid "Success"
 msgstr "成功"
+
+#. Advancer3 print settings
+msgid "Select printer material slot"
+msgstr "选择打印机耗材槽位"
+
+#. Advancer3 print settings
+msgid "Select a loaded material slot"
+msgstr "选择实体耗材槽位"
+
+#. Advancer3 print settings
+msgid "Selected"
+msgstr "已选择"
+
+#. Advancer3 print settings
+msgid "Loaded material color: "
+msgstr "实体耗材色值："
+
+#. Advancer3 print settings
+msgid "\nColor: "
+msgstr "\n色值："
+
+#. Advancer3 print settings
+msgid "Current printer"
+msgstr "当前打印机"
+
+#. Advancer3 print settings
+msgid "Printer MAC · "
+msgstr "打印机 MAC · "
+
+#. Advancer3 print settings
+msgid "T0/T1 are G-code tool IDs, not physical slots. Confirming will upload the file and start printing."
+msgstr "T0/T1 是切片文件中的逻辑工具编号，不是打印机槽位号；确认后将按 T 编号映射并继续上传、下发。"
+
+#. Advancer3 print settings
+msgid "Mapping"
+msgstr "映射"
+
+#. Advancer3 print settings
+msgid "Device slot / loaded color"
+msgstr "打印机实体槽位 / 耗材颜色"
+
+#. Advancer3 print settings
+msgid "Material not set"
+msgstr "未设置材料"
+
+#. Advancer3 print settings
+msgid "Map to"
+msgstr "映射到"
+
+#. Advancer3 print settings
+msgid "Change slot"
+msgstr "更换槽位"
+
+#. Advancer3 print settings
+msgid "Material %d (T%d)"
+msgstr "耗材 %d（T%d）"
+
+#. Advancer3 print settings
+msgid "\nLoaded material color: "
+msgstr "\n实体耗材色值："
+
+#. Advancer3 print settings
+msgid "Advancer3 print settings"
+msgstr "Advancer3 打印设置"
+
+#. Advancer3 print settings
+msgid "Level before printing"
+msgstr "打印前调平"
+
+#. Advancer3 print settings
+msgid "Slot %d"
+msgstr "槽位 %d"
+
+#. Advancer3 print settings
+msgid "Select a loaded device slot for each material. Click a slot to change it."
+msgstr "为每种耗材选择设备已装载的槽位，点击右侧槽位可更换。"
+
+#. Advancer3 print settings
+msgid "G-code material / model color"
+msgstr "G-code 耗材 / 模型颜色"
+
+#. Advancer3 print settings
+msgid "Model color: "
+msgstr "模型颜色："
+
+#. Advancer3 print settings
+msgid "Material %d · "
+msgstr "耗材 %d · "
+
+#. Advancer3 print settings
+msgid "Confirm and print"
+msgstr "确认并下发"
+
+#. Advancer3 print settings
+msgid "Choose a slot for %s. The current slot has a green outline."
+msgstr "为 %s 选择槽位，当前槽位以绿色描边标识。"
+
+#. Advancer3 print settings
+msgid "Could not read loaded Advancer3 slots. Check the printer and its materials, then try again."
+msgstr "无法读取 Advancer3 已装载的槽位，请检查设备和耗材后重试。"
+
+#. Advancer3 print settings
+msgid "No sliced materials or loaded Advancer3 slots are available."
+msgstr "没有可用的切片耗材信息或 Advancer3 已装载槽位。"
+
+#. Advancer3 print settings
+msgid "The material mapping is incomplete. Check the sliced material types, colors and device slots."
+msgstr "耗材映射不完整，请检查切片耗材类型、颜色和设备槽位。"
+
+#. Advancer3 print settings
+msgid "For Advancer3, select one printer and send a G-code file."
+msgstr "Advancer3 下发请仅选择一台打印机，并使用 G-code 文件。"
+
+#. Advancer3 print settings
+msgid "Change  ›"
+msgstr "更换  ›"
+
+#: src/slic3r/GUI/GFDDeviceSelectionDialog.cpp
+msgid "Print submission cancelled."
+msgstr "已取消打印下发。"
