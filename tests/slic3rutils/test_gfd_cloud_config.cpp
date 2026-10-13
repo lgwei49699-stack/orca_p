@@ -12,19 +12,49 @@ static json scheme()
             {"configFileName", "standard.3mf"}, {"defaultProcessConf", "standard parameters"}};
 }
 
-TEST_CASE("Reauthentication cannot move a selected cloud scheme to another account or environment", "[GFDCloudConfig]")
+TEST_CASE("Standard imports reuse explicit names before legacy names without crossing grades", "[GFDCloudConfig]")
 {
-    REQUIRE(cloud_upload_session_matches("qa", "account-a", "qa", "account-a"));
-    REQUIRE_FALSE(cloud_upload_session_matches("qa", "account-a", "production", "account-a"));
-    REQUIRE_FALSE(cloud_upload_session_matches("qa", "account-a", "qa", "account-b"));
-    REQUIRE_FALSE(cloud_upload_session_matches("qa", "account-a", "qa", ""));
-    REQUIRE_FALSE(cloud_upload_session_matches("qa", "", "qa", "account-a"));
+    std::set<std::string> presets;
+    const auto            target = [&](const std::string& name, const std::string& grade) {
+        return cloud_process_import_name(name, grade, [&](const std::string& candidate) { return presets.count(candidate) != 0; });
+    };
+    REQUIRE(target("测试", "standard") == "测试 [standard]");
+    presets.insert("测试");
+    REQUIRE(target("测试", "standard") == "测试");
+    REQUIRE(target("测试", "") == "测试");
+    REQUIRE(target("测试 [standard]", "standard") == "测试");
+    REQUIRE(target("测试", "fast") == "测试 [fast]");
+    REQUIRE(target("测试", "fine") == "测试 [fine]");
+    presets.insert("测试 [standard]");
+    REQUIRE(target("测试", "standard") == "测试 [standard]");
+    REQUIRE(target("测试 [standard]", "standard") == "测试 [standard]");
+    presets.insert("测试 [fast]");
+    REQUIRE(target("测试", "fast") == "测试 [fast]");
+    REQUIRE(target("测试", "fine") == "测试 [fine]");
+    REQUIRE(target("测试 [fast]", "fast") == "测试 [fast]");
+    REQUIRE(target("测试 @EP3 Plus", "standard") == "测试 @EP3 Plus [standard]");
+    REQUIRE(target("", "standard").empty());
+    REQUIRE_THROWS(target("测试", "unknown"));
+}
 
-    // Login is allowed to establish the first account only when no existing scheme was selected.
-    REQUIRE(cloud_upload_session_matches("qa", "", "qa", "account-a", true));
-    REQUIRE_FALSE(cloud_upload_session_matches("qa", "", "production", "account-a", true));
-    REQUIRE_FALSE(cloud_upload_session_matches("qa", "account-a", "qa", "account-b", true));
-    REQUIRE_FALSE(cloud_upload_session_matches("qa", "", "qa", "", true));
+TEST_CASE("Only successful Standard imports decorate legacy process labels", "[GFDCloudConfig]")
+{
+    const json uploaded = {{"cloud_config_id", "123"}, {"fineness", "standard"}};
+    REQUIRE(cloud_process_display_name("测试", json::object()) == "测试");
+    REQUIRE(cloud_process_display_name("测试", uploaded) == "测试");
+    auto imported                     = uploaded;
+    imported["cloud_import_fineness"] = "standard";
+    REQUIRE(cloud_process_display_name("测试", imported) == "测试 [standard]");
+    REQUIRE(cloud_process_display_name("测试 [standard]", imported) == "测试 [standard]");
+    REQUIRE(cloud_process_display_name("测试 [fast]", imported) == "测试 [fast]");
+    REQUIRE(cloud_process_display_name("测试 [fine]", imported) == "测试 [fine]");
+    // Saving another cloud grade does not change the grade last imported into this local preset.
+    imported["fineness"] = "fine";
+    REQUIRE(cloud_process_display_name("测试", imported) == "测试 [standard]");
+    REQUIRE(cloud_process_display_name("测试", json::parse(imported.dump())) == "测试 [standard]");
+    REQUIRE(cloud_process_display_name("", imported).empty());
+    imported["cloud_import_fineness"] = nullptr;
+    REQUIRE(cloud_process_display_name("测试", imported) == "测试");
 }
 
 TEST_CASE("Legacy source records default to Standard without losing explicit qualities", "[GFDCloudConfig]")

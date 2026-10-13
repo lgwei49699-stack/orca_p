@@ -183,6 +183,34 @@ bool PresetComboBox::set_printer_technology(PrinterTechnology pt)
 void PresetComboBox::invalidate_selection()
 {
     m_last_selected = INT_MAX; // this value means that no one item is selected
+    m_cloud_process_names.clear();
+}
+
+std::string PresetComboBox::preset_name_for_selection(int selection) const
+{
+    if (selection < 0 || static_cast<unsigned int>(selection) >= GetCount())
+        return {};
+    const auto name = m_cloud_process_names.find(static_cast<unsigned int>(selection));
+    return name != m_cloud_process_names.end() ? name->second : Preset::remove_suffix_modified(into_u8(GetString(selection)));
+}
+
+void PresetComboBox::decorate_cloud_process_names()
+{
+    if (m_type != Preset::TYPE_PRINT || m_preset_bundle != wxGetApp().preset_bundle || wxGetApp().plater() == nullptr)
+        return;
+    const auto names = wxGetApp().plater()->cloud_process_display_names();
+    for (unsigned int index = 0; index < GetCount(); ++index) {
+        if (reinterpret_cast<Marker>(GetClientData(index)) >= LABEL_ITEM_MARKER)
+            continue;
+        const std::string label   = into_u8(GetString(index));
+        const std::string name    = Preset::remove_suffix_modified(label);
+        const auto        display = names.find(name);
+        if (display == names.end())
+            continue;
+        // Apply after the list has been built, so equal display labels do not merge distinct presets.
+        m_cloud_process_names[index] = name;
+        SetString(index, from_u8(label.substr(0, label.size() - name.size()) + display->second));
+    }
 }
 
 void PresetComboBox::validate_selection(bool predicate/*=false*/)
@@ -195,6 +223,7 @@ void PresetComboBox::validate_selection(bool predicate/*=false*/)
 
 void PresetComboBox::update_selection()
 {
+    decorate_cloud_process_names();
     /* If selected_preset_item is still equal to INT_MAX, it means that
      * there is no presets added to the list.
      * So, select last combobox item ("Add/Remove preset")
@@ -391,10 +420,7 @@ void PresetComboBox::show_all(bool show_all)
     update();
 }
 
-void PresetComboBox::update()
-{
-    this->update(into_u8(this->GetString(this->GetSelection())));
-}
+void PresetComboBox::update() { this->update(preset_name_for_selection(GetSelection())); }
 
 void PresetComboBox::update_from_bundle()
 {
@@ -1449,7 +1475,7 @@ void TabPresetComboBox::update_dirty()
             continue;
 
         std::string   old_label = GetString(ui_id).utf8_str().data();
-        std::string   preset_name = Preset::remove_suffix_modified(old_label);
+        std::string   preset_name = preset_name_for_selection(ui_id);
         std::string   ph_printer_name;
 
         if (marker == LABEL_ITEM_PHYSICAL_PRINTER) {
@@ -1460,6 +1486,9 @@ void TabPresetComboBox::update_dirty()
         Preset* preset = m_collection->find_preset(preset_name, false);
         if (preset) {
             std::string new_label = preset->label(true);
+
+            if (m_type == Preset::TYPE_PRINT && preset_name != Preset::remove_suffix_modified(old_label))
+                new_label += " [standard]";
 
             if (marker == LABEL_ITEM_PHYSICAL_PRINTER)
                 new_label = ph_printer_name + PhysicalPrinter::separator() + new_label;

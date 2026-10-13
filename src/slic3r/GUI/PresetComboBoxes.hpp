@@ -1,6 +1,8 @@
 #ifndef slic3r_PresetComboBoxes_hpp_
 #define slic3r_PresetComboBoxes_hpp_
 
+#include <map>
+#include <string>
 //#include <wx/bmpcbox.h>
 #include <wx/colourdata.h>
 #include <wx/gdicmn.h>
@@ -55,6 +57,8 @@ public:
     bool set_printer_technology(PrinterTechnology pt);
 
     void set_selection_changed_function(std::function<void(int)> sel_changed) { on_selection_changed = sel_changed; }
+    // Cloud grade labels are presentation only; callers must select the original preset.
+    std::string preset_name_for_selection(int selection) const;
 
     bool is_selected_physical_printer();
 
@@ -150,6 +154,8 @@ protected:
     wxBitmap *get_bmp(Preset const &preset);
 
 private:
+    void                                decorate_cloud_process_names();
+    std::map<unsigned int, std::string> m_cloud_process_names;
     void fill_width_height();
 };
 

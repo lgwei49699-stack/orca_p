@@ -31,18 +31,6 @@ inline std::string cloud_string(const nlohmann::json& object, const char* key)
     return {};
 }
 
-// A cloud scheme ID belongs to the account/environment where it was selected.
-// Only a new scheme with no selected account may acquire its first account at login.
-inline bool cloud_upload_session_matches(const std::string& expected_environment,
-                                         const std::string& expected_account,
-                                         const std::string& current_environment,
-                                         const std::string& current_account,
-                                         bool               allow_initial_account = false)
-{
-    return expected_environment == current_environment && !current_account.empty() &&
-           (expected_account == current_account || (allow_initial_account && expected_account.empty()));
-}
-
 // Records created before quality selection have no grade and belong to Standard.
 inline std::string cloud_record_fineness(const nlohmann::json& record)
 {
@@ -52,6 +40,39 @@ inline std::string cloud_record_fineness(const nlohmann::json& record)
     if (!it->is_string() || !valid_cloud_fineness(it->get<std::string>()))
         throw std::runtime_error("Unknown cloud configuration quality.");
     return it->get<std::string>();
+}
+
+inline std::string cloud_process_name_without_quality(const std::string& name)
+{
+    for (const char* grade : CLOUD_FINENESS) {
+        const std::string suffix = std::string(" [") + grade + "]";
+        if (name.size() > suffix.size() && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
+            return name.substr(0, name.size() - suffix.size());
+    }
+    return name;
+}
+
+// Prefer the explicit grade, falling back to the old unqualified name only for Standard.
+template<class Exists> inline std::string cloud_process_import_name(const std::string& name, const std::string& fineness, Exists exists)
+{
+    const std::string grade = fineness.empty() ? "standard" : fineness;
+    if (!valid_cloud_fineness(grade))
+        throw std::runtime_error("Unknown cloud configuration quality.");
+    const std::string base = cloud_process_name_without_quality(name);
+    if (base.empty())
+        return {};
+    const std::string qualified = base + " [" + grade + "]";
+    if (exists(qualified))
+        return qualified;
+    return grade == "standard" && exists(base) ? base : qualified;
+}
+
+// A cloud association can also come from upload. Only a successful import marks the display.
+inline std::string cloud_process_display_name(const std::string& name, const nlohmann::json& record)
+{
+    if (!name.empty() && cloud_string(record, "cloud_import_fineness") == "standard" && cloud_process_name_without_quality(name) == name)
+        return name + " [standard]";
+    return name;
 }
 
 // Preserve unknown grades and profile metadata when editing one supported grade.

@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <map>
 #include <functional>
 #include <vector>
 #include <boost/filesystem/path.hpp>
@@ -449,6 +450,7 @@ public:
     void     update_gfd_config_panel_position();
     bool     has_active_imported_cloud_config() const;
     bool     has_dirty_active_imported_cloud_config() const;
+    std::map<std::string, std::string> cloud_process_display_names() const;
 
     void reset_window_layout();
 

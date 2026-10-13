@@ -3605,8 +3605,6 @@ struct Plater::priv
         std::string cloud_config_id;
         std::string cloud_config_name;
         std::string              fineness{"standard"};
-        std::string              environment;
-        std::string              account;
         std::string printer_preset;
         std::string device_type;
         std::string print_preset;
@@ -8457,9 +8455,7 @@ void Plater::priv::on_select_preset(wxCommandEvent& evt)
     //! instead of
     //!     combo->GetStringSelection().ToUTF8().data());
 
-    std::string preset_name = wxGetApp().preset_bundle->get_preset_name_by_alias(preset_type,
-                                                                                 Preset::remove_suffix_modified(
-                                                                                     combo->GetString(selection).ToUTF8().data()));
+    std::string preset_name = wxGetApp().preset_bundle->get_preset_name_by_alias(preset_type, combo->preset_name_for_selection(selection));
 
     if (preset_type == Preset::TYPE_FILAMENT) {
         wxGetApp().preset_bundle->set_filament_preset(idx, preset_name);
@@ -9795,8 +9791,9 @@ bool Plater::priv::gfd_apply_prepared_cloud_config(const GFDCloudConfigInfo&   c
         if (process_name.empty())
             process_name = cloud_process != nullptr ? cloud_process->name : embedded_process_id;
 
-        if (!process_name.empty())
-            process_name += " [" + config.fineness + "]";
+        process_name = GFD::cloud_process_import_name(process_name, config.fineness, [&bundle](const std::string& candidate) {
+            return bundle.prints.find_preset(candidate, false, true) != nullptr;
+        });
 
         bool   process_imported = false;
         size_t changed_count    = 0;
@@ -9889,8 +9886,13 @@ bool Plater::priv::gfd_apply_prepared_cloud_config(const GFDCloudConfigInfo&   c
                 }
                 wxGetApp().app_config->save();
             }
-            if (process_imported)
+            if (process_imported) {
                 gfd_record_imported_cloud_config(config);
+                // The source record now includes the successful import marker. Refresh labels only;
+                // the process selected before import stays selected.
+                if (auto* tab = wxGetApp().get_tab(Preset::TYPE_PRINT))
+                    tab->update_preset_choice();
+            }
         }
 
         if (wxGetApp().mainframe != nullptr)
@@ -9988,8 +9990,6 @@ void Plater::priv::gfd_record_imported_cloud_config(const GFDCloudConfigInfo& co
     state.cloud_config_id   = config.id;
     state.cloud_config_name = config.name;
     state.fineness          = config.fineness;
-    state.environment       = GFD::Config::current_environment_name(wxGetApp().app_config);
-    state.account           = GFD::Config::user_uuid(wxGetApp().app_config);
     state.printer_preset    = wxGetApp().preset_bundle->printers.get_selected_preset_name();
     state.device_type       = config.device_type;
     state.print_preset      = current_print_preset;
@@ -10007,15 +10007,20 @@ void Plater::priv::gfd_record_imported_cloud_config(const GFDCloudConfigInfo& co
         gfd_imported_cloud_configs.emplace_back(state);
 
     nlohmann::json records = gfd_load_cloud_process_records();
-    records[gfd_cloud_process_config_key(current_print_preset)] = {{"device_type", config.device_type},
-                                                                   {"cloud_config_id", config.id},
-                                                                   {"cloud_config_name", config.name},
-                                                                   {"fineness", config.fineness},
-                                                                   {"environment", state.environment},
-                                                                   {"account", state.account},
-                                                                   {"printer_preset",
-                                                                    wxGetApp().preset_bundle->printers.get_selected_preset_name()},
-                                                                   {"filament_presets", wxGetApp().preset_bundle->filament_presets}};
+    const std::string record_key       = gfd_cloud_process_config_key(current_print_preset);
+    const std::string imported_quality = !gfd_last_imported_cloud_process_preset.empty() ?
+                                             config.fineness :
+                                             (records.contains(record_key) ?
+                                                  GFD::cloud_string(records[record_key], "cloud_import_fineness") :
+                                                  std::string());
+    records[record_key]                = {{"device_type", config.device_type},
+                                          {"cloud_config_id", config.id},
+                                          {"cloud_config_name", config.name},
+                                          {"fineness", config.fineness},
+                                          {"printer_preset", wxGetApp().preset_bundle->printers.get_selected_preset_name()},
+                                          {"filament_presets", wxGetApp().preset_bundle->filament_presets}};
+    if (GFD::valid_cloud_fineness(imported_quality))
+        records[record_key]["cloud_import_fineness"] = imported_quality;
     gfd_save_cloud_process_records(records);
 
     BOOST_LOG_TRIVIAL(info) << "GFD recorded imported cloud config state"
@@ -10115,9 +10120,6 @@ bool Plater::priv::gfd_get_active_imported_cloud_config(GFDCloudImportState& sta
                                                  gfd_normalize_cloud_process_name(existing.print_preset) == current_print_preset;
                                       });
     if (matched != gfd_imported_cloud_configs.end()) {
-        if (matched->environment != GFD::Config::current_environment_name(wxGetApp().app_config) ||
-            matched->account != GFD::Config::user_uuid(wxGetApp().app_config))
-            return false;
         state = *matched;
         return true;
     }
@@ -10142,11 +10144,6 @@ bool Plater::priv::gfd_get_active_imported_cloud_config(GFDCloudImportState& sta
 
     state.cloud_config_id   = item.value("cloud_config_id", std::string());
     state.cloud_config_name = item.value("cloud_config_name", std::string());
-    state.environment       = item.value("environment", GFD::Config::current_environment_name(wxGetApp().app_config));
-    state.account           = item.value("account", GFD::Config::user_uuid(wxGetApp().app_config));
-    if (state.environment != GFD::Config::current_environment_name(wxGetApp().app_config) ||
-        state.account != GFD::Config::user_uuid(wxGetApp().app_config))
-        return false;
     try {
         state.fineness = GFD::cloud_record_fineness(item);
     } catch (const std::exception&) {
@@ -15497,6 +15494,23 @@ bool Plater::has_dirty_active_imported_cloud_config() const
     return p != nullptr && p->gfd_has_dirty_active_imported_cloud_config();
 }
 
+std::map<std::string, std::string> Plater::cloud_process_display_names() const
+{
+    std::map<std::string, std::string> names;
+    if (p == nullptr || wxGetApp().preset_bundle == nullptr)
+        return names;
+    const auto records = p->gfd_load_cloud_process_records();
+    for (const Preset& preset : wxGetApp().preset_bundle->prints.get_presets()) {
+        const auto record = records.find(gfd_cloud_process_config_key(preset.name));
+        if (record == records.end() || !record->is_object())
+            continue;
+        const std::string label = GFD::cloud_process_display_name(preset.name, *record);
+        if (label != preset.name)
+            names.emplace(preset.name, label);
+    }
+    return names;
+}
+
 void Plater::reset_window_layout() { p->reset_window_layout(); }
 
 // BBS
@@ -17676,28 +17690,17 @@ bool Plater::start_gfd_config_upload_async(const std::string&        config_name
 
     if (dialog_parent == nullptr)
         dialog_parent = this;
-    const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
-    const std::string request_account     = GFD::Config::user_uuid(wxGetApp().app_config);
     if (progress)
         progress(-1, _L("Checking login..."));
     if (!GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
         const bool login_started = GFDAuthManager::ensure_logged_in_async(dialog_parent, [this, config_name, remarks, save_mode,
                                                                                           cloud_config_id, finished, fineness,
-                                                                                          metadata_changes, progress, dialog_parent,
-                                                                                          request_environment, request_account,
-                                                                                          is_update](bool        logged_in,
-                                                                                                     std::string login_error) mutable {
+                                                                                          metadata_changes, progress,
+                                                                                          dialog_parent](bool        logged_in,
+                                                                                                         std::string login_error) mutable {
             if (!logged_in) {
                 GFDConfigUploadResult result;
                 result.error_message = login_error.empty() ? "登录状态无效，请重新登录。" : std::move(login_error);
-                finished(std::move(result), false);
-                return;
-            }
-            if (!GFD::cloud_upload_session_matches(request_environment, request_account,
-                                                   GFD::Config::current_environment_name(wxGetApp().app_config),
-                                                   GFD::Config::user_uuid(wxGetApp().app_config), !is_update)) {
-                GFDConfigUploadResult result;
-                result.error_message = _u8L("The account or environment changed. Select the cloud scheme again.");
                 finished(std::move(result), false);
                 return;
             }
@@ -17743,12 +17746,6 @@ bool Plater::start_gfd_config_upload_async(const std::string&        config_name
     }
 
     auto owned_temporary_file = std::make_shared<GFDOwnedTemporaryConfigFile>(config_3mf_path);
-    if (GFD::Config::current_environment_name(wxGetApp().app_config) != request_environment ||
-        GFDAuthManager::current_auth_token(wxGetApp().app_config) != auth_token) {
-        report_later(_u8L("The account or environment changed. Select the cloud scheme again."));
-        return true;
-    }
-
     nlohmann::json request_json;
     request_json["name"]               = config_name;
     request_json["configFileUrl"]      = std::string();
@@ -17778,6 +17775,7 @@ bool Plater::start_gfd_config_upload_async(const std::string&        config_name
                                                         GFD::Config::config_add_url(wxGetApp().app_config);
     const std::string list_url            = GFD::Config::device_slice_type_url(wxGetApp().app_config);
     const std::string detail_base_url     = GFD::Config::config_detail_url(wxGetApp().app_config);
+    const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
 
     auto task_result                  = std::make_shared<GFDConfigUploadTaskResult>();
     task_result->owned_temporary_file = std::move(owned_temporary_file);
@@ -17791,25 +17789,13 @@ bool Plater::start_gfd_config_upload_async(const std::string&        config_name
         p->m_gfd_config_upload_worker,
         [task_result, request_json = std::move(request_json), config_name, remarks, save_mode, cloud_config_id, device_type,
          project_settings_text, config_3mf_path, auth_token, obs_token_url, save_url, list_url, detail_base_url, is_update, fineness,
-         metadata_changes, progress, dialog_parent, request_environment, request_account](Job::Ctl& ctl) mutable {
+         metadata_changes, progress, dialog_parent](Job::Ctl& ctl) mutable {
             auto report_progress = [&ctl, &progress](int percent, const wxString& text) {
                 if (progress)
                     ctl.call_on_main_thread([progress, percent, text] { progress(percent, text); });
             };
             auto refresh_auth = [&](const std::string& failed_token, std::string& refreshed_token, std::string& error) {
-                if (!gfd_refresh_auth_token_for_worker(ctl, dialog_parent, failed_token, refreshed_token, error))
-                    return false;
-                // Inspect AppConfig on the GUI thread, and reject the new token before replaying any request.
-                auto same_session = std::make_shared<bool>(false);
-                ctl.call_on_main_thread([same_session, request_environment, request_account] {
-                       *same_session = GFD::cloud_upload_session_matches(request_environment, request_account,
-                                                                         GFD::Config::current_environment_name(wxGetApp().app_config),
-                                                                         GFD::Config::user_uuid(wxGetApp().app_config));
-                   })
-                    .get();
-                if (!*same_session)
-                    error = _u8L("The account or environment changed. Select the cloud scheme again.");
-                return *same_session;
+                return gfd_refresh_auth_token_for_worker(ctl, dialog_parent, failed_token, refreshed_token, error);
             };
             report_progress(-1, _L("Requesting upload permission..."));
             if (ctl.was_canceled()) {
@@ -18183,18 +18169,14 @@ bool Plater::save_active_imported_cloud_config_async(GFDConfigUploadFinishedFn f
 
     const std::string config_name = !active_state.cloud_config_name.empty() ? active_state.cloud_config_name : _u8L("云端配置");
     const std::string display_config_name = Preset::remove_suffix_modified(config_name);
-    const std::string  confirmed_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
-    const std::string  confirmed_account     = GFD::Config::user_uuid(wxGetApp().app_config);
     GFDCloudSaveDialog confirm_dialog(this, from_u8(display_config_name), active_state.fineness);
-    confirm_dialog.set_submit_handler([this, &confirm_dialog, active_state, config_name, confirmed_environment,
-                                       confirmed_account](GFDConfigUploadFinishedFn completion, GFDConfigUploadProgressFn progress) {
+    confirm_dialog.set_submit_handler([this, &confirm_dialog, active_state, config_name](GFDConfigUploadFinishedFn completion,
+                                                                                         GFDConfigUploadProgressFn progress) {
         priv::GFDCloudImportState current_state;
         if (!p->gfd_get_active_imported_cloud_config(current_state) || current_state.cloud_config_id != active_state.cloud_config_id ||
-            current_state.fineness != active_state.fineness ||
-            GFD::Config::current_environment_name(wxGetApp().app_config) != confirmed_environment ||
-            GFD::Config::user_uuid(wxGetApp().app_config) != confirmed_account) {
+            current_state.fineness != active_state.fineness) {
             GFDConfigUploadResult result;
-            result.error_message = _u8L("The account or environment changed. Select the cloud scheme again.");
+            result.error_message = _u8L("The active cloud scheme changed. Reopen the save dialog.");
             completion(std::move(result), false);
             return true;
         }

@@ -1229,11 +1229,6 @@ private:
                     return;
                 }
 
-                if (GFDAuthManager::current_auth_token(wxGetApp().app_config) != token) {
-                    set_loading_state(false);
-                    set_status(_L("The account changed. Refresh the cloud list."));
-                    return;
-                }
                 // The prepared file is ready. Keep actions locked while applying it, but stop
                 // the network animation before replacement/success dialogs enter another modal loop.
                 m_loading_timer.Stop();
@@ -6726,25 +6721,15 @@ void MainFrame::bind_gfd_config_buttons()
         if (m_gfd_config_operation_in_progress)
             return;
 
-        const std::string     environment = GFD::Config::current_environment_name(wxGetApp().app_config);
-        std::string           target_token;
-        GFDUploadConfigDialog dialog(this, [this, &target_token](wxWindow* parent, GFDCloudConfigInfo& selected) {
+        GFDUploadConfigDialog dialog(this, [this](wxWindow* parent, GFDCloudConfigInfo& selected) {
             GFDCloudImportDialog picker(parent, m_plater, true);
             if (picker.ShowModal() != wxID_OK)
                 return false;
             selected     = picker.selected_config();
-            target_token = GFDAuthManager::current_auth_token(wxGetApp().app_config);
             return true;
         });
         dialog.set_submit_handler(
-            [this, &dialog, environment, &target_token](GFDConfigUploadFinishedFn finished, GFDConfigUploadProgressFn progress) {
-                if (GFD::Config::current_environment_name(wxGetApp().app_config) != environment ||
-                    (!dialog.cloud_config_id().empty() && GFDAuthManager::current_auth_token(wxGetApp().app_config) != target_token)) {
-                    GFDConfigUploadResult result;
-                    result.error_message = _u8L("The account or environment changed. Select the cloud scheme again.");
-                    finished(std::move(result), false);
-                    return true;
-                }
+            [this, &dialog](GFDConfigUploadFinishedFn finished, GFDConfigUploadProgressFn progress) {
                 m_gfd_config_operation_in_progress = true;
                 update_gfd_config_buttons();
                 return m_plater->upload_current_config_to_cloud_async(into_u8(dialog.config_name().Trim(true).Trim(false)),

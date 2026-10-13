@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "project-state",
-  "source_fingerprint": "sha256:6d76749a03009237ed94c24568f2f5c35cd418cd4ea83490c435bf174377c343",
-  "reason": "本轮 Plater 取消收尾不改变工程保存、撤销、备份或云方案来源；主窗口模态退出保护先于清理，不改变弹窗结束后的原保存询问；详细行为记 GUI 模块。"
+  "source_fingerprint": "sha256:a9202cf85d4c6f48266e31248f4e4a104b4fee4645b3dd41094c7bae6de44ff0",
+  "reason": "来源记录取消环境及账号限制，成功云导入另记显示标记；内部名称、来源键、原工艺选择及工程Undo格式保持。"
 }
 -->
 
@@ -39,7 +39,7 @@ UndoRedo 记录模型与选择相关快照，ProjectDirtyStateManager 汇总模�
 
 现有测试/工具范围：`tests/libslic3r/test_3mf.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
 
-云方案来源记录 `user/gfd_cloud_process_records.json` 增加档位及新记录的环境／账号；旧记录无档位、null或空串按 standard 解释，未知类型拒绝，无环境／账号沿用历史当前会话语义。保存窗口默认来源类型，可改选目标类型；成功回读确认后记录实际保存档位，用于下次保存和重启恢复。它用于GUI云端保存目标识别，不等同工程保存或Undo快照，详见[云模块](cloud.md)。
+云方案来源记录 `user/gfd_cloud_process_records.json` 保留实际保存档位与本地机型／工艺／耗材对应关系；新记录不写来源环境或账号，历史 environment/account/account_kind 字段不参与来源解析、按钮显示或保存校验。成功导入／替换另记 `cloud_import_fineness`，用于旧标准工艺的列表显示后缀；上传／保存保留已有导入标记，但不会为未导入项新建标记。没有标记的历史关联不推断为已导入，下一次成功同步后补记。该标记不重命名文件或来源键。旧记录无档位、null或空串按 standard，未知类型拒绝。保存窗口默认来源类型，可改选目标类型；成功回读后记录实际保存档位。导入后沿用恢复原选中工艺的业务，来源记录仍绑定实际导入工艺；本轮不新增自动切换或改变来源绑定。它用于GUI云端保存目标识别，不等同工程保存或Undo快照，详见[云模块](cloud.md)。
 
 ## 关联模块
 

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:19a35614bfec665e54e1d3df56b17a0c5577c534b9ea90bbcb5c89b7b8d636e1",
-  "reason": "增加默认开启和显式关闭调平协议回归，7 用例 87 断言；wx 回归加入原生、自管、嵌套模态下 owner 关闭和退栈后销毁，87 检查通过；保留 GUI 与 Windows 待验边界。"
+  "source_fingerprint": "sha256:cab60fdc8a2d31387477fbef1934891c36656da7ddb312a5646932d7bdf4c547",
+  "reason": "云协议新增标准名称匹配与成功导入显示回归，撤回账号绑定测试；真实下拉选择、脏状态及认证恢复另列GUI交接。"
 }
 -->
 
@@ -51,6 +51,8 @@ CLI 脚本要求显式 `--binary` 和父目录已存在、自身尚不存在的 
 
 0=文档检查通过，1=需复核/缺失/未归属，2=工具或清单错误。脚本不生成正文、不自动记录审核、不暂存、不提交；日期和 mtime 不参与指纹；旧 blob 早于当前换行属性时，字节相同保持原身份，修改后按 Git 当前规范化规则计算。
 
+云配置按用户要求撤回新增来源环境／账号绑定及相应策略测试，恢复旧请求完成校验；JSON协议回归保留。新增标准档名称优先级与成功导入才装饰旧名称的测试，来源按钮、保存、真实下拉选择及认证恢复仍需GUI联调，见[云配置记录](../validation/2026-10-09-cloud-config-quality-analysis.md)。
+
 ## 修改与验证
 
 Windows GUI 采集在 2026-10-09 收到同事现场 JSON：64 位 Windows PowerShell 5.1 下完成三次窗口／线程输入枚举及 249 次消息探测，均返回成功。它证明该环境下采集核心路径已执行；不替代多进程交互、错误处理、双击启动器或 Orca 修复验收。应用故障结论见[现场记录](../validation/2026-10-08-print-ui-freeze-log-analysis.md)。
@@ -96,7 +98,7 @@ Windows GUI 采集在 2026-10-09 收到同事现场 JSON：64 位 Windows PowerS
 
 重建自动化和 CLI 结果统一回填[主记录](../validation/2026-10-04-smart-print-engine.md)，交互对比、采用／撤销／保存重开见[GUI 交接](../validation/2026-10-05-reconstruction-gui.md)。首版明确没有诊断试切片；报告 `trial_slice=not_run` 及 `print_ready=false` 是契约的一部分，不能将这些测试通过写成完整商用或打印质量验收。`[ReconstructionWorkerGuard]` 通过独立 `reconstruction_worker_test_helper` 检验正常销毁、错误父身份、worker 自身超时/RSS 与父退出；不在测试主进程触发退出或收紧内存限制。显式 `[ReconstructionIntegration]` 需 `ORCA_RECONSTRUCTION_BINARY` 指向同源码应用，验证非均匀缩放/镜像后的候选、局部/物理复检和原件不变。
 
-`gfd_cloud_config_tests` 是云方案JSON协议的独立Catch目标，覆盖旧标准档、三档互不覆盖、坏数据拒绝和回读识别丢档；旧来源缺类型／null／空串默认标准到保存payload的连贯校验，并验证明确快速／精细类型不回退到标准。元数据回归验证只修改名称时保留最新备注、明确清空备注、ID禁止被元数据补丁修改，以及回读未保存字段时不能确认成功。提交前增加重登不可跨账号/环境继续写旧目标、仅新建首次登录可建立账号的边界回归。无需账号或桌面，不能代替真实云服务验收，见[云方案记录](../validation/2026-10-09-cloud-config-quality-analysis.md)。
+`gfd_cloud_config_tests` 是云方案JSON协议的独立Catch目标，覆盖旧标准档、三档互不覆盖、坏数据拒绝和回读识别丢档；旧来源缺类型／null／空串默认标准到保存payload的连贯校验，并验证明确快速／精细类型不回退到标准。元数据回归验证只修改名称时保留最新备注、明确清空备注、ID禁止被元数据补丁修改，以及回读未保存字段时不能确认成功。新增名称回归覆盖标准档优先带后缀、回退旧名称、快速／精细隔离、避免重复后缀，以及仅成功导入标记才能装饰列表旧名称；仅上传、坏标记和空名称不装饰，已有导入标记持久化后保持。来源环境／账号绑定策略及对应测试已撤回；原请求完成检查保留。真实下拉条目身份、脏状态和认证恢复需GUI手测，不把纯函数协议回归当作GUI通过。无需账号或桌面，不能代替真实云服务验收，见[云方案记录](../validation/2026-10-09-cloud-config-quality-analysis.md)。
 
 新增 `tests/libslic3r/test_advancer3_presets.cpp` 并注册到现有 libslic3r_tests，标签 `[Advancer3]`：验证向导元数据、Custom 独立加载、与 AD5X 有效参数等价及多品牌共存。测试只写临时目录，运行身份和 CLI 对照结果见[执行记录](../validation/2026-10-09-adv3-custom-feasibility.md)。
 

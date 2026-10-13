@@ -19440,6 +19440,10 @@ msgstr "账号已切换，请刷新云端列表。"
 msgid "The account or environment changed. Select the cloud scheme again."
 msgstr "账号或环境已切换，请重新选择云端方案。"
 
+#: src/slic3r/GUI/Plater.cpp
+msgid "The active cloud scheme changed. Reopen the save dialog."
+msgstr "当前云端方案已变化，请重新打开保存窗口。"
+
 #: src/slic3r/GUI/MainFrame.cpp src/slic3r/GUI/Plater.cpp
 msgid "Invalid cloud configuration profiles."
 msgstr "云端配置的档位数据格式无效。"

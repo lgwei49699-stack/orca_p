@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:0e469798209c8f7946699a1994c4cc8aaa7f0822097ce37e9b4dd355892370bd",
-  "reason": "新增取消独立中性状态英文源串与简中翻译，设备选择源文件加入 gettext 提取清单；msgfmt 校验通过，不改其他语言。"
+  "source_fingerprint": "sha256:56a05257ebeb3fa866cc544be849fc86604bbddeccfb240c32c61ae70be63c0f",
+  "reason": "活动云方案变化提示补齐英文和简中；撤回本批新增环境提示，历史请求完成提示和其他语言不变。"
 }
 -->
 
@@ -57,3 +57,5 @@
 云配置第六批新增准备、上传百分比、服务端保存/回读阶段与带方案名/类型的成功提示，中英文同时维护；新上传窗口标题改用英文原文。中文msgfmt格式检查及本地MO生成通过；其他语言沿用回退英文。实际对话框中英文排版待用户验收。
 
 Advancer3 打印设置及槽位选择沿用 gettext，`GFDConsumableMappingDialog.cpp` 已加入提取清单；新分支使用英文原文、简中补译，旧机型文案不变。
+
+云配置保存提交时，当前来源方案或档位变化使用 “The active cloud scheme changed. Reopen the save dialog.” 及对应简中，避免将方案变化误称账号切换。此次撤回新增来源环境限制，没有新增环境提示；历史请求完成提示及其他语言条目保留。工艺列表显示使用稳定 `[standard]` 标识，中英文切换不会改变内部名称或重复增加后缀。实际排版由GUI手测确认。
