@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:cab60fdc8a2d31387477fbef1934891c36656da7ddb312a5646932d7bdf4c547",
-  "reason": "云协议新增标准名称匹配与成功导入显示回归，撤回账号绑定测试；真实下拉选择、脏状态及认证恢复另列GUI交接。"
+  "source_fingerprint": "sha256:2e96107bac03b9017661b68021fb3cf19de7f037bbc146581cdb6366fbebccba",
+  "reason": "本轮变更仅触及共享 Plater/预设/翻译文件中的云导入隔离逻辑；本模块正文流程无新增行为，当前新源码尚未重新构建验证。"
 }
 -->
 

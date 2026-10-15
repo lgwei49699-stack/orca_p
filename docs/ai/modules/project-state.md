@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "project-state",
-  "source_fingerprint": "sha256:a9202cf85d4c6f48266e31248f4e4a104b4fee4645b3dd41094c7bae6de44ff0",
-  "reason": "来源记录取消环境及账号限制，成功云导入另记显示标记；内部名称、来源键、原工艺选择及工程Undo格式保持。"
+  "source_fingerprint": "sha256:cf5a064b51062e6c9eb0d9b8e831f5db8799ca01d436fc4aed882bf4606bf554",
+  "reason": "按机器隔离云导入工艺/耗材并兼容三档旧标准名称；该模块其他流程未变，当前新源码尚未重新构建验证。"
 }
 -->
 

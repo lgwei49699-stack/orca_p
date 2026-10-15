@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:56a05257ebeb3fa866cc544be849fc86604bbddeccfb240c32c61ae70be63c0f",
-  "reason": "活动云方案变化提示补齐英文和简中；撤回本批新增环境提示，历史请求完成提示和其他语言不变。"
+  "source_fingerprint": "sha256:41925fe9979005a739adbfe485078d5bc10f834a8ef8ee960adfdda8f3a803d4",
+  "reason": "按机器隔离云导入工艺/耗材并兼容三档旧标准名称；该模块其他流程未变，当前新源码尚未重新构建验证。"
 }
 -->
 

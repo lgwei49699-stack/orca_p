@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-parameters",
-  "source_fingerprint": "sha256:2d596ca44374df79dc6196b86230388750340138ec230db041a00d9198e250da",
-  "reason": "工艺下拉显示与真实名称分离，成功导入标准档才装饰旧名称，索引映射保留条目及脏状态；参数定义、覆盖和CLI有效参数未变。"
+  "source_fingerprint": "sha256:e1954d1959c6660d41366135912b3fd0215787f7df3cc69397c4c6686226dda4",
+  "reason": "按机器隔离云导入工艺/耗材并兼容三档旧标准名称；该模块其他流程未变，当前新源码尚未重新构建验证。"
 }
 -->
 

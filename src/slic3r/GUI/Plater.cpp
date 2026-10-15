@@ -2889,13 +2889,53 @@ void gfd_bind_cloud_import_to_printer(DynamicPrintConfig& config, Preset::Type t
         condition->value.clear();
 }
 
+std::string gfd_cloud_preset_storage_subdir(const std::string& compatible_printer_name)
+{
+    return "gfd-cloud/" + gfd_sanitize_cloud_filename(compatible_printer_name);
+}
+
+bool gfd_preset_is_exclusive_to_printer(const Preset& preset, const std::string& compatible_printer_name)
+{
+    const auto* compatible_printers = preset.config.option<ConfigOptionStrings>("compatible_printers");
+    if (compatible_printers == nullptr || compatible_printers->values.empty())
+        return false;
+    if (std::find(compatible_printers->values.begin(), compatible_printers->values.end(), compatible_printer_name) ==
+        compatible_printers->values.end())
+        return false;
+    return std::all_of(compatible_printers->values.begin(), compatible_printers->values.end(),
+                       [&](const std::string& name) { return name == compatible_printer_name || name == "MyMarlin 0.4 nozzle"; });
+}
+
+std::string gfd_scoped_cloud_process_name(PresetCollection&  collection,
+                                          const std::string& cloud_name,
+                                          const std::string& compatible_printer_name)
+{
+    const Preset* existing = collection.find_preset(cloud_name, false, true);
+    if (existing != nullptr && existing->is_user() && gfd_preset_is_exclusive_to_printer(*existing, compatible_printer_name))
+        return cloud_name;
+
+    const std::string suffix      = " (" + compatible_printer_name + ")";
+    const std::string scoped_name = boost::algorithm::ends_with(cloud_name, suffix) ? cloud_name : cloud_name + suffix;
+    existing                      = collection.find_preset(scoped_name, false, true);
+    if (existing == nullptr || (existing->is_user() && gfd_preset_is_exclusive_to_printer(*existing, compatible_printer_name)))
+        return scoped_name;
+
+    for (unsigned int index = 2;; ++index) {
+        const std::string unique_name = scoped_name + " - " + std::to_string(index);
+        if (collection.find_preset(unique_name, false, true) == nullptr)
+            return unique_name;
+    }
+}
+
 std::string gfd_cloud_save_as_default_name(const GFDCloudPresetReplaceItem& item)
 {
     std::string base_name = boost::algorithm::trim_copy(item.cloud_name.empty() ? item.local_name : item.cloud_name);
     if (base_name.empty())
         base_name = "cloud_config";
-    if (!item.compatible_printer_name.empty())
-        return (boost::format("%1% (%2%)") % base_name % item.compatible_printer_name).str();
+    if (!item.compatible_printer_name.empty()) {
+        const std::string scoped_name = (boost::format("%1% (%2%)") % base_name % item.compatible_printer_name).str();
+        return scoped_name == item.local_name ? scoped_name + " - copy" : scoped_name;
+    }
     return base_name + " - copy";
 }
 
@@ -3109,6 +3149,11 @@ bool gfd_replace_cloud_preset(PresetBundle& bundle, const GFDCloudPresetReplaceI
         error_message = "系统参数不能直接覆盖，请先复制为用户参数后再导入: " + item.local_name;
         return false;
     }
+    if ((item.type == Preset::TYPE_FILAMENT || item.type == Preset::TYPE_PRINT) &&
+        !gfd_preset_is_exclusive_to_printer(*target, item.compatible_printer_name)) {
+        error_message = _u8L("This preset may also be used by other printers. Use Save As to keep the original preset: ") + item.local_name;
+        return false;
+    }
 
     Preset replacement = *target;
     replacement.config = item.replacement_config;
@@ -3166,7 +3211,8 @@ bool gfd_save_cloud_preset_as(PresetBundle&                    bundle,
     Preset saved_copy = *source;
     saved_copy.config = item.replacement_config;
     gfd_bind_cloud_import_to_printer(saved_copy.config, item.type, item.compatible_printer_name);
-    collection->save_current_preset(new_name, false, false, &saved_copy);
+    collection->save_current_preset(new_name, false, false, &saved_copy, nullptr,
+                                    gfd_cloud_preset_storage_subdir(item.compatible_printer_name));
 
     Preset* saved = collection->find_preset(new_name, false, true);
     if (saved == nullptr) {
@@ -3194,12 +3240,18 @@ bool gfd_save_new_cloud_process(PresetBundle&             bundle,
     }
 
     Preset process(Preset::TYPE_PRINT, process_name, false);
-    process.config        = process_config;
-    process.loaded        = true;
-    process.is_external   = false;
-    process.is_visible    = true;
-    process.is_compatible = true;
-    bundle.prints.save_current_preset(process_name, true, false, &process);
+    process.config                  = process_config;
+    process.loaded                  = true;
+    process.is_external             = false;
+    process.is_visible              = true;
+    process.is_compatible           = true;
+    const auto* compatible_printers = process_config.option<ConfigOptionStrings>("compatible_printers");
+    if (compatible_printers == nullptr || compatible_printers->values.empty()) {
+        error_message = _u8L("Cloud process preset is not bound to a printer.");
+        return false;
+    }
+    bundle.prints.save_current_preset(process_name, true, false, &process, nullptr,
+                                      gfd_cloud_preset_storage_subdir(compatible_printers->values.front()));
     if (Preset* saved = bundle.prints.find_preset(process_name, false, true); saved != nullptr) {
         saved->is_external   = false;
         saved->is_visible    = true;
@@ -9787,13 +9839,24 @@ bool Plater::priv::gfd_apply_prepared_cloud_config(const GFDCloudConfigInfo&   c
                                                                   &cloud_project_config :
                                                                   nullptr);
 
-        std::string process_name = boost::algorithm::trim_copy(config.name);
-        if (process_name.empty())
-            process_name = cloud_process != nullptr ? cloud_process->name : embedded_process_id;
-
-        process_name = GFD::cloud_process_import_name(process_name, config.fineness, [&bundle](const std::string& candidate) {
-            return bundle.prints.find_preset(candidate, false, true) != nullptr;
-        });
+        std::string cloud_process_name = boost::algorithm::trim_copy(config.name);
+        if (cloud_process_name.empty())
+            cloud_process_name = cloud_process != nullptr ? cloud_process->name : embedded_process_id;
+        const auto machine_process_exists = [&bundle, &compatible_printer_name](const std::string& candidate) {
+            const Preset* preset = bundle.prints.find_preset(candidate, false, true);
+            return preset != nullptr && preset->is_user() && gfd_preset_is_exclusive_to_printer(*preset, compatible_printer_name);
+        };
+        std::string process_name = GFD::cloud_process_import_name(cloud_process_name, config.fineness, machine_process_exists);
+        if (!process_name.empty() && !machine_process_exists(process_name)) {
+            const std::string scoped_base = gfd_scoped_cloud_process_name(bundle.prints,
+                                                                          GFD::cloud_process_name_without_quality(cloud_process_name),
+                                                                          compatible_printer_name);
+            process_name                  = GFD::cloud_process_import_name(scoped_base, config.fineness, machine_process_exists);
+            for (unsigned int index = 2;
+                 bundle.prints.find_preset(process_name, false, true) != nullptr && !machine_process_exists(process_name); ++index)
+                process_name = GFD::cloud_process_import_name(scoped_base + " - " + std::to_string(index), config.fineness,
+                                                              machine_process_exists);
+        }
 
         bool   process_imported = false;
         size_t changed_count    = 0;
@@ -9803,7 +9866,7 @@ bool Plater::priv::gfd_apply_prepared_cloud_config(const GFDCloudConfigInfo&   c
                 item.type                    = Preset::TYPE_PRINT;
                 item.category                = _L("工艺参数");
                 item.local_name              = process_name;
-                item.cloud_name              = process_name;
+                item.cloud_name              = cloud_process_name;
                 item.compatible_printer_name = compatible_printer_name;
                 item.local_config            = local_process->config;
                 item.replacement_config      = gfd_cloud_replacement_config(local_process->config, *cloud_process_config,
@@ -9820,8 +9883,9 @@ bool Plater::priv::gfd_apply_prepared_cloud_config(const GFDCloudConfigInfo&   c
                 process_imported                       = true;
                 changed_count                          = 1;
                 gfd_last_imported_cloud_process_preset = gfd_normalize_cloud_process_name(process_name);
-                BOOST_LOG_TRIVIAL(info) << "GFD imported cloud process preset with original cloud name"
-                                        << ", cloud_config_id=" << config.id << ", process_name=" << process_name;
+                BOOST_LOG_TRIVIAL(info) << "GFD imported machine-scoped cloud process preset"
+                                        << ", cloud_config_id=" << config.id << ", cloud_process_name=" << cloud_process_name
+                                        << ", local_process_name=" << process_name;
             }
         }
 

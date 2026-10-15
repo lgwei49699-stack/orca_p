@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:c557d4e6bec76e199d703762fe87a896a5c98e05a2aa39d5ca4d3db6288bea78",
-  "reason": "共享加载测试扩展为 Advancer3 四喷嘴、12 工艺、六耗材，对照 AD5X 有效参数及兼容关系；预设核心未改，10例1681断言及四规格 CLI 指令等价通过。"
+  "source_fingerprint": "sha256:2780a4f650b33b4eb518cdd31547598fca8f3bc4a25234e0eddf9cc2bf046492",
+  "reason": "按机器隔离云导入工艺/耗材并兼容三档旧标准名称；该模块其他流程未变，当前新源码尚未重新构建验证。"
 }
 -->
 
@@ -24,6 +24,8 @@
 ## 核心流程
 
 `PresetBundle::load_presets` 先加载系统品牌 JSON，再按 AppConfig 的 preset_folder 加载用户预设；随后更新多材料选择、兼容状态，并由 `load_selections` 恢复选择。工程嵌入预设另经 PresetCollection 的对应入口进入，不能把向导列表当作全部运行时预设。
+
+云端导入的用户工艺和耗材按机器存放在各自预设目录的 `gfd-cloud/<机器名>/` 下。`PresetCollection::load_presets` 会在加载普通用户预设后读取这些子目录；`save_user_presets` 保留已存在的机器目录，避免下次保存时把文件移回公共目录。内存中的预设名称仍全局唯一，磁盘目录隔离不能代替名称和兼容机器检查。
 
 `full_config` 按 FFF／SLA 分派。FFF 先叠加默认配置、当前工艺、默认耗材、当前机器和 project_config，再按单／多耗材分支填入耗材值。对象／体积／层范围的覆盖继续由切片应用配置阶段处理；排查时记录最终有效值，而不只看 JSON 父项。
 

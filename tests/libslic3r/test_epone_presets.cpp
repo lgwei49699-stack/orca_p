@@ -390,6 +390,66 @@ TEST_CASE("Loading EPONE Plus user presets preserves files and never creates Pro
     }
 }
 
+TEST_CASE("Machine-scoped cloud process and filament files survive reload and save", "[Preset][EPONE][UserLoading][GFDCloud]")
+{
+    ScopedPresetDirectory directory;
+    const std::string     user     = "epone-cloud-folders";
+    const auto            user_dir = directory.path / PRESET_USER_DIR / user;
+    PresetBundle          bundle;
+    REQUIRE_NOTHROW(bundle.load_user_presets(user, ForwardCompatibilitySubstitutionRule::Disable));
+
+    const std::vector<std::pair<std::string, double>> machines = {{"EPONE 0.4 nozzle", 0.16}, {"EPONE Plus 0.4 nozzle", 0.24}};
+    for (const auto& machine : machines) {
+        const std::string name = "Cloud process (" + machine.first + ")";
+        Preset            preset(Preset::TYPE_PRINT, name, false);
+        preset.config  = bundle.prints.default_preset().config;
+        preset.version = Semver("2.3.0");
+        preset.config.set_key_value("layer_height", new ConfigOptionFloat(machine.second));
+        preset.config.set_key_value("compatible_printers", new ConfigOptionStrings({machine.first}));
+        bundle.prints.save_current_preset(name, true, false, &preset, nullptr, "gfd-cloud/" + machine.first);
+
+        const auto file = user_dir / PRESET_PRINT_NAME / "gfd-cloud" / machine.first / (name + ".json");
+        CHECK(boost::filesystem::is_regular_file(file));
+        Preset* saved = bundle.prints.find_preset(name, false, true);
+        REQUIRE(saved != nullptr);
+        saved->sync_info = "save";
+
+        const std::string filament_name = "Cloud filament (" + machine.first + ")";
+        Preset            filament(Preset::TYPE_FILAMENT, filament_name, false);
+        filament.config  = bundle.filaments.default_preset().config;
+        filament.version = Semver("2.3.0");
+        filament.config.set_key_value("nozzle_temperature", new ConfigOptionInts({machine.first == "EPONE 0.4 nozzle" ? 210 : 230}));
+        filament.config.set_key_value("compatible_printers", new ConfigOptionStrings({machine.first}));
+        bundle.filaments.save_current_preset(filament_name, true, false, &filament, nullptr, "gfd-cloud/" + machine.first);
+        CHECK(boost::filesystem::is_regular_file(user_dir / PRESET_FILAMENT_NAME / "gfd-cloud" / machine.first / (filament_name + ".json")));
+        Preset* saved_filament = bundle.filaments.find_preset(filament_name, false, true);
+        REQUIRE(saved_filament != nullptr);
+        saved_filament->sync_info = "save";
+    }
+
+    std::vector<std::string> deleted;
+    bundle.prints.save_user_presets(user_dir.string(), PRESET_PRINT_NAME, deleted);
+    bundle.filaments.save_user_presets(user_dir.string(), PRESET_FILAMENT_NAME, deleted);
+    REQUIRE(deleted.empty());
+
+    PresetBundle reloaded;
+    REQUIRE_NOTHROW(reloaded.load_user_presets(user, ForwardCompatibilitySubstitutionRule::Disable));
+    for (const auto& machine : machines) {
+        const std::string name  = "Cloud process (" + machine.first + ")";
+        const Preset*     saved = reloaded.prints.find_preset(name, false, true);
+        REQUIRE(saved != nullptr);
+        CHECK(saved->config.opt_float("layer_height") == Approx(machine.second));
+        CHECK(saved->config.option<ConfigOptionStrings>("compatible_printers")->values == std::vector<std::string>{machine.first});
+        CHECK(boost::filesystem::path(saved->file).parent_path().filename().string() == machine.first);
+
+        const Preset* saved_filament = reloaded.filaments.find_preset("Cloud filament (" + machine.first + ")", false, true);
+        REQUIRE(saved_filament != nullptr);
+        CHECK(saved_filament->config.opt_int("nozzle_temperature", 0) == (machine.first == "EPONE 0.4 nozzle" ? 210 : 230));
+        CHECK(saved_filament->config.option<ConfigOptionStrings>("compatible_printers")->values == std::vector<std::string>{machine.first});
+        CHECK(boost::filesystem::path(saved_filament->file).parent_path().filename().string() == machine.first);
+    }
+}
+
 TEST_CASE("Adding EPONE Plus preserves the existing EPONE-to-Pro migration", "[Preset][EPONE][UserLoading]")
 {
     ScopedPresetDirectory directory;

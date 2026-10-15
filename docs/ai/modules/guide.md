@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "guide",
-  "source_fingerprint": "sha256:0fe0fd07b4a13053d144905199cea4d15c492d1ec75c582b2d42e601825914ee",
-  "reason": "Advancer3 四喷嘴目录测试及 22/23 两耗材入口同步复核；共用完整名列表，精确保存预设 key，修复首次向导丢失选择与跨机型合并；12 网页用例通过，GUI 已确认四喷嘴与六种标识。"
+  "source_fingerprint": "sha256:190338b4c2244739b4af28d96ac5bb9ab4e8399f5f746e52238c2a887bd0a9b9",
+  "reason": "本轮变更仅触及共享 Plater/预设/翻译文件中的云导入隔离逻辑；本模块正文流程无新增行为，当前新源码尚未重新构建验证。"
 }
 -->
 
