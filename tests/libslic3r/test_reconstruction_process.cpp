@@ -21,6 +21,9 @@ using namespace Slic3r;
 TEST_CASE("Reconstruction process rejects invalid budgets before spawning", "[ModelRepair][ReconstructionProcess]")
 {
     ReconstructionProcessOptions options;
+    REQUIRE_FALSE(options.include_caller_memory);
+    SECTION("ordinary worker") {}
+    SECTION("nested worker") { options.include_caller_memory = true; }
     options.timeout_ms = 0;
     REQUIRE(run_reconstruction_process("/unused", {}, options).status == ReconstructionProcessStatus::StartFailed);
     options.timeout_ms      = 100;
@@ -42,6 +45,18 @@ TEST_CASE("Reconstruction worker rejects invalid limits without changing this pr
 }
 
 #ifdef RECONSTRUCTION_TEST_HELPER
+TEST_CASE("Nested reconstruction rejects an over-budget caller before spawning", "[ModelRepair][ReconstructionProcess]")
+{
+    ReconstructionProcessOptions options;
+    options.include_caller_memory = true;
+    options.memory_limit_mb       = 1;
+    // This disposable test executable already occupies more than one MiB. A
+    // missing path proves that failure occurs before an attempted child launch.
+    const auto result = run_reconstruction_process(std::string(RECONSTRUCTION_TEST_HELPER) + ".missing", {}, options);
+    REQUIRE(result.status == ReconstructionProcessStatus::MemoryLimitExceeded);
+    REQUIRE(result.exit_code == -1);
+}
+
 TEST_CASE("Reconstruction worker guard stops normally in an isolated process", "[ModelRepair][ReconstructionWorkerGuard]")
 {
     ReconstructionProcessOptions options;
@@ -91,6 +106,24 @@ TEST_CASE("Reconstruction worker guard rejects the wrong parent identity", "[Mod
     INFO(result.message);
     REQUIRE(result.status == ReconstructionProcessStatus::TimedOut);
     REQUIRE(result.exit_code == 124);
+}
+
+TEST_CASE("Nested reconstruction memory accounts for the caller only when enabled", "[ModelRepair][ReconstructionProcess]")
+{
+    // The isolated caller and child each hold 64 MiB and individually fit the
+    // 112 MiB nested budget. The test runner's RSS is deliberately not included.
+    // The helper asserts its resident allocation and expects the parent monitor
+    // (-1), not the child's independent guard (125), to stop the combined case.
+    const std::string mode = GENERATE(std::string("--nested-memory-legacy"), std::string("--nested-memory"));
+    ReconstructionProcessOptions options;
+    options.timeout_ms      = 10000;
+    options.memory_limit_mb = 1024;
+    const auto result = run_reconstruction_process(RECONSTRUCTION_TEST_HELPER,
+                                                   {mode, RECONSTRUCTION_TEST_HELPER, std::to_string(reconstruction_process_id())}, options);
+    INFO(mode);
+    INFO(result.message);
+    REQUIRE(result.status == ReconstructionProcessStatus::Success);
+    REQUIRE(result.exit_code == 0);
 }
 #endif
 
@@ -281,12 +314,14 @@ TEST_CASE("Reconstruction process observes and stops excessive resident memory",
 #ifdef RECONSTRUCTION_TEST_HELPER
 TEST_CASE("Reconstruction worker guard cannot outlive an abruptly exiting parent", "[ModelRepair][ReconstructionWorkerGuard]")
 {
+    const std::string mode = GENERATE(std::string("--parent-exit"), std::string("--nested-parent-exit"));
     ProcessTestDirectory         directory;
     ReconstructionProcessOptions options;
     options.timeout_ms      = 7000;
     options.memory_limit_mb = 1024;
     const auto parent       = run_reconstruction_process(RECONSTRUCTION_TEST_HELPER,
-                                                         {"--parent-exit", RECONSTRUCTION_TEST_HELPER, directory.pid_path()}, options);
+                                                         {mode, RECONSTRUCTION_TEST_HELPER, directory.pid_path()}, options);
+    INFO(mode);
     INFO(parent.message);
     REQUIRE(parent.status == ReconstructionProcessStatus::Success);
     const pid_t child_pid = directory.worker_pid();
@@ -303,6 +338,23 @@ TEST_CASE("Reconstruction worker guard cannot outlive an abruptly exiting parent
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
     } while (!exited && std::chrono::steady_clock::now() < deadline);
     REQUIRE(exited);
+    REQUIRE(access(directory.survivor_path().c_str(), F_OK) != 0);
+    REQUIRE(errno == ENOENT);
+}
+
+TEST_CASE("Nested reconstruction cancellation reaps the leaf worker", "[ModelRepair][ReconstructionProcess]")
+{
+    ProcessTestDirectory         directory;
+    ReconstructionProcessOptions options;
+    options.timeout_ms      = 10000;
+    options.memory_limit_mb = 1024;
+    const auto result = run_reconstruction_process(
+        RECONSTRUCTION_TEST_HELPER,
+        {"--nested-cancel", RECONSTRUCTION_TEST_HELPER, std::to_string(reconstruction_process_id()), directory.pid_path()}, options);
+    INFO(result.message);
+    REQUIRE(result.status == ReconstructionProcessStatus::Success);
+    REQUIRE(result.exit_code == 0);
+    require_reaped(directory.worker_pid());
     REQUIRE(access(directory.survivor_path().c_str(), F_OK) != 0);
     REQUIRE(errno == ENOENT);
 }

@@ -31,6 +31,12 @@ struct MeshReconstructionOptions
 // The worker owns cancellation, time/memory limits and the supplied face limit.
 bool validate_reconstruction_mesh(const TriangleMesh& mesh, nlohmann::json& report, std::size_t face_limit);
 
+// Read-only, engine-independent sampled comparison. Does not certify internal
+// structure, minimum clearance or a Hausdorff bound. Throws on invalid storage.
+nlohmann::json compare_reconstruction_meshes(const TriangleMesh&              source_mm,
+                                             const TriangleMesh&              candidate_mm,
+                                             const MeshReconstructionOptions& options);
+
 // Explicit, approximate reconstruction in physical millimetres. A true result
 // is a validated candidate requiring human review, not restored design intent
 // or a printability certificate. The caller must isolate this operation in a

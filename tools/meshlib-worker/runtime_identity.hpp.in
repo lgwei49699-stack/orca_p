@@ -1,0 +1,7 @@
+#pragma once
+
+// Generated only in the separate local build directory, never shipped in Orca.
+inline constexpr char MESH_RUNTIME[] = R"ORCA(@_mesh_runtime@)ORCA";
+inline constexpr char VOXELS_RUNTIME[] = R"ORCA(@_voxels_runtime@)ORCA";
+inline constexpr char MESH_SHA256[] = "@_mesh_sha256@";
+inline constexpr char VOXELS_SHA256[] = "@_voxels_sha256@";

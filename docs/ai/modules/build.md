@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:64cc00720c1e6c812739af418d91e28a087fae926a4d2dad788a1d537fff7608",
-  "reason": "只读ModelRepairEvidence和单Z截面/有效区域诊断测试注册到既有目标；CLI仅以默认关闭的非动作选项接入，不新增自动编排、依赖、worker或平台安装脚本，保留云配置测试目标。实际构建与跨平台运行状态分别记录。"
+  "source_fingerprint": "sha256:bfda5d2a05ba35e2e0d8783ff678b20ac4a88e0c5057181f943e8ff7cc673ec1",
+  "reason": "新增独立显式启用的C++20 MeshLib本机评估工程，主Orca维持C++17及现有平台最低版本，不链接或打包SDK；复用现有OpenSSL::Crypto作报告哈希，Windows核心目标显式链接该既有依赖。SDK固定头/动态库身份及实际最低macOS版本单独说明，未把本机编译当跨平台发行验证。"
 }
 -->
 
@@ -21,6 +21,8 @@
 - [build_macos_zstd.sh](../../../scripts/build_macos_zstd.sh) 与 [bundle_macos_zstd.sh](../../../scripts/bundle_macos_zstd.sh)：固定运行库构建、架构/最低系统验证与包内重定位；构建入口和独立 DMG 入口共用。
 
 ## 核心流程
+
+`tools/meshlib-worker` 为独立 C++20 CMake 评估工程；默认不启用，显式 `ORCA_MESHLIB_LOCAL_EVALUATION=ON` 并指定固定SDK根目录才能构建。主Orca仍为C++17，不链接MRMesh/MRVoxels，不提升原GUI的最低系统、不自动构建/下载/安装/打包SDK。sidecar编入已有ReconstructionProcess监督实现，固定3.1.3.429头及实际运行库身份；具体本地命令以该目录说明为准。SDK和缺失的上游头只存本地忽略目录，商业授权未确认，不入库或分发。CLI文件SHA256使用项目已有OpenSSL::Crypto，链接由非Windows分支移到共同libslic3r目标，Windows/Linux仍需目标平台构建运行验收。
 
 只读 `ModelRepairEvidence.cpp/.hpp` 编入现有 libslic3r；`test_model_repair_evidence.cpp` 和 `test_mesh_slice_diagnostics.cpp` 注册到现有 libslic3r_tests。证据由默认关闭的非动作选项 `--repair-evidence` 接入：仅检测组合高级修复的残缺结果可能追加单 Z 切层和同轮有效区域观察；普通修复／重建只投影已有报告。默认协议与扫描路径保留，不新增自动编排、GUI 菜单、依赖或 worker。现有高级修复、重建和构建目标保持，应用与测试必须使用同一源码身份；macOS 构建通过不代表 Windows/Linux 已运行验证。
 

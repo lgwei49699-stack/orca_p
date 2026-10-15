@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model-repair",
-  "source_fingerprint": "sha256:606a36db3da3d3d911d6488c993197d70ffe9abd52118b19304d1c1c2cfc5119",
-  "reason": "共享检测工作流对新证据组合区分正常无进展与执行异常；复用严格boundary验收，最终导出网格只预检一次，未完成不得报0。旧调用保持原行为，不清零缺陷，不改变高级/重建算法与自动导入开关；同步核心/CLI及维护台边界验证。本次复用同轮自交对作精确真实穿透存在性分类，并在显式允许封口时接受残留开边依据；schema2严格检查摘要/见证/准入，直接依据命中跳过Z观察，全空区域仍为后备依据。保留原计数、原件和普通修复入口，不实施自动重建。"
+  "source_fingerprint": "sha256:b8a5cae8d48d2962d37eeeb59efeb35caba9b1d607b4a99d4d1728864452e62f",
+  "reason": "仅为显式CLI重建增加固定MeshLib3.1.3.429独立评估worker，复用既有监督、原始索引协议、完整候选验收与采样比较。嵌套路径累计中间worker和sidecar RSS并传剩余时间；原Alpha Wrap默认监督不变。核对实际SDK身份、漏面/输入输出数量/体素，记录前后检查和哈希；不额外删小壳、不自动采用，不承诺微结构保留。源码/SDK授权/平台与实测边界分别记录。"
 }
 -->
 
@@ -25,6 +25,20 @@
 - [ReconstructionProcess.cpp](../../../src/libslic3r/ReconstructionProcess.cpp)：直接启动当前应用的专用 worker、取消／超时／内存监测及退出回收，不复用 GUI 的 detached 启动路径。
 
 ## 核心流程
+
+### MeshLib 本机评估后端（仅 CLI）
+
+独立重建保留 `--reconstruct-model`；显式 `--reconstruction-engine meshlib --reconstruction-voxel-mm <毫米>` 选择固定 SDK 3.1.3.429。默认仍为 Alpha Wrap，原生 GUI 没有 MeshLib 选择项；普通检测/高级修复/证据流程不自动调用 SDK。体素必须有限正数且能表示为正 float，不设通用默认、不自动粗化或回退；Alpha Wrap 的 alpha/offset/预封口关闭参数不能混入 MeshLib。`--reconstruction-worker-path` 接受独立程序绝对路径；未传则只寻找当前应用二进制旁的 `OrcaMeshLibWorker(.exe)`，不搜索 PATH。SDK 缺失或不匹配明确失败。
+
+Orca CLI → 既有受限 Orca worker → 独立 C++20 MeshLib sidecar → 原 worker CGAL 复检/比较/回变换/凸包 → 独立目录的 STL 与报告。sidecar 用 `rebuildMesh`，关闭加载 telemetry，记录跳面/复制顶点和全部实际参数；加载漏面拒绝。SDK 进程退出并释放内存后才进行独立复检，不能以SDK退出0替代网格验收。输入为父程序写出的有界binary STL；输出为原始有界索引协议，不通过自动修复的STL导入器接受外部候选。实际最终STL仍回读并逐三角形精确比较。
+
+嵌套 runner 显式开启 `include_caller_memory`：中间Orca worker与sidecar的采样RSS相加，查询失败不当零，共享页重复计数偏保守；只适用于不再创建子进程的两进程链。Windows祖先Job继续约束总内存。时间传剩余预算，不重新获得完整超时；sidecar有真实直接父PID的WorkerGuard，外层取消或父亡时不会任其继续运行。默认Alpha Wrap不启用累计RSS路径，普通进程调用不增加该开销。
+
+MeshLib报告保留 `model_reconstruction_v1`，增加 backend/sdk_version、输入/候选/worker SHA256、SDK原报告、输入缺陷、独立输出复检和分阶段耗时。双向距离复用AlphaWrap的同一有界采样函数，只作偏差告警，不是最大误差证明。候选通过仍需确认间隙、薄壁和独立部件，`shape_confirmation=not_confirmed`、`print_ready=false`、`applied=false`。不按“只留最大部件”或样本专用阈值删除碎片，不硬编码7部件；因此 Q 对照的79,400面/7部件（额外删除3小壳后的结果）不是首版无删除后端的必达值。无效候选不导出为成功STL，原件始终保留。
+
+此处只集成本机评估代码；SDK商业再分发授权未取得，源码不含SDK，安装包不增加SDK或worker。构建与依赖边界见[构建模块](build.md)；实际通过/失败和耗时见[执行记录](../validation/2026-10-04-smart-print-engine.md)，不能从接口存在推定Windows/Linux或实机通过。
+
+### 既有检测与修复路径
 
 GUI 修复入口经 FixModelByCgal 调用模型修复核心。repair_model 创建隔离的 staging 模型，选择 MODEL_PART 体积；修复前检查、网格修复、属性校验成功后才提交。repair_staged_model 供已隔离的调用者使用，失败结果不可直接写回原模型。
 

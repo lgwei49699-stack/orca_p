@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:59b17664bdeb27490f286a59d2a5f098c3871d3a370c231b640c9f3c2d863f0f",
-  "reason": "显式证据组合升级boundary schema2：复用真实穿透分类，明确依据提前结束，不重复预检；残留开边仅在调用方显式承诺闭合实体及允许封口时建议重建。新增策略参数限定check+CGAL+evidence组合，显式0与独立重建早分流也校验；旧入口/off/普通修复退出码及六字段不变，不自动重建或采用。本轮收尾核对合法策略0/1、非法值与早分流拒绝，CLI专用键不流入切片工艺配置；运行身份及114场景结果归主验证记录。"
+  "source_fingerprint": "sha256:af98456f00fc01b153f1e63f3114b31d11c938a31d4a50f0a19664d47e64d4dd",
+  "reason": "现有独立重建新增显式MeshLib本机评估后端与体素/worker参数；仍复用候选导出协议，不新增自动修复命令或切片入口。普通检测、高级修复、默认Alpha Wrap及GUI选择保持原路径；新增SDK身份、实际参数、输入输出哈希及结构未验证说明。参数混用/缺失拒绝，非成功候选不导出；CLI及原流程实际回归归主验证记录。"
 }
 -->
 
@@ -18,6 +18,8 @@
 - [OrcaSlicer.hpp](../../../src/OrcaSlicer.hpp)：CLI 动作与配置成员的接口边界。
 
 ## 核心流程
+
+独立 `--reconstruct-model` 的可选本机评估后端使用 `--reconstruction-engine meshlib --reconstruction-voxel-mm <毫米> --reconstruction-worker-path <绝对路径>`，仍要求风险确认和新输出目录。默认Alpha Wrap与普通检测/高级修复/切片不变；不新增自动编排命令，不接入原生GUI。MeshLib引擎/体素/独立程序只在此入口解析，不能带入普通切片；无SDK、参数混用或失败均不静默回退。输出仍为 `candidate.stl`、`reconstruction.json`，成功仅表示几何候选及导出验收完成；详细结果/授权/结构保留边界见[模型修复](model-repair.md)。
 
 `main()` 进入 `CLI::run()`，解析动作、变换和配置，加载模型后按请求分盘、切片或导出；需要交互界面时转入 GUI 启动。模型导出走 `CLI::export_models()`，工程导出走 `export_project()`，不是同一种输出。无 GUI 的业务依然复用 Model、Print 和文件格式层。
 

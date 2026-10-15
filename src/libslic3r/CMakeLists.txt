@@ -636,10 +636,12 @@ target_link_libraries(libslic3r
         ZLIB::ZLIB
     )
 
+# Artifact hashes for the optional MeshLib CLI backend; OpenSSL is already a
+# required project dependency. No MeshLib library is linked into this target.
+target_link_libraries(libslic3r PRIVATE OpenSSL::Crypto)
 if(NOT WIN32)
     # Link freetype for OCCT dependency (CAD operations need font rendering)
     target_link_libraries(libslic3r PRIVATE ${FREETYPE_LIBRARIES})
-    target_link_libraries(libslic3r PRIVATE OpenSSL::Crypto)
     if (NOT APPLE)
         target_link_libraries(libslic3r PRIVATE fontconfig)
     endif()

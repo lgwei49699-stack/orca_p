@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:e12033793ae320c9aacbc5bb3bda0f64074f6f84f26fdc9e8143fbacc7f3b800",
-  "reason": "补充新证据组合无进展0与旧off失败对照、显式格式导出、unresolved/partial预检超平面预算真实CLI用例；核心保留事务和最终产物身份断言。维护台覆盖真实check_complete=false几何阻断及错误报告、不改旧任务语义；复核任务结束恢复新计划、首屏不展示历史结果，以及macOS GUI/CLI双槽、配置隔离、定向取消和跨服务维护锁。展示进一步区分assessment与输入范围，覆盖折叠详情、未知枚举、旧报告及纯文本渲染。沿用planning既有忽略范围，不影响源码指纹；保留其他用户测试工具改动。本次追加真实穿透/接触/第200对外见证/截断阴阳性与schema2严格摘要测试，CLI验证实际高级修复后cap穿透和残留开边的策略开关、原件不变及非法入口拒绝；性能仅记录不设脆弱耗时断言。"
+  "source_fingerprint": "sha256:4df29cebc967148cc4aef84913195bd2e1569270858e50a62a27511583b6ad01",
+  "reason": "新增可选MeshLib CLI小夹具回归：只调用已构建应用和独立worker，保存身份/逐例报告，检查独立七项完整零缺陷、参数和SDK身份、非法选项、原件与已有输出不变。原Alpha Wrap/检测/高级修复脚本保持原实现并重跑；测试超时不冒充监督成功。保留工作区其他用户工具和文档，提交选择性隔离。"
 }
 -->
 
@@ -27,6 +27,8 @@
 - [test_gmp_platform_selection.py](../../../scripts/tests/test_gmp_platform_selection.py)：在临时 CMake 脚本中执行 GMP 配方、捕获 ExternalProject/复制参数，验证目标架构对应的版本、校验值及旧补丁/预编译路径；不修改真实构建目录，不等于目标系统编译运行。
 
 ## 核心流程
+
+`scripts/test_cli_meshlib_reconstruction.py` 针对已有应用及独立sidecar做小夹具回归，不构建/下载SDK、不打印。覆盖候选独立检测与哈希、参数互斥、程序缺失/协议失败、原件/旧输出保护，以及默认Alpha Wrap对照；实际资源失败原因单独记录，不把提前内存拒绝当作超时验证。sidecar本身另有 `tools/meshlib-worker/test_worker.py` 验证参数/有界输入和协议；累计RSS、嵌套取消及父亡回收由现有Process测试覆盖。CLI测试通过不能替代结构保留或实机打印验收。
 
 `gfd_modal_dialog_tests` 补充 MainFrame→子面板→栈上原生／自管模态的关闭回归：模态期间退出被否决，嵌套同样保护，非关联窗口不阻塞；结束模态并退出作用域后允许 owner 正常销毁。本轮 Mac arm64 87 项检查通过；15:29 用户日志进一步验证设备框下两次退出拦截、取消恢复和应用正常析构。嵌套打印设置和 Windows 仍按 [Advancer3 续修交接](../validation/2026-10-09-adv3-custom-feasibility.md) 验收。
 

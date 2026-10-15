@@ -19297,6 +19297,78 @@ msgstr "子进程预算：%u 秒、%u MiB。根据输入规模与物理内存选
 msgid "Unsupported reconstruction option or extra input: "
 msgstr "不支持的重建选项或多余输入："
 
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Could not compute the reconstruction artifact checksum."
+msgstr "无法计算重建文件的校验值。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction artifact is missing or exceeds its size limit."
+msgstr "重建文件缺失或超过大小限制。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Voxel size and worker path require the meshlib reconstruction engine."
+msgstr "体素尺寸和独立程序路径仅适用于 MeshLib 重建引擎。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction engine must be alpha-wrap or meshlib."
+msgstr "重建引擎必须为 alpha-wrap 或 meshlib。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "MeshLib requires an explicit finite positive --reconstruction-voxel-mm."
+msgstr "MeshLib 必须通过 --reconstruction-voxel-mm 明确指定有限的正数体素尺寸。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "MeshLib worker path must be absolute."
+msgstr "MeshLib 独立程序路径必须为绝对路径。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "MeshLib worker was not found. Build the evaluation worker and specify --reconstruction-worker-path."
+msgstr "未找到 MeshLib 独立程序。请构建评估程序，并通过 --reconstruction-worker-path 指定其路径。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Reconstruction timed out before starting MeshLib."
+msgstr "启动 MeshLib 前已耗尽重建时间预算。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "MeshLib worker failed."
+msgstr "MeshLib 独立程序执行失败。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "MeshLib worker returned an incompatible report or SDK version."
+msgstr "MeshLib 独立程序返回的报告或 SDK 版本不兼容。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "MeshLib worker output does not match the requested input or parameters."
+msgstr "MeshLib 独立程序的输出与请求的输入或参数不一致。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "MeshLib worker identity changed before execution."
+msgstr "执行前 MeshLib 独立程序的身份已发生变化。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "No additional small-component filtering was performed. Reconstruction may still lose or merge small features; clearances, thin walls and separate parts require shape review."
+msgstr "未额外筛除小部件。重建仍可能丢失或合并微小结构；间隙、薄壁和独立零件需要检查外形。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Alpha, offset and no-close-open-boundaries cannot be used with MeshLib."
+msgstr "MeshLib 不接受 Alpha Wrap 的半径、偏移和禁止预封口参数。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid ""
+"Optional local-evaluation backend: --reconstruction-engine meshlib --reconstruction-voxel-mm MM\n"
+"Use --reconstruction-worker-path PATH for a separately built MeshLib 3.1.3.429 worker.\n"
+"Default engine is alpha-wrap. MeshLib requires an explicit voxel size; no automatic coarsening or fallback.\n"
+"Alpha, offset and no-close-open-boundaries apply only to alpha-wrap, not MeshLib.\n"
+"MeshLib may close openings, merge parts or lose small features. No additional small-component filtering is performed.\n"
+"MeshLib SDK is not bundled; commercial distribution requires separate licensing.\n"
+msgstr ""
+"可选本机评估后端：--reconstruction-engine meshlib --reconstruction-voxel-mm 毫米\n"
+"通过 --reconstruction-worker-path 路径指定单独构建的 MeshLib 3.1.3.429 程序。\n"
+"默认引擎为 alpha-wrap；MeshLib 必须明确指定体素尺寸，不自动粗化或回退其他引擎。\n"
+"半径、偏移和禁止预封口参数仅适用于 alpha-wrap，不适用于 MeshLib。\n"
+"MeshLib 可能封闭开口、合并部件或丢失微小结构；本流程不额外筛除小部件。\n"
+"未捆绑 MeshLib SDK；商用分发需要另行取得授权。\n"
+
 #: src/libslic3r/MeshReconstruction.cpp
 msgid "An approximate candidate is ready, but the self-intersecting source interior remains unverified. Volume comparison is heuristic; manual solid comparison and trial slicing are required."
 msgstr "近似候选已生成，但原始自交模型的内部实体范围尚未验证。体积比较仅为启发式判断，仍须人工比较实体结构并试切片。"

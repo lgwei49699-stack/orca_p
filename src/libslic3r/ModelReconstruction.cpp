@@ -2,6 +2,7 @@
 #include "I18N.hpp"
 
 #include "Model.hpp"
+#include "ModelInspection.hpp"
 #include "ModelRepairEvidence.hpp"
 #include "TriangleMesh.hpp"
 #include "Utils.hpp"
@@ -11,6 +12,7 @@
 #include <boost/nowide/fstream.hpp>
 #include <boost/nowide/iostream.hpp>
 #include <boost/uuid/detail/sha1.hpp>
+#include <openssl/evp.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -33,6 +35,79 @@ constexpr size_t  INPUT_FACE_LIMIT  = RECONSTRUCTION_MAX_INPUT_FACES;
 constexpr size_t  OUTPUT_FACE_LIMIT = RECONSTRUCTION_MAX_OUTPUT_FACES;
 constexpr char    MESH_MAGIC[8]     = {'O', 'R', 'C', 'A', 'R', 'C', '0', '1'};
 std::atomic<bool> reconstruction_running{false};
+
+std::string sha256_bytes(const void* bytes, size_t size)
+{
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned      length = 0;
+    if (EVP_Digest(bytes, size, digest, &length, EVP_sha256(), nullptr) != 1 || length != 32)
+        throw std::runtime_error(L("Could not compute the reconstruction artifact checksum."));
+    std::ostringstream out;
+    out << std::hex << std::setfill('0');
+    for (unsigned i = 0; i < length; ++i)
+        out << std::setw(2) << unsigned(digest[i]);
+    return out.str();
+}
+
+std::string sha256_file(const fs::path& path)
+{
+    if (!fs::is_regular_file(path) || fs::file_size(path) > MAX_FILE_BYTES)
+        throw std::runtime_error(L("Reconstruction artifact is missing or exceeds its size limit."));
+    boost::nowide::ifstream                                 in(path.string(), std::ios::binary);
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+    if (!context || EVP_DigestInit_ex(context.get(), EVP_sha256(), nullptr) != 1)
+        throw std::runtime_error(L("Could not compute the reconstruction artifact checksum."));
+    std::array<char, 65536> buffer;
+    size_t                  total = 0;
+    while (in) {
+        in.read(buffer.data(), buffer.size());
+        total += size_t(in.gcount());
+        if (total > MAX_FILE_BYTES || EVP_DigestUpdate(context.get(), buffer.data(), size_t(in.gcount())) != 1)
+            throw std::runtime_error(L("Could not compute the reconstruction artifact checksum."));
+    }
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned      length = 0;
+    if (!in.eof() || EVP_DigestFinal_ex(context.get(), digest, &length) != 1 || length != 32)
+        throw std::runtime_error(L("Could not compute the reconstruction artifact checksum."));
+    std::ostringstream out;
+    out << std::hex << std::setfill('0');
+    for (unsigned i = 0; i < length; ++i)
+        out << std::setw(2) << unsigned(digest[i]);
+    return out.str();
+}
+
+json reconstruction_backend(const ModelReconstructionOptions& options)
+{
+    if (options.engine == "alpha-wrap") {
+        if (options.voxel_mm != 0. || !options.meshlib_worker_executable.empty())
+            throw std::invalid_argument(L("Voxel size and worker path require the meshlib reconstruction engine."));
+        return {{"engine", "alpha-wrap"}};
+    }
+    if (options.engine != "meshlib")
+        throw std::invalid_argument(L("Reconstruction engine must be alpha-wrap or meshlib."));
+    const float voxel = float(options.voxel_mm);
+    if (!std::isfinite(options.voxel_mm) || !std::isfinite(voxel) || voxel <= 0.)
+        throw std::invalid_argument(L("MeshLib requires an explicit finite positive --reconstruction-voxel-mm."));
+    fs::path worker = options.meshlib_worker_executable;
+    if (!worker.empty() && !worker.is_absolute())
+        throw std::invalid_argument(L("MeshLib worker path must be absolute."));
+    if (worker.empty()) {
+#ifdef _WIN32
+        worker = fs::path(options.executable).parent_path() / "OrcaMeshLibWorker.exe";
+#else
+        worker = fs::path(options.executable).parent_path() / "OrcaMeshLibWorker";
+#endif
+    }
+    if (!fs::is_regular_file(worker))
+        throw std::invalid_argument(
+            L("MeshLib worker was not found. Build the evaluation worker and specify --reconstruction-worker-path."));
+    worker = fs::canonical(worker);
+    return {{"engine", "meshlib"},
+            {"sdk_version", "3.1.3.429"},
+            {"voxel_mm", options.voxel_mm},
+            {"worker_path", worker.string()},
+            {"worker_sha256", sha256_file(worker)}};
+}
 
 std::string digest(boost::uuids::detail::sha1& hash)
 {
@@ -225,7 +300,7 @@ json base_report()
             {"requires_manual_confirmation", true}};
 }
 
-TriangleMesh read_reconstruction_stl(const fs::path& path)
+TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot_sha256 = nullptr)
 {
     if (!fs::is_regular_file(path))
         throw std::invalid_argument(L("STL input is missing or is not a regular file."));
@@ -239,6 +314,8 @@ TriangleMesh read_reconstruction_stl(const fs::path& path)
     in.read(&data[0], std::streamsize(data.size()));
     if (!in || in.peek() != std::char_traits<char>::eof())
         throw std::invalid_argument(L("Could not read a stable, bounded STL input."));
+    if (snapshot_sha256)
+        *snapshot_sha256 = sha256_bytes(data.data(), data.size());
     const auto* bytes    = reinterpret_cast<const unsigned char*>(data.data());
     const auto  read_u32 = [](const unsigned char* p) {
         return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
@@ -362,11 +439,130 @@ TriangleMesh read_reconstruction_stl(const fs::path& path)
     // indices can reach TriangleMesh's statistics/volume constructor unchecked.
     return TriangleMesh(std::move(its));
 }
+bool reconstruct_with_meshlib(const fs::path&                       task,
+                              TriangleMesh&                         source,
+                              TriangleMesh&                         candidate,
+                              json&                                 report,
+                              const json&                           backend,
+                              const MeshReconstructionOptions&      options,
+                              unsigned                              timeout_ms,
+                              size_t                                memory_limit,
+                              std::chrono::steady_clock::time_point started)
+{
+    report                = {{"status", "failed"},
+                             {"metrics", json::object()},
+                             {"validation",
+                              {{"complete", false},
+                               {"requires_manual_confirmation", true},
+                               {"printability_verified", false},
+                               {"design_intent_restored", false},
+                               {"reference_interior_check_complete", false},
+                               {"interior_check_status", "not_verified"}}}};
+    const auto elapsed_ms = [&] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+    };
+    ModelInspectionOptions inspection_options;
+    inspection_options.max_triangles         = options.max_input_faces;
+    inspection_options.max_vertices          = options.max_input_faces * 3;
+    inspection_options.detail_limit          = 0; // Aggregate evidence, not unbounded face lists.
+    const auto inspection_started            = elapsed_ms();
+    report["input_inspection"]               = inspect_model_mesh(source, inspection_options);
+    report["timings_ms"]["input_inspection"] = elapsed_ms() - inspection_started;
+    if (!store_stl((task / "meshlib-input.stl").string().c_str(), &source, true))
+        throw std::runtime_error(L("Could not write the reconstruction mesh."));
+    const auto elapsed = elapsed_ms();
+    if (elapsed >= timeout_ms) {
+        report["status"]  = "timed_out";
+        report["message"] = L("Reconstruction timed out before starting MeshLib.");
+        return false;
+    }
+    const unsigned               remaining = timeout_ms - unsigned(elapsed);
+    ReconstructionProcessOptions process_options{remaining, memory_limit, {}, {}};
+    process_options.include_caller_memory = true;
+    std::ostringstream voxel;
+    voxel.imbue(std::locale::classic());
+    voxel << std::setprecision(std::numeric_limits<double>::max_digits10) << backend.at("voxel_mm").get<double>();
+    const auto process                   = run_reconstruction_process(backend.at("worker_path").get<std::string>(),
+                                                                      {"--task-directory", task.string(), "--parent-pid",
+                                                                       std::to_string(reconstruction_process_id()), "--timeout-ms", std::to_string(remaining),
+                                                                       "--memory-limit-mb", std::to_string(memory_limit), "--voxel-mm", voxel.str(),
+                                                                       "--max-input-faces", std::to_string(options.max_input_faces), "--max-output-faces",
+                                                                       std::to_string(options.max_output_faces)},
+                                                                      process_options);
+    report["timings_ms"]["sidecar_wall"] = elapsed_ms() - elapsed;
+    report["sidecar_process_status"]     = reconstruction_process_status_name(process.status);
+    if (process.status != ReconstructionProcessStatus::Success) {
+        report["status"]  = reconstruction_process_status_name(process.status);
+        report["message"] = process.message.empty() ? L("MeshLib worker failed.") : process.message;
+        return false;
+    }
+    // The SDK process has exited and released its memory before CGAL validation.
+    const auto sidecar = read_json(task / "meshlib-report.json");
+    report["sidecar"]  = sidecar;
+    if (sidecar.at("schema") != "meshlib_worker_v1" || sidecar.at("engine") != "meshlib" || sidecar.at("sdk_version") != "3.1.3.429")
+        throw std::runtime_error(L("MeshLib worker returned an incompatible report or SDK version."));
+    if (sidecar.value("status", "") != "candidate_generated") {
+        // The sidecar cannot declare an Orca-validated candidate or promote an
+        // unknown status. Preserve its raw reason inside the diagnostic report.
+        report["status"]  = "failed";
+        report["message"] = sidecar.value("message", "MeshLib did not generate a candidate.");
+        return false;
+    }
+    const auto& actual = sidecar.at("parameters");
+    if (!sidecar.value("runtime_identity_verified", false) || sidecar.at("input").at("faces").get<size_t>() != source.its.indices.size() ||
+        sidecar.at("input").at("loaded_faces").get<size_t>() != source.its.indices.size() ||
+        sidecar.at("skipped_face_count").get<int64_t>() != 0 || sidecar.at("duplicated_vertex_count").get<int64_t>() < 0 ||
+        actual.at("voxel_mm").get<double>() != double(float(backend.at("voxel_mm").get<double>())) ||
+        actual.at("max_input_faces").get<size_t>() != options.max_input_faces ||
+        actual.at("max_output_faces").get<size_t>() != options.max_output_faces || actual.at("fragment_removal") != "none")
+        throw std::runtime_error(L("MeshLib worker output does not match the requested input or parameters."));
+    // This local protocol is still checked independently; exit 0 is not acceptance.
+    candidate = read_mesh(task / "meshlib-candidate.mesh", options.max_output_faces);
+    if (sidecar.at("output").at("faces").get<size_t>() != candidate.its.indices.size() ||
+        sidecar.at("output").at("vertices").get<size_t>() != candidate.its.vertices.size())
+        throw std::runtime_error(L("MeshLib worker output does not match the requested input or parameters."));
+    const auto validation_started = elapsed_ms();
+    json       validation;
+    const bool valid                             = validate_reconstruction_mesh(candidate, validation, options.max_output_faces);
+    report["final_mesh_check"]                   = validation;
+    report["timings_ms"]["candidate_validation"] = elapsed_ms() - validation_started;
+    report["output"]                             = {{"faces", candidate.its.indices.size()}, {"vertices", candidate.its.vertices.size()}};
+    if (!valid) {
+        report["status"]  = validation.value("status", "candidate_rejected");
+        report["message"] = validation.value("message", "MeshLib candidate failed independent validation.");
+        candidate         = TriangleMesh();
+        return false;
+    }
+    const auto comparison_started               = elapsed_ms();
+    report["metrics"]                           = compare_reconstruction_meshes(source, candidate, options);
+    report["metrics"]["engine"]                 = "MeshLib rebuildMesh";
+    report["metrics"]["engine_version"]         = "3.1.3.429";
+    report["metrics"]["voxel_mm"]               = backend.at("voxel_mm");
+    report["metrics"]["effective_voxel_mm"]     = actual.at("voxel_mm");
+    report["metrics"]["component_count"]        = validation.at("metrics").at("component_count");
+    report["metrics"]["output_volume_mm3"]      = validation.at("metrics").at("signed_volume");
+    report["timings_ms"]["geometry_comparison"] = elapsed_ms() - comparison_started;
+    report["structure_preservation"] =
+        {{"verified", false},
+         {"small_components_removed_by_postprocessing", 0},
+         {"input_connected_components", report.at("input_inspection").at("component_analysis").at("component_count")},
+         {"output_connected_components", validation.at("metrics").at("component_count")},
+         {"input_component_limit_reached", report.at("input_inspection").at("component_analysis").at("limit_reached")},
+         {"component_correspondence", "not_verified"},
+         {"message", L("No additional small-component filtering was performed. Reconstruction may still lose or merge small features; "
+                       "clearances, thin walls and separate parts require shape review.")}};
+    report["validation"]["complete"]          = true;
+    report["validation"]["geometry_complete"] = true;
+    report["status"]                          = "candidate_ready";
+    report["message"] = L("The reconstructed mesh passed complete model checks. Shape and internal structure may have changed; trial "
+                          "slicing is still required.");
+    return true;
+}
 } // namespace
 
-ReconstructionProcessOptions model_reconstruction_process_options(size_t input_faces,
+ReconstructionProcessOptions model_reconstruction_process_options(size_t                              input_faces,
                                                                   const ReconstructionProcessOptions& requested,
-                                                                  size_t physical_memory_bytes)
+                                                                  size_t                              physical_memory_bytes)
 {
     auto resolved = requested;
     if (resolved.timeout_ms == 0)
@@ -477,6 +673,12 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
             throw std::runtime_error(L("Reconstruction was canceled."));
         }
         const auto mesh_options = parse_parameters(parameters(options.mesh));
+        const auto backend      = reconstruction_backend(options);
+        if (options.engine == "meshlib") {
+            result.report["backend"]                    = "meshlib";
+            result.report["sdk_version"]                = "3.1.3.429";
+            result.report["artifacts"]["worker_sha256"] = backend.at("worker_sha256");
+        }
         if (object_index >= model.objects.size() || !model.objects[object_index])
             throw std::invalid_argument(L("No model object selected for reconstruction."));
         const auto& source_object = *model.objects[object_index];
@@ -505,7 +707,7 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
         source_mm.transform(to_mm, true);
         validate_mesh_storage(source_mm, mesh_options.max_input_faces);
         TaskDirectory task;
-        const auto    request = json{{"schema", "reconstruction_worker_v1"},
+        auto          request = json{{"schema", "reconstruction_worker_v1"},
                                      {"source_identity", source_identity},
                                      {"mesh_identity", mesh_identity(source_mm)},
                                      {"parameters", parameters(mesh_options)},
@@ -513,6 +715,8 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
                                      {"parent_pid", reconstruction_process_id()},
                                      {"timeout_ms", process_options.timeout_ms},
                                      {"memory_limit_mb", process_options.memory_limit_mb}};
+        if (options.engine == "meshlib")
+            request["backend"] = backend;
         write_mesh(task.path / "input.mesh", source_mm, mesh_options.max_input_faces);
         write_json(task.path / "request.json", request);
         const auto process = run_reconstruction_process(options.executable, {"--reconstruction-worker", task.path.string()},
@@ -526,6 +730,11 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
             report.value("input_mesh_identity", "") != request.at("mesh_identity"))
             throw std::runtime_error(L("Reconstruction worker returned a mismatched report."));
         report["resource_limits"]   = result.report.at("resource_limits");
+        if (options.engine == "meshlib") {
+            if (report.value("backend", "") != "meshlib" || report.value("sdk_version", "") != "3.1.3.429")
+                throw std::runtime_error(L("MeshLib worker returned an incompatible report or SDK version."));
+            report["artifacts"]["worker_sha256"] = backend.at("worker_sha256");
+        }
         result.status               = report.value("status", "failed");
         result.message              = report.value("message", "");
         result.report               = std::move(report);
@@ -585,6 +794,7 @@ int run_model_reconstruction_worker(const std::string& task_directory)
     const fs::path task(task_directory);
     auto           report = base_report();
     try {
+        const auto started = std::chrono::steady_clock::now();
         const auto request = read_json(task / "request.json");
         if (request.at("schema") != "reconstruction_worker_v1")
             throw std::runtime_error(L("Unsupported reconstruction protocol."));
@@ -607,7 +817,29 @@ int run_model_reconstruction_worker(const std::string& task_directory)
             throw std::runtime_error(L("Reconstruction input checksum mismatch."));
         TriangleMesh candidate;
         json         engine_report;
-        const bool   generated = reconstruct_mesh(source, candidate, engine_report, options);
+        bool         generated = false;
+        if (request.contains("backend")) {
+            const auto&                backend = request.at("backend");
+            ModelReconstructionOptions backend_options;
+            backend_options.engine                    = backend.at("engine").get<std::string>();
+            backend_options.voxel_mm                  = backend.at("voxel_mm").get<double>();
+            backend_options.meshlib_worker_executable = backend.at("worker_path").get<std::string>();
+            const auto resolved_backend               = reconstruction_backend(backend_options);
+            if (resolved_backend != backend || backend_options.engine != "meshlib")
+                throw std::runtime_error(L("MeshLib worker identity changed before execution."));
+            report["backend"]                = "meshlib";
+            report["sdk_version"]            = "3.1.3.429";
+            report["parameters"]["engine"]   = "meshlib";
+            report["parameters"]["voxel_mm"] = backend_options.voxel_mm;
+            // Alpha Wrap scales/closure are not MeshLib settings.
+            report["parameters"].erase("alpha_mm");
+            report["parameters"].erase("offset_mm");
+            report["parameters"].erase("close_open_boundaries");
+            generated = reconstruct_with_meshlib(task, source, candidate, engine_report, backend, options, timeout_ms, memory_limit,
+                                                 started);
+        } else {
+            generated = reconstruct_mesh(source, candidate, engine_report, options);
+        }
         report["engine"]       = engine_report;
         report["status"]       = engine_report.value("status", generated ? "candidate_ready" : "failed");
         report["message"]      = engine_report.value("message", "");
@@ -684,8 +916,10 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
     ModelReconstructionOptions options;
     options.executable = executable;
     std::string input, output;
-    bool        confirmed = false;
-    bool        repair_evidence = false;
+    bool        confirmed           = false;
+    bool        repair_evidence     = false;
+    bool        alpha_options_given = false;
+    std::string input_sha256;
     fs::path    output_path;
     bool        output_owned = false;
     try {
@@ -709,7 +943,17 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
                 continue;
             }
             if (arg == "--reconstruction-no-close-open-boundaries") {
+                alpha_options_given                = true;
                 options.mesh.close_open_boundaries = false;
+                continue;
+            }
+            if (arg == "--reconstruction-engine" || arg == "--reconstruction-worker-path") {
+                if (++i >= args.size() || args[i].empty())
+                    throw std::invalid_argument(L("Missing reconstruction option value."));
+                if (arg == "--reconstruction-engine")
+                    options.engine = args[i];
+                else
+                    options.meshlib_worker_executable = args[i];
                 continue;
             }
             if (arg == "--help") {
@@ -727,10 +971,18 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
                     "Automatic worker budgets: 60/180/300 seconds and up to 1024/2048/4096 MiB by input size.\n"
                     "Automatic memory is capped at one quarter of physical RAM; explicit timeout overrides the default.\n"
                     "Candidate requires shape confirmation and a separate slice; this command never prints.\n");
+                boost::nowide::cout << L(
+                    "Optional local-evaluation backend: --reconstruction-engine meshlib --reconstruction-voxel-mm MM\n"
+                    "Use --reconstruction-worker-path PATH for a separately built MeshLib 3.1.3.429 worker.\n"
+                    "Default engine is alpha-wrap. MeshLib requires an explicit voxel size; no automatic coarsening or fallback.\n"
+                    "Alpha, offset and no-close-open-boundaries apply only to alpha-wrap, not MeshLib.\n"
+                    "MeshLib may close openings, merge parts or lose small features. No additional small-component filtering is "
+                    "performed.\n"
+                    "MeshLib SDK is not bundled; commercial distribution requires separate licensing.\n");
                 return 0;
             }
             if (arg == "--outputdir" || arg == "--reconstruction-alpha" || arg == "--reconstruction-offset" ||
-                arg == "--reconstruction-max-deviation" || arg == "--reconstruction-timeout") {
+                arg == "--reconstruction-max-deviation" || arg == "--reconstruction-timeout" || arg == "--reconstruction-voxel-mm") {
                 if (++i >= args.size())
                     throw std::invalid_argument(L("Missing reconstruction option value."));
                 if (arg == "--outputdir") {
@@ -741,10 +993,14 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
                 const double value = std::stod(args[i], &end);
                 if (end != args[i].size() || !std::isfinite(value) || value <= 0)
                     throw std::invalid_argument(L("Reconstruction options require finite positive numbers."));
-                if (arg == "--reconstruction-alpha")
+                if (arg == "--reconstruction-alpha") {
+                    alpha_options_given   = true;
                     options.mesh.alpha_mm = value;
-                else if (arg == "--reconstruction-offset")
+                } else if (arg == "--reconstruction-offset") {
+                    alpha_options_given    = true;
                     options.mesh.offset_mm = value;
+                } else if (arg == "--reconstruction-voxel-mm")
+                    options.voxel_mm = value;
                 else if (arg == "--reconstruction-max-deviation")
                     options.mesh.max_deviation_mm = value;
                 else {
@@ -760,12 +1016,15 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
         parse_parameters(parameters(options.mesh));
         if (!confirmed || input.empty() || output.empty())
             throw std::invalid_argument(L("Reconstruction requires one STL, a new --outputdir, and --accept-reconstruction-risk."));
+        if (options.engine == "meshlib" && alpha_options_given)
+            throw std::invalid_argument(L("Alpha, offset and no-close-open-boundaries cannot be used with MeshLib."));
+        reconstruction_backend(options);
         fs::path input_path = fs::absolute(input);
         auto     extension  = input_path.extension().string();
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return char(std::tolower(c)); });
         if (extension != ".stl")
             throw std::invalid_argument(L("Standalone reconstruction currently accepts only an uncolored STL."));
-        TriangleMesh mesh = read_reconstruction_stl(input_path);
+        TriangleMesh mesh = read_reconstruction_stl(input_path, options.engine == "meshlib" ? &input_sha256 : nullptr);
         output_path       = fs::absolute(output);
         if (fs::exists(output_path) || !fs::is_directory(output_path.parent_path()))
             throw std::invalid_argument(L("Reconstruction output must be a new directory under an existing parent."));
@@ -779,6 +1038,12 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
         object->add_volume(std::move(mesh), ModelVolumeType::MODEL_PART, false);
         object->add_instance();
         auto result = reconstruct_model_candidate(model, 0, options);
+        if (options.engine == "meshlib") {
+            result.report["backend"]                   = "meshlib";
+            result.report["sdk_version"]               = "3.1.3.429";
+            result.report["artifacts"]["input_sha256"] = input_sha256;
+            result.report["input_file"]                = input_path.string();
+        }
         if (result.candidate_model) {
             auto       candidate      = result.candidate_model->objects[0]->volumes.front()->mesh();
             const auto candidate_path = output_path / "candidate.stl";
@@ -805,6 +1070,8 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
                 throw std::runtime_error(L("Exported reconstruction STL changed its validated triangles."));
             result.report["candidate_file"]    = "candidate.stl";
             result.report["export_round_trip"] = "passed";
+            if (options.engine == "meshlib")
+                result.report["artifacts"]["candidate_sha256"] = sha256_file(candidate_path);
         }
         if (repair_evidence)
             result.report["boundary"] = model_reconstruction_boundary(result.report);
@@ -814,6 +1081,12 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
     } catch (const std::exception& error) {
         auto report       = base_report();
         report["message"] = error.what();
+        if (options.engine == "meshlib") {
+            report["backend"]     = "meshlib";
+            report["sdk_version"] = "3.1.3.429";
+            if (!input_sha256.empty())
+                report["artifacts"]["input_sha256"] = input_sha256;
+        }
         if (repair_evidence)
             report["boundary"] = model_reconstruction_boundary(report);
         if (output_owned) {

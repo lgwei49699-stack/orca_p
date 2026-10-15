@@ -553,6 +553,26 @@ TEST_CASE("Small transform roundtrip error cannot approve collapsed float triang
     CHECK(report.at("reason") == "unsupported_degenerate");
 }
 
+TEST_CASE("Engine independent comparison is read only and retains warning semantics", "[MeshReconstruction]")
+{
+    const auto                      source    = make_cube(10., 10., 10.);
+    auto                            candidate = source;
+    const MeshReconstructionOptions options;
+    auto                            exact = compare_reconstruction_meshes(source, candidate, options);
+    CHECK(exact.at("sampled_source_to_candidate_mm").get<double>() == Approx(0.));
+    CHECK(exact.at("sampled_candidate_to_source_mm").get<double>() == Approx(0.));
+    CHECK_FALSE(exact.at("deviation_warning").get<bool>());
+    CHECK_FALSE(exact.at("distance_is_upper_bound").get<bool>());
+    candidate.translate(1., 0., 0.);
+    auto shifted = compare_reconstruction_meshes(source, candidate, options);
+    CHECK(shifted.at("bbox_deviation_mm").get<double>() == Approx(1.));
+    CHECK(shifted.at("deviation_warning").get<bool>());
+    CHECK(source.bounding_box().min.x() == Approx(0.));
+    auto invalid             = options;
+    invalid.max_deviation_mm = 0.;
+    CHECK_THROWS(compare_reconstruction_meshes(source, candidate, invalid));
+}
+
 TEST_CASE("Final reconstruction validation respects the caller face budget", "[MeshReconstruction]")
 {
     const auto     mesh  = make_cube(2., 2., 2.);

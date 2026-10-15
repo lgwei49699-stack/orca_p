@@ -20,6 +20,11 @@ struct ModelReconstructionOptions
     // These sentinels are resolved before invoking the generic process runner.
     ReconstructionProcessOptions process{0, 0, {}, {}};
     std::string                  executable;
+    // CLI-only opt-in backend. The native GUI keeps alpha-wrap; no SDK is linked
+    // into Orca. MeshLib requires an explicitly chosen physical voxel size.
+    std::string engine   = "alpha-wrap";
+    double      voxel_mm = 0.;
+    std::string meshlib_worker_executable;
 };
 
 // Resolves only resource limits, preserving cancellation/tick callbacks. Physical

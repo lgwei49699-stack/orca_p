@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:3fdf7ebdd3a48ce8b233dafacea1ea641bca919f40a450653ee8c69aafce64b1",
-  "reason": "保持既有手动修复菜单，新增默认关闭的repair-evidence非动作选项英文帮助、独立重建帮助及布尔参数错误的简中对应；明确只读证据不代表自动重建或打印通过，其他语言及无关翻译保留。本次更新先真实穿透分类/已有依据跳过截面的英文和简中帮助，新增显式封口建议策略及两条CLI错误对应；OrcaSlicer.cpp纳入提取清单以防未来gettext遗漏，未重生成POT或其他语言。"
+  "source_fingerprint": "sha256:13a1d7c18369da865aee490d330a6b5988cdc69cbbe24876b83fd19c4f1d197e",
+  "reason": "MeshLib显式评估CLI帮助及核心错误补齐英文原文和简中；明确授权、实际参数、仅生成候选，未额外筛除不代表微结构保留。无新增GUI菜单，不重生成POT或其他语言，已有翻译保留；msgfmt格式检查与GUI视觉验证分别记录。"
 }
 -->
 
@@ -19,6 +19,8 @@
 - [I18N.cpp](../../../src/slic3r/GUI/I18N.cpp)：`L_str` 把 UTF-8 字符串交给 `wxGetTranslation`，不承担语言包生成。
 
 ## 核心流程
+
+MeshLib 本机评估 CLI 的引擎、体素、worker路径和错误信息新增英文原文及简中对应；强调仅显式调用、无SDK捆绑、未额外筛除碎片但体素重建仍可能丢失/合并微小结构。没有新增GUI菜单，稳定JSON状态不翻译。
 
 打印下发主动取消使用英文源串 `Print submission cancelled.` 与简中“已取消打印下发。”，设备选择源文件纳入 gettext 清单；取消状态不沿用失败文案或错误颜色。
 

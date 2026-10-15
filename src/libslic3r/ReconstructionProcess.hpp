@@ -20,6 +20,10 @@ struct ReconstructionProcessOptions
     // Called synchronously on the caller's thread. Keep this callback short.
     // Callback exceptions terminate and reap the worker before propagating.
     std::function<void()> on_tick;
+    // Only for a disposable worker launching a single leaf sidecar. Count this
+    // caller and its direct child against one RSS budget; this does not monitor
+    // an arbitrary process tree. The ordinary parent/worker path stays unchanged.
+    bool include_caller_memory = false;
 };
 
 struct ReconstructionProcessResult
@@ -60,6 +64,8 @@ private:
 // Linux uses worker-side RLIMIT_AS plus an RSS watchdog. macOS uses only the RSS
 // watchdog: it is a sampled cancellation budget, not a hard allocation limit.
 // Windows places the suspended child in a memory-limited, kill-on-close Job first.
+// include_caller_memory additionally samples caller + child RSS on all platforms;
+// inherited Windows ancestor Job limits are retained (no breakaway is requested).
 ReconstructionProcessResult run_reconstruction_process(const std::string&                  executable,
                                                        const std::vector<std::string>&     args,
                                                        const ReconstructionProcessOptions& options = {});

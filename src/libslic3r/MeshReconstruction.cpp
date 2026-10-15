@@ -243,6 +243,24 @@ double sampled_distance(const Soup& from, const Soup& to, std::size_t& samples)
     return std::sqrt(maximum_squared);
 }
 
+nlohmann::json comparison_metrics(const Soup& source, const Soup& output, double warning_mm)
+{
+    const double bbox            = std::max((output.minimum - source.minimum).cwiseAbs().maxCoeff(),
+                                            (output.maximum - source.maximum).cwiseAbs().maxCoeff());
+    std::size_t  forward_samples = 0, reverse_samples = 0;
+    const double forward = sampled_distance(source, output, forward_samples);
+    const double reverse = sampled_distance(output, source, reverse_samples);
+    require(std::isfinite(forward) && std::isfinite(reverse) && std::isfinite(bbox), "candidate_rejected",
+            L("The reconstructed surface comparison is not finite."));
+    return {{"bbox_deviation_mm", bbox},
+            {"sampled_source_to_candidate_mm", forward},
+            {"sampled_candidate_to_source_mm", reverse},
+            {"source_samples", forward_samples},
+            {"candidate_samples", reverse_samples},
+            {"deviation_warning_mm", warning_mm},
+            {"deviation_warning", std::max({forward, reverse, bbox}) > warning_mm}};
+}
+
 // A wrap of an open surface can be a paper-thin envelope instead of the intended
 // solid. Prepare a private, fully validated closed input when requested. Never
 // treat a failed patch or a checker exception as successful closure.
@@ -375,6 +393,23 @@ bool validate_reconstruction_mesh(const TriangleMesh& mesh, nlohmann::json& repo
     return false;
 }
 
+nlohmann::json compare_reconstruction_meshes(const TriangleMesh&              source_mm,
+                                             const TriangleMesh&              candidate_mm,
+                                             const MeshReconstructionOptions& options)
+{
+    require(std::isfinite(options.max_deviation_mm) && options.max_deviation_mm > 0, "invalid_options",
+            L("Reconstruction options require finite positive numbers."));
+    const auto source                               = read_soup(source_mm, options.max_input_faces, true);
+    const auto output                               = read_soup(candidate_mm, options.max_output_faces);
+    auto       metrics                              = comparison_metrics(source, output, options.max_deviation_mm);
+    metrics["distance_method"]                      = "sampled_vertices_edge_midpoints_and_face_centroids";
+    metrics["distance_is_upper_bound"]              = false;
+    metrics["deviation_policy"]                     = "warning_only";
+    metrics["comparison_excluded_degenerate_faces"] = source.removed_degenerate;
+    metrics["comparison_excluded_duplicate_faces"]  = source.removed_duplicates;
+    return metrics;
+}
+
 bool reconstruct_mesh(const TriangleMesh&              source_mm,
                       TriangleMesh&                    candidate_mm,
                       nlohmann::json&                  report,
@@ -457,20 +492,7 @@ bool reconstruct_mesh(const TriangleMesh&              source_mm,
                 report["metrics"]["effective_offset_mm"] = offset;
                 report["metrics"]["output_volume_mm3"]   = report["final_mesh_check"]["metrics"]["signed_volume"];
                 report["metrics"]["component_count"]     = report["final_mesh_check"]["metrics"]["component_count"];
-                report["metrics"]["bbox_deviation_mm"]   = std::max((output.minimum - source.minimum).cwiseAbs().maxCoeff(),
-                                                                    (output.maximum - source.maximum).cwiseAbs().maxCoeff());
-                std::size_t  forward_samples = 0, reverse_samples = 0;
-                const double forward = sampled_distance(source, output, forward_samples);
-                const double reverse = sampled_distance(output, source, reverse_samples);
-                require(std::isfinite(forward) && std::isfinite(reverse), "candidate_rejected",
-                        L("The reconstructed surface comparison is not finite."));
-                report["metrics"]["sampled_source_to_candidate_mm"] = forward;
-                report["metrics"]["sampled_candidate_to_source_mm"] = reverse;
-                report["metrics"]["source_samples"]                 = forward_samples;
-                report["metrics"]["candidate_samples"]              = reverse_samples;
-                report["metrics"]["deviation_warning_mm"]           = options.max_deviation_mm;
-                report["metrics"]["deviation_warning"] = std::max({forward, reverse, report["metrics"]["bbox_deviation_mm"].get<double>()}) >
-                                                         options.max_deviation_mm;
+                report["metrics"].update(comparison_metrics(source, output, options.max_deviation_mm));
                 attempt["status"] = "candidate_ready";
                 report["attempts"].push_back(std::move(attempt));
                 report["validation"]["complete"]               = true;

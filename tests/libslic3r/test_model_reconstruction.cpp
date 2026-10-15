@@ -97,6 +97,16 @@ TEST_CASE("Reconstruction failure and pre-cancel preserve the source", "[ModelRe
         options.process.is_canceled = [] { return true; };
     }
     SECTION("invalid parameters") { options.mesh.alpha_mm = -1.; }
+    SECTION("unknown backend") { options.engine = "unknown"; }
+    SECTION("voxel rejected by default backend") { options.voxel_mm = 0.08; }
+    SECTION("worker override rejected by default backend") { options.meshlib_worker_executable = "/missing/worker"; }
+    SECTION("meshlib requires voxel") { options.engine = "meshlib"; }
+    SECTION("meshlib worker missing")
+    {
+        options.engine                    = "meshlib";
+        options.voxel_mm                  = 0.08;
+        options.meshlib_worker_executable = "/missing/worker";
+    }
     SECTION("excessive input") { options.mesh.max_input_faces = 4; }
     const auto result = reconstruct_model_candidate(model, 0, options);
     REQUIRE_FALSE(result.candidate_model);

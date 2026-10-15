@@ -2,6 +2,20 @@
 
 ## 当前执行状态
 
+- 10-15 第一阶段已提交 `d751db42f2`（未推送）：44个相关文件；工作区下载脚本/文字分析/其他用户记录及result.json均保留。第二阶段 MeshLib CLI 本机评估已实现并完成下列 macOS arm64 验证：现有 `--reconstruct-model` 新增显式引擎与体素参数，默认Alpha Wrap及原生GUI不变；C++20独立sidecar固定SDK3.1.3.429，SDK仅下载校验并提取到planning/cache，不安装到系统、不入库、不捆绑发布。嵌套进程累计中间worker+sidecar RSS、共享剩余时间并有父亡保护；实际候选仍由Orca严格复检，不照搬Q样本专用3小壳删除。商业授权未取得，本批不是正式跨平台发布验收。
+
+- MeshLib 最终构建身份：直接应用 `92f63fbe19ad0323e4b71fb46203d2d051d816cea6a33ea81fb0c233fd08762c`，测试 `f295958a0f4bdeb16e5039502f6ef6012bf7aa7aec726d584c90bdd25bcdbc67`，sidecar `9074ce321531fff5f6c56b9e20049b038ecb9405ef65f00dd2b90749cb52115b`。最终增量构建 `planning/build/meshlib-cli-build-20261015-final.log` 成功；此前首轮 const STL writer 编译错误已修正，不使用失败产物证明通过。主程序无 MRMesh/MRVoxels 动态依赖；独立SDK实际依赖最低macOS14.0，主Orca最低版本未变。用户运行中的旧打包GUI未关闭/覆盖。
+
+- MeshLib 验证通过：核心270用例/17012断言、既有真实worker集成1用例/22断言；新CLI35/35、旧Alpha Wrap36/36、check-model114/114、普通高级修复67/67、sidecar协议12/12。新CLI中开口立方体、独立双体、折叠管、ASCII/中文路径通过完整几何验收；非法参数、worker缺失/无协议、体素浮点溢出、原件/已有输出保护通过；1秒真实监督超时约1.118秒返回timed_out且无候选。日志为 `planning/repair/meshlib-{core-final,worker-integration,alpha-regression,check-regression,repair-regression}-20261015.log`（core文件为 `meshlib-core-final-20261015.log`），新CLI汇总为 `planning/repair/meshlib-cli-regression-20261015/summary.json`。未传切片profiles、不生成G-code；Windows/Linux、旧macOS、实机与商业打包未验。
+
+- Q真实CLI输出在 `planning/repair/meshlib-q-cli-20261015`，退出0、候选SHA256 `8041074cc18d458bfdf6f27b330d780d51f8833f81dc2761603519363a5164e8`，原输入SHA256 `776db5822a1e3afcdda6fd094e8ca724f9ccf778b6d36c0023951a244fd58ce0`不变。59,924→79,494面，16原始连通分量→10闭合壳；七项完整为零、壳体包含/方向分析完整，保留3微壳共94面（其中两壳为内部反向壳）。单次完整进程wall8.92秒，报告候选流程8766ms，SDK total5213ms、重建5181ms、输入检测312ms、首次候选验收783ms、采样比较582ms，后续还有坐标/凸包/序列化验收。此为单次本机记录，不与历史5.816秒不同范围的中位数直接比快慢。
+
+- Q几何边界：包围盒偏差0.008892mm，候选→原件采样0.047674mm，原件→候选采样4.455702mm，触发0.25mm告警。采样不是全局误差上界；原件/候选部件对应尚未确认，不能以七项归零宣称结构保真。`small_components_removed_by_postprocessing=0`只表示没有额外碎片筛除，体素重建本身仍可能丢失/合并微结构。`shape_confirmation=not_confirmed`、`print_ready=false`、`applied=false`保持。下一步为本机样本外形/间隙评估与更多模型回归，不自动采用或改变现有修复分流。
+
+- Q偏差只读定位精确复现107,410采样及4.455701577344164mm峰值，源点(489.605774,26.595013,20.145760)是原STL第55032面（0基）AB边中点，原部件15该表面位于另一闭合部件5内部；沿面法线±0.01mm原件绕数为1/2，候选为1/1，支持该峰值来自重叠实体内部界面消除，而非该位置外轮廓丢失。加密样本中46,322个偏差>0.25mm的源点均在候选内；仍是采样证据，不据此清除告警或保证全部设计特征。证据 `planning/repair/meshlib-q-cli-20261015/deviation-diagnostic-refined.json`，原件及候选未改。
+
+- 21:35 新应用再次 computer use 回归维护台Q默认流程，输出 `planning/debug/runs/cli-20261015-213513-78d7d56f`：退出0、unresolved、真实穿透依据、跳过重复截面均与原规则一致，完成后启动按钮恢复、控制台无error。长时间停留的旧预览先被过期保护拒绝并自动生成新计划，新计划正常执行，不是CLI失败。截图 `planning/repair/meshlib-gui-button-20261015.jpg`、`meshlib-gui-evidence-20261015.jpg`。此为原检测界面的回归；MeshLib本批仅CLI，无原生GUI新入口。
+
 - 10-15 20:43 提交前 computer use 复核完成：当前同一应用实际启动 cube、70de、37365默认/允许封口、Q默认共5例，均正常结束0且启动按钮恢复；健康跳过、接触负例不升级、真实穿透及显式封口正例跳过额外预检均符合预期，控制台无error。输出依次为 `planning/debug/runs/cli-20261015-203202-894fb443`、`203321-15ef9a44`、`203453-b93d2f32`、`203635-4c17af0c`、`204236-098e1f34`（后四项同cli-20261015-前缀）；截图 `planning/repair/rebuild-trigger-20261015-7x7nPk/gui-commit-q.jpg`。现有源码差异复核无阻塞，准备选择性提交，保留下载脚本/文字分析/其他用户文档及result.json。维护台属于历史忽略的planning工具，不强制入库；原生GUI/Windows/Linux/打印未新增验收。用户确认尚无MeshLib SDK商用再分发授权，下一阶段只做本机评估接入，不捆绑SDK、不正式发布。
 
 - 10-15 20:30 用户批准下一阶段：先由 AI 使用 computer use 复核当前判断入口，审核通过后选择性提交，再接入 MeshLib CLI 重建后端；原生GUI/模型特征暂不扩展。基准 master/c893a4e3ef 加当前工作区，直接应用仍0e6c16a7…、根result.json仍aa3a68f…acd6。待提交范围需排除用户文档、下载脚本及无关记录；第一阶段先复用既有266核心/114检测CLI/67普通高级CLI证据并补界面真实启动回归。第二阶段读取外部交接、固定3.1.3.429 API和实际SDK能力，保留默认Alpha Wrap，不接受或代购SDK协议；商用再分发条件待用户确认，本轮先推进可独立完成的工程与评估验证。

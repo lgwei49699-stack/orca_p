@@ -152,6 +152,16 @@ private:
     bool   m_finished = false;
 };
 
+bool resident_bytes(HANDLE process, uint64_t& bytes)
+{
+    PROCESS_MEMORY_COUNTERS counters{};
+    counters.cb = sizeof(counters);
+    if (!GetProcessMemoryInfo(process, &counters, sizeof(counters)))
+        return false;
+    bytes = counters.WorkingSetSize;
+    return true;
+}
+
 ReconstructionProcessResult run_platform_process(const std::string&                  executable,
                                                  const std::vector<std::string>&     args,
                                                  const ReconstructionProcessOptions& options,
@@ -204,6 +214,7 @@ ReconstructionProcessResult run_platform_process(const std::string&             
         return failure(ReconstructionProcessStatus::StartFailed, windows_error("ResumeThread"));
 
     const auto deadline = Clock::now() + std::chrono::milliseconds(options.timeout_ms);
+    unsigned   memory_query_failures = 0;
     for (;;) {
         DWORD        notification = 0;
         ULONG_PTR    key          = 0;
@@ -228,6 +239,32 @@ ReconstructionProcessResult run_platform_process(const std::string&             
             return failure(ReconstructionProcessStatus::Canceled, L("Reconstruction was canceled."));
         if (Clock::now() >= deadline)
             return failure(ReconstructionProcessStatus::TimedOut, L("Reconstruction exceeded its time limit."));
+        if (options.include_caller_memory) {
+            uint64_t caller_rss = 0;
+            uint64_t child_rss  = 0;
+            if (!resident_bytes(GetCurrentProcess(), caller_rss) || caller_rss == 0)
+                return failure(ReconstructionProcessStatus::MonitorFailed, L("Cannot observe reconstruction worker memory usage."));
+            if (!resident_bytes(process.get(), child_rss) || child_rss == 0) {
+                // A child may have exited between the wait and RSS query. Only
+                // its confirmed exit may replace a missing observation.
+                if (WaitForSingleObject(process.get(), 0) == WAIT_OBJECT_0) {
+                    DWORD exit_code = 0;
+                    if (GetExitCodeProcess(process.get(), &exit_code)) {
+                        child.finished();
+                        return process_exit_result(static_cast<int>(exit_code));
+                    }
+                }
+                if (++memory_query_failures >= 3)
+                    return failure(ReconstructionProcessStatus::MonitorFailed, L("Cannot observe reconstruction worker memory usage."));
+                std::this_thread::sleep_for(POLL_INTERVAL);
+                continue;
+            }
+            memory_query_failures = 0;
+            // Subtraction avoids overflow even if the OS reports an unexpected
+            // value. Shared mappings may be counted twice: this is conservative.
+            if (caller_rss > limit_bytes || child_rss > limit_bytes - caller_rss)
+                return failure(ReconstructionProcessStatus::MemoryLimitExceeded, L("The worker exceeded its memory limit."));
+        }
         if (options.on_tick)
             options.on_tick();
         std::this_thread::sleep_for(POLL_INTERVAL);
@@ -391,8 +428,11 @@ ReconstructionProcessResult run_platform_process(const std::string&             
             return failure(ReconstructionProcessStatus::Canceled, L("Reconstruction was canceled."));
         if (Clock::now() >= deadline)
             return failure(ReconstructionProcessStatus::TimedOut, L("Reconstruction exceeded its time limit."));
+        uint64_t caller_rss = 0;
+        if (options.include_caller_memory && (!resident_bytes(getpid(), caller_rss) || caller_rss == 0))
+            return failure(ReconstructionProcessStatus::MonitorFailed, L("Cannot observe reconstruction worker memory usage."));
         uint64_t rss = 0;
-        if (!resident_bytes(pid, rss)) {
+        if (!resident_bytes(pid, rss) || (options.include_caller_memory && rss == 0)) {
             // proc_pidinfo can disappear before waitpid reports a dying child.
             // Allow only a bounded observation grace period, never restart the
             // worker or treat missing RSS as zero. Cancellation/deadline remain active.
@@ -404,7 +444,9 @@ ReconstructionProcessResult run_platform_process(const std::string&             
             continue;
         }
         memory_query_failures = 0;
-        if (rss > limit_bytes)
+        // In nested mode, both workers share the same budget; do not add first
+        // because an invalid large RSS value could overflow the total.
+        if (caller_rss > limit_bytes || rss > limit_bytes - caller_rss)
             return failure(ReconstructionProcessStatus::MemoryLimitExceeded, L("The worker exceeded its memory limit."));
         if (options.on_tick)
             options.on_tick();
@@ -585,6 +627,18 @@ ReconstructionProcessResult run_reconstruction_process(const std::string&       
     if (options.is_canceled && options.is_canceled())
         return failure(ReconstructionProcessStatus::Canceled, L("Reconstruction was canceled before starting the worker."));
 #if defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
+    if (options.include_caller_memory) {
+        uint64_t caller_rss = 0;
+#ifdef _WIN32
+        const bool observed = resident_bytes(GetCurrentProcess(), caller_rss);
+#else
+        const bool observed = resident_bytes(getpid(), caller_rss);
+#endif
+        if (!observed || caller_rss == 0)
+            return failure(ReconstructionProcessStatus::MonitorFailed, L("Cannot observe reconstruction worker memory usage."));
+        if (caller_rss > limit_bytes)
+            return failure(ReconstructionProcessStatus::MemoryLimitExceeded, L("The worker exceeded its memory limit."));
+    }
     return run_platform_process(executable, args, options, limit_bytes);
 #else
     return failure(ReconstructionProcessStatus::StartFailed, L("Reconstruction process limits are unsupported on this platform."));
