@@ -22,13 +22,15 @@ def validate_issue_summary(issues):
         assert isinstance(issue["complete"], bool), issue
 
 
-def validate_business_result(result):
+def validate_business_result(result, *, evidence=False):
     """Exact public contract: detailed inspections and slicing records stay internal."""
     assert set(result) == {"return_code", "error_string", "model_checks"}, result.keys()
     assert type(result["return_code"]) is int and isinstance(result["error_string"], str)
     assert len(result["model_checks"]) == 1, result
     check = result["model_checks"][0]
     keys = {"schema_version", "mesh_status", "check_complete", "input_materials_ignored", "repair_status", "issues"}
+    if evidence:
+        keys.add("boundary")
     assert set(check) == keys, check.keys()
     assert check["schema_version"] == 4
     assert isinstance(check["check_complete"], bool)
@@ -43,7 +45,76 @@ def validate_business_result(result):
         if check["mesh_status"] == "passed":
             assert check["check_complete"]
             assert all(issue == {"count": 0, "complete": True} for issue in check["issues"].values())
+    if evidence:
+        validate_boundary(check)
     return check
+
+
+def validate_boundary(check):
+    boundary = check["boundary"]
+    assert set(boundary) == {"schema_version", "inspection", "repair", "proper_crossings", "sections", "reconstruction"}, boundary
+    assert boundary["schema_version"] == 2, boundary
+    inspection, repair, sections, reconstruction = (boundary[key] for key in ("inspection", "repair", "sections", "reconstruction"))
+    assert inspection["status"] in ("not_run", "passed", "defects_detected", "incomplete"), inspection
+    assert isinstance(inspection["known_defects"], list) and isinstance(inspection["incomplete_checks"], list), inspection
+    assert isinstance(inspection["structural_blockers"], list), inspection
+    expected = {} if check["issues"] is None else {key: value for key, value in check["issues"].items() if value["count"] > 0}
+    known = {item["check"]: {"count": item["count"], "complete": item["count_complete"]}
+             for item in inspection["known_defects"]}
+    assert known == expected, (known, expected)
+    assert inspection["printability"] == "not_assessed", inspection
+    assert repair["status"] in ("not_run", "completed", "incomplete", "canceled", "failed"), repair
+    assert sections["status"] in ("not_run", "completed", "incomplete", "canceled", "failed"), sections
+    assert reconstruction["assessment"] in ("not_needed", "undetermined", "evidence_present", "blocked"), reconstruction
+    assert reconstruction["automatic_adoption"] is False, reconstruction
+    assert reconstruction["applicability"] in ("not_evaluated", "eligible", "unsupported"), reconstruction
+    assert reconstruction["necessity"] == "not_established" and reconstruction["printability"] == "not_assessed", reconstruction
+    assert set(reconstruction["policy"]) == {"version", "allow_boundary_closure"}, reconstruction
+    assert reconstruction["policy"]["version"] == 1, reconstruction
+    assert isinstance(reconstruction["policy"]["allow_boundary_closure"], bool), reconstruction
+    crossings = boundary["proper_crossings"]
+    assert crossings["status"] in ("not_run", "completed", "incomplete"), crossings
+    if crossings["status"] != "not_run":
+        assert isinstance(crossings["detected"], bool) and isinstance(crossings["search_complete"], bool), crossings
+        assert type(crossings["pairs_checked"]) is int and type(crossings["total_pairs"]) is int, crossings
+        assert 0 <= crossings["pairs_checked"] <= crossings["total_pairs"], crossings
+        assert crossings["elapsed_ms"] >= 0, crossings
+        assert crossings["total_pairs"] == check["issues"]["self_intersection"]["count"], (crossings, check)
+        assert crossings["search_complete"] == check["issues"]["self_intersection"]["complete"], (crossings, check)
+        if crossings["detected"]:
+            assert crossings["pairs_checked"] > 0 and crossings["status"] == "completed", crossings
+            witness = crossings["witness"]
+            assert len(witness["faces"]) == 2 and witness["faces"][0] != witness["faces"][1], witness
+            assert all(type(face) is int and face >= 0 for face in witness["faces"]), witness
+            assert len(witness["segment"]) == 2 and witness["segment"][0] != witness["segment"][1], witness
+            assert all(len(point) == 3 and all(math.isfinite(value) for value in point) for point in witness["segment"]), witness
+        else:
+            assert crossings["pairs_checked"] == crossings["total_pairs"] and crossings["witness"] is None, crossings
+    if check["repair_status"] in ("not_requested", "not_started", "not_needed"):
+        assert repair["status"] == "not_run" and sections["status"] == "not_run", boundary
+    if check["repair_status"] in ("partially_repaired", "unresolved"):
+        assert repair["execution_completed"] is True and repair["failed"] == 0, repair
+    if sections["status"] == "completed":
+        assert sections["planes"] == sections["requested_planes"] and sections["planes"] > 0, sections
+        assert len(sections["axes"]) == 1 and sections["axes"][0]["axis"] == "Z", sections
+        assert sections["printer_layer_plan"] is False, sections
+        assert type(sections["remaining_open_chains"]) is int and sections["remaining_open_chains"] >= 0, sections
+    if reconstruction["assessment"] == "evidence_present":
+        assert inspection["status"] == "defects_detected" and repair["execution_completed"] is True, boundary
+        assert reconstruction["applicability"] == "eligible", boundary
+        reason = reconstruction["reason"]
+        assert reason in ("proper_crossing_after_repair", "open_boundaries_under_closed_solid_policy", "no_effective_regions"), boundary
+        if reason == "no_effective_regions":
+            assert sections["status"] == "completed", boundary
+            assert sections["all_effective_regions_empty"] is True and sections["effective_regions"] == 0, boundary
+            assert sections["nondegenerate_closed_loop_planes"] > 0 and sections["parameters_can_remove_regions"] is False, boundary
+        else:
+            assert sections["status"] == "not_run" and sections["reason"] == "reconstruction_evidence_already_present", boundary
+            if reason == "proper_crossing_after_repair":
+                assert crossings["status"] == "completed" and crossings["search_complete"] and crossings["detected"], boundary
+            else:
+                assert reconstruction["policy"]["allow_boundary_closure"] is True, boundary
+                assert check["issues"]["boundary"]["complete"] and check["issues"]["boundary"]["count"] > 0, boundary
 
 
 def fixture_artifacts(output, source, options, result):
@@ -171,11 +242,12 @@ def main():
     results = []
     baselines = {}
 
-    def run(label, source, *options, success=True):
+    def run(label, source, *options, success=True, include_evidence=False):
         output = evidence / label
         output.mkdir()
         source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
-        command = [str(binary), "--check-model", "--outputdir", str(output), *options, str(source)]
+        command = [str(binary), "--check-model", "--outputdir", str(output), *options,
+                   *(('--repair-evidence',) if include_evidence else ()), str(source)]
         (output / "command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")
         with (output / "process.log").open("w", encoding="utf-8") as log:
             process = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout, check=False)
@@ -183,7 +255,7 @@ def main():
         assert hashlib.sha256(source.read_bytes()).hexdigest() == source_hash, (label, "Input changed")
         assert (process.returncode == 0) == success, (label, process.returncode, result)
         assert (result["return_code"] == 0) == success, (label, result)
-        check = validate_business_result(result)
+        check = validate_business_result(result, evidence=include_evidence)
         assert bool(result["error_string"]) == (not success), (label, result)
         artifacts = fixture_artifacts(output, source, options, result)
         # Test-only adapter: neither path field belongs to the response JSON.
@@ -272,6 +344,16 @@ def main():
             repeated, _ = run(f"cap-recheck-{variant}", Path(fixed["working_model"]))
             assert repeated["issues"]["degenerate"]["count"] == 0
             assert repeated["issues"]["boundary"]["count"] == 0
+            if variant == "obj":
+                observed, _ = run("cap-proper-crossing-evidence", cap, "--repair-model", "cgal", include_evidence=True)
+                assert observed["repair_status"] == "partially_repaired", observed
+                assert observed["boundary"]["proper_crossings"]["detected"] is True, observed
+                assert observed["boundary"]["reconstruction"]["assessment"] == "evidence_present", observed
+                assert observed["boundary"]["reconstruction"]["reason"] == "proper_crossing_after_repair", observed
+                assert observed["boundary"]["sections"]["status"] == "not_run", observed
+                assert observed["boundary"]["reconstruction"]["policy"]["allow_boundary_closure"] is False, observed
+                assert observed["issues"] == fixed["issues"], (observed, fixed)
+                assert Path(observed["working_model"]).read_bytes() == Path(fixed["working_model"]).read_bytes()
             if variant == "colored-obj":
                 assert any(path.endswith(".mtl") for path in fixed["_artifacts"])
                 area = material_areas(Path(fixed["working_model"]))
@@ -289,19 +371,89 @@ def main():
         assert not check["check_complete"] and check["mesh_status"] == "unknown"
         assert check["issues"] is None and check["working_model"] is None
         plane_baseline, _ = run("unsafe-plane-baseline", fixtures / "10-only-triangle.obj")
-        check, _ = run("unsafe-plane", fixtures / "10-only-triangle.obj", "--repair-model", "cgal", success=False)
+        check, _ = run("unsafe-plane", fixtures / "10-only-triangle.obj", "--repair-model", "cgal", success=False, include_evidence=True)
         assert Path(check["working_model"]).name == "prepared.obj"
         assert check["repair_status"] == "failed"
         assert check["issues"] == plane_baseline["issues"]
-        check, result = run("unresolved-no-progress", fixtures / "09-nonmanifold-edge.obj", "--repair-model", "cgal", success=False)
-        assert check["repair_status"] == "unresolved" and result["return_code"] == -25
+        assert check["boundary"]["sections"]["status"] == "not_run"
+        assert check["boundary"]["reconstruction"]["assessment"] == "blocked"
+        assert check["boundary"]["reconstruction"]["failure_kind"] == "repair_failed"
+        check, result = run("unresolved-no-progress", fixtures / "09-nonmanifold-edge.obj", "--repair-model", "cgal",
+                            include_evidence=True)
+        assert check["repair_status"] == "unresolved" and result["return_code"] == 0
         assert check["issues"] == baselines[("09-nonmanifold-edge", "obj")]["issues"]
         assert Path(check["working_model"]).name == "prepared.obj"
+        assert check["boundary"]["repair"]["status"] == "completed"
+        assert "failure_kind" not in check["boundary"]["reconstruction"]
+        assert check["boundary"]["sections"]["status"] == "completed"
+        assert check["boundary"]["reconstruction"]["assessment"] == "undetermined"
+        assert check["boundary"]["reconstruction"]["reason"] == "no_conclusive_region_failure"
+        # The opt-in combined workflow completed, not the geometric repair.
+        # Default and explicit-off calls preserve their legacy failure code,
+        # exact six-field v4 model summary and the same retained geometry.
+        for label, flags in (("unresolved-default-no-evidence", ()), ("unresolved-explicit-off", ("--repair-evidence", "0"))):
+            plain, plain_result = run(label, fixtures / "09-nonmanifold-edge.obj", "--repair-model", "cgal",
+                                      *flags, success=False)
+            expected = {key: value for key, value in result["model_checks"][0].items() if key != "boundary"}
+            assert plain_result["model_checks"][0] == expected, (plain_result, expected)
+            assert plain_result["return_code"] == -25
+            assert Path(plain["working_model"]).read_bytes() == Path(check["working_model"]).read_bytes()
+        # Normal no-progress must continue through an explicitly requested
+        # conversion and inspect the serialized result, rather than return 0
+        # early with only prepared.obj. STL conversion itself is not a repair.
+        converted, converted_result = run("unresolved-evidence-export-stl", fixtures / "09-nonmanifold-edge.obj",
+                                           "--repair-model", "cgal", "--export-stl", include_evidence=True)
+        assert converted_result["return_code"] == 0 and converted["repair_status"] == "unresolved"
+        assert Path(converted["working_model"]).name == "result.stl"
+        assert triangle_count(Path(converted["working_model"])) == triangle_count(fixtures / "09-nonmanifold-edge.obj")
+        assert converted["issues"] == check["issues"]
+        assert converted["mesh_status"] == check["mesh_status"] == "needs_repair"
+        assert converted["check_complete"] == check["check_complete"]
+        assert converted["boundary"]["sections"]["status"] == "completed"
+        assert converted["boundary"]["sections"]["planes"] == check["boundary"]["sections"]["planes"]
+        assert converted["boundary"]["proper_crossings"]["detected"] is False, converted
+        policy_no_opening, _ = run("closed-contact-policy-enabled", fixtures / "09-nonmanifold-edge.obj",
+                                  "--repair-model", "cgal", "--repair-evidence-close-boundaries", "1", include_evidence=True)
+        assert policy_no_opening["boundary"]["reconstruction"]["policy"]["allow_boundary_closure"] is True, policy_no_opening
+        assert policy_no_opening["issues"]["boundary"]["count"] == 0, policy_no_opening
+        assert policy_no_opening["boundary"]["reconstruction"]["assessment"] == "undetermined", policy_no_opening
+        assert policy_no_opening["boundary"]["reconstruction"]["reason"] == "no_conclusive_region_failure", policy_no_opening
+        plain, plain_result = run("unresolved-export-stl-explicit-off", fixtures / "09-nonmanifold-edge.obj",
+                                  "--repair-model", "cgal", "--export-stl", "--repair-evidence", "0", success=False)
+        assert plain_result["return_code"] == -25 and plain["repair_status"] == "unresolved"
+        assert Path(plain["working_model"]).name == "prepared.obj"
+        assert not list((evidence / "unresolved-export-stl-explicit-off").rglob("result.stl"))
         # Native OBJ import does not independently remove duplicates. Retainable
         # cleanup belongs to the advanced transaction, not the prepared model.
         duplicate_bad = evidence / "duplicate-nonmanifold.obj"
         bad_text = (fixtures / "09-nonmanifold-edge.obj").read_text()
         first_face = next(line for line in bad_text.splitlines() if line.startswith("f "))
+        # Two tetrahedra share a non-manifold edge; remove one outer face so
+        # advanced repair retains a genuine open boundary, not a repairable
+        # healthy cube. Enabling this policy changes only the recommendation.
+        open_bad = evidence / "open-nonmanifold.obj"
+        open_lines = bad_text.splitlines()
+        open_lines.pop(max(index for index, line in enumerate(open_lines) if line.startswith("f ")))
+        open_bad.write_text("\n".join(open_lines) + "\n", encoding="utf-8")
+        open_default, _ = run("residual-open-default-policy", open_bad, "--repair-model", "cgal", include_evidence=True)
+        assert open_default["repair_status"] in ("partially_repaired", "unresolved"), open_default
+        assert open_default["issues"]["boundary"]["count"] > 0, open_default
+        assert open_default["boundary"]["proper_crossings"]["detected"] is False, open_default
+        assert open_default["boundary"]["reconstruction"]["assessment"] == "undetermined", open_default
+        assert open_default["boundary"]["reconstruction"]["policy"]["allow_boundary_closure"] is False, open_default
+        for value in ("0", "1"):
+            open_policy, _ = run(f"residual-open-policy-{value}", open_bad, "--repair-model", "cgal",
+                                 "--repair-evidence-close-boundaries", value, include_evidence=True)
+            assert open_policy["boundary"]["reconstruction"]["policy"]["allow_boundary_closure"] == (value == "1"), open_policy
+            assert open_policy["issues"] == open_default["issues"], (open_policy, open_default)
+            assert Path(open_policy["working_model"]).read_bytes() == Path(open_default["working_model"]).read_bytes()
+            if value == "1":
+                assert open_policy["boundary"]["reconstruction"]["assessment"] == "evidence_present", open_policy
+                assert open_policy["boundary"]["reconstruction"]["reason"] == "open_boundaries_under_closed_solid_policy", open_policy
+                assert open_policy["boundary"]["sections"]["status"] == "not_run", open_policy
+            else:
+                assert open_policy["boundary"]["reconstruction"]["assessment"] == "undetermined", open_policy
+                assert open_policy["boundary"]["sections"]["status"] == "completed", open_policy
         duplicate_bad.write_text(bad_text + "\n" + first_face + "\n", encoding="utf-8")
         duplicate_baseline, _ = run("keep-basic-progress-before", duplicate_bad)
         assert duplicate_baseline["issues"]["duplicate"]["count"] == 1
@@ -312,6 +464,106 @@ def main():
         assert check["issues"]["nonmanifold_edge"]["count"] > 0
         assert check["repair_status"] == "partially_repaired"
         assert check["mesh_status"] == "needs_repair"
+        observed, observed_result = run("keep-basic-progress-evidence", duplicate_bad, "--repair-model", "cgal", include_evidence=True)
+        assert {key: value for key, value in observed_result["model_checks"][0].items() if key != "boundary"} == result["model_checks"][0]
+        assert Path(observed["working_model"]).read_bytes() == Path(check["working_model"]).read_bytes()
+        assert observed["boundary"]["sections"]["status"] == "completed"
+        # Stretch Z only: the same eight-face defect remains deterministic, but
+        # its 600 mm height exceeds the 2,000 reference-plane budget. This is a
+        # real CLI resource boundary without adding a public test-only option.
+        tall_bad_text = "\n".join(
+            "v " + " ".join((*line.split()[1:3], str(float(line.split()[3]) * 30.)))
+            if line.startswith("v ") else line
+            for line in bad_text.splitlines()) + "\n"
+        for partial in (False, True):
+            label = "partial" if partial else "unresolved"
+            tall = evidence / f"{label}-plane-limit.obj"
+            tall.write_text(tall_bad_text + (first_face + "\n" if partial else ""), encoding="utf-8")
+            limited, limited_result = run(f"{label}-evidence-plane-limit", tall, "--repair-model", "cgal",
+                                           success=False, include_evidence=True)
+            assert limited_result["return_code"] == -25
+            assert limited["repair_status"] == ("partially_repaired" if partial else "unresolved")
+            assert limited["mesh_status"] == "needs_repair"
+            assert limited["boundary"]["repair"]["status"] == "completed"
+            assert limited["boundary"]["sections"]["status"] == "incomplete"
+            assert limited["boundary"]["sections"]["reason"] == "plane_limit"
+            assert limited["boundary"]["sections"]["planes"] == 0
+            assert limited["boundary"]["reconstruction"]["assessment"] == "blocked"
+            assert limited["boundary"]["reconstruction"].get("failure_kind"), limited
+            plain, plain_result = run(f"{label}-plane-limit-explicit-off", tall, "--repair-model", "cgal",
+                                      "--repair-evidence", "0", success=partial)
+            assert plain_result["return_code"] == (0 if partial else -25)
+            assert {key: value for key, value in limited_result["model_checks"][0].items() if key != "boundary"} == plain_result["model_checks"][0]
+            assert Path(limited["working_model"]).read_bytes() == Path(plain["working_model"]).read_bytes()
+        for label, source, flags in (
+                ("healthy-evidence", fixtures / "00-healthy-cube.obj", ()),
+                ("healthy-repair-evidence", fixtures / "00-healthy-cube.obj", ("--repair-model", "cgal")),
+                ("defects-detection-only-evidence", fixtures / "09-nonmanifold-edge.obj", ()),
+                ("repairable-evidence", fixtures / "01-missing-top.obj", ("--repair-model", "cgal"))):
+            observed, _ = run(label, source, *flags, include_evidence=True)
+            assert observed["boundary"]["sections"]["status"] == "not_run", observed
+        invalid, _ = run("invalid-index-evidence", fixtures / "12-invalid-index.obj", success=False, include_evidence=True)
+        assert invalid["boundary"]["reconstruction"]["assessment"] == "blocked", invalid
+        invalid, _ = run("invalid-combination-evidence", fixtures / "00-healthy-cube.obj", "--slice", "0",
+                         success=False, include_evidence=True)
+        assert invalid["boundary"]["reconstruction"]["failure_kind"] == "invalid_arguments", invalid
+        for value in ("0", "1"):
+            for label, flags, include in (
+                    ("no-advanced", (), True),
+                    ("no-evidence", ("--repair-model", "cgal"), False),
+                    ("evidence-off", ("--repair-model", "cgal", "--repair-evidence", "0"), False)):
+                rejected, rejected_result = run(f"reject-closure-policy-{label}-{value}", fixtures / "00-healthy-cube.obj",
+                                                *flags, "--repair-evidence-close-boundaries", value,
+                                                success=False, include_evidence=include)
+                assert "--repair-evidence-close-boundaries requires" in rejected_result["error_string"], rejected_result
+                assert rejected["issues"] is None and not rejected["_artifacts"], rejected
+        accepted, _ = run("healthy-closure-policy-enabled", fixtures / "00-healthy-cube.obj", "--repair-model", "cgal",
+                          "--repair-evidence-close-boundaries", "1", include_evidence=True)
+        assert accepted["boundary"]["reconstruction"]["policy"]["allow_boundary_closure"] is True, accepted
+        assert accepted["boundary"]["reconstruction"]["assessment"] == "not_needed", accepted
+        assert accepted["boundary"]["sections"]["status"] == "not_run", accepted
+
+        for label, flags in (
+                ("ordinary-repair", ("--repair-model", "cgal", "--repair-evidence", "--export-stl")),
+                ("ordinary-export", ("--export-stl",)),
+                ("reconstruct", ("--reconstruct-model", "--accept-reconstruction-risk")),
+                ("reconstruct-help", ("--reconstruct-model", "--help"))):
+            for value in ("0", "1"):
+                output = evidence / f"reject-closure-policy-{label}-{value}"
+                command = [str(binary), *flags, "--repair-evidence-close-boundaries=" + value,
+                           "--outputdir", str(output), str(fixtures / "00-healthy-cube.stl")]
+                process = subprocess.run(command, capture_output=True, text=True, timeout=args.timeout, check=False)
+                assert process.returncode != 0, (command, process.stdout, process.stderr)
+                assert "--repair-evidence-close-boundaries requires" in process.stderr, (command, process.stderr)
+                if label.startswith("reconstruct"):
+                    assert not output.exists(), output
+                else:
+                    rejected_result = json.loads((output / "result.json").read_text(encoding="utf-8"))
+                    assert rejected_result["return_code"] != 0, rejected_result
+                    assert "--repair-evidence-close-boundaries requires" in rejected_result["error_string"], rejected_result
+                    assert set(path.name for path in output.iterdir()) == {"result.json"}, output
+                results.append({"case": f"reject-closure-policy-{label}-{value}", "exit_code": process.returncode})
+        for prefix in ("--", "-"):
+            output = evidence / f"reject-closure-policy-invalid-{len(prefix)}"
+            command = [str(binary), "--check-model", "--repair-model", "cgal", "--repair-evidence",
+                       prefix + "repair-evidence-close-boundaries=2", "--outputdir", str(output),
+                       str(fixtures / "00-healthy-cube.obj")]
+            process = subprocess.run(command, capture_output=True, text=True, timeout=args.timeout, check=False)
+            assert process.returncode != 0 and "expects 0 or 1" in process.stderr, (command, process.stderr)
+            assert not output.exists(), output
+            results.append({"case": f"reject-closure-policy-invalid-{len(prefix)}", "exit_code": process.returncode})
+        output = evidence / "reject-evidence-without-model-action"
+        output.mkdir()
+        command = [str(binary), "--repair-evidence", "--export-stl", "--outputdir", str(output),
+                   str(fixtures / "00-healthy-cube.obj")]
+        (output / "command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")
+        with (output / "process.log").open("w", encoding="utf-8") as log:
+            process = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout, check=False)
+        rejected = json.loads((output / "result.json").read_text(encoding="utf-8"))
+        assert process.returncode > 0 and rejected["return_code"] != 0, rejected
+        assert "--repair-evidence requires" in rejected["error_string"], rejected
+        assert not list(output.rglob("*.stl")), output
+        results.append({"case": "reject-evidence-without-model-action", "exit_code": process.returncode})
         run("reject-slice", fixtures / "00-healthy-cube.stl", "--slice", "0", success=False)
         run("reject-legacy-repair", fixtures / "00-healthy-cube.stl", "--auto-repair-model", "1", success=False)
         run("reject-disable-legacy-repair", fixtures / "00-healthy-cube.stl", "--auto-repair-model", "0", success=False)

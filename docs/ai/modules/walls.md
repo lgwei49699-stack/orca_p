@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "walls",
-  "source_fingerprint": "sha256:139ca856632d3aeed74e1bbd7479c1ad10d5dfa516a23d6e29a9c6e7697f6c76",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。补登记公共参数定义依赖；核对配置约束沿用本分支实现。"
+  "source_fingerprint": "sha256:1a0b9b9a20f325d5a71e53d2acd04664051598121211bdf0e7f87eb3ca390f10",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入PerimeterGenerator/Arachne参数工厂；墙生成器、线宽、最小特征、短墙过滤及GUI墙参数均未改变。"
 }
 -->
 

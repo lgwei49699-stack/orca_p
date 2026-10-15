@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "adhesion",
-  "source_fingerprint": "sha256:49f2de97b398e4b69379f2ede743ba0c02d8876f34d053a73566015f16f81b07",
-  "reason": "共享支撑测试新增无墙筏层阶梯凹口回归，不改Brim/Skirt参数或生成算法；半线宽安全裁剪保持，故无需附着正文变更。筏层路径测试不替代实机附着验收。"
+  "source_fingerprint": "sha256:29c271c32bb3276afcc9fe307ab07e30dbe489623e068d58b581486ab8b59226",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助只控制建议，未接入make_brim或Skirt；附着类型、宽度、间隙、绘制耳朵和GUI附着设置保持。"
 }
 -->
 

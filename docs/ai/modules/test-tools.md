@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:cab60fdc8a2d31387477fbef1934891c36656da7ddb312a5646932d7bdf4c547",
-  "reason": "云协议新增标准名称匹配与成功导入显示回归，撤回账号绑定测试；真实下拉选择、脏状态及认证恢复另列GUI交接。"
+  "source_fingerprint": "sha256:e12033793ae320c9aacbc5bb3bda0f64074f6f84f26fdc9e8143fbacc7f3b800",
+  "reason": "补充新证据组合无进展0与旧off失败对照、显式格式导出、unresolved/partial预检超平面预算真实CLI用例；核心保留事务和最终产物身份断言。维护台覆盖真实check_complete=false几何阻断及错误报告、不改旧任务语义；复核任务结束恢复新计划、首屏不展示历史结果，以及macOS GUI/CLI双槽、配置隔离、定向取消和跨服务维护锁。展示进一步区分assessment与输入范围，覆盖折叠详情、未知枚举、旧报告及纯文本渲染。沿用planning既有忽略范围，不影响源码指纹；保留其他用户测试工具改动。本次追加真实穿透/接触/第200对外见证/截断阴阳性与schema2严格摘要测试，CLI验证实际高级修复后cap穿透和残留开边的策略开关、原件不变及非法入口拒绝；性能仅记录不设脆弱耗时断言。"
 }
 -->
 
@@ -23,6 +23,7 @@
 - [copy_windows_active_log.cmd](../../../scripts/copy_windows_active_log.cmd) / [copy_windows_active_log.ps1](../../../scripts/copy_windows_active_log.ps1)：双击选择正在使用的日志，以兼容读写共享的只读句柄复制到桌面，保留源程序及原文件。
 - [test_check_ai_module_docs.py](../../../scripts/tests/test_check_ai_module_docs.py)：临时 Git 仓库的文档工具回归。
 - [test_cli_model_reconstruction.py](../../../scripts/test_cli_model_reconstruction.py)：针对已有应用创建隔离 STL 夹具、逐例目录和独立重建协议审计；保存二进制／输入 hash、stdout/stderr、报告及汇总，不构建、不切片、不打印。
+- [test_cli_model_check.py](../../../scripts/test_cli_model_check.py)：沿用既有检测／显式组合高级修复回归，核对默认 v4 精确六字段及显式 `--repair-evidence` 的可选 `boundary`；分别验证开关、非法组合、原字段／退出码和产物一致性，不新增自动修复命令或实际打印任务。
 - [test_gmp_platform_selection.py](../../../scripts/tests/test_gmp_platform_selection.py)：在临时 CMake 脚本中执行 GMP 配方、捕获 ExternalProject/复制参数，验证目标架构对应的版本、校验值及旧补丁/预编译路径；不修改真实构建目录，不等于目标系统编译运行。
 
 ## 核心流程
@@ -41,7 +42,23 @@ Windows GUI 采集脚本使用 PowerShell 5.1 与内嵌 C# P/Invoke，默认延�
 
 `[BoundaryClosure]` 新增 3 用例/72 断言，检验缺面方块恢复实体、反向面朝向、关闭后薄壳、闭合输入/贯通孔/相交闭壳不受补面影响，以及平面/开放自交/超预算环安全回退。CLI 新增关闭选项场景，并校验默认选项通过协议生效及体积差异；总场景数量与实际运行结果以主记录为准。外部诊断切片以同一已保存 GUI 工程保留有效配置和变换，3MF 输出必须共享精确相同顶点，不能因测试夹具把各三角形顶点拆开而误判业务切片故障。
 
-CLI 脚本要求显式 `--binary` 和父目录已存在、自身尚不存在的 `--output-dir`；保存 `fixture-manifest.json` 与 `summary.json`，复核源文件、既有产物和二进制未改变、不产生旧 `result.json`。测试健康 ASCII／二进制／中文路径、彩色 STL 拒绝、开口／多实体、非有限坐标、截断、参数白名单、风险确认及资源预算；超限场景可能先被资源守卫拒绝，不能因此声称已观测到超时，实际超时另由进程测试覆盖。
+独立重建 CLI 脚本要求显式 `--binary` 和父目录已存在、自身尚不存在的 `--output-dir`；保存 `fixture-manifest.json` 与 `summary.json`，复核源文件、既有产物和二进制未改变、不产生旧 `result.json`。测试健康 ASCII／二进制／中文路径、彩色 STL 拒绝、开口／多实体、非有限坐标、截断、参数白名单、风险确认及资源预算；超限场景可能先被资源守卫拒绝，不能因此声称已观测到超时，实际超时另由进程测试覆盖。
+
+`test_model_repair_evidence.cpp` 验证只读检测／修复／重建证据投影，区分未执行、完整检测、已知缺陷与不完整，保留已观测阳性和失败原因。高级修复正常结束、完整已知缺陷及准入通过后，真实穿透见证或显式允许封口下的残留开边可以形成建议并跳过Z观察；否则保留全部请求Z平面无有效区域、存在非退化闭圈且无主动删区配置的后备依据。摘要类型、face ID范围/次序、截断搜索、矛盾计数、坏见证及未完成操作均不得误报有效建议；开链、单空层和缺陷总数本身不触发。覆盖参考层位与调用方层位、诊断取消、资源／坐标预算、异常及原件不变；不注册自动编排或候选自动采用测试。
+
+`test_model_inspection.cpp` 的 `[ProperCrossing]` 使用精确非共面交线、极小穿透、共面重叠、点/边接触及健康闭体对照，验证分类不改变既有检测结果。另覆盖0/1对预算及第201个接触之后的穿透：阳性可提前结束存在性分类，但原搜索不完整仍不能作完整建议；阴性必须检查全部保留对，不能把前200个展示样本当全量。分类耗时只断言非负，不以机器相关时间阈值判通过。
+
+`test_mesh_slice_diagnostics.cpp` 的 `[MeshSliceDiagnostics]` 验证观察入口不改变普通切片输出；有效区域入口与 `slice_mesh_ex` 共用转换，切一次即得到原轮廓诊断与 `ExPolygons`。覆盖开放链丢弃、非零补隙、同坐标未焊接点、缺失水平盖，以及变换／模式／闭合半径／偏移／简化／单层／空输入和取消。参考单 Z 观察不是实际层计划或完整工艺试切片，不能宣称模型健康或打印通过。
+
+三个既有 CLI 脚本验证默认为关闭、显式开启与显式 `0` 关闭的协议和产物。`test_cli_model_check.py` 默认严格断言六字段；开启后检查 `boundary.schema_version=2`、穿透摘要、策略及单Z参考观察，以及健康／只检测跳过截面、部分修复和无进展保留语义、参数／输入失败及不支持组合。新增真实高级修复后的cap穿透及删一外侧面的非流形夹具，验证直接建议跳过截面、封口策略默认/0/1对照、同模型输出字节不因策略改变；合法无开边输入不误触发，普通修复/导出/独立重建入口连显式0也拒绝该策略，非法值受控拒绝。`test_cli_repair_acceptance.py` 对照普通 CGAL 报告及导出物；`test_cli_model_reconstruction.py` 对照独立候选身份／文件及只读投影，二者保持原投影版本且不因证据选项额外执行检测。检测／断面不完整、取消或失败不能被投影成必须重建；实际运行、旧 GUI 流程、Windows/Linux 和打印结论分别记录，不由测试代码存在推定通过。
+
+10-15组合完成语义回归：新组合正常无进展返回0但保留unresolved/缺陷，旧默认和显式off仍-25；显式STL转换必须产出并复检result.stl。用拉高Z的确定性非流形夹具触发2000截面预算，分别验证unresolved/partial的新组合非零、旧partial仍0与保留产物一致。核心测试覆盖同一路径；本地维护台Node测试按历史实际argv识别模式，并覆盖check_complete=false但已知几何阻断/有效预检完成的结果文案，不改其他任务和历史退出码。
+
+本地维护台另以Node VM执行实际前端生命周期函数，覆盖CLI成功/失败/取消/超时/中断后的新计划和按钮恢复、首次读取历史不加载旧结果、显式历史回看、活动任务恢复及迟到响应保护；浏览器实跑证据见同一[模型修复记录](../validation/2026-10-04-smart-print-engine.md)。这是既有Git忽略的`planning/cache`维护台测试，不是原生GUI或修复核心改动，不用其通过替代跨平台验收。
+
+重建报告主结论只展示 `assessment`，`applicability` 移到默认折叠的“重建输入范围”，明确不是重建建议。`eligible` 仅说明当前入口未发现不支持项，不承诺输入完整有效、需要重建或能修好。Node覆盖四类结论与输入范围独立、未知值不冒充支持、报告不变、实际DOM默认折叠及文本安全；旧版/缺报告继续保守显示。此项仅本地中文维护台展示，不改原生GUI/CLI业务、JSON或国际化机制，无额外模型计算。
+
+10-15维护台双槽回归允许macOS标准GUI与一个CLI并行，全部CLI独立datadir/输出目录；构建、打包、重置/清理/恢复持全程独占锁，兼容旧服务锁。编辑版GUI命令按实际步骤归独占槽；前端依服务端execution_slot及能力位启用并行，旧服务安全保持互斥。Node覆盖双向启动、独立日志/取消、刷新恢复、未知槽拒绝及迟到响应；Python临时目录验证跨服务冲突、启动失败释放、维护操作期间锁与预览token保留、不构造SQLite及外部应用进程门禁。141项Python和38项Node通过；浏览器实跑GUI常驻下两次cube证据检测、cube/dragon普通切片通过，不代表打印质量或原生修复再验收。Windows仅模拟独占分支，未宣称Windows/Linux现场通过。
 
 ## 配置与约束
 

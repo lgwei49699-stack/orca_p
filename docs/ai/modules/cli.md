@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:7e3ce60a4abd6e6f0ca80d1fb041c5aea35fd5808a41cbc308daa924f627eb0b",
-  "reason": "保留独立重建预算/协议改动；CLI全部切片新增跳过空盘和全禁用盘，显式指定禁用盘仍报错，启用越界模型不跳过。通过PartPlateList共享导出快照统一多盘切片包选择；普通解析、check-model v4、旧repair JSON未变。"
+  "source_fingerprint": "sha256:59b17664bdeb27490f286a59d2a5f098c3871d3a370c231b640c9f3c2d863f0f",
+  "reason": "显式证据组合升级boundary schema2：复用真实穿透分类，明确依据提前结束，不重复预检；残留开边仅在调用方显式承诺闭合实体及允许封口时建议重建。新增策略参数限定check+CGAL+evidence组合，显式0与独立重建早分流也校验；旧入口/off/普通修复退出码及六字段不变，不自动重建或采用。本轮收尾核对合法策略0/1、非法值与早分流拒绝，CLI专用键不流入切片工艺配置；运行身份及114场景结果归主验证记录。"
 }
 -->
 
@@ -23,9 +23,19 @@
 
 独立 `--reconstruct-model` 与内部 `--reconstruction-worker` 在 `CLI::run` 的普通解析、预设和 GUI 启动之前分流到 ModelReconstruction。前者要求一个无色 STL、尚不存在的 `--outputdir` 和显式 `--accept-reconstruction-risk`；后者只用于受控任务目录中的 worker 协议。GUI 与公共 CLI 共享候选核心，不通过旧 `--repair-model cgal` 或 `--check-model` 间接执行重建。
 
+`--repair-evidence` 是非动作选项（默认关闭，显式 `0` 关闭），不新增修复命令、菜单或编排。默认 `--check-model` v4 仍为六字段；显式开启才附加自身 `schema_version=2` 的 `boundary`，包含 `proper_crossings` 摘要与 `reconstruction.policy`。普通 `--repair-model cgal` 和独立 `--reconstruct-model` 也只在此选项下投影已有报告，保持各自原有投影，不升级为模型检测证据协议；开启选项却不包含上述检测／修复入口时受控拒绝，不能借此启动 GUI 或改变普通导出。原检测七项计数、修复参数和旧入口退出码不变；后端自行调度，程序不因证据字段执行重建。
+
+仅组合 `--check-model --repair-model cgal --repair-evidence` 采用流程完成语义：正常无进展且最终证据完整有效返回0、空error_string，保留unresolved/needs_repair及缺陷。共享工作流仍执行显式格式转换和最终复检。最终健康可跳过预检；残留缺陷须通过完整性及eligible准入检查，已确认真实穿透或允许封口策略下的残留开放边界可直接形成建议并跳过预检，否则最多执行一次完整有界预检。无确定异常的完整观察可以完成，但任意undetermined/缺证据不能直接算完成。预检异常、超限、未知或未完成仍非零（沿用既有码），部分成果照样保留；不把所有-25改0。原生GUI不走该CLI工作流，行为不变；本地维护台按真实命令及返回值显示“已完成，模型未解决”，不改旧231历史。
+
+只有该显式组合复用当前保留网格的同一轮自交搜索，以精确几何判定区分真实穿透与共面重叠、点/边接触；不重新进行全量搜索。`evidence_present / proper_crossing_after_repair` 需要完整检查及非零长度、互相严格跨面的交线见证。允许封口策略下的残留开边对应 `open_boundaries_under_closed_solid_policy`。这两类明确依据使 `sections.status=not_run`、`reason=reconstruction_evidence_already_present`，不是漏执行。只有未取得明确依据的残留缺陷才追加一次 Z 观察，复用普通区域构造得到有效 `ExPolygons`，不生成墙、填充、支撑或 G-code。健康网格直接复用无交对摘要并跳过截面；只检测和默认旧调用不启用该分类或截面，未知／失败结果不继续升级。
+
+原有 `evidence_present / no_effective_regions` 保留为另一条充分依据：完整参考 Z 计划全部无有效区域、存在非退化闭圈、无主动删区参数干扰且准入为eligible；不再把它当作所有模型都必须满足的前置条件。开链、单空层、面积变化、自交数量或非流形数量不能单独触发。CLI 未加载工艺，参考层位不等于实际打印层；建议重建不证明原模型一定切片失败，也不证明重建候选可打印。GUI 仍走既有手动修复与候选确认，未新增此评估的展示或自动执行入口。详见[协议](../../../doc/model-check-workflow.md)与[共享模型修复](model-repair.md)。
+
 ## 配置与约束
 
 命令行加载的机器／耗材／工艺配置与输入工程的配置合成为有效配置，再应用动作及对象覆盖。输入顺序、单位变换、多盘及颜色分组都会影响输出，不能只比较命令末尾几个参数。日志、进程退出码与结果 JSON 分别核对。
+
+`--repair-evidence-close-boundaries 0|1` 默认false，仅允许与 `--check-model --repair-model cgal --repair-evidence` 同时启用。值1是调用方明确承诺“输入应为闭合实体、允许填补剩余开口”，仅影响重建建议，不执行封口、重建或采用；不从STL格式、面数或组件数猜测设计意图。`boundary.reconstruction.policy` 记录版本1及实际 `allow_boundary_closure`。显式传0也必须在该组合使用；普通修复/导出和独立重建早分流均拒绝这个策略参数，独立重建仍使用自己原有的风险确认及封口参数。该选项不是对旧 `--auto-repair-model 0|1` 的替代。
 
 `--slice 0` 全部切片跳过空盘及全部实例明确关闭打印的盘，不因这些盘在 apply 后没有打印对象而中断任务。显式指定该盘仍执行原有校验；启用但越界的模型不因此跳过。`--min-save --export-3mf` 使用共享导出快照，只写选定的可打印盘的 G-code/切片信息，未选中盘仅留编号空槽兼容既有读取器；参与打印但未切片、缺失 G-code 或没有目标盘仍失败。普通带模型工程允许包含未切片盘，不套用切片包限制。
 
@@ -48,6 +58,8 @@
 现有测试/工具范围：`tests/fff_print/test_gcode.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
 
 独立重建另用 `scripts/test_cli_model_reconstruction.py --binary <当前应用可执行文件> --output-dir <全新证据目录>`，校验二进制／输入 hash、独立报告、候选 STL、输入与既有输出不变；脚本不构建、不试切片、不打印。运行身份与结果在[主记录](../validation/2026-10-04-smart-print-engine.md)，GUI 路径和具体对照在[交接清单](../validation/2026-10-05-reconstruction-gui.md)。
+
+现有三个修复CLI脚本覆盖默认旧协议、显式on/off证据、非法组合、输入/早期参数失败，以及相同模型修复/候选身份和原件不变；不另设自动修复协议脚本。`test_cli_model_check.py` 新增schema2、真实穿透见证、封口策略开/关/默认、无开边不误触发，以及新参数在普通入口/独立重建及显式0时拒绝的契约检查；用高级修复实际保留网格验证建议，不能以修复已通过的缺顶方块冒充残留开边触发。只检测不运行分类或截面观察。脚本覆盖不等于已运行，统计与平台/GUI状态见主记录，不能据证据字段宣称已经可打印。
 
 ## 分支现状
 

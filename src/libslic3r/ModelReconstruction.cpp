@@ -2,6 +2,7 @@
 #include "I18N.hpp"
 
 #include "Model.hpp"
+#include "ModelRepairEvidence.hpp"
 #include "TriangleMesh.hpp"
 #include "Utils.hpp"
 #include "Format/STL.hpp"
@@ -530,8 +531,9 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
         result.report               = std::move(report);
         result.report["elapsed_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started)
                                           .count();
-        if (result.status != "candidate_ready" || !result.report.value("mesh_validated", false))
+        if (result.status != "candidate_ready" || !result.report.value("mesh_validated", false)) {
             return result;
+        }
         auto candidate_mm = read_mesh(task.path / "candidate.mesh", mesh_options.max_output_faces);
         if (mesh_identity(candidate_mm) != result.report.at("output_mesh_identity").get<std::string>())
             throw std::runtime_error(L("Reconstruction output checksum does not match the validated candidate."));
@@ -683,6 +685,7 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
     options.executable = executable;
     std::string input, output;
     bool        confirmed = false;
+    bool        repair_evidence = false;
     fs::path    output_path;
     bool        output_owned = false;
     try {
@@ -690,6 +693,17 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
             const auto& arg = args[i];
             if (arg == "--reconstruct-model")
                 continue;
+            if (arg == "--repair-evidence" || arg.compare(0, 18, "--repair-evidence=") == 0) {
+                std::string value;
+                if (arg != "--repair-evidence")
+                    value = arg.substr(18);
+                else if (i + 1 < args.size() && (args[i + 1] == "0" || args[i + 1] == "1"))
+                    value = args[++i];
+                if (!value.empty() && value != "0" && value != "1")
+                    throw std::invalid_argument(L("--repair-evidence expects 0 or 1."));
+                repair_evidence = value != "0";
+                continue;
+            }
             if (arg == "--accept-reconstruction-risk") {
                 confirmed = true;
                 continue;
@@ -703,6 +717,7 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
                     "Usage: --reconstruct-model INPUT.stl --outputdir NEW_DIRECTORY --accept-reconstruction-risk\n"
                     "Options: --reconstruction-alpha MM --reconstruction-offset MM --reconstruction-max-deviation MM\n"
                     "         --reconstruction-timeout SECONDS --reconstruction-no-close-open-boundaries\n"
+                    "         --repair-evidence [0|1] (optional read-only boundary evidence, disabled by default)\n"
                     "Generates an approximate candidate only. Original input is never overwritten.\n"
                     "STL units are millimeters. Shape, holes and cavities may change; colored STL is unsupported.\n"
                     "Maximum deviation is a warning threshold, not a rejection limit. Up to three bounded wrap attempts.\n"
@@ -791,12 +806,16 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
             result.report["candidate_file"]    = "candidate.stl";
             result.report["export_round_trip"] = "passed";
         }
+        if (repair_evidence)
+            result.report["boundary"] = model_reconstruction_boundary(result.report);
         write_json(output_path / "reconstruction.json", result.report);
         boost::nowide::cout << result.report.dump(2) << '\n';
         return result.candidate_model ? 0 : 2;
     } catch (const std::exception& error) {
         auto report       = base_report();
         report["message"] = error.what();
+        if (repair_evidence)
+            report["boundary"] = model_reconstruction_boundary(report);
         if (output_owned) {
             boost::system::error_code ec;
             fs::remove(output_path / "candidate.stl", ec);

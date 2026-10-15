@@ -1,3 +1,4 @@
+src/OrcaSlicer.cpp
 src/slic3r/GUI/DeviceTab/uiAmsHumidityPopup.h
 src/slic3r/GUI/DeviceTab/uiAmsHumidityPopup.cpp
 src/slic3r/GUI/DeviceTab/uiDeviceUpdateVersion.h

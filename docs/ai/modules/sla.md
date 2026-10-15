@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "sla",
-  "source_fingerprint": "sha256:9195e44b9b3f6782f2b67d903066ceb3f3bbafd5811fd7aa2c892b35c33eeb29",
-  "reason": "按 2026-10-04 用户约定更新构建与测试分工说明；SLA 测试目标现状、源码指纹及既有验证限制未变。"
+  "source_fingerprint": "sha256:39a3090a386f44dbaaca3ad82adc0bdc2c4c95a6a85b2f2ec042a1547978c794",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助仅供独立模型建议；SLAPrint中空/排孔/支撑/光栅化和曝光参数不消费此键，GUI SLA工艺行为未改。"
 }
 -->
 

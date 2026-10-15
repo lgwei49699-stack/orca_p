@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "support",
-  "source_fingerprint": "sha256:d02b3f537f6522c24f05684cb48ad5894cba9e856b37456a6bde921ae12cd1a5",
-  "reason": "共享测试新增增强筏层阶梯凹口裁断回归；普通支撑、悬空告警及SupportCommon安全裁剪实现未改，新增端点限制只由RaftMerge无墙增强分支设置，正文沿用。筏层/填充专项通过，不宣称全量普通支撑或实机验收。"
+  "source_fingerprint": "sha256:aff2a7a269e5341bef6143b777ed5b4430ce19fdead660fb87051111d5c64396",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不被SupportMaterial/TreeSupport消费；支撑阈值、间隙、悬空告警和GUI支撑设置保持，证据流程不生成支撑路径。"
 }
 -->
 

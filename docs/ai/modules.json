@@ -59,14 +59,18 @@
         "src/OrcaSlicer.hpp",
         "src/OrcaSlicer_app_msvc.cpp"
       ],
-      "watch": [],
+      "watch": [
+        "src/libslic3r/ModelRepairEvidence.hpp",
+        "src/libslic3r/ModelReconstruction.hpp"
+      ],
       "entrypoints": [
         "src/OrcaSlicer.cpp",
         "src/OrcaSlicer.hpp"
       ],
       "tests": [
         "tests/fff_print/test_gcode.cpp",
-        "scripts/test_cli_model_reconstruction.py"
+        "scripts/test_cli_model_reconstruction.py",
+        "scripts/test_cli_model_check.py"
       ],
       "test_note": "修改动作路由优先检查 run/export_models 和结果序列化；验证无参数启动、模型导出、分盘→切片和不合法参数。使用隔离输出目录；共享业务按 validation.md 与 GUI 的有效配置、结果及失败语义对照。"
     },
@@ -356,6 +360,8 @@
         "src/libslic3r/ModelReconstruction.hpp",
         "src/libslic3r/ModelRepair.cpp",
         "src/libslic3r/ModelRepair.hpp",
+        "src/libslic3r/ModelRepairEvidence.cpp",
+        "src/libslic3r/ModelRepairEvidence.hpp",
         "src/libslic3r/ReconstructionProcess.cpp",
         "src/libslic3r/ReconstructionProcess.hpp",
         "src/slic3r/Utils/FixModelByCgal.cpp",
@@ -364,9 +370,13 @@
         "src/slic3r/Utils/ModelRepairBackup.hpp",
         "src/slic3r/Utils/ModelRepairPolicy.hpp"
       ],
-      "watch": [],
+      "watch": [
+        "src/libslic3r/TriangleMeshSlicer.cpp",
+        "src/libslic3r/TriangleMeshSlicer.hpp"
+      ],
       "entrypoints": [
         "src/libslic3r/ModelRepair.cpp",
+        "src/libslic3r/ModelRepairEvidence.cpp",
         "src/libslic3r/MeshBoolean.cpp",
         "src/slic3r/Utils/FixModelByCgal.cpp",
         "src/libslic3r/ModelCheckWorkflow.cpp",
@@ -382,9 +392,12 @@
         "tests/libslic3r/test_mesh_reconstruction.cpp",
         "tests/libslic3r/test_model_reconstruction.cpp",
         "tests/libslic3r/test_reconstruction_process.cpp",
-        "scripts/test_cli_model_reconstruction.py"
+        "tests/libslic3r/test_model_repair_evidence.cpp",
+        "tests/libslic3r/test_mesh_slice_diagnostics.cpp",
+        "scripts/test_cli_model_reconstruction.py",
+        "scripts/test_cli_model_check.py"
       ],
-      "test_note": "旧修复按 `[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]` 回归；独立重建按 `[MeshReconstruction],[ModelReconstruction],[ReconstructionProcess]` 及 CLI 专项检查健康/不支持输入、变换后最终网格、候选不污染源、取消/超时/内存/异常输出。GUI 确认、Undo、备份和同参试切片按交接记录另验，无匹配不能计为通过。"
+      "test_note": "旧修复按 `[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]` 回归；独立重建按 `[MeshReconstruction],[ModelReconstruction],[ReconstructionProcess]` 及 CLI 专项检查健康/不支持输入、变换后最终网格、候选不污染源、取消/超时/内存/异常输出。新增只读证据投影及 `[MeshSliceDiagnostics]` 回归，既有check-model脚本核对v4旧字段/退出码和boundary扩展；不新增自动编排，参考 Z 截面不等于实际试切片。GUI 确认、Undo、备份和同参试切片按交接记录另验，无匹配不能计为通过。"
     },
     {
       "id": "geometry",
@@ -584,7 +597,8 @@
       "tests": [
         "tests/fff_print/test_print.cpp",
         "tests/fff_print/test_printobject.cpp",
-        "tests/fff_print/test_flow.cpp"
+        "tests/fff_print/test_flow.cpp",
+        "tests/libslic3r/test_mesh_slice_diagnostics.cpp"
       ],
       "test_note": "关注 invalidate_state_by_config_options、apply 差异和完整 process 链。测试模型层数/Z、重复切片、改配置后重切、取消恢复；本轮没有运行切片业务验收。"
     },

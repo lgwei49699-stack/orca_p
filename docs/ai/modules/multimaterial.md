@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "multimaterial",
-  "source_fingerprint": "sha256:0f5f722f5ad3318703da8424b763b15fad152e473ff8efe19d18f08de2d3a792",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。补登记公共参数定义依赖；核对配置约束沿用本分支实现。"
+  "source_fingerprint": "sha256:ae610b0591e8a85237ec49201de955a6086ed1354a88f383ce2b96ac425a09e7",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入分色、工具排序或擦料塔生成；多材料映射、冲刷参数及GUI颜色配置保持，不因建议策略丢弃绘制。"
 }
 -->
 

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gcode-export",
-  "source_fingerprint": "sha256:f056efe29d1155bfa9495464d556fdfe8801e8ccda7e67236de243a150835757",
-  "reason": "统一总层数占位符/文件尾与实际输出口径：工具顺序建立后复用实际层组，跳过无工具组并保留支撑/筏层/擦料塔；逐对象按副本计数。不改网格或路径，补空层回归及真实龙模型修前后/应用CLI对照。"
+  "source_fingerprint": "sha256:0a0cf5103f8a5186f982eb946db1284e665b09010bae6a353be5f2f6b07133a2",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，只在模型检测组合解释；GCode/GCodeWriter、指令风格、速度流量、后处理及GUI导出路径未改，证据流程不输出G-code。"
 }
 -->
 

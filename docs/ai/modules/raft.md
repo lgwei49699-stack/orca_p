@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "raft",
-  "source_fingerprint": "sha256:209e56c31ff19d6986f95048bf6b2211abb11e774cac765231d4f452787cced4",
-  "reason": "增强无墙ZigZag同时约束扫描和折返轮廓，消除凹口处被最终安全裁断的路径；保留原短线/切缝/孔洞/床面裁剪及旧分支。新增固定轮廓回归与Fill依赖，macOS筏层/填充92用例通过，CLI单变量对照及GUI交接见专题。"
+  "source_fingerprint": "sha256:13117dd1dd3c7f40a94e74871b45b047a78c54ab1d5da1f14c803bb5d81c6ea5",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入RaftPlan/RaftGeometry/RaftMerge；筏层分块、平滑、气隙、阶段参数和GUI筏层面板均未改变。"
 }
 -->
 

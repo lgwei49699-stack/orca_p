@@ -54,11 +54,13 @@
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Geometry.hpp"
+#include "libslic3r/I18N.hpp"
 #include "libslic3r/GCode/PostProcessor.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/ModelRepair.hpp"
 #include "libslic3r/ModelReconstruction.hpp"
+#include "libslic3r/ModelRepairEvidence.hpp"
 #include "libslic3r/ModelCheckWorkflow.hpp"
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Exception.hpp"
@@ -248,6 +250,7 @@ typedef struct _sliced_info {
     std::vector<model_repair_info_t> model_repairs;
     std::vector<obj_export_info_t>   obj_exports;
     bool                             cgal_repair_requested{false};
+    bool                             repair_evidence_requested{false};
     bool                             repair_slice_requested{false};
     size_t                           repair_slices_completed{0};
     json                             model_transforms = nlohmann::json::array();
@@ -720,6 +723,8 @@ bool record_exit_reson(std::string                        outputdir,
                 repair_json["completed"]        = report.completed;
                 repair_json["can_continue"]     = report.can_continue();
                 repair_json["mesh_validated"]          = report.mesh_validated();
+                if (sliced_info.repair_evidence_requested)
+                    repair_json["boundary"] = model_repair_boundary(report);
                 repair_json["before"]                  = {{"facets", report.before_facets}, {"open_edges", report.before_open_edges}};
                 repair_json["repair_actions"]          = {{"objects", report.objects},
                                                           {"volumes", report.volumes},
@@ -1469,6 +1474,34 @@ int CLI::run(int argc, char **argv)
         return CLI_ENVIRONMENT_ERROR;
     }
 
+    const std::string boundary_policy_usage_error = L(
+        "--repair-evidence-close-boundaries requires --check-model, --repair-model cgal and --repair-evidence together.");
+    bool raw_boundary_policy_requested = false;
+    bool raw_reconstruction_requested  = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg(argv[i]);
+        if (arg == "--")
+            break;
+        raw_reconstruction_requested |= arg == "--reconstruct-model";
+        if (arg.empty() || arg.front() != '-')
+            continue;
+        const std::string token  = arg.substr(boost::starts_with(arg, "--") ? 2 : 1);
+        const std::string option = "repair-evidence-close-boundaries";
+        if (token == option || boost::starts_with(token, option + "=")) {
+            raw_boundary_policy_requested = true;
+            if (token != option && token != option + "=0" && token != option + "=1") {
+                boost::nowide::cerr << L("--repair-evidence-close-boundaries expects 0 or 1.") << std::endl;
+                return CLI_INVALID_PARAMS;
+            }
+        }
+    }
+    // Reconstruction has its own parser, before setup(). Reject this evidence
+    // policy even when explicitly disabled or paired with early --help.
+    if (raw_reconstruction_requested && raw_boundary_policy_requested) {
+        boost::nowide::cerr << boundary_policy_usage_error << std::endl;
+        return CLI_INVALID_PARAMS;
+    }
+
     // Independent, headless reconstruction protocol. Never enter legacy repair,
     // profile migration or GUI initialization in a resource-limited worker.
     if (argc == 3 && std::string(argv[1]) == "--reconstruction-worker")
@@ -1572,7 +1605,10 @@ int CLI::run(int argc, char **argv)
                                                         [](const ModelCliSpec& spec) { return spec.arrange_group.has_value(); });
 
     // Validate before material catalog loading and before the no-action GUI branch.
-    const bool cgal_repair_requested   = std::find(m_actions.begin(), m_actions.end(), "repair_model") != m_actions.end();
+    const bool cgal_repair_requested     = std::find(m_actions.begin(), m_actions.end(), "repair_model") != m_actions.end();
+    const bool repair_evidence_requested = m_config.opt_bool("repair_evidence");
+    const bool boundary_policy_requested = std::find(m_requested_options.begin(), m_requested_options.end(),
+                                                     "repair_evidence_close_boundaries") != m_requested_options.end();
     if (std::find(m_actions.begin(), m_actions.end(), "check_model") != m_actions.end()) {
         ModelCheckWorkflowReport check_report;
         int                      code = CLI_SUCCESS;
@@ -1580,8 +1616,11 @@ int CLI::run(int argc, char **argv)
         try {
             // This is a model-only entry point, before printer/material catalog
             // loading, arrangement, bed transforms and the normal slice path.
-            const std::set<std::string> allowed_options{"check_model", "repair_model", "export_obj", "export_stl",
-                                                        "outputdir",   "debug",        "datadir",    "repair_ignore_materials"};
+            const std::set<std::string> allowed_options{"check_model",     "repair_model",
+                                                        "export_obj",      "export_stl",
+                                                        "outputdir",       "debug",
+                                                        "datadir",         "repair_ignore_materials",
+                                                        "repair_evidence", "repair_evidence_close_boundaries"};
             for (const auto& key : m_requested_options)
                 if (allowed_options.count(key) == 0)
                     throw std::invalid_argument("--check-model does not accept this slicing/transform option: " + key);
@@ -1594,27 +1633,39 @@ int CLI::run(int argc, char **argv)
                 throw std::invalid_argument("--check-model does not accept per-model slicing overrides.");
             if (cgal_repair_requested && m_config.opt_string("repair_model") != "cgal")
                 throw std::invalid_argument("--check-model supports only --repair-model cgal.");
+            if (boundary_policy_requested && (!cgal_repair_requested || !repair_evidence_requested))
+                throw std::invalid_argument(boundary_policy_usage_error);
             if (m_config.opt_bool("export_obj") && m_config.opt_bool("export_stl"))
                 throw std::invalid_argument("Choose one model check export format: OBJ or STL.");
             ModelCheckWorkflowOptions options;
-            options.input_file       = boost::filesystem::absolute(m_input_files.front()).string();
-            options.output_directory = outfile_dir;
-            options.advanced_repair  = cgal_repair_requested;
-            options.ignore_materials = m_config.opt_bool("repair_ignore_materials");
-            options.export_format    = m_config.opt_bool("export_obj") ? "obj" : (m_config.opt_bool("export_stl") ? "stl" : "");
+            options.input_file             = boost::filesystem::absolute(m_input_files.front()).string();
+            options.output_directory       = outfile_dir;
+            options.advanced_repair        = cgal_repair_requested;
+            options.repair_evidence        = repair_evidence_requested;
+            options.allow_boundary_closure = m_config.opt_bool("repair_evidence_close_boundaries");
+            options.ignore_materials       = m_config.opt_bool("repair_ignore_materials");
+            options.export_format          = m_config.opt_bool("export_obj") ? "obj" : (m_config.opt_bool("export_stl") ? "stl" : "");
             run_model_check_workflow(options, check_report);
         } catch (const std::invalid_argument& error) {
             code    = CLI_INVALID_PARAMS;
             message = error.what();
+            if (check_report.failure_kind.empty())
+                check_report.failure_kind = "invalid_arguments";
         } catch (const std::bad_alloc&) {
             code    = CLI_OUT_OF_MEMORY;
             message = "Insufficient memory while checking the model.";
+            if (check_report.failure_kind.empty())
+                check_report.failure_kind = "memory_allocation_failed";
         } catch (const std::exception& error) {
             code    = check_report.repair_attempted ? CLI_MODEL_REPAIR_ERROR : CLI_MODEL_CHECK_ERROR;
             message = error.what();
+            if (check_report.failure_kind.empty() && !check_report.repair_no_progress)
+                check_report.failure_kind = "execution_failed";
         } catch (...) {
             code    = CLI_MODEL_CHECK_ERROR;
             message = "Unexpected model check failure.";
+            if (check_report.failure_kind.empty())
+                check_report.failure_kind = "execution_failed";
         }
         if (check_report.check.empty())
             check_report.check = {{"check_complete", false},
@@ -1624,6 +1675,8 @@ int CLI::run(int argc, char **argv)
                                    {{"requested", cgal_repair_requested},
                                     {"status", cgal_repair_requested ? "not_started" : "not_requested"}}}};
         if (code != CLI_SUCCESS) {
+            if (!check_report.failure_kind.empty())
+                check_report.check["failure_kind"] = check_report.failure_kind;
             check_report.check["operation_error"] = message;
             check_report.check["operation_status"] = "failed";
             if (check_report.check.contains("advanced_repair") && check_report.check["advanced_repair"].value("status", "") == "running") {
@@ -1636,12 +1689,27 @@ int CLI::run(int argc, char **argv)
         // diagnostic tree. Remaining issue counts describe the retained model.
         if (!check_report.repair.failures.empty())
             check_report.check["repair_message"] = check_report.repair.failures.front().message;
+        // Preserve the explicit opt-in even when argument validation failed
+        // before the shared workflow could initialize its internal report.
+        check_report.check["repair_evidence_requested"] = repair_evidence_requested;
         sliced_info.model_checks.push_back(std::move(check_report.check));
         if (!record_exit_reson(outfile_dir, code, 0, message, sliced_info))
             return CLI_RESULT_WRITE_ERROR;
         return code;
     }
-    sliced_info.cgal_repair_requested = cgal_repair_requested;
+    sliced_info.cgal_repair_requested     = cgal_repair_requested;
+    sliced_info.repair_evidence_requested = repair_evidence_requested;
+    if (boundary_policy_requested) {
+        boost::nowide::cerr << boundary_policy_usage_error << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, boundary_policy_usage_error, sliced_info);
+        return CLI_INVALID_PARAMS;
+    }
+    if (repair_evidence_requested && !cgal_repair_requested) {
+        const std::string message = "--repair-evidence requires --check-model, --repair-model cgal or --reconstruct-model.";
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        return CLI_INVALID_PARAMS;
+    }
     sliced_info.repair_slice_requested = cgal_repair_requested &&
         std::find(m_actions.begin(), m_actions.end(), "slice") != m_actions.end();
     if (sliced_info.repair_slice_requested &&

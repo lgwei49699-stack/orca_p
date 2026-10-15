@@ -296,6 +296,8 @@ set(lisbslic3r_sources
     Model.hpp
     ModelRepair.cpp
     ModelRepair.hpp
+    ModelRepairEvidence.cpp
+    ModelRepairEvidence.hpp
     ModelReconstruction.cpp
     ModelReconstruction.hpp
     MeshReconstruction.hpp

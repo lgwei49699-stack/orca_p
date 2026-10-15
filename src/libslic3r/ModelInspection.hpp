@@ -2,12 +2,21 @@
 #define slic3r_ModelInspection_hpp_
 
 #include <cstddef>
+#include <stdexcept>
 #include <vector>
 #include <nlohmann/json.hpp>
 
 namespace Slic3r {
 class Model;
 class TriangleMesh;
+
+// Explicit geometry admission limits, distinct from malformed input or an
+// inspection execution error. The legacy runtime_error contract is preserved.
+class ModelInspectionLimitError : public std::runtime_error
+{
+public:
+    using std::runtime_error::runtime_error;
+};
 
 struct ModelInspectionOptions
 {
@@ -18,6 +27,9 @@ struct ModelInspectionOptions
     unsigned    max_intersections    = 20000;
     std::size_t max_solid_components = 128;
     std::size_t detail_limit         = 200;
+    // Optional existence test on the already found intersection pairs. This
+    // does not change the seven checks or perform another pair search.
+    bool classify_proper_crossings = false;
 };
 
 // Seven geometry checks and two public supplemental checks, on the supplied mesh.

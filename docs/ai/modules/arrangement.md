@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "arrangement",
-  "source_fingerprint": "sha256:00d43ed19ad7b045102febbfd432eca796d6c65553c3bcab6c191e675bffe38b",
-  "reason": "PartPlateList导出快照新增实际可打印实例状态供GUI/CLI共享筛盘；不改变摆放、盘归属、边界或实例printable。CLI仅全部切片跳过空盘/全禁用盘，启用但越界及显式指定盘仍走原校验。"
+  "source_fingerprint": "sha256:09b38921653f4c58dbde71160d5c775471e2bc240304be0e42ec89cefd098abe",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI专用repair_evidence_close_boundaries及证据帮助，只作用模型检测组合；不改变Arrange/ModelArrange、盘归属、间距、筏层预留或GUI摆盘行为。"
 }
 -->
 

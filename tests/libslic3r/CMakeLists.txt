@@ -32,6 +32,8 @@ add_executable(${_TEST_NAME}_tests
 	test_meshboolean.cpp
 	test_model.cpp
 	test_model_repair.cpp
+	test_model_repair_evidence.cpp
+	test_mesh_slice_diagnostics.cpp
 	test_mesh_reconstruction.cpp
 	test_reconstruction_process.cpp
 	test_model_reconstruction.cpp

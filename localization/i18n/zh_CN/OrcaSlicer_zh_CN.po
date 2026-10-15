@@ -15753,6 +15753,34 @@ msgstr "导出文件的输出路径。"
 msgid "Automatically repair imported model"
 msgstr "自动修复导入的模型"
 
+#: src/libslic3r/PrintConfig.cpp
+msgid "Include model repair evidence"
+msgstr "附加模型修复判断依据"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "With --check-model, --repair-model cgal or --reconstruct-model, include read-only repair boundary evidence. With --check-model and --repair-model cgal, reuse proper-crossing classification first; decisive evidence skips Z sections. Only unresolved residual defects may additionally require bounded Z sections. Does not automatically reconstruct or adopt a model; disabled by default."
+msgstr "配合 --check-model、--repair-model cgal 或 --reconstruct-model，附加只读的修复边界依据。与 --check-model 和 --repair-model cgal 组合时，先复用真实穿透分类；已有明确依据时跳过 Z 截面预检。仅残留缺陷尚未明确时才可能追加有界 Z 截面预检。不会自动重建或采用模型；默认关闭。"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Allow boundary-closure reconstruction recommendations"
+msgstr "允许建议重建封闭开放边界"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Requires --check-model, --repair-model cgal and --repair-evidence together. The caller confirms that the input should be a closed solid and that remaining open boundaries may be filled. Only affects the reconstruction recommendation; does not close boundaries, reconstruct or adopt a model. Disabled by default."
+msgstr "必须同时启用 --check-model、--repair-model cgal 和 --repair-evidence。调用方确认输入应为闭合实体，并允许填充残留开放边界。仅影响重建建议，不执行封口、重建或采用模型。默认关闭。"
+
+#: src/OrcaSlicer.cpp
+msgid "--repair-evidence-close-boundaries requires --check-model, --repair-model cgal and --repair-evidence together."
+msgstr "--repair-evidence-close-boundaries 必须与 --check-model、--repair-model cgal 和 --repair-evidence 同时启用。"
+
+#: src/OrcaSlicer.cpp
+msgid "--repair-evidence-close-boundaries expects 0 or 1."
+msgstr "--repair-evidence-close-boundaries 的值必须为 0 或 1。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "--repair-evidence expects 0 or 1."
+msgstr "--repair-evidence 的值必须为 0 或 1。"
+
 msgid ""
 "Automatically repair STL mesh connectivity and normals while importing the "
 "model. With --repair-model cgal, this defaults to 0; set to 1 to run automatic "
@@ -19235,6 +19263,7 @@ msgid ""
 "Usage: --reconstruct-model INPUT.stl --outputdir NEW_DIRECTORY --accept-reconstruction-risk\n"
 "Options: --reconstruction-alpha MM --reconstruction-offset MM --reconstruction-max-deviation MM\n"
 "         --reconstruction-timeout SECONDS --reconstruction-no-close-open-boundaries\n"
+"         --repair-evidence [0|1] (optional read-only boundary evidence, disabled by default)\n"
 "Generates an approximate candidate only. Original input is never overwritten.\n"
 "STL units are millimeters. Shape, holes and cavities may change; colored STL is unsupported.\n"
 "Maximum deviation is a warning threshold, not a rejection limit. Up to three bounded wrap attempts.\n"
@@ -19248,6 +19277,7 @@ msgstr ""
 "用法：--reconstruct-model INPUT.stl --outputdir NEW_DIRECTORY --accept-reconstruction-risk\n"
 "选项：--reconstruction-alpha MM --reconstruction-offset MM --reconstruction-max-deviation MM\n"
 "      --reconstruction-timeout SECONDS --reconstruction-no-close-open-boundaries\n"
+"      --repair-evidence [0|1]（可选的只读边界依据，默认关闭）\n"
 "仅生成近似候选模型，绝不覆盖原始输入。\n"
 "STL 单位为毫米；形状、孔洞和空腔可能改变，不支持彩色 STL。\n"
 "最大偏差参数为告警阈值，不是拒绝上限；最多尝试三档受限包裹。\n"

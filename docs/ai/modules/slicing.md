@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "slicing",
-  "source_fingerprint": "sha256:05645126d63b0fcb040edcd76f51d03218211eda0f0ccf150d4f470e165a62f4",
-  "reason": "修正同次网格替换和实例变换后的部分有效区域缓存：复用前验证坐标兼容，不兼容则同步重建边界和层区。补导出后无变更重入、分层/未改体积、新建Print对照和真实配置/位置修改失效回归，不修改切片参数或绕过失效。"
+  "source_fingerprint": "sha256:f27cc0c94d62499111e6949647412eda50100b129c67b9c197f51b004156a36b",
+  "reason": "共享原有Polygons到ExPolygons转换，一次切层同时得到诊断和有效区域；保留正常slice_mesh_ex参数语义，补模式/变换/孔洞/空层及实际PrintObject对照。将现有全空层异常检查移到brim首层访问前，避免空列表访问；预检不生成墙填充支撑或G-code。本次共享PrintConfig变化仅增加CLI repair_evidence_close_boundaries及证据帮助；已有直接重建依据时由模型检测工作流跳过预检，不更改本模块层高、区域构造、切片参数和GUI/CLI正常切片行为。"
 }
 -->
 
@@ -21,6 +21,10 @@
 - [SlicingAdaptive.cpp](../../../src/libslic3r/SlicingAdaptive.cpp)：层高曲线解析及层级生成。
 
 ## 核心流程
+
+只读 `slice_mesh_with_diagnostics` 仍走普通 `slice_mesh` 的同一连接/补缝实现；记录开放链/长度、非零补缝及模式处理前闭圈数/绝对面积。`slice_mesh_ex_with_diagnostics` 只切一次，并与普通 `slice_mesh_ex` 共用区域构造 helper（填充规则、closing/offset、模式和简化不变），逐层释放原始闭圈。未焊接重合顶点不是裂缝，缺水平顶面仍可有闭合 Z 截面；原闭圈面积和不是实体面积。只在 --repair-evidence 的受限残留缺陷路径做一次 Z 观察；普通旧修复调用不新增扫描，不自动升级重建，不生成墙/填充/支撑。
+
+`PrintObject::slice` 的既有“没有层”检查移至 slice_volumes 后，早于 polyhole/brim 的首层访问，避免反向重叠壳导致全空层后访问 layers.front()。沿用原 SlicingError 和文案，正常非空切片行为不变；这不是自动修补丢失区域。
 
 Print::apply 将 Model 和完整配置拆成 PrintObject／PrintRegion，检测差异使相应步骤失效；Print::process 组织切层、轮廓、填充、支撑、工具排序和输出准备。层对象保存 surfaces 与 extrusion collections，缓存序列化还保存路径顺序属性。
 
@@ -41,6 +45,8 @@ PrintTryCancel 与步骤状态配合，异常／取消不得标为完成。只�
 关注 invalidate_state_by_config_options、apply 差异和完整 process 链。`[PrintApplyCache]` 覆盖仅换网格、同时落床/Z缩放/倾斜/绕Z旋转，有无分层覆盖、未改体积缓存与新建 Print 的边界对照，以及完整切片/G-code 后重复 apply 稳定。真实参数或位置改变仍须失效。GUI 后台刷新和 CLI 切片共用此核心；具体执行结果、真实龙模型修前修后证据见[验证记录](../validation/2026-10-04-smart-print-engine.md)，GUI 首次导出按交接清单另验。
 
 现有测试/工具范围：`tests/fff_print/test_print.cpp`；`tests/fff_print/test_printobject.cpp`；`tests/fff_print/test_flow.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+`[MeshSliceDiagnostics]` 对照普通/诊断输出，覆盖区域转换的模式组合、closing/offset/resolution、变换、抵消空区域和取消。`test_printobject.cpp` 的 `[SectionPreflight]` 用真实 PrintObject 层计划对照健康/空腔/部分及全部抵消，区分 slice_z 与 print_z；只在开发回归运行，不在生产额外切片。证据解释归 model-repair；测试通过不等于所有工艺路径或打印质量保证。
 
 ## 关联模块
 

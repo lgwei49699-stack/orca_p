@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-parameters",
-  "source_fingerprint": "sha256:2d596ca44374df79dc6196b86230388750340138ec230db041a00d9198e250da",
-  "reason": "工艺下拉显示与真实名称分离，成功导入标准档才装饰旧名称，索引映射保留条目及脏状态；参数定义、覆盖和CLI有效参数未变。"
+  "source_fingerprint": "sha256:03b4155e8d1f9d66994264bcc1099488256d7ea5e7576d6c56a637b13c834fb2",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加仅为CLIMiscConfigDef的repair_evidence_close_boundaries及证据帮助，未加入Tab/ParamsPanel或对象覆盖列表，不改变GUI参数联动和预设脏状态。"
 }
 -->
 

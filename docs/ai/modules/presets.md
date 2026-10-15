@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:c557d4e6bec76e199d703762fe87a896a5c98e05a2aa39d5ca4d3db6288bea78",
-  "reason": "共享加载测试扩展为 Advancer3 四喷嘴、12 工艺、六耗材，对照 AD5X 有效参数及兼容关系；预设核心未改，10例1681断言及四规格 CLI 指令等价通过。"
+  "source_fingerprint": "sha256:91cc75cfc34a5202ed207ad4fed8ce7295f59d3c131fca836ed43d0c4f82d4c2",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次CLIMiscConfigDef新增默认false的repair_evidence_close_boundaries并细化证据帮助；不属于PrintConfig工艺键，不修改机器/耗材/工艺预设、父子继承或GUI预设更新。"
 }
 -->
 

@@ -1275,9 +1275,10 @@ static void chain_open_polylines_exact(std::vector<OpenPolyline> &open_polylines
 // called by make_loops() to connect remaining open polylines across shared triangle edges and vertices, 
 // possibly closing small gaps.
 // Depending on "try_connect_reversed", it may or may not connect segments crossing triangles of opposite orientation.
-static void chain_open_polylines_close_gaps(std::vector<OpenPolyline> &open_polylines, Polygons &loops, double max_gap, bool try_connect_reversed)
+static void chain_open_polylines_close_gaps(
+    std::vector<OpenPolyline>& open_polylines, Polygons& loops, double max_gap, bool try_connect_reversed, bool* gap_closing_used = nullptr)
 {
-    const coord_t max_gap_scaled = (coord_t)scale_(max_gap);
+    const coord_t max_gap_scaled = (coord_t) scale_(max_gap);
 
     // Sort the open polylines by their length, so the new loops will be seeded from longer chains.
     // Update the polyline lengths, return only not yet consumed polylines.
@@ -1325,6 +1326,8 @@ static void chain_open_polylines_close_gaps(std::vector<OpenPolyline> &open_poly
                 loop_closed = sqrt(current_loop_closing_distance2) < 0.3 * length(opl->points);
             }
             if (loop_closed) {
+                if (gap_closing_used != nullptr && current_loop_closing_distance2 > 0.)
+                    *gap_closing_used = true;
                 // Remove the start point of the current polyline from the lookup.
                 // Mark the current segment as not consumed, otherwise the closest_end_point_lookup.erase() would fail.
                 opl->consumed = false;
@@ -1356,6 +1359,8 @@ static void chain_open_polylines_close_gaps(std::vector<OpenPolyline> &open_poly
                 break;
             }
             // Attach this polyline to the end of the initial polyline.
+            if (gap_closing_used != nullptr && next_start_and_dist.second > 0.)
+                *gap_closing_used = true;
             if (next_start->start) {
                 auto it = next_start->polyline->points.begin();
                 if (*it == opl->points.back())
@@ -1382,8 +1387,11 @@ static void chain_open_polylines_close_gaps(std::vector<OpenPolyline> &open_poly
 
 static Polygons make_loops(
     // Lines will have their flags modified.
-    IntersectionLines   &lines)
+    IntersectionLines&   lines,
+    MeshSliceDiagnostic* diagnostic = nullptr)
 {
+    if (diagnostic != nullptr)
+        *diagnostic = MeshSliceDiagnostic{};
     Polygons loops;
 #if 0
 //FIXME slice_facet() may create zero length edges due to rounding of doubles into coord_t.
@@ -1431,6 +1439,11 @@ static Polygons make_loops(
     chain_open_polylines_exact(open_polylines, loops, false);
     chain_open_polylines_exact(open_polylines, loops, true);
 
+    if (diagnostic != nullptr)
+        for (const OpenPolyline& polyline : open_polylines)
+            if (!polyline.consumed && polyline.points.size() >= 2)
+                ++diagnostic->open_chains_before_gap_closing;
+
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING
     {
         static int iRun = 0;
@@ -1457,14 +1470,28 @@ static Polygons make_loops(
     }
 #else
     const double max_gap = 2.; //mm
-    chain_open_polylines_close_gaps(open_polylines, loops, max_gap, false);
-    chain_open_polylines_close_gaps(open_polylines, loops, max_gap, true);
+    bool*        gap_closing_used = diagnostic == nullptr ? nullptr : &diagnostic->gap_closing_used;
+    chain_open_polylines_close_gaps(open_polylines, loops, max_gap, false, gap_closing_used);
+    chain_open_polylines_close_gaps(open_polylines, loops, max_gap, true, gap_closing_used);
 #endif
+
+    // These chains are discarded by the normal slicer. Measure their actual
+    // current points, as cached lengths may predate the final joining pass.
+    if (diagnostic != nullptr) {
+        for (const OpenPolyline& polyline : open_polylines)
+            if (!polyline.consumed && polyline.points.size() >= 2) {
+                ++diagnostic->remaining_open_chains;
+                diagnostic->remaining_open_length_mm += unscale<double>(Slic3r::length(polyline.points));
+            }
+        diagnostic->closed_loops = loops.size();
+        for (const Polygon& loop : loops)
+            diagnostic->closed_loop_area_mm2 += std::abs(loop.area()) * SCALING_FACTOR * SCALING_FACTOR;
+    }
 
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING
     {
         static int iRun = 0;
-        SVG svg(debug_out_path("TriangleMeshSlicer_make_loops-polylines-final-%d.svg", iRun++).c_str(), bbox_svg);
+        SVG        svg(debug_out_path("TriangleMeshSlicer_make_loops-polylines-final-%d.svg", iRun++).c_str(), bbox_svg);
         svg.draw(union_ex(loops));
         for (const OpenPolyline &pl : open_polylines) {
             if (pl.points.empty())
@@ -1483,51 +1510,51 @@ static Polygons make_loops(
 template<typename ThrowOnCancel>
 static std::vector<Polygons> make_loops(
     // Lines will have their flags modified.
-    std::vector<IntersectionLines> &lines, 
-    const MeshSlicingParams        &params, 
-    ThrowOnCancel                   throw_on_cancel)
+    std::vector<IntersectionLines>&   lines,
+    const MeshSlicingParams&          params,
+    ThrowOnCancel                     throw_on_cancel,
+    std::vector<MeshSliceDiagnostic>* diagnostics = nullptr)
 {
     std::vector<Polygons> layers;
     layers.resize(lines.size());
-    tbb::parallel_for(
-        tbb::blocked_range<size_t>(0, lines.size()),
-        [&lines, &layers, &params, throw_on_cancel](const tbb::blocked_range<size_t> &range) {
-            for (size_t line_idx = range.begin(); line_idx < range.end(); ++ line_idx) {
-                if ((line_idx & 0x0ffff) == 0)
-                    throw_on_cancel();
+    if (diagnostics != nullptr)
+        diagnostics->resize(lines.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, lines.size()),
+                      [&lines, &layers, &params, throw_on_cancel, diagnostics](const tbb::blocked_range<size_t>& range) {
+                          for (size_t line_idx = range.begin(); line_idx < range.end(); ++line_idx) {
+                              if ((line_idx & 0x0ffff) == 0)
+                                  throw_on_cancel();
 
-                Polygons &polygons = layers[line_idx];
-                polygons = make_loops(lines[line_idx]);
+                              Polygons& polygons = layers[line_idx];
+                              polygons = make_loops(lines[line_idx], diagnostics == nullptr ? nullptr : &(*diagnostics)[line_idx]);
 
-                auto this_mode = line_idx < params.slicing_mode_normal_below_layer ? params.mode_below : params.mode;
-                if (! polygons.empty()) {
-                    if (this_mode == MeshSlicingParams::SlicingMode::Positive) {
-                        // Reorient all loops to be CCW.
-                        for (Polygon& p : polygons)
-                            p.make_counter_clockwise();
-                    }
-                    else if (this_mode == MeshSlicingParams::SlicingMode::PositiveLargestContour) {
-                        // Keep just the largest polygon, make it CCW.
-                        double   max_area = 0.;
-                        Polygon* max_area_polygon = nullptr;
-                        for (Polygon& p : polygons) {
-                            double a = p.area();
-                            if (std::abs(a) > std::abs(max_area)) {
-                                max_area = a;
-                                max_area_polygon = &p;
-                            }
-                        }
-                        assert(max_area_polygon != nullptr);
-                        if (max_area < 0.)
-                            max_area_polygon->reverse();
-                        Polygon p(std::move(*max_area_polygon));
-                        polygons.clear();
-                        polygons.emplace_back(std::move(p));
-                    }
-                }
-            }
-        }
-    );
+                              auto this_mode = line_idx < params.slicing_mode_normal_below_layer ? params.mode_below : params.mode;
+                              if (!polygons.empty()) {
+                                  if (this_mode == MeshSlicingParams::SlicingMode::Positive) {
+                                      // Reorient all loops to be CCW.
+                                      for (Polygon& p : polygons)
+                                          p.make_counter_clockwise();
+                                  } else if (this_mode == MeshSlicingParams::SlicingMode::PositiveLargestContour) {
+                                      // Keep just the largest polygon, make it CCW.
+                                      double   max_area         = 0.;
+                                      Polygon* max_area_polygon = nullptr;
+                                      for (Polygon& p : polygons) {
+                                          double a = p.area();
+                                          if (std::abs(a) > std::abs(max_area)) {
+                                              max_area         = a;
+                                              max_area_polygon = &p;
+                                          }
+                                      }
+                                      assert(max_area_polygon != nullptr);
+                                      if (max_area < 0.)
+                                          max_area_polygon->reverse();
+                                      Polygon p(std::move(*max_area_polygon));
+                                      polygons.clear();
+                                      polygons.emplace_back(std::move(p));
+                                  }
+                              }
+                          }
+                      });
 
     return layers;
 }
@@ -1861,15 +1888,15 @@ static std::vector<stl_vertex> transform_mesh_vertices_for_slicing(const indexed
     return out;
 }
 
-std::vector<Polygons> slice_mesh(
-    const indexed_triangle_set       &mesh,
-    // Unscaled Zs
-    const std::vector<float>         &zs,
-    const MeshSlicingParams          &params,
-    std::function<void()>             throw_on_cancel)
+static std::vector<Polygons> slice_mesh_impl(const indexed_triangle_set& mesh,
+                                             // Unscaled Zs
+                                             const std::vector<float>&         zs,
+                                             const MeshSlicingParams&          params,
+                                             std::function<void()>             throw_on_cancel,
+                                             std::vector<MeshSliceDiagnostic>* diagnostics)
 {
     BOOST_LOG_TRIVIAL(debug) << "slice_mesh to polygons";
-       
+
     std::vector<IntersectionLines> lines;
 
     {
@@ -1899,7 +1926,7 @@ std::vector<Polygons> slice_mesh(
 
     throw_on_cancel();
 
-    std::vector<Polygons> layers = make_loops(lines, params, throw_on_cancel);
+    std::vector<Polygons> layers = make_loops(lines, params, throw_on_cancel, diagnostics);
 
 #ifdef SLIC3R_DEBUG
     {
@@ -1935,6 +1962,26 @@ std::vector<Polygons> slice_mesh(
 #endif
 
     return layers;
+}
+
+std::vector<Polygons> slice_mesh(const indexed_triangle_set& mesh,
+                                 const std::vector<float>&   zs,
+                                 const MeshSlicingParams&    params,
+                                 std::function<void()>       throw_on_cancel)
+{
+    return slice_mesh_impl(mesh, zs, params, std::move(throw_on_cancel), nullptr);
+}
+
+MeshSlicingDiagnosticResult slice_mesh_with_diagnostics(const indexed_triangle_set& mesh,
+                                                        const std::vector<float>&   zs,
+                                                        const MeshSlicingParams&    params,
+                                                        std::function<void()>       throw_on_cancel)
+{
+    throw_on_cancel();
+    MeshSlicingDiagnosticResult result;
+    result.slices = slice_mesh_impl(mesh, zs, params, throw_on_cancel, &result.diagnostics);
+    throw_on_cancel();
+    return result;
 }
 
 // Specialized version for a single slicing plane only, running on a single thread.
@@ -2000,57 +2047,80 @@ Polygons slice_mesh(
     return layers.front();
 }
 
-std::vector<ExPolygons> slice_mesh_ex(
-    const indexed_triangle_set       &mesh,
-    const std::vector<float>         &zs,
-    const MeshSlicingParamsEx        &params,
-    std::function<void()>             throw_on_cancel)
+static MeshSlicingParams slicing_params_for_expolygons(const MeshSlicingParamsEx& params)
 {
-    std::vector<Polygons> layers_p;
-    {
-        MeshSlicingParams slicing_params(params);
-        if (params.mode == MeshSlicingParams::SlicingMode::PositiveLargestContour)
-            slicing_params.mode = MeshSlicingParams::SlicingMode::Positive;
-        if (params.mode_below == MeshSlicingParams::SlicingMode::PositiveLargestContour)
-            slicing_params.mode_below = MeshSlicingParams::SlicingMode::Positive;
-        layers_p = slice_mesh(mesh, zs, slicing_params, throw_on_cancel);
-    }
-    
-//    BOOST_LOG_TRIVIAL(debug) << "slice_mesh make_expolygons in parallel - start";
+    MeshSlicingParams slicing_params(params);
+    if (params.mode == MeshSlicingParams::SlicingMode::PositiveLargestContour)
+        slicing_params.mode = MeshSlicingParams::SlicingMode::Positive;
+    if (params.mode_below == MeshSlicingParams::SlicingMode::PositiveLargestContour)
+        slicing_params.mode_below = MeshSlicingParams::SlicingMode::Positive;
+    return slicing_params;
+}
+
+// Consume an already-cut mesh. Both public ExPolygons entry points use this
+// conversion so diagnostics cannot drift from ordinary slicing or cut twice.
+static std::vector<ExPolygons> make_slice_regions(std::vector<Polygons>        layers_p,
+                                                  const MeshSlicingParamsEx&   params,
+                                                  const std::function<void()>& throw_on_cancel)
+{
+    //    BOOST_LOG_TRIVIAL(debug) << "slice_mesh make_expolygons in parallel - start";
     std::vector<ExPolygons> layers(layers_p.size(), ExPolygons{});
-    tbb::parallel_for(
-        tbb::blocked_range<size_t>(0, layers_p.size()),
-        [&layers_p, &params, &layers, throw_on_cancel]
-        (const tbb::blocked_range<size_t>& range) {
-            auto resolution = scaled<float>(params.resolution);
-            for (size_t layer_id = range.begin(); layer_id < range.end(); ++ layer_id) {
-                throw_on_cancel();
-                ExPolygons &expolygons = layers[layer_id];
-                const auto this_mode = layer_id < params.slicing_mode_normal_below_layer ? params.mode_below : params.mode;
-                Slic3r::make_expolygons(
-                    layers_p[layer_id], params.closing_radius, params.extra_offset,
-                    this_mode == MeshSlicingParams::SlicingMode::EvenOdd ? ClipperLib::pftEvenOdd : 
-                    this_mode == MeshSlicingParams::SlicingMode::PositiveLargestContour ? ClipperLib::pftPositive : ClipperLib::pftNonZero,
-                    &expolygons);
-                //FIXME simplify
-                if (this_mode == MeshSlicingParams::SlicingMode::PositiveLargestContour)
-                    keep_largest_contour_only(expolygons);
-                if (resolution != 0.) {
-                    ExPolygons simplified;
-                    simplified.reserve(expolygons.size());
-                    for (const ExPolygon &ex : expolygons)
-                        append(simplified, ex.simplify(resolution));
-                    expolygons = std::move(simplified);
-                }
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, layers_p.size()), [&layers_p, &params, &layers,
+                                                                       throw_on_cancel](const tbb::blocked_range<size_t>& range) {
+        auto resolution = scaled<float>(params.resolution);
+        for (size_t layer_id = range.begin(); layer_id < range.end(); ++layer_id) {
+            throw_on_cancel();
+            ExPolygons& expolygons = layers[layer_id];
+            const auto  this_mode  = layer_id < params.slicing_mode_normal_below_layer ? params.mode_below : params.mode;
+            Slic3r::make_expolygons(layers_p[layer_id], params.closing_radius, params.extra_offset,
+                                    this_mode == MeshSlicingParams::SlicingMode::EvenOdd                ? ClipperLib::pftEvenOdd :
+                                    this_mode == MeshSlicingParams::SlicingMode::PositiveLargestContour ? ClipperLib::pftPositive :
+                                                                                                          ClipperLib::pftNonZero,
+                                    &expolygons);
+            // No later stage needs the raw loops. Release each completed
+            // layer rather than retaining both representations until exit.
+            Polygons{}.swap(layers_p[layer_id]);
+            // FIXME simplify
+            if (this_mode == MeshSlicingParams::SlicingMode::PositiveLargestContour)
+                keep_largest_contour_only(expolygons);
+            if (resolution != 0.) {
+                ExPolygons simplified;
+                simplified.reserve(expolygons.size());
+                for (const ExPolygon& ex : expolygons)
+                    append(simplified, ex.simplify(resolution));
+                expolygons = std::move(simplified);
             }
-        });
-//    BOOST_LOG_TRIVIAL(debug) << "slice_mesh make_expolygons in parallel - end";
+        }
+    });
+    //    BOOST_LOG_TRIVIAL(debug) << "slice_mesh make_expolygons in parallel - end";
 
     return layers;
 }
 
+std::vector<ExPolygons> slice_mesh_ex(const indexed_triangle_set& mesh,
+                                      const std::vector<float>&   zs,
+                                      const MeshSlicingParamsEx&  params,
+                                      std::function<void()>       throw_on_cancel)
+{
+    return make_slice_regions(slice_mesh(mesh, zs, slicing_params_for_expolygons(params), throw_on_cancel), params, throw_on_cancel);
+}
+
+MeshSlicingDiagnosticResultEx slice_mesh_ex_with_diagnostics(const indexed_triangle_set& mesh,
+                                                             const std::vector<float>&   zs,
+                                                             const MeshSlicingParamsEx&  params,
+                                                             std::function<void()>       throw_on_cancel)
+{
+    throw_on_cancel();
+    MeshSlicingDiagnosticResultEx result;
+    result.slices = make_slice_regions(slice_mesh_impl(mesh, zs, slicing_params_for_expolygons(params), throw_on_cancel,
+                                                       &result.diagnostics),
+                                       params, throw_on_cancel);
+    throw_on_cancel();
+    return result;
+}
+
 // Slice a triangle set with a set of Z slabs (thick layers).
-// The effect is similar to producing the usual top / bottom layers from a sliced mesh by 
+// The effect is similar to producing the usual top / bottom layers from a sliced mesh by
 // subtracting layer[i] from layer[i - 1] for the top surfaces resp.
 // subtracting layer[i] from layer[i + 1] for the bottom surfaces,
 // with the exception that the triangle set this function processes may not cover the whole top resp. bottom surface.

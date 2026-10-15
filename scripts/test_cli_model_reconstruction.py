@@ -172,7 +172,7 @@ class Suite:
 
     def run(self, name, source, *, expectation="rejected", flags=(), risk=True, existing_output=None,
             allowed_statuses=None, message_contains=None, worker=False, expect_ambiguous_interior=False,
-            expect_closure=None, automatic_budget=False, expected_timeout_ms=None):
+            expect_closure=None, automatic_budget=False, expected_timeout_ms=None, evidence=False):
         case = self.output / name
         case.mkdir()
         cwd = case / "working-directory"
@@ -188,6 +188,8 @@ class Suite:
                 command.extend(("--reconstruction-timeout", "10"))
             if risk:
                 command.append("--accept-reconstruction-risk")
+            if evidence:
+                command.append("--repair-evidence")
             command.extend(flags)
             command.append(str(source))
         save_json(case / "command.json", command)
@@ -210,6 +212,17 @@ class Suite:
             save_json(case / "report.json", report)
             record["reported_status"] = report.get("status")
             check_report_contract(report)
+            if not worker and evidence:
+                boundary = report.get("boundary", {})
+                assert boundary.get("schema_version") == 1, report
+                assert boundary.get("status") == report.get("status"), report
+                assert boundary.get("mesh_validated") == report.get("mesh_validated"), report
+                assert boundary.get("automatic_adoption") is False, report
+                assert boundary.get("shape_structure_guaranteed") is False, report
+                assert boundary.get("printability") == "not_assessed", report
+                assert boundary.get("metrics") == report.get("metrics", {}), report
+            else:
+                assert "boundary" not in report, report
             if expected_timeout_ms is not None:
                 assert report["resource_limits"]["timeout_ms"] == expected_timeout_ms, report
                 assert report["resource_limits"]["max_input_faces"] == PARAMETERS["max_input_faces"], report
@@ -346,6 +359,12 @@ def main():
     initial_binary_hash = digest(binary)
 
     first_export = suite.run("binary_cube", fixtures["binary"], expectation="candidate")
+    evidence_export = suite.run("binary_cube_evidence", fixtures["binary"], expectation="candidate", evidence=True)
+    disabled_export = suite.run("binary_cube_evidence_disabled", fixtures["binary"], expectation="candidate",
+                                flags=("--repair-evidence", "0"))
+    suite.run("early_failure_evidence", fixtures["binary"], risk=False, evidence=True)
+    suite.run("reject_slicing_with_evidence", fixtures["binary"], flags=("--slice", "0"), evidence=True,
+              message_contains="Unsupported reconstruction option")
     suite.run("repeat_same_output", fixtures["binary"], existing_output=first_export)
     suite.run("ascii_cube", fixtures["ascii"], expectation="candidate")
     suite.run("unicode_paths_中文 空格", fixtures["unicode"], expectation="candidate")
@@ -397,6 +416,16 @@ def main():
         "binary_unchanged": digest(binary) == initial_binary_hash,
         "no_legacy_result_json": not list(output.rglob("result.json")),
     }
+    # The evidence option is a report projection, not another reconstruction
+    # policy. Compare validated physical triangle identity, not timing fields.
+    try:
+        parity_reports = [json.loads((directory / "reconstruction.json").read_text(encoding="utf-8"))
+                          for directory in (first_export, evidence_export, disabled_export)]
+        invariants["evidence_does_not_change_candidate"] = (
+            len({report["output_mesh_identity"] for report in parity_reports}) == 1
+            and len({digest(directory / "candidate.stl") for directory in (first_export, evidence_export, disabled_export)}) == 1)
+    except (OSError, ValueError, KeyError):
+        invariants["evidence_does_not_change_candidate"] = False
     failed = sum(not item.get("passed", False) for item in suite.results if not item.get("skipped", False))
     summary = {"schema": "reconstruction_cli_regression_v1", "started_utc": started,
                "finished_utc": datetime.now(timezone.utc).isoformat(), "binary": str(binary),

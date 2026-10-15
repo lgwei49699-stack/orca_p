@@ -3,10 +3,12 @@
 #include <libslic3r/Model.hpp>
 #include <libslic3r/ModelInspection.hpp>
 #include <libslic3r/ModelCheckWorkflow.hpp>
+#include <libslic3r/ModelRepairEvidence.hpp>
 #include <libslic3r/Format/STL.hpp>
 #include <libslic3r/Format/OBJ.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 #include <boost/filesystem.hpp>
+#include <array>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -30,6 +32,44 @@ std::string inspection_file_bytes(const std::string& path)
 {
     std::ifstream input(path, std::ios::binary);
     return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+TriangleMesh inspection_triangle_pair(const std::array<Vec3f, 3>& second, float x_offset = 0.f)
+{
+    indexed_triangle_set its;
+    its.vertices = {{-2.f, -2.f, 0.f}, {2.f, -2.f, 0.f}, {0.f, 2.f, 0.f}};
+    its.vertices.insert(its.vertices.end(), second.begin(), second.end());
+    for (auto& vertex : its.vertices)
+        vertex.x() += x_offset;
+    its.indices = {{0, 1, 2}, {3, 4, 5}};
+    return TriangleMesh(std::move(its));
+}
+
+TriangleMesh inspection_crossing_pair(float x_offset = 0.f)
+{
+    return inspection_triangle_pair({Vec3f(0.f, -1.f, -1.f), Vec3f(0.f, -1.f, 1.f), Vec3f(0.f, 1.f, 0.f)}, x_offset);
+}
+
+TriangleMesh inspection_coplanar_pair(float x_offset = 0.f)
+{
+    return inspection_triangle_pair({Vec3f(-1.f, -1.f, 0.f), Vec3f(1.f, -1.f, 0.f), Vec3f(0.f, 1.f, 0.f)}, x_offset);
+}
+
+void check_inspection_with_crossings(nlohmann::json actual, const TriangleMesh& retained)
+{
+    REQUIRE(actual.contains("proper_crossings"));
+    auto crossing_evidence = actual.at("proper_crossings");
+    actual.erase("proper_crossings");
+    CHECK(actual == inspect_model_mesh(retained));
+    ModelInspectionOptions options;
+    options.classify_proper_crossings = true;
+    auto expected_crossings           = inspect_model_mesh(retained, options).at("proper_crossings");
+    CHECK(crossing_evidence.at("elapsed_ms").get<double>() >= 0.0);
+    // Only elapsed time is nondeterministic; every classification field must
+    // match inspection of the retained serialized artifact.
+    crossing_evidence.erase("elapsed_ms");
+    expected_crossings.erase("elapsed_ms");
+    CHECK(crossing_evidence == expected_crossings);
 }
 } // namespace
 
@@ -174,19 +214,218 @@ TEST_CASE("Workflow enforces the same geometry budget at admission and serialize
                             "Model check input exceeds the " + std::to_string(options.max_input_bytes) + " byte limit.");
         CHECK(report.check["basic_repair"].is_null());
         CHECK(report.check["check_complete"] == false);
+        CHECK(report.failure_kind == "resource_limit");
+        CHECK_FALSE(report.check.contains("section_evidence"));
     }
     SECTION("Decoded triangle limit remains enforced")
     {
         options.inspection_options.max_triangles = 11;
         REQUIRE_THROWS_WITH(run_model_check_workflow(options, report), "Model check requires 1 to 11 decoded triangles.");
         CHECK(report.check["check_complete"] == false);
+        CHECK(report.failure_kind == "resource_limit");
     }
     SECTION("Serialized inspection uses the workflow vertex budget")
     {
         options.inspection_options.max_vertices = 7;
         REQUIRE_THROWS_WITH(run_model_check_workflow(options, report), "Model inspection vertex limit exceeded.");
         CHECK(report.check["check_complete"] == false);
+        CHECK(report.failure_kind == "resource_limit");
+        CHECK(report.check["failure_stage"] == "inspection");
     }
+    CHECK(inspection_file_bytes(input) == original);
+}
+
+TEST_CASE("Inspection geometry budgets have an explicit exception type", "[ModelRepair][Inspection][BoundaryEvidence]")
+{
+    const auto             mesh = make_cube(10., 10., 10.);
+    ModelInspectionOptions options;
+    SECTION("Triangle admission limit")
+    {
+        options.max_triangles = 11;
+        REQUIRE_THROWS_AS(inspect_model_mesh(mesh, options), ModelInspectionLimitError);
+        REQUIRE_THROWS_WITH(inspect_model_mesh(mesh, options), "Model inspection triangle limit exceeded.");
+    }
+    SECTION("Canonical vertex admission limit")
+    {
+        options.max_vertices = 7;
+        REQUIRE_THROWS_AS(inspect_model_mesh(mesh, options), ModelInspectionLimitError);
+        REQUIRE_THROWS_WITH(inspect_model_mesh(mesh, options), "Model inspection vertex limit exceeded.");
+    }
+    SECTION("Invalid input is not reclassified as resource exhaustion")
+    {
+        try {
+            inspect_model_mesh(TriangleMesh{});
+            FAIL("Empty mesh should not pass inspection");
+        } catch (const ModelInspectionLimitError&) {
+            FAIL("Invalid input is not a geometry admission limit");
+        } catch (const std::runtime_error& error) {
+            CHECK(std::string(error.what()) == "Cannot inspect an empty model.");
+        }
+    }
+}
+
+TEST_CASE("Workflow separates opt-in completion from legacy repair outcomes", "[ModelRepair][Inspection][BoundaryEvidence]")
+{
+    InspectionTempDirectory   temp;
+    ModelCheckWorkflowOptions options;
+    options.output_directory = temp.path.string();
+    options.advanced_repair  = true;
+    options.repair_evidence  = true;
+    ModelCheckWorkflowReport report;
+
+    SECTION("Healthy requested repair adds no section work")
+    {
+        options.input_file = std::string(TEST_DATA_DIR) + "/model_repair_acceptance/00-healthy-cube.obj";
+        run_model_check_workflow(options, report);
+        CHECK(report.check["advanced_repair"]["status"] == "not_needed");
+        CHECK_FALSE(report.repair_attempted);
+        CHECK_FALSE(report.check.contains("section_evidence"));
+        const auto result = model_check_business_result(nlohmann::json::array({report.check}), 0, "");
+        CHECK(result["model_checks"][0]["boundary"]["reconstruction"]["assessment"] == "not_needed");
+    }
+    SECTION("Geometric no-progress completes the opt-in workflow without claiming a repair")
+    {
+        options.input_file  = std::string(TEST_DATA_DIR) + "/model_repair_acceptance/09-nonmanifold-edge.obj";
+        const auto original = inspection_file_bytes(options.input_file);
+        run_model_check_workflow(options, report);
+        CHECK_FALSE(report.repair_no_progress);
+        CHECK_FALSE(report.repair.committed);
+        CHECK(report.failure_kind.empty());
+        CHECK(report.check["operation_status"] == "completed");
+        CHECK(report.check["advanced_repair"]["status"] == "unresolved");
+        CHECK(report.check["repair_evidence"]["execution_completed"] == true);
+        CHECK(report.check["section_evidence"]["status"] == "completed");
+        CHECK(report.check["checked_stage"] == "serialized_prepared");
+        const auto  result   = model_check_business_result(nlohmann::json::array({report.check}), 0, "");
+        const auto& evidence = result["model_checks"][0]["boundary"];
+        CHECK(result["return_code"] == 0);
+        CHECK(result["error_string"] == "");
+        CHECK(result["model_checks"][0]["repair_status"] == "unresolved");
+        CHECK(result["model_checks"][0]["mesh_status"] == "needs_repair");
+        CHECK(evidence["repair"]["status"] == "completed");
+        CHECK(evidence["reconstruction"]["reason"] == "no_conclusive_region_failure");
+        CHECK_FALSE(evidence["reconstruction"].contains("failure_kind"));
+        CHECK(evidence["reconstruction"]["automatic_adoption"] == false);
+        CHECK(inspection_file_bytes(options.input_file) == original);
+    }
+    SECTION("No-progress still honors explicit conversion and observes the final artifact")
+    {
+        options.input_file    = std::string(TEST_DATA_DIR) + "/model_repair_acceptance/09-nonmanifold-edge.obj";
+        options.export_format = "stl";
+        run_model_check_workflow(options, report);
+        REQUIRE(report.check["advanced_repair"]["status"] == "unresolved");
+        CHECK(report.check["operation_status"] == "completed");
+        const auto output = report.check["working_model"].get<std::string>();
+        CHECK(boost::filesystem::path(output).filename() == "result.stl");
+        Model retained;
+        REQUIRE(load_stl(output.c_str(), &retained, nullptr, nullptr, 80, false));
+        retained.add_default_instances(); // Match the workflow loader before Model::mesh().
+        check_inspection_with_crossings(report.check["inspection"], retained.mesh());
+        const auto observed = inspect_model_section_evidence(retained.mesh());
+        for (const char* key : {"requested_planes", "planes", "effective_regions", "axes"})
+            CHECK(report.check["section_evidence"][key] == observed[key]);
+    }
+    SECTION("Fatal advanced repair is blocked without section work")
+    {
+        options.input_file  = std::string(TEST_DATA_DIR) + "/model_repair_acceptance/10-only-triangle.obj";
+        const auto original = inspection_file_bytes(options.input_file);
+        REQUIRE_THROWS_WITH(run_model_check_workflow(options, report), "Advanced repair failed; the prepared working model was retained.");
+        CHECK_FALSE(report.repair_no_progress);
+        CHECK(report.failure_kind == "repair_failed");
+        CHECK_FALSE(report.check.contains("section_evidence"));
+        const auto result = model_check_business_result(nlohmann::json::array({report.check}), -25, "Advanced repair failed");
+        CHECK(result["model_checks"][0]["boundary"]["reconstruction"]["assessment"] == "blocked");
+        CHECK(result["model_checks"][0]["boundary"]["reconstruction"]["failure_kind"] == "repair_failed");
+        CHECK(inspection_file_bytes(options.input_file) == original);
+    }
+    SECTION("Legacy unresolved workflow does not run the new preflight")
+    {
+        options.repair_evidence = false;
+        options.input_file      = std::string(TEST_DATA_DIR) + "/model_repair_acceptance/09-nonmanifold-edge.obj";
+        REQUIRE_THROWS_WITH(run_model_check_workflow(options, report),
+                            "Advanced repair produced no retainable change; see the remaining inspection findings.");
+        CHECK(report.repair_no_progress);
+        CHECK_FALSE(report.check.contains("section_evidence"));
+        CHECK_FALSE(report.check.contains("repair_evidence"));
+        const auto result = model_check_business_result(nlohmann::json::array({report.check}), -25, "No retainable change");
+        CHECK(result["model_checks"][0].size() == 6);
+        CHECK_FALSE(result["model_checks"][0].contains("boundary"));
+    }
+}
+
+TEST_CASE("Unfinished preflight cannot complete the opt-in workflow", "[ModelRepair][Inspection][BoundaryEvidence]")
+{
+    InspectionTempDirectory temp;
+    auto                    mesh = load_model("model_repair_acceptance/09-nonmanifold-edge.obj");
+    // 500 mm requires 2500 reference planes, beyond the unchanged 2000 cap.
+    for (auto& vertex : mesh.its.vertices)
+        vertex.z() *= 25.f;
+    bool partial = false;
+    SECTION("Unchanged unresolved model") {}
+    SECTION("Retained partial repair")
+    {
+        mesh.its.indices.push_back(mesh.its.indices.front());
+        partial = true;
+    }
+    const auto input = (temp.path / "tall-nonmanifold.obj").string();
+    REQUIRE(store_obj(input.c_str(), &mesh));
+    const auto                original = inspection_file_bytes(input);
+    ModelCheckWorkflowOptions options;
+    options.input_file       = input;
+    options.output_directory = temp.path.string();
+    options.advanced_repair  = true;
+    options.repair_evidence  = true;
+    ModelCheckWorkflowReport report;
+    REQUIRE_THROWS_WITH(run_model_check_workflow(options, report), "Repair evidence did not complete; see the boundary details.");
+    CHECK_FALSE(report.repair_no_progress);
+    CHECK(report.failure_kind == "repair_evidence_incomplete");
+    CHECK(report.check["failure_stage"] == "repair_evidence");
+    CHECK(report.check["advanced_repair"]["status"] == (partial ? "partially_repaired" : "unresolved"));
+    CHECK(report.check["section_evidence"]["status"] == "incomplete");
+    CHECK(report.check["section_evidence"]["reason"] == "plane_limit");
+    CHECK(boost::filesystem::exists(report.check["working_model"].get<std::string>()));
+    const auto result = model_check_business_result(nlohmann::json::array({report.check}), -25, "Evidence incomplete");
+    CHECK(result["model_checks"][0]["boundary"]["reconstruction"]["assessment"] == "blocked");
+    CHECK(inspection_file_bytes(input) == original);
+
+    options.repair_evidence = false;
+    if (partial) {
+        run_model_check_workflow(options, report);
+        CHECK(report.check["operation_status"] == "completed");
+        CHECK(report.check["advanced_repair"]["status"] == "partially_repaired");
+    } else {
+        REQUIRE_THROWS_WITH(run_model_check_workflow(options, report),
+                            "Advanced repair produced no retainable change; see the remaining inspection findings.");
+        CHECK(report.repair_no_progress);
+    }
+    CHECK_FALSE(report.check.contains("section_evidence"));
+}
+
+TEST_CASE("Retained partial result section evidence observes the serialized final model", "[ModelRepair][Inspection][BoundaryEvidence]")
+{
+    InspectionTempDirectory temp;
+    auto                    mesh = load_model("model_repair_acceptance/09-nonmanifold-edge.obj");
+    mesh.its.indices.push_back(mesh.its.indices.front());
+    const auto input = (temp.path / "duplicate-nonmanifold.obj").string();
+    REQUIRE(store_obj(input.c_str(), &mesh));
+    const auto                original = inspection_file_bytes(input);
+    ModelCheckWorkflowOptions options;
+    options.input_file       = input;
+    options.output_directory = temp.path.string();
+    options.advanced_repair  = true;
+    options.repair_evidence  = true;
+    ModelCheckWorkflowReport report;
+    run_model_check_workflow(options, report);
+    REQUIRE(report.repair.committed);
+    CHECK(report.check["advanced_repair"]["status"] == "partially_repaired");
+    CHECK(report.check["checked_stage"] == "serialized_advanced");
+    const auto output   = report.check["working_model"].get<std::string>();
+    auto       reloaded = Model::read_from_file(output);
+    const auto observed = inspect_model_section_evidence(reloaded.mesh());
+    CHECK(report.check["section_evidence"]["status"] == "completed");
+    for (const char* key : {"requested_planes", "planes", "remaining_open_chains", "gap_closed_planes", "axes"})
+        CHECK(report.check["section_evidence"][key] == observed[key]);
+    check_inspection_with_crossings(report.check["inspection"], reloaded.mesh());
     CHECK(inspection_file_bytes(input) == original);
 }
 
@@ -442,6 +681,129 @@ TEST_CASE("Limits and detail sampling cannot turn an incomplete inspection into 
     }
 }
 
+TEST_CASE("Proper crossings are opt-in evidence without changing existing inspection", "[ModelRepair][Inspection][ProperCrossing]")
+{
+    auto mesh = inspection_crossing_pair();
+    SECTION("An exact crossing is reported with original face IDs")
+    {
+        // The self-intersection search excludes this first face. Evidence must
+        // still refer to the original mesh, not the compact nondegenerate list.
+        mesh.its.indices.insert(mesh.its.indices.begin(), Vec3i32(0, 0, 1));
+    }
+    SECTION("Very small crossings are not rounded into plane contacts")
+    {
+        mesh.its.vertices[3].z() = -1e-20f;
+        mesh.its.vertices[4].z() = 1e-20f;
+    }
+    const auto baseline = inspect_model_mesh(mesh);
+    CHECK_FALSE(baseline.contains("proper_crossings"));
+    ModelInspectionOptions options;
+    options.classify_proper_crossings = true;
+    auto        result                = inspect_model_mesh(mesh, options);
+    const auto& evidence              = result.at("proper_crossings");
+    CHECK(evidence.at("status") == "completed");
+    CHECK(evidence.at("detected") == true);
+    CHECK(evidence.at("search_complete") == true);
+    CHECK(evidence.at("pairs_checked") == 1);
+    CHECK(evidence.at("total_pairs") == 1);
+    CHECK(evidence.at("elapsed_ms").get<double>() >= 0.0);
+    const auto first = mesh.its.indices.size() - 2;
+    CHECK(evidence.at("witness").at("faces") == nlohmann::json::array({first, first + 1}));
+    REQUIRE(evidence.at("witness").at("segment").size() == 2);
+    CHECK(evidence.at("witness").at("segment")[0] != evidence.at("witness").at("segment")[1]);
+    result.erase("proper_crossings");
+    CHECK(result == baseline);
+}
+
+TEST_CASE("Proper crossings exclude contact and coplanar intersections", "[ModelRepair][Inspection][ProperCrossing]")
+{
+    TriangleMesh mesh;
+    std::size_t  expected_pairs = 1;
+    SECTION("Coplanar overlapping area") { mesh = inspection_coplanar_pair(); }
+    SECTION("Point contact with only one plane strictly crossed")
+    {
+        mesh = inspection_triangle_pair({Vec3f(0.f, 0.f, 0.f), Vec3f(0.f, 0.f, 1.f), Vec3f(1.f, 0.f, 1.f)});
+    }
+    SECTION("Both planes are strictly crossed but their intersection is only a point")
+    {
+        mesh = inspection_triangle_pair({Vec3f(0.f, -2.f, 0.f), Vec3f(0.f, -3.f, -1.f), Vec3f(0.f, -3.f, 1.f)});
+    }
+    SECTION("Edge lying on another triangle")
+    {
+        mesh = inspection_triangle_pair({Vec3f(-1.f, 0.f, 0.f), Vec3f(1.f, 0.f, 0.f), Vec3f(0.f, 0.f, 1.f)});
+    }
+    SECTION("Healthy closed mesh has no self intersections")
+    {
+        mesh           = make_cube(10., 10., 10.);
+        expected_pairs = 0;
+    }
+    ModelInspectionOptions options;
+    options.classify_proper_crossings = true;
+    const auto  result                = inspect_model_mesh(mesh, options);
+    const auto& evidence              = result.at("proper_crossings");
+    CHECK(result.at("issues").at("self_intersection").at("count") == expected_pairs);
+    CHECK(evidence.at("status") == "completed");
+    CHECK(evidence.at("detected") == false);
+    CHECK(evidence.at("search_complete") == true);
+    CHECK(evidence.at("pairs_checked") == expected_pairs);
+    CHECK(evidence.at("total_pairs") == expected_pairs);
+    CHECK(evidence.at("witness").is_null());
+}
+
+TEST_CASE("Proper crossing evidence retains incomplete search boundaries", "[ModelRepair][Inspection][ProperCrossing]")
+{
+    ModelInspectionOptions options;
+    options.classify_proper_crossings = true;
+    options.max_intersections         = 1;
+    auto mesh                         = inspection_crossing_pair();
+    mesh.merge(inspection_crossing_pair(10.f));
+    bool expected_positive = true;
+    SECTION("A found crossing is a witness but does not complete the search") {}
+    SECTION("Zero pair budget cannot claim that crossings are absent")
+    {
+        options.max_intersections = 0;
+        expected_positive         = false;
+    }
+    SECTION("A truncated contact-only list cannot rule out crossings")
+    {
+        mesh = inspection_coplanar_pair();
+        mesh.merge(inspection_coplanar_pair(10.f));
+        expected_positive = false;
+    }
+    const auto  result   = inspect_model_mesh(mesh, options);
+    const auto& evidence = result.at("proper_crossings");
+    CHECK(evidence.at("detected") == expected_positive);
+    CHECK(evidence.at("status") == (expected_positive ? "completed" : "incomplete"));
+    CHECK(evidence.at("search_complete") == false);
+    CHECK(evidence.at("pairs_checked") == options.max_intersections);
+    CHECK(evidence.at("total_pairs") == options.max_intersections);
+    CHECK(evidence.at("witness").is_null() == !expected_positive);
+    CHECK(result.at("issues").at("self_intersection").at("complete") == false);
+    CHECK(result.at("issues").at("self_intersection").at("count_is_lower_bound") == true);
+}
+
+TEST_CASE("Proper crossing classification is not limited to display samples", "[ModelRepair][Inspection][ProperCrossing]")
+{
+    auto mesh = inspection_coplanar_pair();
+    for (int i = 1; i < 201; ++i)
+        mesh.merge(inspection_coplanar_pair(float(i * 10)));
+    mesh.merge(inspection_crossing_pair(2010.f));
+    ModelInspectionOptions options;
+    options.classify_proper_crossings = true;
+    SECTION("Default display limit hides the late crossing") {}
+    SECTION("No display samples requested") { options.detail_limit = 0; }
+    const auto  result   = inspect_model_mesh(mesh, options);
+    const auto& evidence = result.at("proper_crossings");
+    CHECK(result.at("issues").at("self_intersection").at("count") == 202);
+    CHECK(result.at("issues").at("self_intersection").at("pairs").size() == options.detail_limit);
+    CHECK(evidence.at("status") == "completed");
+    CHECK(evidence.at("detected") == true);
+    CHECK(evidence.at("search_complete") == true);
+    CHECK(evidence.at("pairs_checked") == 202);
+    CHECK(evidence.at("total_pairs") == 202);
+    CHECK(evidence.at("witness").at("faces") == nlohmann::json::array({402, 403}));
+}
+
 TEST_CASE("Business check JSON is bounded and omits artifact paths", "[ModelRepair][Inspection][JSON]")
 {
     using nlohmann::json;
@@ -471,6 +833,7 @@ TEST_CASE("Business check JSON is bounded and omits artifact paths", "[ModelRepa
     CHECK(summary.at("check_complete") == true);
     CHECK(summary.at("input_materials_ignored") == false);
     CHECK(summary.at("repair_status") == "not_requested");
+    CHECK_FALSE(summary.contains("boundary"));
     REQUIRE(summary.at("issues").size() == 7);
     for (auto it = inspection.at("issues").begin(); it != inspection.at("issues").end(); ++it) {
         const json expected = {{"count", it.value().at("count")}, {"complete", it.value().at("complete")}};
@@ -479,6 +842,21 @@ TEST_CASE("Business check JSON is bounded and omits artifact paths", "[ModelRepa
     for (const char* removed : {"input_file", "working_model", "next_action", "repair_message", "supplementary", "issues_before_repair"})
         CHECK_FALSE(summary.contains(removed));
     CHECK(check == original);
+
+    SECTION("Boundary extension requires an explicit request and preserves old fields")
+    {
+        check["repair_evidence_requested"] = true;
+        auto  extended                     = model_check_business_result(json::array({check}), 0, "");
+        auto& item                         = extended["model_checks"][0];
+        REQUIRE(item.size() == 7);
+        CHECK(item["boundary"]["schema_version"] == 2);
+        CHECK(item["boundary"]["inspection"]["status"] == "passed");
+        CHECK(item["boundary"]["repair"]["status"] == "not_run");
+        CHECK(item["boundary"]["sections"]["status"] == "not_run");
+        CHECK(item["boundary"]["reconstruction"]["assessment"] == "not_needed");
+        item.erase("boundary");
+        CHECK(extended == result);
+    }
 
     SECTION("Internal sampled geometry never increases the public payload")
     {
@@ -544,6 +922,10 @@ TEST_CASE("Business check JSON is bounded and omits artifact paths", "[ModelRepa
             CHECK(issue.at("complete") == true);
         }
         CHECK_FALSE(current.contains("supplementary"));
+        check["repair_evidence_requested"] = true;
+        const auto extended                = model_check_business_result(json::array({check}), 0, "");
+        CHECK(extended["model_checks"][0]["boundary"]["inspection"]["status"] == "incomplete");
+        CHECK(extended["model_checks"][0]["boundary"]["reconstruction"]["assessment"] == "blocked");
     }
 }
 

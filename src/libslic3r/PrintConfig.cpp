@@ -8450,6 +8450,27 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli     = "repair-ignore-materials";
     def->set_default_value(new ConfigOptionBool(false));
 
+    def          = this->add("repair_evidence", coBool);
+    def->label   = L("Include model repair evidence");
+    def->tooltip = L(
+        "With --check-model, --repair-model cgal or --reconstruct-model, include read-only repair boundary evidence. "
+        "With --check-model and --repair-model cgal, reuse proper-crossing classification first; decisive evidence skips Z sections. "
+        "Only unresolved residual defects may additionally require bounded Z sections. "
+        "Does not automatically reconstruct or adopt a model; disabled by default.");
+    def->cli        = "repair-evidence";
+    def->cli_params = "0|1";
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def          = this->add("repair_evidence_close_boundaries", coBool);
+    def->label   = L("Allow boundary-closure reconstruction recommendations");
+    def->tooltip = L(
+        "Requires --check-model, --repair-model cgal and --repair-evidence together. "
+        "The caller confirms that the input should be a closed solid and that remaining open boundaries may be filled. "
+        "Only affects the reconstruction recommendation; does not close boundaries, reconstruct or adopt a model. Disabled by default.");
+    def->cli        = "repair-evidence-close-boundaries";
+    def->cli_params = "0|1";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def             = this->add("auto_repair_model", coBool);
     def->label      = L("Automatically repair imported model");
     def->tooltip    = L("Automatically repair STL mesh connectivity and normals while importing the model. With --repair-model cgal, "

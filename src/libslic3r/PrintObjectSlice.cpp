@@ -814,6 +814,11 @@ void PrintObject::slice()
     m_layers = new_layers(this, generate_object_layers(m_slicing_params, layer_height_profile, m_config.precise_z_height.value));
     this->slice_volumes();
     m_print->throw_if_canceled();
+    // Region construction may remove every layer (for example, opposing
+    // coincident shells). Reject before brim regrouping dereferences front().
+    if (m_layers.empty())
+        throw Slic3r::SlicingError(
+            L("No layers were detected. You might want to repair your STL file(s) or check their size or thickness and retry.\n"));
     int firstLayerReplacedBy = 0;
 
 #if 0
@@ -849,9 +854,6 @@ void PrintObject::slice()
                 layer.backup_untyped_slices();
             }
         });
-    if (m_layers.empty())
-        throw Slic3r::SlicingError(L("No layers were detected. You might want to repair your STL file(s) or check their size or thickness and retry.\n"));
-
     // BBS
     this->set_done(posSlice);
 }

@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <iterator>
 #include <limits>
@@ -56,7 +57,7 @@ struct Mesh
         if (found != point_index.end())
             return found->second;
         if (points.size() >= options.max_vertices)
-            throw std::runtime_error("Model inspection vertex limit exceeded.");
+            throw ModelInspectionLimitError("Model inspection vertex limit exceeded.");
         const auto id = points.size();
         point_index.emplace(xyz, id);
         coordinates.push_back(xyz);
@@ -131,6 +132,65 @@ struct Issue
     std::vector<FacePair>             pairs;
     std::vector<IntersectionGeometry> pair_geometry;
 };
+
+bool strictly_straddles(const Mesh& mesh, const Face& plane, const Face& triangle)
+{
+    bool positive = false, negative = false;
+    for (const auto vertex : triangle) {
+        const auto side = CGAL::orientation(mesh.points[plane[0]], mesh.points[plane[1]], mesh.points[plane[2]], mesh.points[vertex]);
+        positive        = positive || side == CGAL::POSITIVE;
+        negative        = negative || side == CGAL::NEGATIVE;
+    }
+    return positive && negative;
+}
+
+json classify_proper_crossings(const Mesh& mesh, const Issue& intersections)
+{
+    const auto  started = std::chrono::steady_clock::now();
+    json        result  = {{"status", intersections.complete ? "completed" : "incomplete"},
+                           {"detected", false},
+                           {"pairs_checked", std::size_t(0)},
+                           // This is the retained pair count, not an exact total when
+                           // the existing self-intersection search reached its cap.
+                           {"total_pairs", intersections.pairs.size()},
+                           {"search_complete", intersections.complete},
+                           {"witness", nullptr}};
+    std::size_t checked = 0;
+    for (const auto& pair : intersections.pairs) {
+        ++checked;
+        const auto& a = mesh.faces[pair[0]];
+        const auto& b = mesh.faces[pair[1]];
+        // Both sides must strictly cross the other triangle's plane. This
+        // excludes coplanar overlap and point/edge contacts without a numeric
+        // tolerance. The pair search already excluded degenerate triangles.
+        if (!strictly_straddles(mesh, a, b) || !strictly_straddles(mesh, b, a))
+            continue;
+        const auto intersection = CGAL::intersection(Kernel::Triangle_3(mesh.points[a[0]], mesh.points[a[1]], mesh.points[a[2]]),
+                                                     Kernel::Triangle_3(mesh.points[b[0]], mesh.points[b[1]], mesh.points[b[2]]));
+        if (!intersection)
+            throw std::runtime_error("CGAL reported a pair without intersection geometry.");
+        const auto* segment = boost::get<Kernel::Segment_3>(&*intersection);
+        if (!segment || segment->source() == segment->target())
+            continue;
+        std::array<XYZ, 2> coordinates;
+        for (std::size_t end = 0; end < coordinates.size(); ++end) {
+            const auto& point = segment->vertex(int(end));
+            coordinates[end]  = {CGAL::to_double(point.x()), CGAL::to_double(point.y()), CGAL::to_double(point.z())};
+            for (const double value : coordinates[end])
+                if (!std::isfinite(value))
+                    throw std::runtime_error("Intersection coordinates cannot be displayed safely.");
+        }
+        result["detected"] = true;
+        result["status"]   = "completed"; // Existence proved, not a complete pair census.
+        result["witness"]  = {{"faces", pair}, {"segment", coordinates}};
+        break;
+    }
+    result["pairs_checked"] = checked;
+    // Classifier overhead only: the shared pair search and inspection are not
+    // included in this number.
+    result["elapsed_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    return result;
+}
 
 struct Use
 {
@@ -550,7 +610,7 @@ nlohmann::json inspect_model_mesh(const TriangleMesh& source, const ModelInspect
     if (source.its.indices.empty())
         throw std::runtime_error("Cannot inspect an empty model.");
     if (source.its.indices.size() > options.max_triangles)
-        throw std::runtime_error("Model inspection triangle limit exceeded.");
+        throw ModelInspectionLimitError("Model inspection triangle limit exceeded.");
     if (options.max_intersections == std::numeric_limits<unsigned>::max())
         throw std::invalid_argument("Intersection limit must allow a sentinel result.");
     validate_mesh(source);
@@ -565,15 +625,18 @@ nlohmann::json inspect_model_mesh(const TriangleMesh& source, const ModelInspect
         mesh.faces.push_back(canonical);
     }
     mesh.point_index.clear();
-    const auto issues         = inspect(mesh);
-    const auto components     = inspect_components(mesh, issues);
-    json       report         = {{"schema_version", 1},
-                                 {"algorithm", "demo_geometry_v1"},
-                                 {"coordinate_basis", "decoded_orca_mesh"},
-                                 {"triangle_count", mesh.faces.size()},
-                                 {"geometric_vertex_count", mesh.points.size()},
-                                 {"detail_limit", options.detail_limit},
-                                 {"issues", json::object()}};
+    const auto issues           = inspect(mesh);
+    const auto proper_crossings = options.classify_proper_crossings ? classify_proper_crossings(mesh, issues[3]) : json(nullptr);
+    const auto components       = inspect_components(mesh, issues);
+    json       report           = {{"schema_version", 1},
+                                   {"algorithm", "demo_geometry_v1"},
+                                   {"coordinate_basis", "decoded_orca_mesh"},
+                                   {"triangle_count", mesh.faces.size()},
+                                   {"geometric_vertex_count", mesh.points.size()},
+                                   {"detail_limit", options.detail_limit},
+                                   {"issues", json::object()}};
+    if (options.classify_proper_crossings)
+        report["proper_crossings"] = proper_crossings;
     bool       basic_complete = true, has_issues = false;
     for (const auto& issue : issues) {
         basic_complete       = basic_complete && issue.complete;

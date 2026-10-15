@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:276bbc8e6d5b532510ca8e5df2491377987347a75c25bf56da36b0dbba7ee47b",
-  "reason": "登记三档纯协议及共享云配置表单测试目标；提交前因Plater接口和会话边界改动最小重建当前Mac arm64 Release应用/测试，命令和结果见云方案记录；工具链/版本/域名不变。"
+  "source_fingerprint": "sha256:64cc00720c1e6c812739af418d91e28a087fae926a4d2dad788a1d537fff7608",
+  "reason": "只读ModelRepairEvidence和单Z截面/有效区域诊断测试注册到既有目标；CLI仅以默认关闭的非动作选项接入，不新增自动编排、依赖、worker或平台安装脚本，保留云配置测试目标。实际构建与跨平台运行状态分别记录。"
 }
 -->
 
@@ -21,6 +21,8 @@
 - [build_macos_zstd.sh](../../../scripts/build_macos_zstd.sh) 与 [bundle_macos_zstd.sh](../../../scripts/bundle_macos_zstd.sh)：固定运行库构建、架构/最低系统验证与包内重定位；构建入口和独立 DMG 入口共用。
 
 ## 核心流程
+
+只读 `ModelRepairEvidence.cpp/.hpp` 编入现有 libslic3r；`test_model_repair_evidence.cpp` 和 `test_mesh_slice_diagnostics.cpp` 注册到现有 libslic3r_tests。证据由默认关闭的非动作选项 `--repair-evidence` 接入：仅检测组合高级修复的残缺结果可能追加单 Z 切层和同轮有效区域观察；普通修复／重建只投影已有报告。默认协议与扫描路径保留，不新增自动编排、GUI 菜单、依赖或 worker。现有高级修复、重建和构建目标保持，应用与测试必须使用同一源码身份；macOS 构建通过不代表 Windows/Linux 已运行验证。
 
 根 CMake 配置依赖与目标，src 子目标链接 libslic3r、GUI 和开发工具；平台脚本组织依赖、应用与打包，dev-utils/platform 提供图标、manifest、plist 和桌面集成。deps/deps_src 是供应链边界。
 

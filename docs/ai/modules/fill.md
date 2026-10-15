@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "fill",
-  "source_fingerprint": "sha256:91a924234795e1b722b18cacac9b9cbbf09706cd1741e379c663537814f7b3cc",
-  "reason": "增加默认不启用的扫描端点延伸上限，仅增强无墙筏层设置；旧负值分支保持原偏移表达式。补阶梯凹口回归、四角度与两种线宽/密度，登记共享测试和夹具依赖；筏层/填充92用例通过，模型路径与关闭增强输出另作CLI对照，GUI平滑0导出一致，其余交接场景待验。"
+  "source_fingerprint": "sha256:9ede2086525ca15bd11131eb22b70891d46af00bc116bddf040defc42d23baa5",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助仅供模型建议，未传入Fill；密度、图案、搭墙延伸、顶底填充和GUI工艺控件均未改变，证据流程不生成填充。"
 }
 -->
 
