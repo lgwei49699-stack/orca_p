@@ -22,6 +22,7 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -144,17 +145,88 @@ bool strictly_straddles(const Mesh& mesh, const Face& plane, const Face& triangl
     return positive && negative;
 }
 
+CGAL::Orientation plane_side(const Mesh& mesh, const Face& plane, std::size_t vertex)
+{
+    return CGAL::orientation(mesh.points[plane[0]], mesh.points[plane[1]], mesh.points[plane[2]], mesh.points[vertex]);
+}
+
+bool same_plane(const Mesh& mesh, const Face& a, const Face& b)
+{
+    return std::all_of(b.begin(), b.end(), [&](std::size_t vertex) { return plane_side(mesh, a, vertex) == CGAL::COPLANAR; });
+}
+
+std::optional<Edge> edge_in_plane(const Mesh& mesh, const Face& triangle, const Face& plane)
+{
+    for (std::size_t i = 0; i < 3; ++i)
+        if (plane_side(mesh, plane, triangle[i]) == CGAL::COPLANAR && plane_side(mesh, plane, triangle[(i + 1) % 3]) == CGAL::COPLANAR &&
+            plane_side(mesh, plane, triangle[(i + 2) % 3]) != CGAL::COPLANAR)
+            return Edge{std::min(triangle[i], triangle[(i + 1) % 3]), std::max(triangle[i], triangle[(i + 1) % 3])};
+    return std::nullopt;
+}
+
+bool opposite_off_edge_sides(const Mesh& mesh, const Face& a, const Face& b, const Face& plane, const Edge& edge)
+{
+    const auto side = [&](const Face& face) {
+        for (const auto vertex : face)
+            if (vertex != edge[0] && vertex != edge[1])
+                return plane_side(mesh, plane, vertex);
+        return CGAL::COPLANAR;
+    };
+    const auto first = side(a), second = side(b);
+    return first != CGAL::COPLANAR && second != CGAL::COPLANAR && first != second;
+}
+
 json classify_proper_crossings(const Mesh& mesh, const Issue& intersections)
 {
-    const auto  started = std::chrono::steady_clock::now();
-    json        result  = {{"status", intersections.complete ? "completed" : "incomplete"},
-                           {"detected", false},
-                           {"pairs_checked", std::size_t(0)},
-                           // This is the retained pair count, not an exact total when
-                           // the existing self-intersection search reached its cap.
-                           {"total_pairs", intersections.pairs.size()},
-                           {"search_complete", intersections.complete},
-                           {"witness", nullptr}};
+    const auto started = std::chrono::steady_clock::now();
+    json       result  = {{"schema_version", 2},
+                          {"status", intersections.complete ? "completed" : "incomplete"},
+                          {"detected", false},
+                          {"pairs_checked", std::size_t(0)},
+                          // This is the retained pair count, not an exact total when
+                          // the existing self-intersection search reached its cap.
+                          {"total_pairs", intersections.pairs.size()},
+                          {"search_complete", intersections.complete},
+                          {"classification_scope", "triangle_interiors_and_coplanar_edge_patches"},
+                          {"classification_complete", intersections.complete},
+                          {"budget_exhausted", false},
+                          {"neighborhood",
+                           {{"candidate_limit", mesh.options.max_crossing_neighborhood_candidates},
+                            {"face_limit", mesh.options.max_crossing_neighborhood_faces},
+                            {"candidates", std::size_t(0)},
+                            {"faces_scanned", std::size_t(0)},
+                            {"reason", "not_required"}}},
+                          {"witness", nullptr}};
+    const auto finish  = [&]() {
+        result["elapsed_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        return result;
+    };
+    const auto stop_at_budget = [&](const char* reason) {
+        result["status"]                  = "incomplete";
+        result["classification_complete"] = false;
+        result["budget_exhausted"]        = true;
+        result["neighborhood"]["reason"]  = reason;
+        return finish();
+    };
+    const auto triangle = [&](std::size_t id) {
+        const auto& face = mesh.faces[id];
+        return Kernel::Triangle_3(mesh.points[face[0]], mesh.points[face[1]], mesh.points[face[2]]);
+    };
+    const auto set_witness = [&](const FacePair& pair, const Kernel::Segment_3& segment, const char* kind, const char* source,
+                                 const std::array<std::vector<std::size_t>, 2>& support) {
+        std::array<XYZ, 2> coordinates;
+        for (std::size_t end = 0; end < coordinates.size(); ++end) {
+            const auto& point = segment.vertex(int(end));
+            coordinates[end]  = {CGAL::to_double(point.x()), CGAL::to_double(point.y()), CGAL::to_double(point.z())};
+            for (const double value : coordinates[end])
+                if (!std::isfinite(value))
+                    throw std::runtime_error("Intersection coordinates cannot be displayed safely.");
+        }
+        result["detected"]                = true;
+        result["status"]                  = "completed"; // Existence, not a complete pair census.
+        result["classification_complete"] = true;
+        result["witness"] = {{"kind", kind}, {"source", source}, {"faces", pair}, {"support_faces", support}, {"segment", coordinates}};
+    };
     std::size_t checked = 0;
     for (const auto& pair : intersections.pairs) {
         ++checked;
@@ -165,31 +237,114 @@ json classify_proper_crossings(const Mesh& mesh, const Issue& intersections)
         // tolerance. The pair search already excluded degenerate triangles.
         if (!strictly_straddles(mesh, a, b) || !strictly_straddles(mesh, b, a))
             continue;
-        const auto intersection = CGAL::intersection(Kernel::Triangle_3(mesh.points[a[0]], mesh.points[a[1]], mesh.points[a[2]]),
-                                                     Kernel::Triangle_3(mesh.points[b[0]], mesh.points[b[1]], mesh.points[b[2]]));
+        const auto intersection = CGAL::intersection(triangle(pair[0]), triangle(pair[1]));
         if (!intersection)
             throw std::runtime_error("CGAL reported a pair without intersection geometry.");
         const auto* segment = boost::get<Kernel::Segment_3>(&*intersection);
         if (!segment || segment->source() == segment->target())
             continue;
-        std::array<XYZ, 2> coordinates;
-        for (std::size_t end = 0; end < coordinates.size(); ++end) {
-            const auto& point = segment->vertex(int(end));
-            coordinates[end]  = {CGAL::to_double(point.x()), CGAL::to_double(point.y()), CGAL::to_double(point.z())};
-            for (const double value : coordinates[end])
-                if (!std::isfinite(value))
-                    throw std::runtime_error("Intersection coordinates cannot be displayed safely.");
-        }
-        result["detected"] = true;
-        result["status"]   = "completed"; // Existence proved, not a complete pair census.
-        result["witness"]  = {{"faces", pair}, {"segment", coordinates}};
-        break;
+        set_witness(pair, *segment, "triangle_interiors", "intersection_pair", {{{pair[0]}, {pair[1]}}});
+        result["pairs_checked"] = checked;
+        return finish();
     }
     result["pairs_checked"] = checked;
-    // Classifier overhead only: the shared pair search and inspection are not
-    // included in this number.
-    result["elapsed_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-    return result;
+    // Do not use a truncated pair set to claim complete neighborhood coverage.
+    if (!intersections.complete)
+        return finish();
+
+    struct EdgeCandidate
+    {
+        FacePair                           faces;
+        Kernel::Segment_3                  segment;
+        std::array<bool, 2>                strict;
+        std::array<std::optional<Edge>, 2> edges;
+    };
+    std::vector<EdgeCandidate> candidates;
+    // Retain only queried edges, not the original full topology maps released
+    // before CGAL's intersection search. Three IDs suffice to reject >2 uses.
+    std::map<Edge, std::vector<std::size_t>> adjacency;
+    const auto                               candidate_limit = mesh.options.max_crossing_neighborhood_candidates;
+    for (const auto& pair : intersections.pairs) {
+        const auto&               a = mesh.faces[pair[0]];
+        const auto&               b = mesh.faces[pair[1]];
+        const std::array<bool, 2> strict{strictly_straddles(mesh, b, a), strictly_straddles(mesh, a, b)};
+        // At least one original triangle must cross the other's plane through
+        // its interior. Assembling BOTH sides from coplanar edge neighbors can
+        // mistake differently triangulated, edge-touching solids for crossings.
+        if (strict[0] == strict[1])
+            continue;
+        const std::array<std::optional<Edge>, 2> edges{strict[0] ? std::nullopt : edge_in_plane(mesh, a, b),
+                                                       strict[1] ? std::nullopt : edge_in_plane(mesh, b, a)};
+        if ((!strict[0] && !edges[0]) || (!strict[1] && !edges[1]))
+            continue; // Coplanarity and vertex-only contact cannot prove crossing.
+        const auto intersection = CGAL::intersection(triangle(pair[0]), triangle(pair[1]));
+        if (!intersection)
+            throw std::runtime_error("CGAL reported a pair without intersection geometry.");
+        const auto* segment = boost::get<Kernel::Segment_3>(&*intersection);
+        if (!segment || segment->source() == segment->target())
+            continue;
+        if (candidates.size() >= candidate_limit)
+            return stop_at_budget("candidate_limit");
+        candidates.push_back({pair, *segment, strict, edges});
+        for (const auto& edge : edges)
+            if (edge)
+                adjacency.emplace(*edge, std::vector<std::size_t>{});
+        result["neighborhood"]["candidates"] = candidates.size();
+        if (adjacency.size() > candidate_limit)
+            return stop_at_budget("candidate_limit");
+    }
+    result["neighborhood"]["candidates"] = std::max(candidates.size(), adjacency.size());
+    if (adjacency.empty())
+        return finish();
+    if (mesh.faces.size() > mesh.options.max_crossing_neighborhood_faces)
+        return stop_at_budget("face_limit");
+    for (std::size_t id = 0; id < mesh.faces.size(); ++id) {
+        const auto& face = mesh.faces[id];
+        for (std::size_t i = 0; i < 3; ++i) {
+            const Edge edge{std::min(face[i], face[(i + 1) % 3]), std::max(face[i], face[(i + 1) % 3])};
+            const auto found = adjacency.find(edge);
+            if (found != adjacency.end() && found->second.size() < 3 &&
+                !CGAL::collinear(mesh.points[face[0]], mesh.points[face[1]], mesh.points[face[2]]))
+                found->second.push_back(id);
+        }
+    }
+    result["neighborhood"]["faces_scanned"] = mesh.faces.size();
+    result["neighborhood"]["reason"]        = "completed";
+    for (const auto& candidate : candidates) {
+        std::array<std::vector<std::size_t>, 2> support;
+        bool                                    proved = true;
+        for (std::size_t side = 0; side < 2; ++side) {
+            const auto anchor = candidate.faces[side];
+            support[side]     = {anchor};
+            if (candidate.strict[side])
+                continue;
+            const auto&             edge = *candidate.edges[side];
+            const auto&             uses = adjacency.at(edge);
+            const Kernel::Segment_3 shared_edge(mesh.points[edge[0]], mesh.points[edge[1]]);
+            if (uses.size() != 2 || (uses[0] != anchor && uses[1] != anchor) || !shared_edge.has_on(candidate.segment.source()) ||
+                !shared_edge.has_on(candidate.segment.target())) {
+                proved = false;
+                break;
+            }
+            const auto neighbor = uses[0] == anchor ? uses[1] : uses[0];
+            if (!same_plane(mesh, mesh.faces[anchor], mesh.faces[neighbor]) ||
+                !opposite_off_edge_sides(mesh, mesh.faces[anchor], mesh.faces[neighbor], mesh.faces[candidate.faces[1 - side]], edge)) {
+                proved = false;
+                break;
+            }
+            support[side] = uses;
+        }
+        for (const auto first : support[0])
+            if (std::find(support[1].begin(), support[1].end(), first) != support[1].end())
+                proved = false;
+        if (proved) {
+            set_witness(candidate.faces, candidate.segment, "coplanar_edge_patches", "intersection_pair", support);
+            return finish();
+        }
+    }
+    // A shared nonmanifold edge is deliberately not regrouped into artificial
+    // sheets: two solids merely touching along an edge can produce that fan.
+    return finish();
 }
 
 struct Use

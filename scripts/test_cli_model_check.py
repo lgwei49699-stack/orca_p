@@ -489,7 +489,10 @@ def main():
             assert limited["boundary"]["sections"]["reason"] == "plane_limit"
             assert limited["boundary"]["sections"]["planes"] == 0
             assert limited["boundary"]["reconstruction"]["assessment"] == "blocked"
-            assert limited["boundary"]["reconstruction"].get("failure_kind"), limited
+            assert limited["boundary"]["reconstruction"]["failure_kind"] == "repair_evidence_incomplete", limited
+            assert limited["boundary"]["reconstruction"]["failure_stage"] == "sections", limited
+            assert limited["boundary"]["reconstruction"]["failure_cause"] == "plane_limit", limited
+            assert limited["boundary"]["reconstruction"]["failure_category"] == "resource", limited
             plain, plain_result = run(f"{label}-plane-limit-explicit-off", tall, "--repair-model", "cgal",
                                       "--repair-evidence", "0", success=partial)
             assert plain_result["return_code"] == (0 if partial else -25)

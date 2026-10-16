@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:af98456f00fc01b153f1e63f3114b31d11c938a31d4a50f0a19664d47e64d4dd",
-  "reason": "现有独立重建新增显式MeshLib本机评估后端与体素/worker参数；仍复用候选导出协议，不新增自动修复命令或切片入口。普通检测、高级修复、默认Alpha Wrap及GUI选择保持原路径；新增SDK身份、实际参数、输入输出哈希及结构未验证说明。参数混用/缺失拒绝，非成功候选不导出；CLI及原流程实际回归归主验证记录。"
+  "source_fingerprint": "sha256:05b9130efe9d9a1b13a48529243e5673194ce3b867e6a1fb96f5ecd901dcde4e",
+  "reason": "显式repair-evidence流程补单侧共面穿透摘要及失败阶段/资源归因，保留原数值退出码和默认关闭行为，不新增参数、自动重建或GUI入口。CLI限制场景断言同步；本提交不改变现有MeshLib worker调用。"
 }
 -->
 
@@ -29,7 +29,9 @@
 
 仅组合 `--check-model --repair-model cgal --repair-evidence` 采用流程完成语义：正常无进展且最终证据完整有效返回0、空error_string，保留unresolved/needs_repair及缺陷。共享工作流仍执行显式格式转换和最终复检。最终健康可跳过预检；残留缺陷须通过完整性及eligible准入检查，已确认真实穿透或允许封口策略下的残留开放边界可直接形成建议并跳过预检，否则最多执行一次完整有界预检。无确定异常的完整观察可以完成，但任意undetermined/缺证据不能直接算完成。预检异常、超限、未知或未完成仍非零（沿用既有码），部分成果照样保留；不把所有-25改0。原生GUI不走该CLI工作流，行为不变；本地维护台按真实命令及返回值显示“已完成，模型未解决”，不改旧231历史。
 
-只有该显式组合复用当前保留网格的同一轮自交搜索，以精确几何判定区分真实穿透与共面重叠、点/边接触；不重新进行全量搜索。`evidence_present / proper_crossing_after_repair` 需要完整检查及非零长度、互相严格跨面的交线见证。允许封口策略下的残留开边对应 `open_boundaries_under_closed_solid_policy`。这两类明确依据使 `sections.status=not_run`、`reason=reconstruction_evidence_already_present`，不是漏执行。只有未取得明确依据的残留缺陷才追加一次 Z 观察，复用普通区域构造得到有效 `ExPolygons`，不生成墙、填充、支撑或 G-code。健康网格直接复用无交对摘要并跳过截面；只检测和默认旧调用不启用该分类或截面，未知／失败结果不继续升级。
+只有该显式组合复用当前保留网格的同一轮自交搜索，以精确几何判定区分已证明的表面穿透与共面重叠、点/边接触；不重新进行全量搜索。`evidence_present / proper_crossing_after_repair` 需要完整检查及非零长度交线上的跨面证明：保留原双三角片严格跨面，新增有界单侧共面双邻面补证；禁止两侧都重组邻面、共享多面边直接升级。具体证明与4096候选/300万面预算见共享模块；摘要自身schema2记录支持面和分类完整性，超限不能当阴性或建议。允许封口策略下的残留开边对应 `open_boundaries_under_closed_solid_policy`。这两类明确依据使 `sections.status=not_run`、`reason=reconstruction_evidence_already_present`，不是漏执行。只有未取得明确依据的残留缺陷才追加一次 Z 观察，复用普通区域构造得到有效 `ExPolygons`，不生成墙、填充、支撑或 G-code。健康网格直接复用无交对摘要并跳过截面；只检测和默认旧调用不启用该分类或截面，未知／失败结果不继续升级。
+
+证据流程未完成的既有退出码与 `failure_kind=repair_evidence_incomplete` 不变；`boundary.reconstruction` 新增已知子阶段的 `failure_stage/failure_cause` 并正确派生 `failure_category`。如 `sections/plane_limit` 为 resource，取消为 canceled，未知为 execution；不从英文报错推断，不用后续证据覆盖旧IO失败，不放宽blocked或流程完成语义。无新CLI开关或GUI入口。
 
 原有 `evidence_present / no_effective_regions` 保留为另一条充分依据：完整参考 Z 计划全部无有效区域、存在非退化闭圈、无主动删区参数干扰且准入为eligible；不再把它当作所有模型都必须满足的前置条件。开链、单空层、面积变化、自交数量或非流形数量不能单独触发。CLI 未加载工艺，参考层位不等于实际打印层；建议重建不证明原模型一定切片失败，也不证明重建候选可打印。GUI 仍走既有手动修复与候选确认，未新增此评估的展示或自动执行入口。详见[协议](../../../doc/model-check-workflow.md)与[共享模型修复](model-repair.md)。
 

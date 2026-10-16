@@ -186,6 +186,9 @@ void require_completed_evidence(ModelCheckWorkflowReport& report)
                                                reason == "open_boundaries_under_closed_solid_policy"))))
         return;
     report.failure_stage = "repair_evidence";
+    // Keep the existing workflow failure kind and CLI exit semantics. The
+    // boundary projection preserves a known failing substage/cause separately
+    // so, for example, a section plane budget is not reported as an engine fault.
     report.failure_kind  = "repair_evidence_incomplete";
     throw std::runtime_error("Repair evidence did not complete; see the boundary details.");
 }

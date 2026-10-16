@@ -515,6 +515,81 @@ TEST_CASE("Confirmed proper crossing recommends a candidate without section work
     REQUIRE(decision(touching)["reconstruction"]["assessment"] == "blocked");
 }
 
+TEST_CASE("Bounded coplanar patch evidence preserves completion and witness boundaries", "[RepairEvidence][ProperCrossing]")
+{
+    indexed_triangle_set mesh;
+    mesh.vertices = {{-2.f, -2.f, 0.f}, {2.f, -2.f, 0.f}, {0.f, 2.f, 0.f}, {0.f, -1.f, -1.f},
+                     {0.f, -1.f, 1.f},  {0.f, 1.f, 0.f},  {0.f, -1.f, 0.f}};
+    mesh.indices  = {{0, 1, 2}, {3, 6, 5}, {6, 4, 5}};
+    ModelInspectionOptions options;
+    options.classify_proper_crossings = true;
+    const auto inspected              = inspect_model_mesh(TriangleMesh(mesh), options);
+    REQUIRE(inspected["proper_crossings"]["schema_version"] == 2);
+    REQUIRE(inspected["proper_crossings"]["witness"]["kind"] == "coplanar_edge_patches");
+    // Only the retained-mesh classifier and decision projection are exercised;
+    // this does not claim advanced repair actually failed on this fixture.
+    const auto repaired = model_repair_boundary(unresolved_repair());
+    const auto decision = [&](const json& input) {
+        return model_check_boundary(input, repaired, {}, "", eligible_reconstruction)["reconstruction"];
+    };
+    const auto result = decision(inspected);
+    REQUIRE(result["assessment"] == "evidence_present");
+    REQUIRE(result["reason"] == "proper_crossing_after_repair");
+    REQUIRE(result["automatic_adoption"] == false);
+    REQUIRE(result["necessity"] == "not_established");
+
+    auto unsplit      = mesh;
+    unsplit.indices   = {{0, 1, 2}, {3, 4, 5}};
+    const auto strict = inspect_model_mesh(TriangleMesh(unsplit), options);
+    REQUIRE(strict["proper_crossings"]["witness"]["kind"] == "triangle_interiors");
+    REQUIRE(strict["proper_crossings"]["neighborhood"]["reason"] == "not_required");
+    REQUIRE(decision(strict)["assessment"] == "evidence_present");
+
+    for (const auto& patch : {json{{"classification_complete", false}}, json{{"budget_exhausted", true}}, json{{"schema_version", 3}},
+                              json{{"schema_version", "2"}}, json{{"classification_scope", "all_mesh_crossings"}},
+                              json{{"pairs_checked", 0}}, json{{"neighborhood", {{"reason", "face_limit"}}}}}) {
+        auto invalid = inspected;
+        invalid["proper_crossings"].update(patch);
+        REQUIRE(decision(invalid)["assessment"] == "blocked");
+    }
+    for (const auto& patch :
+         {json{{"support_faces", {{0}, {1, 1}}}}, json{{"support_faces", {{0, 2}, {1, 2}}}}, json{{"support_faces", {{0}, {1, 3}}}},
+          json{{"support_faces", {{0}, {2}}}}, json{{"support_faces", {{0}, {1}}}}, json{{"support_faces", {{0, 1, 2}, {1}}}},
+          json{{"source", "shared_nonmanifold_edge"}}, json{{"kind", "triangle_interiors"}}}) {
+        auto invalid = inspected;
+        invalid["proper_crossings"]["witness"].update(patch);
+        REQUIRE(decision(invalid)["assessment"] == "blocked");
+    }
+    auto missing = inspected;
+    missing["proper_crossings"].erase("classification_complete");
+    REQUIRE(decision(missing)["assessment"] == "blocked");
+    missing = inspected;
+    missing["proper_crossings"].erase("schema_version");
+    REQUIRE(decision(missing)["assessment"] == "blocked");
+    for (const auto* key : {"classification_scope", "classification_complete", "budget_exhausted", "neighborhood"})
+        missing["proper_crossings"].erase(key);
+    REQUIRE(decision(missing)["assessment"] == "blocked");
+    for (const auto& patch : {json{{"reason", "not_required"}}, json{{"faces_scanned", 0}}, json{{"candidates", 0}}}) {
+        auto invalid = inspected;
+        invalid["proper_crossings"]["neighborhood"].update(patch);
+        REQUIRE(decision(invalid)["assessment"] == "blocked");
+    }
+    auto double_patch                                                 = inspected;
+    double_patch["triangle_count"]                                    = 4;
+    double_patch["proper_crossings"]["neighborhood"]["faces_scanned"] = 4;
+    double_patch["proper_crossings"]["witness"]["support_faces"]      = {{0, 3}, {1, 2}};
+    REQUIRE(decision(double_patch)["assessment"] == "blocked");
+
+    auto negative = inspected;
+    negative["proper_crossings"].update(
+        {{"detected", false}, {"pairs_checked", inspected["proper_crossings"]["total_pairs"]}, {"witness", nullptr}});
+    REQUIRE(model_check_boundary(negative, repaired, completed_sections(), "", eligible_reconstruction)["reconstruction"]["assessment"] ==
+            "undetermined");
+    negative["proper_crossings"]["classification_complete"] = false;
+    REQUIRE(model_check_boundary(negative, repaired, completed_sections(), "", eligible_reconstruction)["reconstruction"]["assessment"] ==
+            "blocked");
+}
+
 TEST_CASE("Open mesh boundaries only recommend reconstruction under explicit closed-solid policy", "[RepairEvidence]")
 {
     const auto                inspected = residual_inspection();
@@ -572,6 +647,99 @@ TEST_CASE("Failure unknown and incomplete observations never become reconstructi
     REQUIRE(invalid["assessment"] == "blocked");
     REQUIRE(invalid["reason"] == "invalid_section_evidence");
     REQUIRE(model_check_boundary(residual_inspection(), json(1), json("completed"))["reconstruction"]["assessment"] == "undetermined");
+}
+
+TEST_CASE("Evidence workflow failures retain their substage cause without changing the wrapper", "[RepairEvidence]")
+{
+    const auto repair          = model_repair_boundary(unresolved_repair());
+    const auto failed_sections = [&](const json& sections, const std::string& failure = "repair_evidence_incomplete") {
+        return model_check_boundary(residual_inspection(), repair, sections, failure, eligible_reconstruction)["reconstruction"];
+    };
+    for (const auto* cause :
+         {"plane_limit", "time_limit", "input_limit", "intersection_limit", "coordinate_limit", "memory_allocation_failed"}) {
+        const auto result = failed_sections({{"status", "incomplete"}, {"reason", cause}});
+        REQUIRE(result["assessment"] == "blocked");
+        REQUIRE(result["reason"] == "workflow_failure");
+        REQUIRE(result["failure_kind"] == "repair_evidence_incomplete");
+        REQUIRE(result["failure_stage"] == "sections");
+        REQUIRE(result["failure_cause"] == cause);
+        REQUIRE(result["failure_category"] == "resource");
+    }
+    const auto canceled = failed_sections({{"status", "canceled"}, {"reason", "canceled"}});
+    REQUIRE(canceled["failure_category"] == "canceled");
+    REQUIRE(canceled["failure_cause"] == "canceled");
+    for (const auto* cause : {"execution_failed", "future_unknown_reason", "unsupported_transform", "degenerate_extent",
+                              "coordinate_precision", "candidate_limit", "face_limit"}) {
+        const auto result = failed_sections({{"status", "incomplete"}, {"reason", cause}});
+        REQUIRE(result["failure_category"] == "execution");
+        REQUIRE(result["failure_cause"] == cause);
+    }
+    const auto invalid_input = failed_sections({{"status", "failed"}, {"reason", "invalid_input"}});
+    REQUIRE(invalid_input["failure_category"] == "input");
+    auto completed      = completed_sections();
+    completed["reason"] = "plane_limit";
+    const auto stale    = failed_sections(completed);
+    REQUIRE(stale["failure_category"] == "execution");
+    REQUIRE_FALSE(stale.contains("failure_cause"));
+    REQUIRE_FALSE(stale.contains("failure_stage"));
+    const auto no_reason = failed_sections({{"status", "incomplete"}});
+    REQUIRE(no_reason["failure_category"] == "execution");
+    REQUIRE(no_reason["failure_stage"] == "sections");
+    REQUIRE_FALSE(no_reason.contains("failure_cause"));
+    // An earlier IO/repair failure must not be reclassified by later/stale
+    // evidence, even if that evidence contains a recognized resource reason.
+    const auto io = failed_sections({{"status", "incomplete"}, {"reason", "plane_limit"}}, "io_failed");
+    REQUIRE(io["failure_kind"] == "io_failed");
+    REQUIRE(io["failure_category"] == "io");
+    REQUIRE_FALSE(io.contains("failure_cause"));
+    const auto direct = failed_sections({{"status", "incomplete"}, {"reason", "plane_limit"}}, "");
+    REQUIRE(direct["reason"] == "section_evidence_not_completed");
+    REQUIRE(direct["failure_category"] == "resource");
+    REQUIRE(direct["failure_cause"] == "plane_limit");
+}
+
+TEST_CASE("Only established inspection or crossing budgets refine evidence failure classification", "[RepairEvidence]")
+{
+    const auto repair            = model_repair_boundary(unresolved_repair());
+    const auto failed_inspection = [&](const json& inspection) {
+        return model_check_boundary(inspection, repair, {}, "repair_evidence_incomplete", eligible_reconstruction)["reconstruction"];
+    };
+    auto limited                                   = residual_inspection();
+    limited["component_analysis"]["limit_reached"] = true;
+    auto result                                    = failed_inspection(limited);
+    REQUIRE(result["failure_stage"] == "inspection");
+    REQUIRE(result["failure_cause"] == "component_limit");
+    REQUIRE(result["failure_category"] == "resource");
+    limited                                                 = residual_inspection();
+    limited["issues"]["self_intersection"]["complete"]      = false;
+    limited["component_analysis"]["intersections_complete"] = false;
+    result                                                  = failed_inspection(limited);
+    REQUIRE(result["failure_cause"] == "self_intersection_incomplete");
+    REQUIRE(result["failure_category"] == "resource");
+    limited["component_analysis"]["intersections_complete"] = true;
+    REQUIRE(failed_inspection(limited)["failure_category"] == "execution");
+    for (const auto* cause : {"candidate_limit", "face_limit"}) {
+        auto crossing                = residual_inspection();
+        crossing["proper_crossings"] = {{"schema_version", 2},
+                                        {"status", "incomplete"},
+                                        {"classification_complete", false},
+                                        {"budget_exhausted", true},
+                                        {"neighborhood", {{"reason", cause}}}};
+        result                       = failed_inspection(crossing);
+        REQUIRE(result["assessment"] == "blocked");
+        REQUIRE(result["failure_kind"] == "repair_evidence_incomplete");
+        REQUIRE(result["failure_stage"] == "proper_crossings");
+        REQUIRE(result["failure_cause"] == cause);
+        REQUIRE(result["failure_category"] == "resource");
+        for (const auto& patch : {json{{"schema_version", 1}}, json{{"status", "completed"}}, json{{"classification_complete", true}},
+                                  json{{"budget_exhausted", false}}, json{{"neighborhood", {{"reason", "future_unknown_reason"}}}}}) {
+            auto invalid = crossing;
+            invalid["proper_crossings"].update(patch);
+            const auto unclassified = failed_inspection(invalid);
+            REQUIRE(unclassified["failure_category"] == "execution");
+            REQUIRE_FALSE(unclassified.contains("failure_cause"));
+        }
+    }
 }
 
 TEST_CASE("Contradictory completed-region evidence cannot recommend reconstruction", "[RepairEvidence]")

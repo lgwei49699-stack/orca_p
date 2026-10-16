@@ -1,6 +1,6 @@
 # STL / OBJ 检测与修复流程
 
-2026-10-15 当前证据协议 v2：组合 `--check-model --repair-model cgal --repair-evidence` 复用相交对分类。高级正常结束后，真实穿透，或明确允许封口时的残留开放边，可直接给出重建建议并跳过截面预检；其余保留一次有界 Z 预检。只提供建议，不调用重建或采用候选。封口策略默认关闭，显式 `--repair-evidence-close-boundaries 1` 声明输入应为闭合实体且允许封口；该参数只能用于上述三项组合，不能借此给开放薄片自动加厚。
+2026-10-16 当前证据协议 v2：组合 `--check-model --repair-model cgal --repair-evidence` 复用相交对分类，补充有界单侧共面邻接证明和失败原因归因。高级正常结束后，明确的表面穿透，或明确允许封口时的残留开放边，可直接给出重建建议并跳过截面预检；其余保留一次有界 Z 预检。只提供建议，不调用重建或采用候选。封口策略默认关闭，显式 `--repair-evidence-close-boundaries 1` 声明输入应为闭合实体且允许封口；该参数只能用于上述三项组合，不能借此给开放薄片自动加厚。
 
 2026-10-15 组合完成语义：仅上述组合将“流程完成”和“模型修好”分开。高级修复正常无进展、最终检测和证据评估完成时返回 `0`、`error_string=""`，仍报告 `repair_status=unresolved` 与实际缺陷；明确几何依据可以免预检。实际执行的预检异常／超限／未完成仍非零，部分修复也不例外。无此选项、显式 `0`、普通修复及独立重建沿用原语义。
 
@@ -150,10 +150,14 @@
 | inspection.status | not_run：未检测；passed：完整范围通过；defects_detected：已有完整缺陷证据；incomplete：未能完整判定。known_defects 保留已观测阳性，不能因其余检查未知而丢掉 |
 | repair.status | not_run／completed／incomplete／failed／canceled：高级修复是否正常执行；execution_completed 不等于产生了修改，也不等于完整网格通过 |
 | sections.status | not_run／completed／incomplete／failed／canceled：附加截面证据的执行状态；只有 completed 才能按完整采样范围解读计数 |
-| proper_crossings | 仅组合高级修复评估时分类；status/detected 表示真实穿透存在性，search_complete 表示原搜索完整，pairs_checked 是已分类数，total_pairs 是保留的相交对数（搜索截断时只是下界），witness 给出一个原面编号对及交段。elapsed_ms 仅新增分类耗时，不含原搜索 |
+| proper_crossings | 仅组合高级修复评估时分类；当前摘要自身 schema_version=2，status/detected 表示覆盖范围内的表面穿透存在性，search_complete 表示原搜索完整；classification_complete/budget_exhausted 单独说明本次分类完成/预算情况。pairs_checked/total_pairs 只计原相交对，不计支持邻面；witness 给出原面对/交段和 kind/source/support_faces。elapsed_ms 仅分类耗时（含需要时的邻接扫描），不含原搜索 |
 | reconstruction.assessment | not_needed：当前完整检查无网格缺陷；evidence_present：高级正常结束、完整已知缺陷和重建准入通过，命中下述三条之一；undetermined：未取得明确依据，本次不升级；blocked：不完整、失败、取消或不适用 |
 
-重建建议依次判断：`proper_crossing_after_repair`（双方三角形顶点严格跨越对方平面，精确交集是非零线段）；`open_boundaries_under_closed_solid_policy`（policy.allow_boundary_closure=true 且仍有开放边）；`no_effective_regions`（原完整参考截面全空规则）。前两项不需要全空截面，`sections.status=not_run/reason=reconstruction_evidence_already_present` 是正常短路，不是评估失败。没有新增相交对全搜索，不按显示前200对抽样；有一个精确阳性即可停止分类，无阳性必须检查完保留对，搜索截断即不能建议。原七项计数不改，共面重叠/点边接触、非流形数量不独立触发。
+重建建议依次判断：`proper_crossing_after_repair`（精确非零交线上的双侧跨面证明，详见下段）；`open_boundaries_under_closed_solid_policy`（policy.allow_boundary_closure=true 且仍有开放边）；`no_effective_regions`（原完整参考截面全空规则）。前两项不需要全空截面，`sections.status=not_run/reason=reconstruction_evidence_already_present` 是正常短路，不是评估失败。没有新增相交对全搜索，不按显示前200对抽样；一个精确阳性可提前结束存在性分类，无阳性须完成声明范围的分类，原搜索截断或分类超限均不能建议。原七项计数不改，共面重叠/点边接触、非流形数量不独立触发。
+
+穿透分类保留原“双三角片各自严格跨越对方平面”快速路径；若交线恰落在其中一片的边上，只在另一片仍严格跨面时补查该边的邻面。整条非零交段必须精确落边，全网格该边恰有两个有效邻面，两个邻面共面且第三顶点位于对方平面两侧，支持面不重复。见证 `triangle_interiors` 含两片，`coplanar_edge_patches` 含三片；`source=intersection_pair`，支持面不是新增自交对。只在需要时扫描一次网格建立有限邻接，默认最多4096个候选和300万扫描面；无交对或原快速路径命中不作邻接扫描。预算不足返回 incomplete，不把未完成分类当“没有穿透”。
+
+这是 `triangle_interiors_and_coplanar_edge_patches` 范围内的存在性判定，不是完整实体重叠检测。双方都需邻面补证、仅共享多面边、任意折角邻接仍不作阳性证明：两实体边接触也可能重组出看似交叉的面片，不能因此推荐重建。阴性只表示本次范围内未取得该证据，不保证所有穿透均不存在；其他两条依据仍按原规则判断。
 
 `sections` 只在显式“检测＋高级修复＋repair-evidence”、高级执行正常结束、当前保留网格仍有完整缺陷证据且通过既有重建准入、没有上述直接几何依据时运行。健康模型、普通只检测、默认旧调用、失败/未知不新增截面扫描。未改网格复用原检查；改动后保留实际导出回读检测，并复用该网格进行预检。开放边策略默认false；真正的杯口若内外壁在杯沿相连，并不是网格开放边。
 
@@ -162,6 +166,8 @@
 CLI 仍不加载工艺，因此 `coverage=reference_z_midplanes / printer_layer_plan=false`，不能冒充用户真实层位；共享 C++ 接口可接受调用方的完整层位与有效切层参数，但本轮没有让 GUI 自动执行新评估。普通切片只共用区域转换和全空层提前拒绝保护。参数主动收缩、简化或采用非 Regular 填充模式时，空区域结果不当作网格导致的重建依据；本轮保守限定阳性范围，不改变实际切片配置。
 
 `evidence_present / no_effective_regions` 说明该 Z 计划下确实没有形成有效区域，可供后端决定是否尝试重建；仍不是设计意图、全部工艺或候选质量保证。`applicability=eligible/unsupported/not_evaluated` 独立记录准入，`necessity=not_established / automatic_adoption=false` 保留形状及解决手段边界。unknown／incomplete、超时、内存不足或取消不能推动升级。输入/检测超限标记 `failure_kind=resource_limit`，不匹配英文报错猜原因；未取得检测仍保留 `issues=null`。
+
+证据流程未完成仍保留既有数值退出码及包装原因 `failure_kind=repair_evidence_incomplete`。能从失败子阶段取得明确依据时，`reconstruction.failure_stage` 为 `sections/inspection/proper_crossings`，`failure_cause` 保留具体原因，`failure_category` 按资源/取消/输入/执行分类。例如截面 `plane_limit` 属于 resource，不再被包装成通用 execution。未知原因仍按 execution，已完成观察里的历史 reason 不影响当前失败，早期 IO 等失败不会被后续摘要覆盖；这些字段不允许失败升级为重建建议。
 
 | repair_status | 含义 |
 |---|---|

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model-repair",
-  "source_fingerprint": "sha256:b8a5cae8d48d2962d37eeeb59efeb35caba9b1d607b4a99d4d1728864452e62f",
-  "reason": "仅为显式CLI重建增加固定MeshLib3.1.3.429独立评估worker，复用既有监督、原始索引协议、完整候选验收与采样比较。嵌套路径累计中间worker和sidecar RSS并传剩余时间；原Alpha Wrap默认监督不变。核对实际SDK身份、漏面/输入输出数量/体素，记录前后检查和哈希；不额外删小壳、不自动采用，不承诺微结构保留。源码/SDK授权/平台与实测边界分别记录。"
+  "source_fingerprint": "sha256:7bfc74f12ae43693f7cabbbcf90778e02ad951e445c638a93a2ff4ce4ec6d6b9",
+  "reason": "仅优化显式高级修复证据：保留严格穿透路径，补有界单侧共面邻接证明；共享多面边及双侧重组不升级，schema2校验支持面和预算。保留包装与退出码并细化失败阶段/原因/分类。默认分类关闭，不改变GUI、普通修复或重建引擎；正负例及资源回归同步。"
 }
 -->
 
@@ -52,15 +52,21 @@ GUI 修复入口经 FixModelByCgal 调用模型修复核心。repair_model 创�
 
 检测面数/顶点预算通过 `ModelInspectionLimitError` 标识，组合工作流记录 `resource_limit`；该类型保留旧 `runtime_error` 继承与消息，不改变门槛或退出码。其他异常按明确执行阶段分类，不解析英文报错猜原因。旧高级核心已吞并为失败报告的异常仍是 `repair_failed`，不能把它进一步伪称为确定的内存不足或几何无进展。
 
+证据未完成保留 `repair_evidence_incomplete` 包装及既有数值码；投影追加 `failure_stage/failure_cause`，从失败子阶段保留截面超限/取消/输入原因、已确认检测预算和局部分类预算，`failure_category` 不再将这些资源保护一律归为 execution。只认明确结构化原因；未知/不适用项仍按 execution，已完成观察的历史 reason 或后续摘要不覆盖早期IO等失败。截面、检测、分类不完整仍 blocked，不据资源失败推动重建。
+
 只有显式“检测＋高级修复＋repair-evidence”且修复正常结束、当前保留网格仍有完整缺陷证据并通过既有重建准入、尚无直接几何依据，才执行 `inspect_model_section_evidence`。未改变的网格复用已有检测；有改变时检查实际导出回读网格并将该副本复用于预检。默认参考 Z 中间平面间距不超过0.2mm、最多2000面，保留30秒协作预算、300万输入面/顶点与1000万潜在三角面-层位相交保护。超限不降采样冒充完整；单次旧调用不保证硬中断。普通旧调用不做额外扫描，健康/失败/未知分支也不跑预检。
 
-直接几何依据复用既有 CGAL 相交对，不新增全对搜索：组合流程开启 `ModelInspectionOptions::classify_proper_crossings`，以 EPECK 的双方严格跨平面与非零交线段确定真实穿透，排除共面/点/边接触。首个阳性可以结束存在性分类；阴性须查完所有保留对，不能只看 detail_limit 的前200个。原搜索截断或摘要不一致均不能推荐；原七项计数、原 face ID 和副本身份保持。`elapsed_ms` 仅分类开销，不含原搜索。正常旧入口默认不开启，原生 GUI 高级修复和手动重建不因此加扫描。
+直接几何依据复用既有 CGAL 相交对，不新增全对搜索：组合流程开启 `ModelInspectionOptions::classify_proper_crossings`，以 EPECK 的非零交段及下述严格跨面/单侧共面邻接证明确认表面穿透。首个阳性可以结束存在性分类；阴性须完成声明范围内的分类，不能只看 detail_limit 的前200个。原搜索截断或摘要不一致均不能推荐；原七项计数、原 face ID 和副本身份保持。`elapsed_ms` 仅分类开销，不含原搜索。正常旧入口默认不开启，原生 GUI 高级修复和手动重建不因此加扫描。
 
 `ModelRepairEvidencePolicy::allow_boundary_closure` 默认false；CLI只能在上述完整组合显式加 `--repair-evidence-close-boundaries 1`，表示后台确认输入应为闭合实体且允许封口，不表示当前操作会封口。维护台证据模式提供默认关闭的对应验证复选框；开放薄片不能借此自动加厚，格式/面数/对象数不能代替设计约定。历史 schema1 只读兼容，不为旧报告补造穿透分类或封口授权。
 
 同一轮 Z 切层同时取得原始闭圈/开放链和经普通 `slice_mesh_ex` 同规则整理的 ExPolygons；不重复切层、不增加全量二维自交检查、不生成墙/填充/支撑/G-code。有效区域统计、全空区域、非退化闭圈被抵消及最多16个位置样本补充旧开链/补缝数据；绝对闭圈面积和包含洞及重叠，不能当预期实体面积或丢失比例。CLI 无工艺上下文，明确 reference_z_midplanes/printer_layer_plan=false；共享接口可接受调用方完整层位及有效参数，坐标按变换后的毫米解释，身份/完整计划由调用方负责。异常/取消/超限不改变旧返回或产物；内部 elapsed_ms 与包含网格准备的 workflow_elapsed_ms 分别记录。规模保护不是硬 RSS 限制；区域在全 Z 生成后汇总释放，不能宣称恒定内存或30秒硬截止。
 
 `evidence_present` 统一要求高级正常结束、完整已知缺陷和重建准入 eligible，依次接受 `proper_crossing_after_repair`、明确封口策略下的 `open_boundaries_under_closed_solid_policy`、原 `no_effective_regions`。前两者命中时截面状态为正常 `not_run/reconstruction_evidence_already_present`，不重复预检；第三者仍要求完整 Z 计划全无有效区域且存在非退化闭圈、没有能主动删区的参数干扰。开链、自交总数、单个空层、非流形数量或面积跳变不独立触发。其余 undetermined，失败/取消/未知 blocked；applicability 独立准入，necessity=not_established、automatic_adoption=false，不能把质量策略建议说成原模型必定切片失败或候选必定保真。not_needed 仅表示当前完整网格检查通过。
+
+穿透分类仅在显式证据组合启用，默认 `classify_proper_crossings=false` 不新增工作。原双三角片严格跨面快速路径优先；未命中时允许单侧共面双邻面补证：另一侧原片必须严格跨面，精确非零交段整体落在支持边，支持边全网格恰两非退化邻面，邻面共面且第三点异侧。只复用已发现的交对，不新增全对搜索；最多4096个候选、300万面的一次局部邻接收集，每边最多保存3个face ID即可拒绝多面共边。健康无交对或快速路径命中不扫描邻接；预算不足明确 incomplete。曲面/不共面邻面、双侧补证、共享多面边不证明穿透，避免将两实体边接触重组为交叉曲面。
+
+`proper_crossings` 自身schema2保留原pairs计数，增加范围/分类完成/预算摘要和原pair的2面或3面支持见证；消费者检查kind/source、支持面互异与锚点、邻接实际扫描完成。原无版本strict摘要兼容，但不能把新版patch元数据删一部分伪装legacy。负结果仅表示声明范围未证明穿透，不是全几何或实体重叠保证；原完整搜索要求不放宽，四面双patch即使ID合法也不能形成建议。
 
 普通高级修复和独立重建 CLI 也仅在 --repair-evidence 时投影已有结果，不增加检测/预检。重建投影保留 shape_structure_guaranteed=false、printability=not_assessed；共享候选核心/GUI 不无条件改变报告，不改变原偏差告警、风险确认、人工采用和撤销语义。
 

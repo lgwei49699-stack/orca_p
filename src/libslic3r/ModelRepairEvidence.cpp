@@ -509,6 +509,23 @@ json model_check_boundary(const json&                      inspection,
     const auto* self_issue    = issues ? field(*issues, "self_intersection") : nullptr;
     const auto* detected      = field(crossings, "detected");
     const auto* witness       = field(crossings, "witness");
+    // Unversioned summaries are the original strict triangle-pair contract.
+    // The bounded adjacency extension must declare its scope and completion;
+    // otherwise an exhausted neighborhood search could look like a negative.
+    const bool  versioned_crossings = field(crossings, "schema_version") != nullptr;
+    uint64_t    crossing_version = 0, candidates = 0, candidate_limit = 0, scanned = 0, face_limit = 0;
+    const auto* neighborhood = field(crossings, "neighborhood");
+    const bool  classification_complete =
+        versioned_crossings ?
+             (count_field(crossings, "schema_version", crossing_version) && crossing_version == 2 &&
+             text_field(crossings, "classification_scope") == "triangle_interiors_and_coplanar_edge_patches" &&
+             flag(crossings, "classification_complete") && flag(crossings, "budget_exhausted", false) && neighborhood &&
+             (text_field(*neighborhood, "reason") == "not_required" || text_field(*neighborhood, "reason") == "completed") &&
+             count_field(*neighborhood, "candidates", candidates) && count_field(*neighborhood, "candidate_limit", candidate_limit) &&
+             candidates <= candidate_limit && count_field(*neighborhood, "faces_scanned", scanned) &&
+             count_field(*neighborhood, "face_limit", face_limit) && scanned <= face_limit) :
+             (!field(crossings, "classification_scope") && !field(crossings, "classification_complete") &&
+             !field(crossings, "budget_exhausted") && !neighborhood);
     bool        witness_valid = false;
     if (witness && witness->is_object()) {
         const auto* faces   = field(*witness, "faces");
@@ -529,9 +546,50 @@ json model_check_boundary(const json&                      inspection,
             }
             witness_valid = witness_valid && (*segment)[0] != (*segment)[1];
         }
+        if (witness_valid && versioned_crossings) {
+            const auto  kind    = text_field(*witness, "kind");
+            const auto* support = field(*witness, "support_faces");
+            witness_valid       = text_field(*witness, "source") == "intersection_pair" && support && support->is_array() &&
+                            support->size() == 2 && (kind == "triangle_interiors" || kind == "coplanar_edge_patches");
+            std::array<uint64_t, 4> supporting_faces{};
+            std::size_t             support_count = 0;
+            if (witness_valid) {
+                for (std::size_t side = 0; side < 2 && witness_valid; ++side) {
+                    const auto& patch           = (*support)[side];
+                    bool        contains_anchor = false;
+                    if (!patch.is_array() || patch.empty() || patch.size() > 2) {
+                        witness_valid = false;
+                        break;
+                    }
+                    for (const auto& id : patch) {
+                        uint64_t face_id = 0;
+                        if (!count(id, face_id) || face_id >= triangle_count ||
+                            std::find(supporting_faces.begin(), supporting_faces.begin() + support_count, face_id) !=
+                                supporting_faces.begin() + support_count) {
+                            witness_valid = false;
+                            break;
+                        }
+                        supporting_faces[support_count++] = face_id;
+                        contains_anchor                   = contains_anchor || face_id == (side == 0 ? first : second);
+                    }
+                    witness_valid = witness_valid && contains_anchor;
+                }
+                // At least one original triangle must strictly cross. Allowing
+                // two reconstructed patches could regroup touching shells into
+                // a fictitious crossing, especially at T-junctions.
+                witness_valid = witness_valid && (kind == "triangle_interiors" ? support_count == 2 : support_count == 3);
+                if (kind == "coplanar_edge_patches")
+                    witness_valid = witness_valid && neighborhood && text_field(*neighborhood, "reason") == "completed" && candidates > 0 &&
+                                    scanned == triangle_count;
+            }
+        } else if (witness_valid) {
+            // Removing only version metadata must not reinterpret a patch
+            // witness as the historical strict two-triangle proof.
+            witness_valid = !field(*witness, "kind") && !field(*witness, "source") && !field(*witness, "support_faces");
+        }
     }
-    const bool crossing_summary_complete = text_field(crossings, "status") == "completed" && flag(crossings, "search_complete") &&
-                                           count_field(crossings, "pairs_checked", checked_pairs) &&
+    const bool crossing_summary_complete = classification_complete && text_field(crossings, "status") == "completed" &&
+                                           flag(crossings, "search_complete") && count_field(crossings, "pairs_checked", checked_pairs) &&
                                            count_field(crossings, "total_pairs", total_pairs) && checked_pairs <= total_pairs &&
                                            self_issue && flag(*self_issue, "complete") &&
                                            count_field(*self_issue, "count", self_intersections) && total_pairs == self_intersections &&
@@ -583,20 +641,58 @@ json model_check_boundary(const json&                      inspection,
     const bool no_effective_regions = sections_complete && flag(observed, "all_effective_regions_empty") && regions == 0 &&
                                       closed_planes > 0 && empty_closed_planes == closed_planes &&
                                       flag(observed, "parameters_can_remove_regions", false);
+    const auto record_stage_failure = [&](const char* stage, const std::string& cause, const std::string& category) {
+        reconstruction["failure_stage"]    = stage;
+        reconstruction["failure_category"] = category;
+        if (!cause.empty())
+            reconstruction["failure_cause"] = cause;
+    };
+    const auto record_evidence_failure = [&] {
+        // Only a failed/incomplete substage can refine the wrapper error. A
+        // completed observation's stale or contradictory reason cannot do so.
+        if (section_status == "failed" || section_status == "canceled" || section_status == "incomplete") {
+            const auto cause = section_status == "canceled" ? std::string("canceled") : text_field(observed, "reason");
+            record_stage_failure("sections", cause, cause.empty() ? "execution" : failure_category(cause));
+            return;
+        }
+        if (inspection_status == "incomplete") {
+            const auto* components = field(inspection, "component_analysis");
+            if (components && flag(*components, "limit_reached")) {
+                record_stage_failure("inspection", "component_limit", "resource");
+                return;
+            }
+            if (components && self_issue && flag(*self_issue, "complete", false) && flag(*components, "intersections_complete", false)) {
+                record_stage_failure("inspection", "self_intersection_incomplete", "resource");
+                return;
+            }
+        }
+        uint64_t    crossing_schema = 0;
+        const auto* neighborhood    = field(crossings, "neighborhood");
+        const auto  crossing_reason = neighborhood ? text_field(*neighborhood, "reason") : std::string{};
+        if (count_field(crossings, "schema_version", crossing_schema) && crossing_schema == 2 &&
+            text_field(crossings, "status") == "incomplete" && flag(crossings, "classification_complete", false) &&
+            flag(crossings, "budget_exhausted") && (crossing_reason == "candidate_limit" || crossing_reason == "face_limit"))
+            record_stage_failure("proper_crossings", crossing_reason, "resource");
+    };
     if (!failure_kind.empty()) {
         set_assessment("blocked", "workflow_failure");
         reconstruction["failure_kind"]     = failure_kind;
         reconstruction["failure_category"] = failure_category(failure_kind);
+        if (failure_kind == "repair_evidence_incomplete")
+            record_evidence_failure();
     } else if (repair_status == "failed" || repair_status == "canceled" || repair_status == "incomplete") {
         set_assessment("blocked", "repair_not_completed");
     } else if (section_status == "failed" || section_status == "canceled" || section_status == "incomplete") {
         set_assessment("blocked", "section_evidence_not_completed");
+        record_evidence_failure();
     } else if (section_status == "completed" && !sections_complete) {
         set_assessment("blocked", "invalid_section_evidence");
     } else if (inspection_status == "incomplete") {
         set_assessment("blocked", "inspection_incomplete");
+        record_evidence_failure();
     } else if (invalid_crossings) {
         set_assessment("blocked", "proper_crossing_evidence_incomplete");
+        record_evidence_failure();
     } else if (inspection_status == "passed") {
         set_assessment("not_needed", "no_detected_mesh_defects");
     } else if (inspection_status == "defects_detected" && eligibility == "unsupported") {

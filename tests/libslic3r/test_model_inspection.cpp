@@ -8,10 +8,12 @@
 #include <libslic3r/Format/OBJ.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 #include <boost/filesystem.hpp>
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <set>
 
 using namespace Slic3r;
 
@@ -48,6 +50,14 @@ TriangleMesh inspection_triangle_pair(const std::array<Vec3f, 3>& second, float 
 TriangleMesh inspection_crossing_pair(float x_offset = 0.f)
 {
     return inspection_triangle_pair({Vec3f(0.f, -1.f, -1.f), Vec3f(0.f, -1.f, 1.f), Vec3f(0.f, 1.f, 0.f)}, x_offset);
+}
+
+TriangleMesh inspection_edge_split_crossing_pair()
+{
+    auto mesh = inspection_crossing_pair();
+    mesh.its.vertices.emplace_back(0.f, -1.f, 0.f);
+    mesh.its.indices = {{0, 1, 2}, {3, 6, 5}, {6, 4, 5}};
+    return mesh;
 }
 
 TriangleMesh inspection_coplanar_pair(float x_offset = 0.f)
@@ -748,6 +758,166 @@ TEST_CASE("Proper crossings exclude contact and coplanar intersections", "[Model
     CHECK(evidence.at("pairs_checked") == expected_pairs);
     CHECK(evidence.at("total_pairs") == expected_pairs);
     CHECK(evidence.at("witness").is_null());
+}
+
+TEST_CASE("A crossing on a two-face coplanar edge survives triangulation changes", "[ModelRepair][Inspection][ProperCrossing]")
+{
+    auto mesh = inspection_edge_split_crossing_pair();
+    SECTION("Original winding and order") {}
+    SECTION("Reverse all windings")
+    {
+        for (auto& face : mesh.its.indices)
+            std::swap(face[1], face[2]);
+    }
+    SECTION("Reverse only one winding") { std::swap(mesh.its.indices[1][1], mesh.its.indices[1][2]); }
+    SECTION("Reorder faces and rotate their corners")
+    {
+        std::reverse(mesh.its.indices.begin(), mesh.its.indices.end());
+        for (auto& face : mesh.its.indices)
+            face = Vec3i32(face[1], face[2], face[0]);
+    }
+    const auto             baseline = inspect_model_mesh(mesh);
+    ModelInspectionOptions options;
+    options.classify_proper_crossings = true;
+    auto        result                = inspect_model_mesh(mesh, options);
+    const auto& evidence              = result.at("proper_crossings");
+    CHECK(evidence.at("schema_version") == 2);
+    CHECK(evidence.at("detected") == true);
+    CHECK(evidence.at("status") == "completed");
+    CHECK(evidence.at("classification_complete") == true);
+    CHECK(evidence.at("search_complete") == true);
+    CHECK(evidence.at("budget_exhausted") == false);
+    CHECK(evidence.at("pairs_checked") == 2);
+    CHECK(evidence.at("neighborhood").at("reason") == "completed");
+    CHECK(evidence.at("neighborhood").at("faces_scanned") == 3);
+    const auto& witness = evidence.at("witness");
+    CHECK(witness.at("kind") == "coplanar_edge_patches");
+    CHECK(witness.at("source") == "intersection_pair");
+    REQUIRE(witness.at("support_faces").size() == 2);
+    std::set<std::size_t> support;
+    for (std::size_t side = 0; side < 2; ++side) {
+        const auto& faces = witness.at("support_faces").at(side);
+        CHECK((faces.size() == 1 || faces.size() == 2));
+        CHECK(std::find(faces.begin(), faces.end(), witness.at("faces").at(side)) != faces.end());
+        for (const auto& face : faces)
+            support.insert(face.get<std::size_t>());
+    }
+    CHECK(support.size() == 3);
+    CHECK(witness.at("segment").at(0) != witness.at("segment").at(1));
+    result.erase("proper_crossings");
+    CHECK(result == baseline); // Opt-in evidence never rewrites the seven checks.
+}
+
+TEST_CASE("Coplanar edge support does not turn contacts or ambiguous fans into crossings", "[ModelRepair][Inspection][ProperCrossing]")
+{
+    auto mesh = inspection_edge_split_crossing_pair();
+    SECTION("Only one side of the edge exists") { mesh.its.indices.pop_back(); }
+    SECTION("The neighboring patch folds back on the same side") { mesh.its.vertices[4] = Vec3f(0.f, 0.f, -1.f); }
+    SECTION("The neighboring patch is not exactly coplanar") { mesh.its.vertices[4].x() = 0.5f; }
+    SECTION("Three faces use the same support edge")
+    {
+        mesh.its.vertices.emplace_back(0.f, 0.f, 2.f);
+        mesh.its.indices.emplace_back(6, 7, 5);
+    }
+    SECTION("A coplanar patch only touches the other triangle at a point")
+    {
+        mesh.its.vertices[3] = Vec3f(0.f, 3.f, -1.f);
+        mesh.its.vertices[4] = Vec3f(0.f, 3.f, 1.f);
+        mesh.its.vertices[5] = Vec3f(0.f, 2.f, 0.f);
+        mesh.its.vertices[6] = Vec3f(0.f, 3.f, 0.f);
+    }
+    SECTION("Two solids touching on an edge are not regrouped into crossing sheets")
+    {
+        mesh = Model::read_from_file(std::string(TEST_DATA_DIR) + "/model_repair_acceptance/09-nonmanifold-edge.obj").mesh();
+    }
+    SECTION("Differently triangulated edge-touching solids are not assembled on both sides")
+    {
+        // The same two tetrahedra as 09-nonmanifold-edge.obj; only their y=0
+        // faces are subdivided. A full edge and its two half edges each have
+        // two coplanar uses, but combining both sides would falsely cross.
+        mesh.its.vertices = {{0.f, 0.f, 0.f},   {10.f, 0.f, 0.f},  {0.f, 10.f, 0.f}, {0.f, 0.f, 10.f},
+                             {0.f, -10.f, 0.f}, {0.f, 0.f, -10.f}, {5.f, 0.f, 0.f}};
+        mesh.its.indices  = {{0, 2, 1}, {0, 6, 3}, {6, 1, 3}, {0, 3, 2}, {1, 2, 3}, {0, 4, 1}, {0, 6, 5}, {6, 1, 5}, {0, 5, 4}, {1, 4, 5}};
+    }
+    SECTION("Both crossing sheets split on the same edge remain outside this proof scope")
+    {
+        mesh.its.vertices = {{-2.f, -2.f, 0.f}, {2.f, -2.f, 0.f}, {0.f, 2.f, 0.f},   {0.f, -2.f, 0.f},
+                             {0.f, -1.f, 0.f},  {0.f, 1.f, 0.f},  {0.f, -1.f, -1.f}, {0.f, -1.f, 1.f}};
+        mesh.its.indices  = {{0, 3, 4}, {0, 4, 5}, {0, 5, 2}, {1, 4, 3}, {1, 5, 4}, {1, 2, 5}, {6, 4, 5}, {4, 7, 5}};
+    }
+    ModelInspectionOptions options;
+    options.classify_proper_crossings = true;
+    const auto  result                = inspect_model_mesh(mesh, options);
+    const auto& evidence              = result.at("proper_crossings");
+    CHECK(evidence.at("detected") == false);
+    CHECK(evidence.at("status") == "completed");
+    CHECK(evidence.at("classification_complete") == true);
+    CHECK(evidence.at("classification_scope") == "triangle_interiors_and_coplanar_edge_patches");
+    CHECK(evidence.at("budget_exhausted") == false);
+    CHECK(evidence.at("witness").is_null());
+}
+
+TEST_CASE("Coplanar edge classification exposes budgets and incomplete pair searches", "[ModelRepair][Inspection][ProperCrossing]")
+{
+    const auto             mesh = inspection_edge_split_crossing_pair();
+    ModelInspectionOptions options;
+    options.classify_proper_crossings = true;
+    std::string reason;
+    bool        search_complete = true, budget_exhausted = true;
+    SECTION("No neighborhood candidates allowed")
+    {
+        options.max_crossing_neighborhood_candidates = 0;
+        reason                                       = "candidate_limit";
+    }
+    SECTION("A retained candidate is not evidence before checking all of its neighboring faces")
+    {
+        options.max_crossing_neighborhood_candidates = 1;
+        reason                                       = "candidate_limit";
+    }
+    SECTION("Insufficient face-scan budget")
+    {
+        options.max_crossing_neighborhood_faces = 2;
+        reason                                  = "face_limit";
+    }
+    SECTION("A truncated original pair search is not upgraded by neighborhood work")
+    {
+        options.max_intersections = 1;
+        search_complete           = false;
+        budget_exhausted          = false;
+        reason                    = "not_required";
+    }
+    const auto  result   = inspect_model_mesh(mesh, options);
+    const auto& evidence = result.at("proper_crossings");
+    CHECK(evidence.at("detected") == false);
+    CHECK(evidence.at("status") == "incomplete");
+    CHECK(evidence.at("classification_complete") == false);
+    CHECK(evidence.at("search_complete") == search_complete);
+    CHECK(evidence.at("budget_exhausted") == budget_exhausted);
+    CHECK(evidence.at("neighborhood").at("reason") == reason);
+    CHECK(evidence.at("neighborhood").at("faces_scanned") == 0);
+    CHECK(evidence.at("witness").is_null());
+}
+
+TEST_CASE("Crossing neighborhood budgets do not affect strict witnesses or legacy inspection", "[ModelRepair][Inspection][ProperCrossing]")
+{
+    ModelInspectionOptions options;
+    options.max_crossing_neighborhood_candidates = 0;
+    options.max_crossing_neighborhood_faces      = 0;
+    auto mesh                                    = inspection_edge_split_crossing_pair();
+    CHECK(inspect_model_mesh(mesh, options) == inspect_model_mesh(mesh));
+    options.classify_proper_crossings = true;
+    const auto strict                 = inspect_model_mesh(inspection_crossing_pair(), options).at("proper_crossings");
+    CHECK(strict.at("detected") == true);
+    CHECK(strict.at("classification_complete") == true);
+    CHECK(strict.at("budget_exhausted") == false);
+    CHECK(strict.at("neighborhood").at("faces_scanned") == 0);
+    CHECK(strict.at("neighborhood").at("reason") == "not_required");
+    CHECK(strict.at("witness").at("kind") == "triangle_interiors");
+    CHECK(strict.at("witness").at("support_faces") == nlohmann::json::array({{0}, {1}}));
+    const auto healthy = inspect_model_mesh(make_cube(10., 10., 10.), options).at("proper_crossings");
+    CHECK(healthy.at("detected") == false);
+    CHECK(healthy.at("classification_complete") == true);
+    CHECK(healthy.at("neighborhood").at("reason") == "not_required");
 }
 
 TEST_CASE("Proper crossing evidence retains incomplete search boundaries", "[ModelRepair][Inspection][ProperCrossing]")
