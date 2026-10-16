@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "resource-profiles",
-  "source_fingerprint": "sha256:b433ee0997e4d1a2152ada123a76319645b32046f857c561a5c7c3b323811982",
-  "reason": "Custom 升至02.03.02.81，Advancer3 补齐 AD5X 四喷嘴、12工艺、六耗材，完整展开本品牌继承，独立 cloud identity 仍为Advancer3；validator、全规格有效参数、CLI 等价通过，GUI 显示已核查，Windows/实机未验。"
+  "source_fingerprint": "sha256:17b2fa418a26404eff410fd1cf97bc0a04ae680b64d643c023bc58d134d20656",
+  "reason": "本轮变更仅触及共享 Plater/预设/翻译文件中的云导入隔离逻辑；本模块正文流程无新增行为，合并后Mac arm64应用和测试目标已重新构建；回归结果及云导入GUI待验边界见模型修复主记录，不把构建通过当完整业务验收。"
 }
 -->
 

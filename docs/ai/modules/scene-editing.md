@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "scene-editing",
-  "source_fingerprint": "sha256:8a17f5b7661acf46229a156ec69a81f5731fd8adeb402184171676991597bd47",
-  "reason": "Plater中云来源限制撤回、名称兼容和显示映射；不改模型、变换、场景编辑或导入前的工艺选择。"
+  "source_fingerprint": "sha256:16239a36c3028281024db91f0a53d3e0b1f14484a6b47e0effc53ebbb3695809",
+  "reason": "本轮变更仅触及共享 Plater/预设/翻译文件中的云导入隔离逻辑；本模块正文流程无新增行为，合并后Mac arm64应用和测试目标已重新构建；回归结果及云导入GUI待验边界见模型修复主记录，不把构建通过当完整业务验收。"
 }
 -->
 

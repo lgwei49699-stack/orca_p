@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:ddc914fdb498f0c68b83dcb8e440da3a45c877c01cca42d505dc6c96d4357f92",
-  "reason": "MeshLib CLI回归改为同进程SDK，覆盖PID、参数/内存预算、旧worker参数拒绝、候选独立检查和失败保护；新增协作控制及平台配置测试，移除sidecar工具。保留已提交证据分类测试；Mac实测、配置模拟与Windows/Linux原生待验分开，不含下载工具变更。"
+  "source_fingerprint": "sha256:d7dd22f7c2f5f85a8e2a916502805344222c674953b79e1c28c6260fabdf304c",
+  "reason": "保留MeshLib同进程、协作预算、旧worker参数拒绝、平台配置及重建证据回归；合并新增云工艺/耗材机器目录保存、重载和参数隔离测试。Mac运行与配置模拟、Windows/Linux及GUI待验分开记录，不包含stash中的下载工具变更。"
 }
 -->
 
@@ -80,6 +80,8 @@ Windows GUI 采集脚本使用 PowerShell 5.1 与内嵌 C# P/Invoke，默认延�
 云配置按用户要求撤回新增来源环境／账号绑定及相应策略测试，恢复旧请求完成校验；JSON协议回归保留。新增标准档名称优先级与成功导入才装饰旧名称的测试，来源按钮、保存、真实下拉选择及认证恢复仍需GUI联调，见[云配置记录](../validation/2026-10-09-cloud-config-quality-analysis.md)。
 
 ## 修改与验证
+
+`test_epone_presets.cpp` 的 `[Preset][GFDCloud]` 用临时用户目录保存两机型的云工艺和耗材，再执行 `save_user_presets` 与重新加载，核对机器子目录、兼容机型和各自层高/温度保持独立；不依赖云账号、不写真实用户预设。此共享存储测试不覆盖 Plater 的替换/另存弹窗、真实三档下拉和网络导入，合并后的构建/回归与 GUI 待验见[主记录](../validation/2026-10-04-smart-print-engine.md)。
 
 Windows GUI 采集在 2026-10-09 收到同事现场 JSON：64 位 Windows PowerShell 5.1 下完成三次窗口／线程输入枚举及 249 次消息探测，均返回成功。它证明该环境下采集核心路径已执行；不替代多进程交互、错误处理、双击启动器或 Orca 修复验收。应用故障结论见[现场记录](../validation/2026-10-08-print-ui-freeze-log-analysis.md)。
 

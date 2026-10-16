@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:91cc75cfc34a5202ed207ad4fed8ce7295f59d3c131fca836ed43d0c4f82d4c2",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次CLIMiscConfigDef新增默认false的repair_evidence_close_boundaries并细化证据帮助；不属于PrintConfig工艺键，不修改机器/耗材/工艺预设、父子继承或GUI预设更新。"
+  "source_fingerprint": "sha256:79a47384b6c5fc1a7c8084d4a0f7c74f9c3af5e40ff28febad25ff6f44dbdd16",
+  "reason": "合并云导入预设的gfd-cloud机器子目录、保存/重载与三档旧名称兼容，默认save_current_preset调用保持原公共目录。保留CLI专用默认关闭的repair_evidence/close_boundaries选项，不把其纳入机器/耗材/工艺配置。正文补存储边界，合并后验证见主记录。"
 }
 -->
 
@@ -24,6 +24,8 @@
 ## 核心流程
 
 `PresetBundle::load_presets` 先加载系统品牌 JSON，再按 AppConfig 的 preset_folder 加载用户预设；随后更新多材料选择、兼容状态，并由 `load_selections` 恢复选择。工程嵌入预设另经 PresetCollection 的对应入口进入，不能把向导列表当作全部运行时预设。
+
+云端导入的用户工艺和耗材按机器存放在各自预设目录的 `gfd-cloud/<机器名>/` 下。`PresetCollection::load_presets` 会在加载普通用户预设后读取这些子目录；`save_user_presets` 保留已存在的机器目录，避免下次保存时把文件移回公共目录。内存中的预设名称仍全局唯一，磁盘目录隔离不能代替名称和兼容机器检查。
 
 `full_config` 按 FFF／SLA 分派。FFF 先叠加默认配置、当前工艺、默认耗材、当前机器和 project_config，再按单／多耗材分支填入耗材值。对象／体积／层范围的覆盖继续由切片应用配置阶段处理；排查时记录最终有效值，而不只看 JSON 父项。
 

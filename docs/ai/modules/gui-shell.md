@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-shell",
-  "source_fingerprint": "sha256:31d0aac57f9c3b2695838fca08a67f0440e513232fa34226176865a8fd9cb238",
-  "reason": "移除云导入完成及已有方案选择新增token限制，原列表重查和模态生命周期不变；来源环境不控制保存，原请求完成检查保留。"
+  "source_fingerprint": "sha256:cec934a0b43feaaca335d258b1a7e6bdfd2e79dcf138f8a418f7159173461620",
+  "reason": "本轮变更仅触及共享 Plater/预设/翻译文件中的云导入隔离逻辑；本模块正文流程无新增行为，合并后Mac arm64应用和测试目标已重新构建；回归结果及云导入GUI待验边界见模型修复主记录，不把构建通过当完整业务验收。"
 }
 -->
 

@@ -18529,6 +18529,14 @@ msgstr[0] "%1$d 条网格未配对边"
 msgid "Edge-pairing check only; this is not a complete mesh validation."
 msgstr "此处仅检查三角面边的配对关系，不代表网格已通过完整检测。"
 
+#: src/slic3r/GUI/Plater.cpp
+msgid "This preset may also be used by other printers. Use Save As to keep the original preset: "
+msgstr "该参数也可能用于其他机型，请使用“另存为”保留原参数："
+
+#: src/slic3r/GUI/Plater.cpp
+msgid "Cloud process preset is not bound to a printer."
+msgstr "云端工艺参数未绑定机型。"
+
 #~ msgid ""
 #~ "Improve shell precision by adjusting outer wall spacing. This also "
 #~ "improves layer consistency."

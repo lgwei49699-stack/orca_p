@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:c40b1c86d762c6d692d9547933cf86626407da8f506e0132e4affc86d45fc5b3",
-  "reason": "MeshLib CLI帮助移除独立worker用法，中英文同步说明同进程协作预算及无崩溃隔离；新增可选128至4096MiB内存预算的帮助与严格整数错误，明确整个进程RSS、非硬上限及不自动识别容器额度。无新增GUI菜单，不批量改其他语言，msgfmt与界面验证分开记录。"
+  "source_fingerprint": "sha256:b7981f3469b83cae11f5cc6ab7254b6bbfc2b2a52fdff540d6b61116a3a694f1",
+  "reason": "保留MeshLib同进程CLI、协作预算及内存帮助的中英文说明；合并云预设跨机型替换保护和未绑定机型两条提示，不删除任一侧翻译，不新增修复GUI菜单。占位符/msgfmt与真实界面排版分开验证，见主记录。"
 }
 -->
 
@@ -37,6 +37,8 @@ MeshLib 本机评估 CLI 帮助移除worker路径，说明同进程SDK、协作�
 只读证据选项 `--repair-evidence` 的标签、说明、布尔值错误和独立重建帮助同时维护英文原文及简中。当前帮助说明先复用真实穿透分类，已有明确依据时跳过Z截面，只有尚未明确的残留缺陷可能追加有界观察；不会自动重建或采用候选。`--repair-evidence-close-boundaries` 的标签/说明及两条CLI参数错误同时补齐中英文，明确默认关闭、调用方承诺闭合实体及允许封口、仅影响建议而不执行封口。`src/OrcaSlicer.cpp` 加入提取清单，与现有PrintConfig源一起参与后续gettext提取；不批量更新POT或其他语言。它们不是新修复动作，没有新增 GUI 菜单；机器报告的状态键仍为英文稳定标识，不随界面语言变化。全空层提前拒绝继续复用既有错误原文及翻译，不新造另一套切片失败文案。
 
 ## 配置与约束
+
+云预设按机器隔离新增跨机型覆盖保护和未绑定机型的英文原文及简中翻译：前者引导使用“另存为”保留原参数，后者拒绝缺少机器绑定的云工艺。保留修复 CLI 既有翻译；msgfmt 通过不能代替真实弹窗中英文排版验收。
 
 切片包导出新增 `The selected plates do not have valid G-code. Please slice them again before exporting.`，简中为“所选打印盘没有有效的 G-code，请重新切片后再导出。”；不将普通未切片工程保存错误地提示为必须切片。生成资源与应用需使用同一工作目录，新增文案 GUI 手测按最新交接执行。
 

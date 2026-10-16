@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-parameters",
-  "source_fingerprint": "sha256:03b4155e8d1f9d66994264bcc1099488256d7ea5e7576d6c56a637b13c834fb2",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加仅为CLIMiscConfigDef的repair_evidence_close_boundaries及证据帮助，未加入Tab/ParamsPanel或对象覆盖列表，不改变GUI参数联动和预设脏状态。"
+  "source_fingerprint": "sha256:07a0e3694974585f4744ea4b498a0917bdcf567c772300db6806451651d37975",
+  "reason": "合并云预设按机型隔离及三档旧标准名称兼容；共享Preset接口追加可选目录，默认调用和GUI参数联动不变。保留CLI默认关闭的repair_evidence/close_boundaries选项，它们不属于工艺键或对象覆盖，不新增Tab控件。合并构建/测试及GUI待验边界见主记录。"
 }
 -->
 
