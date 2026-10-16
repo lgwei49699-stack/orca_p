@@ -36,6 +36,7 @@ add_executable(${_TEST_NAME}_tests
 	test_mesh_slice_diagnostics.cpp
 	test_mesh_reconstruction.cpp
 	test_reconstruction_process.cpp
+	test_inprocess_reconstruction_control.cpp
 	test_model_reconstruction.cpp
 	test_model_inspection.cpp
 	# test_marchingsquares.cpp

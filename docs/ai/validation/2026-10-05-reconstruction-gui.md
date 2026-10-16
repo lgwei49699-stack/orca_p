@@ -1,5 +1,72 @@
 # 独立重建候选：GUI 验证交接
 
+## 10-16 入库时的验证边界
+
+模型修复改动按“重建判断优化”和“MeshLib同进程接入”分开提交，未新增原生GUI控件。当前直接应用SHA256为 `8890db8dd9e28441c74a1a03becd2b9a2bd0524db13e70b4ab315f64be68f8dc`，路径仍为下述 `src/Release` 应用；本次该身份通过MeshLib CLI42项及AlphaWrap CLI36项。下列Computer Use截图对应各节明确记录的历史构建，不写成当前构建重新通过；其后的证据优化仅作用显式CLI组合，未重跑GUI交互/实机。
+
+原生GUI默认仍为AlphaWrap，MeshLib仅显式CLI；Windows/Linux原生构建、ABI/无桌面运行以及实机打印仍待验证。继续按下列Mac步骤验证时，应使用本段最新构建身份；具体测试/样本证据见[主记录](2026-10-04-smart-print-engine.md#当前执行状态)。
+
+## 10-16 跨平台适配后的Mac原流程回归
+
+本节为最新构建身份，覆盖下面旧hash：直接应用`build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer` SHA256 `2732b1af161cec630480c2163271c8856025dda8bec677946184edaafb0e1cac`，arm64/Release/SDK ON/macOS14。只接入显式CLI MeshLib，未增加原生GUI或维护台后端按钮；本轮不做打包。
+
+Computer Use已在原维护台`http://127.0.0.1:52014/#cli`选择新直接应用路径，实际完成：
+
+| 操作 | 本次输出 | 观察结果 |
+| --- | --- | --- |
+| 高级修复＋重建判断验证，stl/cube.stl | `planning/debug/runs/cli-20261016-082406-13a8f4c3` | exit0；无需修复/重建、检测完整，不运行几何预检 |
+| 普通切片，cube/EP7/0.20mm/Generic PLA | `planning/debug/runs/cli-20261016-082702-530bea43` | exit0；生成G-code；90层、Z0.20–18.00mm、3361条挤出路径 |
+
+两次均通过启动确认框实际执行，结束后按钮恢复，浏览器控制台无error；截图`planning/repair/meshlib-platform-gui-{evidence,slice}-20261016.jpg`。未发送打印、改预设或关闭用户Orca，也未修改维护台。用户复核可按表选择同一流程和配置，核对实际可执行文件路径/hash；文件时间的旧页面缓存不作为二进制身份依据。
+
+MeshLib本体由实际CLI/SDK集成/Q模型及中文空格运行库迁移测试验证，详见[主记录](2026-10-04-smart-print-engine.md#当前执行状态)。Windows/Linux只有源码及22项隔离配置测试，尚未原生编译/运行；用户后续自行打包前仍需匹配SDK、完整依赖、无桌面启动、中文路径、超时/失败恢复和普通切片回归。原生GUI重建、干净目标机部署及实机打印不在本轮通过范围内。
+
+### 本地Mac用户验证步骤（10-16）
+
+已核对上述直接应用SHA与Q输入SHA，运行`--reconstruct-model --help`成功；本节提供复测步骤，没有重新执行重建。当前本机无需再次编译或安装SDK；不要使用旧`build/arm64/OrcaSlicer/OrcaSlicer.app`打包副本，也不要在原生GUI点重建来验证MeshLib，GUI目前仍为旧引擎。
+
+终端运行以下命令，每次创建独立结果父目录，`output`由Orca创建，不覆盖输入或旧结果：
+
+```sh
+cd /Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer-soft
+repair_run="$(mktemp -d "$PWD/planning/repair/meshlib-manual-XXXXXX")"
+./build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer \
+  --reconstruct-model "/Users/liwei/Downloads/eb5b3e71-2bfb-437c-80ce-aadc8f10cd18.stl" \
+  --reconstruction-engine meshlib \
+  --reconstruction-voxel-mm 0.0803 \
+  --accept-reconstruction-risk \
+  --outputdir "$repair_run/output" \
+  > "$repair_run/run.log" 2>&1
+repair_exit=$?
+printf '退出码：%s\n结果目录：%s\n' "$repair_exit" "$repair_run"
+open "$repair_run"
+```
+
+这是直接测试重建，不先自动运行高级修复或判断是否需要重建；`--accept-reconstruction-risk`确认生成可能改变形状的候选，不自动覆盖/采用。0.0803mm仅为当前Q样本回归参数，不是所有模型通用精度。
+
+1. 退出0，`output`内存在`candidate.stl`和`reconstruction.json`。报告应为`backend=meshlib`、`execution.mode=in_process`、`status=candidate_ready`、`mesh_validated=true`、`export_round_trip=passed`；最终检测位于`engine.final_mesh_check.inspection`。SDK生成阶段的`engine.sdk.candidate_validated=false`不代表Orca最终复检失败，不能混用层级。
+2. 当前Q基准为79,494面/10个封闭部件；此前单次墙钟约7.86秒、峰RSS约512MiB，不作性能保证。`metrics.deviation_warning=true`为已知几何变化告警；`print_ready=false`及`trial_slice=not_run`是未验收打印状态，不是命令失败。
+3. 在Orca中新建测试工程，分别导入原STL与`candidate.stl`（不要覆盖正在编辑的工程），比较孔洞、独立部件/间隙、薄壁与外形；使用相同机型、耗材和工艺分别切片，逐层比较缺层/断面/意外连接。GUI导入/切片可验证候选，但不是GUI调用MeshLib；本次用户手工对照待反馈，不计入已有Computer Use通过项。
+4. 若要测“是否建议重建”，先在维护台选择“高级修复＋重建判断验证（不切片）”。该模式只输出依据，不自动调用上述命令；要串联时，后端应把高级修复流程实际保留的工作模型交给重建。失败时回传`run.log`及存在的`reconstruction.json`，不把无报告/未完成当作成功。
+
+## 10-15 23:03 MeshLib 同进程接入后的界面回归
+
+本节覆盖下方旧构建身份。MeshLib仍仅显式CLI，原生Orca和维护台没有新增MeshLib按钮；维护台仅验证现有检测/高级修复/重建依据没有因链接SDK而改变。直接应用 `build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer` SHA256 `1d553f13f7ab63d9d622a1ab0cf78916044f4fa332cdda5d4c496ccef17da7e9`，macOS arm64本机评估ON/macOS14。旧打包GUI未覆盖。
+
+已通过 Computer Use 在 `http://127.0.0.1:52014/#cli` 实际刷新、选择“高级修复＋重建判断验证（不切片）”并启动：
+
+| 样本 | 页面结果 | 状态 |
+| --- | --- | --- |
+| stl/cube.stl | 无需修复；检查范围内无需重建；不运行几何预检 | 退出0，启动按钮恢复 |
+| repair-evidence-20261014/Q | 高级未解决；真实穿透依据；已有依据跳过额外预检；不自动重建 | 退出0，启动按钮恢复 |
+| 普通切片：cube / EP7 / 0.20mm / Generic PLA | 真实生成plate_1.gcode，90层、Z0.20–18.00mm、3361条挤出路径 | 退出0，预览正常、启动按钮恢复 |
+
+普通切片输出 `planning/debug/runs/cli-20261015-230704-cd1af1b1`，截图 `planning/repair/meshlib-inprocess-gui-slice-20261015.jpg`，控制台无error；无发送/打印。这是普通流程冒烟，不是Q重建候选的试切片或全部配置验收。
+
+实际输出目录分别 `planning/debug/runs/cli-20261015-225725-3c29d7e6`、`cli-20261015-225843-d4456fce`；控制台无error；截图 `planning/repair/meshlib-inprocess-gui-evidence-20261015.jpg`。刷新首次进入没有旧检测结果，仅运行后显示本次结果。
+
+MeshLib CLI及取消/超时/异常实际回归、Q产物和性能见[主记录](2026-10-04-smart-print-engine.md#当前执行状态)。额外网页检查器读取候选被Chrome扩展文件URL权限阻止，未开启权限，也未宣称视觉复检通过；CLI已对实际导出STL完整复检并确认与旧产物哈希相同。原生GUI新入口不适用；Windows/Linux/旧macOS和实机仍未验证。用户若复核已有界面，可按下方步骤使用本节新构建，不使用旧hash的打包程序；没有要求用户替代本轮已完成的CLI验证。
+
 ## 10-15 重建证据升级交付与复测
 
 20:43 用户授权 AI 使用 computer use 后已重跑5例：cube、70de、37365默认/允许封口、Q默认均完成0；各次结束后按钮恢复，默认封口未授权，70de保持不升级，Q真实穿透和37365显式策略能建议重建且跳过额外预检。输出为 `planning/debug/runs/cli-20261015-203202-894fb443`、`cli-20261015-203321-15ef9a44`、`cli-20261015-203453-b93d2f32`、`cli-20261015-203635-4c17af0c`、`cli-20261015-204236-098e1f34`。控制台无error；截图 `planning/repair/rebuild-trigger-20261015-7x7nPk/gui-commit-q.jpg`。本次为浏览器维护台真实调用CLI，不是原生Orca修复菜单验收；用户常驻Orca未关闭。

@@ -2,7 +2,10 @@
 #include <libslic3r/Model.hpp>
 #include <libslic3r/ModelReconstruction.hpp>
 #include <libslic3r/TriangleMesh.hpp>
+#include <meshlib/MeshLibAdapter.hpp>
 #include <cstdlib>
+#include <limits>
+#include <stdexcept>
 
 using namespace Slic3r;
 
@@ -99,13 +102,28 @@ TEST_CASE("Reconstruction failure and pre-cancel preserve the source", "[ModelRe
     SECTION("invalid parameters") { options.mesh.alpha_mm = -1.; }
     SECTION("unknown backend") { options.engine = "unknown"; }
     SECTION("voxel rejected by default backend") { options.voxel_mm = 0.08; }
-    SECTION("worker override rejected by default backend") { options.meshlib_worker_executable = "/missing/worker"; }
     SECTION("meshlib requires voxel") { options.engine = "meshlib"; }
-    SECTION("meshlib worker missing")
+    SECTION("meshlib invalid voxel")
     {
-        options.engine                    = "meshlib";
-        options.voxel_mm                  = 0.08;
-        options.meshlib_worker_executable = "/missing/worker";
+        options.engine   = "meshlib";
+        options.voxel_mm = std::numeric_limits<double>::infinity();
+    }
+    SECTION("meshlib float voxel underflow")
+    {
+        options.engine   = "meshlib";
+        options.voxel_mm = 1e-100;
+    }
+    SECTION("meshlib pre-cancel")
+    {
+        options.engine              = "meshlib";
+        options.voxel_mm            = 0.0803;
+        options.process.is_canceled = [] { return true; };
+    }
+    SECTION("early unknown cancellation callback exception")
+    {
+        options.engine              = "meshlib";
+        options.voxel_mm            = 0.0803;
+        options.process.is_canceled = []() -> bool { throw 17; };
     }
     SECTION("excessive input") { options.mesh.max_input_faces = 4; }
     const auto result = reconstruct_model_candidate(model, 0, options);
@@ -115,6 +133,122 @@ TEST_CASE("Reconstruction failure and pre-cancel preserve the source", "[ModelRe
     CHECK(object.volumes.front()->mesh_ptr() == mesh);
     CHECK_FALSE(result.report.at("mesh_validated").get<bool>());
     CHECK(result.report.at("trial_slice") == "not_run");
+}
+
+TEST_CASE("SDK-OFF MeshLib requests never fall back to another backend", "[ModelReconstruction]")
+{
+    if (OrcaMeshLib::available()) {
+        SUCCEED("SDK is enabled; the explicit in-process integration test verifies this build.");
+        return;
+    }
+    Model                      model    = reconstruction_model();
+    const auto                 identity = model_reconstruction_source_identity(*model.objects.front());
+    ModelReconstructionOptions options;
+    options.engine   = "meshlib";
+    options.voxel_mm = 0.0803;
+    // An invalid Alpha Wrap worker must never be consulted as a fallback.
+    options.executable = "/nonexistent-reconstruction-worker";
+    const auto result  = reconstruct_model_candidate(model, 0, options);
+    CHECK_FALSE(result.candidate_model);
+    CHECK(result.status == "failed");
+    CHECK(result.report.at("message").get<std::string>().find("does not include the MeshLib SDK backend") != std::string::npos);
+    CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
+}
+
+TEST_CASE("In-process MeshLib joins stopped work and remains reusable", "[.][MeshLibInProcessIntegration]")
+{
+    // Explicit opt-in: a disabled SDK must fail this requested integration run,
+    // not silently skip it or count unavailable functionality as tested.
+    REQUIRE(OrcaMeshLib::available());
+    Model                      model       = reconstruction_model();
+    auto&                      object      = *model.objects.front();
+    const auto                 identity    = model_reconstruction_source_identity(object);
+    const auto                 source_mesh = object.volumes.front()->mesh_ptr();
+    ModelReconstructionOptions options;
+    options.engine                  = "meshlib";
+    options.voxel_mm                = 0.0803;
+    options.executable              = "/must-not-launch-a-reconstruction-worker";
+    options.process.memory_limit_mb = 2048;
+    const auto check_source         = [&] {
+        CHECK(model_reconstruction_source_identity(object) == identity);
+        CHECK(object.volumes.front()->mesh_ptr() == source_mesh);
+    };
+    const auto check_candidate = [&] {
+        const auto result = reconstruct_model_candidate(model, 0, options);
+        INFO(result.report.dump(2));
+        REQUIRE(result.status == "candidate_ready");
+        REQUIRE(result.candidate_model);
+        CHECK(result.report["execution"]["mode"] == "in_process");
+        CHECK(result.report["execution"]["process_id"] == reconstruction_process_id());
+        CHECK(result.report["execution"]["hard_timeout"] == false);
+        CHECK(result.report["execution"]["crash_isolation"] == false);
+        CHECK(result.report["resource_limits"]["hard_memory_limit"] == false);
+        CHECK(result.report["engine"]["sdk"]["runtime_identity_verified"] == true);
+        CHECK_FALSE(result.report["engine"].contains("sidecar"));
+        CHECK(result.report["mesh_validated"] == true);
+        CHECK(result.report["print_ready"] == false);
+        check_source();
+    };
+    check_candidate();
+
+    SECTION("cancel requested during work")
+    {
+        bool   cancel               = false;
+        size_t ticks                = 0;
+        options.process.is_canceled = [&] { return cancel; };
+        options.process.on_tick     = [&] {
+            ++ticks;
+            cancel = true;
+        };
+        const auto result = reconstruct_model_candidate(model, 0, options);
+        INFO(result.report.dump(2));
+        REQUIRE(ticks > 0);
+        CHECK(result.status == "canceled");
+        CHECK_FALSE(result.candidate_model);
+        CHECK(result.report["mesh_validated"] == false);
+    }
+    SECTION("expired cooperative budget discards all late output")
+    {
+        options.process.timeout_ms = 1;
+        const auto result          = reconstruct_model_candidate(model, 0, options);
+        INFO(result.report.dump(2));
+        CHECK(result.status == "timed_out");
+        CHECK_FALSE(result.candidate_model);
+        CHECK(result.report["mesh_validated"] == false);
+    }
+    SECTION("caller callback exception is contained")
+    {
+        size_t ticks            = 0;
+        options.process.on_tick = [&] {
+            ++ticks;
+            throw std::runtime_error("test callback failure");
+        };
+        const auto result = reconstruct_model_candidate(model, 0, options);
+        INFO(result.report.dump(2));
+        REQUIRE(ticks > 0);
+        CHECK(result.status == "failed");
+        CHECK_FALSE(result.candidate_model);
+        CHECK(result.report["mesh_validated"] == false);
+    }
+    SECTION("unknown caller callback exception is contained")
+    {
+        size_t ticks            = 0;
+        options.process.on_tick = [&] {
+            ++ticks;
+            throw 17;
+        };
+        const auto result = reconstruct_model_candidate(model, 0, options);
+        INFO(result.report.dump(2));
+        REQUIRE(ticks > 0);
+        CHECK(result.status == "failed");
+        CHECK_FALSE(result.candidate_model);
+        CHECK(result.report["mesh_validated"] == false);
+    }
+    check_source();
+    options.process.is_canceled = {};
+    options.process.on_tick     = {};
+    options.process.timeout_ms  = 0;
+    check_candidate();
 }
 
 TEST_CASE("Installing a matching convex hull invalidates an existing footprint", "[ModelReconstruction]")

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:05b9130efe9d9a1b13a48529243e5673194ce3b867e6a1fb96f5ecd901dcde4e",
-  "reason": "显式repair-evidence流程补单侧共面穿透摘要及失败阶段/资源归因，保留原数值退出码和默认关闭行为，不新增参数、自动重建或GUI入口。CLI限制场景断言同步；本提交不改变现有MeshLib worker调用。"
+  "source_fingerprint": "sha256:bad0115a40cf8636e0dccecc34fa253ba4b73f2d12aadcfc3e0c5ceb5baf9ed0",
+  "reason": "MeshLib显式重建改为Orca同进程SDK调用，移除worker路径参数；补128–4096MiB显式预算和中英文帮助，报告协作限制及失败边界。默认AlphaWrap、普通GUI/检测/修复/切片业务不变，不自动调用或采用候选；保留已提交的证据分类和归因规则，SDK开关与跨平台验收边界明确。"
 }
 -->
 
@@ -19,7 +19,7 @@
 
 ## 核心流程
 
-独立 `--reconstruct-model` 的可选本机评估后端使用 `--reconstruction-engine meshlib --reconstruction-voxel-mm <毫米> --reconstruction-worker-path <绝对路径>`，仍要求风险确认和新输出目录。默认Alpha Wrap与普通检测/高级修复/切片不变；不新增自动编排命令，不接入原生GUI。MeshLib引擎/体素/独立程序只在此入口解析，不能带入普通切片；无SDK、参数混用或失败均不静默回退。输出仍为 `candidate.stl`、`reconstruction.json`，成功仅表示几何候选及导出验收完成；详细结果/授权/结构保留边界见[模型修复](model-repair.md)。
+独立 `--reconstruct-model` 的可选本机评估后端使用 `--reconstruction-engine meshlib --reconstruction-voxel-mm <毫米>`，仍要求风险确认和新输出目录。同一Orca进程内部调用SDK，不再接受 `--reconstruction-worker-path`，不启动MeshLib或Orca修复子进程；默认Alpha Wrap保留原worker。普通检测/高级修复/切片的业务不变，不新增自动编排或原生GUI入口。引擎/体素仅在此入口解析；未编入SDK、参数混用或失败不静默回退。启用SDK构建依赖本地动态库，缺库可在进程启动阶段失败。输出仍为 `candidate.stl`、`reconstruction.json`，报告包含同进程身份与协作预算边界；成功仅表示候选及导出验收完成。详细结果/授权/结构保留边界见[模型修复](model-repair.md)。
 
 `main()` 进入 `CLI::run()`，解析动作、变换和配置，加载模型后按请求分盘、切片或导出；需要交互界面时转入 GUI 启动。模型导出走 `CLI::export_models()`，工程导出走 `export_project()`，不是同一种输出。无 GUI 的业务依然复用 Model、Print 和文件格式层。
 
@@ -47,13 +47,13 @@
 
 ## 失败与取消
 
-重建输入上限为 300 万面且 STL 文件最多 256 MiB，超过任一限制即受控拒绝；输出仍最多 100 万面。未传 `--reconstruction-timeout` 时共享核心按模型面数选择 60/180/300 秒，传入的 1–300 秒覆盖自动值。内存预算共享 GUI 的分档及物理 RAM 约束，不由 STL 字节大小代替面数决定；`resource_limits` 记录实际生效值，worker 超时/内存不足也保留该记录。具体分档见[模型修复](model-repair.md)，帮助同步说明限制。
+重建输入上限为 300 万面且 STL 文件最多 256 MiB，超过任一限制即受控拒绝；输出仍最多 100 万面。未传 `--reconstruction-timeout` 时共享核心按模型面数选择 60/180/300 秒，传入的 1–300 秒覆盖自动值。可选 `--reconstruction-memory-mb` 严格接受十进制整数128–4096，覆盖自动内存预算；未传时仍共享GUI分档及物理RAM约束，不由STL字节大小替代面数。该服务配置仅在CLI暴露，GUI没有资源手填项，但两端共享同一有效预算规则。MeshLib统计整个Orca RSS、AlphaWrap统计worker预算；不自动检测容器限制，不宣称硬隔离。`resource_limits`记录实际生效值，超时/内存不足也保留；具体分档见[模型修复](model-repair.md)。
 
 输入解析、参数组合、IO 和切片校验失败有不同出口；分盘未排入与进程成功不能画等号。应同时核对盘归属、警告和实际产物。用户没有要求时不要启动真实设备任务，也不要把运行生成的 result.json 入库。
 
 重建不覆盖源 STL／已有目录，不生成旧 `result.json`，仅在本次创建的输出目录保存 `candidate.stl` 与 `reconstruction.json`。拒绝／失败不给出可用候选；读取和报告中明确区分候选成功、形状未确认、`trial_slice=not_run` 和 `print_ready=false`。公共命令退出 0 只能表示候选工作流成功，不表示可打印；专用 worker 退出状态和业务拒绝报告分开解释。
 
-默认 `parameters.close_open_boundaries=true`，与 GUI 的“包裹前尝试闭合开放边界”相同；`--reconstruction-no-close-open-boundaries` 显式关闭。该参数完整传递至 worker，旧内部请求缺字段时取默认 true。封闭副本必须通过完整检查才能用于包裹；有意开口可能被填上，仍要求风险确认。报告新增 `engine.boundary_closure` 与 `engine.metrics.open_surface_envelope_warning`，分别解释预闭合结果和原汤包裹的薄壳风险；不能仅因命令退出 0 推断墙/填充可生成。不改 `--check-model` v4 或旧 repair JSON。
+Alpha Wrap 默认 `parameters.close_open_boundaries=true`，与 GUI 的“包裹前尝试闭合开放边界”相同；`--reconstruction-no-close-open-boundaries` 显式关闭。该参数完整传递至 worker，旧内部请求缺字段时取默认 true。封闭副本必须通过完整检查才能用于包裹；有意开口可能被填上，仍要求风险确认。报告新增 `engine.boundary_closure` 与 `engine.metrics.open_surface_envelope_warning`，分别解释预闭合结果和原汤包裹的薄壳风险；不能仅因命令退出 0 推断墙/填充可生成。不改 `--check-model` v4 或旧 repair JSON。MeshLib 不接受此 Alpha Wrap 专用参数；其超时/RSS为协作预算，覆盖准入及生成/验收而非最终文件导出，并明确报告非硬限制。
 
 ## 修改与验证
 

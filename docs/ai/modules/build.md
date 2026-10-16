@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:bfda5d2a05ba35e2e0d8783ff678b20ac4a88e0c5057181f943e8ff7cc673ec1",
-  "reason": "新增独立显式启用的C++20 MeshLib本机评估工程，主Orca维持C++17及现有平台最低版本，不链接或打包SDK；复用现有OpenSSL::Crypto作报告哈希，Windows核心目标显式链接该既有依赖。SDK固定头/动态库身份及实际最低macOS版本单独说明，未把本机编译当跨平台发行验证。"
+  "source_fingerprint": "sha256:2be075df5c2605571eba308e238ccab45c806629e70d00a74a8b198c0087fcf1",
+  "reason": "内部MeshLib适配库补Windows MSVC x64和Linux x64/arm64受控配置，固定官方布局/版本/运行库hash，拒绝Debug CRT和共享旧依赖等已知混用；MSVC与Unix编译参数分离、PIC及Linux已知静态库符号隐藏。OFF不依赖SDK，不改主业务C++17，不复制或打包SDK；跨平台配置测试与Mac实测分开，目标OS ABI/运行验收仍待执行。"
 }
 -->
 
@@ -22,7 +22,11 @@
 
 ## 核心流程
 
-`tools/meshlib-worker` 为独立 C++20 CMake 评估工程；默认不启用，显式 `ORCA_MESHLIB_LOCAL_EVALUATION=ON` 并指定固定SDK根目录才能构建。主Orca仍为C++17，不链接MRMesh/MRVoxels，不提升原GUI的最低系统、不自动构建/下载/安装/打包SDK。sidecar编入已有ReconstructionProcess监督实现，固定3.1.3.429头及实际运行库身份；具体本地命令以该目录说明为准。SDK和缺失的上游头只存本地忽略目录，商业授权未确认，不入库或分发。CLI文件SHA256使用项目已有OpenSSL::Crypto，链接由非Windows分支移到共同libslic3r目标，Windows/Linux仍需目标平台构建运行验收。
+`src/meshlib` 是根CMake管理的内部静态适配库，不再构建独立MeshLib程序。默认 `ORCA_MESHLIB_LOCAL_EVALUATION=OFF` 编译C++17无SDK桩；ON只将适配实现编成C++20并私有包含SDK头，链接固定3.1.3.429的MRMesh/MRVoxels，主Orca业务仍C++17。关闭该目标LTO、隐藏内联符号，避免SDK头污染旧TBB/Eigen/OpenVDB；实际macOS两级命名空间链接探针通过不代表其他平台ABI兼容。
+
+ON要求64位和Orca静态依赖：macOS arm64显式最低14.0；Windows MSVC x64使用匹配工具集的官方非IteratorDebug SDK、Release系配置及/MD，拒绝/MT、/MDd和非零iterator ABI；Linux x64/arm64支持官方include/MeshLib及lib/MeshLib布局，针对已知静态依赖archive隐藏导出，防止旧符号干扰SDK，但此配置不证明ELF绑定安全。Windows/Linux输出实验提示，需目标平台编译运行验收，不能将配置测试写成原生通过。OFF保留原平台/最低版本。
+
+SDK版本校验：Unix读固定config_cmake.h，Windows读完整发行目录app/Release/mr.version；MRMesh/MRVoxels运行库内容哈希进入私有模板，不再固化构建机绝对路径。Windows运行期使用宽字符WinAPI按函数地址定位DLL；Unix使用dladdr，适配层启用PIC。哈希不覆盖所有传递依赖，也不是加载沙箱。Unix仅设置构建树SDK RPATH，Windows运行需要在受控DLL搜索路径提供配套依赖；缺库仍可能早于CLI解析失败。用户后续自行打包，本轮不下载/安装/复制/打包SDK、不创建镜像，未取得商业再分发授权。具体构建/迁移边界见[适配层说明](../../../src/meshlib/README.md)。仍由同一Orca调用SDK，无额外修复程序；默认Alpha Wrap不变。
 
 只读 `ModelRepairEvidence.cpp/.hpp` 编入现有 libslic3r；`test_model_repair_evidence.cpp` 和 `test_mesh_slice_diagnostics.cpp` 注册到现有 libslic3r_tests。证据由默认关闭的非动作选项 `--repair-evidence` 接入：仅检测组合高级修复的残缺结果可能追加单 Z 切层和同轮有效区域观察；普通修复／重建只投影已有报告。默认协议与扫描路径保留，不新增自动编排、GUI 菜单、依赖或 worker。现有高级修复、重建和构建目标保持，应用与测试必须使用同一源码身份；macOS 构建通过不代表 Windows/Linux 已运行验证。
 

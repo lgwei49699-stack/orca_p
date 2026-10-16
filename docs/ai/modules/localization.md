@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:13a1d7c18369da865aee490d330a6b5988cdc69cbbe24876b83fd19c4f1d197e",
-  "reason": "MeshLib显式评估CLI帮助及核心错误补齐英文原文和简中；明确授权、实际参数、仅生成候选，未额外筛除不代表微结构保留。无新增GUI菜单，不重生成POT或其他语言，已有翻译保留；msgfmt格式检查与GUI视觉验证分别记录。"
+  "source_fingerprint": "sha256:c40b1c86d762c6d692d9547933cf86626407da8f506e0132e4affc86d45fc5b3",
+  "reason": "MeshLib CLI帮助移除独立worker用法，中英文同步说明同进程协作预算及无崩溃隔离；新增可选128至4096MiB内存预算的帮助与严格整数错误，明确整个进程RSS、非硬上限及不自动识别容器额度。无新增GUI菜单，不批量改其他语言，msgfmt与界面验证分开记录。"
 }
 -->
 
@@ -20,7 +20,9 @@
 
 ## 核心流程
 
-MeshLib 本机评估 CLI 的引擎、体素、worker路径和错误信息新增英文原文及简中对应；强调仅显式调用、无SDK捆绑、未额外筛除碎片但体素重建仍可能丢失/合并微小结构。没有新增GUI菜单，稳定JSON状态不翻译。
+MeshLib 本机评估 CLI 帮助移除worker路径，说明同进程SDK、协作预算而非硬超时/崩溃隔离；核心准入、未包含SDK和未知异常等英文原文同步简中。强调仅显式调用、无SDK捆绑、未额外筛除碎片但体素重建仍可能丢失/合并微小结构。没有新增GUI菜单，SDK技术诊断和稳定JSON状态仍为英文，固定核心提示沿用gettext。
+
+`--reconstruction-memory-mb` 的帮助和非法整数提示同步中英文：128–4096 MiB，显式覆盖自动预算，MeshLib计整个Orca RSS，非SDK增量内存/硬上限，不自动识别容器限制。默认值与旧入口保持，无新GUI控件；单位及告警含义不随语言改变。
 
 打印下发主动取消使用英文源串 `Print submission cancelled.` 与简中“已取消打印下发。”，设备选择源文件纳入 gettext 清单；取消状态不沿用失败文案或错误颜色。
 

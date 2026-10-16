@@ -354,6 +354,8 @@
         "src/libslic3r/MeshReconstruction.cpp",
         "src/libslic3r/MeshReconstruction.hpp",
         "src/libslic3r/MeshRepairOutcome.hpp",
+        "src/libslic3r/InProcessReconstructionControl.cpp",
+        "src/libslic3r/InProcessReconstructionControl.hpp",
         "src/libslic3r/ModelCheckWorkflow.cpp",
         "src/libslic3r/ModelCheckWorkflow.hpp",
         "src/libslic3r/ModelInspection.cpp",
@@ -372,7 +374,7 @@
         "src/slic3r/Utils/ModelExportPolicy.hpp",
         "src/slic3r/Utils/ModelRepairBackup.hpp",
         "src/slic3r/Utils/ModelRepairPolicy.hpp",
-        "tools/meshlib-worker/**"
+        "src/meshlib/**"
       ],
       "watch": [
         "src/libslic3r/TriangleMeshSlicer.cpp",
@@ -396,6 +398,7 @@
         "tests/libslic3r/test_mesh_reconstruction.cpp",
         "tests/libslic3r/test_model_reconstruction.cpp",
         "tests/libslic3r/test_reconstruction_process.cpp",
+        "tests/libslic3r/test_inprocess_reconstruction_control.cpp",
         "tests/libslic3r/test_model_repair_evidence.cpp",
         "tests/libslic3r/test_mesh_slice_diagnostics.cpp",
         "scripts/test_cli_model_reconstruction.py",
@@ -1700,7 +1703,8 @@
       "tests": [
         "scripts/tests/test_bundle_macos_zstd.py",
         "scripts/tests/test_macos_build_compatibility.py",
-        "scripts/tests/test_gmp_platform_selection.py"
+        "scripts/tests/test_gmp_platform_selection.py",
+        "scripts/tests/test_meshlib_platform_config.py"
       ],
       "test_note": "修改 CMake／打包脚本先静态检查，再按 validation.md 的长期分工构建受影响目标；缺少所需构建时由 AI 补齐。打包改动验证实际打包流程，跨平台 Python 测试不等于 Windows 安装包验收。"
     },
@@ -1730,6 +1734,7 @@
         "scripts/tests/test_macos_build_compatibility.py",
         "scripts/tests/test_check_ai_module_docs.py",
         "scripts/tests/test_gmp_platform_selection.py",
+        "scripts/tests/test_meshlib_platform_config.py",
         "scripts/validate_raft_stability.py",
         "tests/CLAUDE.md",
         "tests/CMakeLists.txt",

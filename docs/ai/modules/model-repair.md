@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model-repair",
-  "source_fingerprint": "sha256:7bfc74f12ae43693f7cabbbcf90778e02ad951e445c638a93a2ff4ce4ec6d6b9",
-  "reason": "仅优化显式高级修复证据：保留严格穿透路径，补有界单侧共面邻接证明；共享多面边及双侧重组不升级，schema2校验支持面和预算。保留包装与退出码并细化失败阶段/原因/分类。默认分类关闭，不改变GUI、普通修复或重建引擎；正负例及资源回归同步。"
+  "source_fingerprint": "sha256:43f4e2b619d8ddaa4050b72a0fa46c070193861cc15fe14c159eb3276b08c1ac",
+  "reason": "MeshLib从独立sidecar改为内部C++20适配库，私有网格/配置、SDK回调异常收口与协作RSS/超时/取消、后台join后再交付。保持独立完整网格/变换/STL回读验收及形状未确认语义；默认OFF、AlphaWrap和GUI路径不变，保留已提交证据规则。新增平台配置与运行库身份、移除旧worker和累计RSS，Mac实测与Windows/Linux待验分别记录。"
 }
 -->
 
@@ -28,15 +28,15 @@
 
 ### MeshLib 本机评估后端（仅 CLI）
 
-独立重建保留 `--reconstruct-model`；显式 `--reconstruction-engine meshlib --reconstruction-voxel-mm <毫米>` 选择固定 SDK 3.1.3.429。默认仍为 Alpha Wrap，原生 GUI 没有 MeshLib 选择项；普通检测/高级修复/证据流程不自动调用 SDK。体素必须有限正数且能表示为正 float，不设通用默认、不自动粗化或回退；Alpha Wrap 的 alpha/offset/预封口关闭参数不能混入 MeshLib。`--reconstruction-worker-path` 接受独立程序绝对路径；未传则只寻找当前应用二进制旁的 `OrcaMeshLibWorker(.exe)`，不搜索 PATH。SDK 缺失或不匹配明确失败。
+独立重建保留 `--reconstruct-model`；显式 `--reconstruction-engine meshlib --reconstruction-voxel-mm <毫米>` 选择固定 SDK 3.1.3.429。默认仍为 Alpha Wrap，原生 GUI 没有 MeshLib 选择项；普通检测/高级修复/证据流程不自动调用 SDK。体素必须有限正数且能表示为正 float，不设通用默认、不自动粗化或回退；Alpha Wrap 的 alpha/offset/预封口关闭参数不能混入 MeshLib。MeshLib 改为同进程调用，旧 `--reconstruction-worker-path` 已移除并按未知参数拒绝，不另维护修复程序。
 
-Orca CLI → 既有受限 Orca worker → 独立 C++20 MeshLib sidecar → 原 worker CGAL 复检/比较/回变换/凸包 → 独立目录的 STL 与报告。sidecar 用 `rebuildMesh`，关闭加载 telemetry，记录跳面/复制顶点和全部实际参数；加载漏面拒绝。SDK 进程退出并释放内存后才进行独立复检，不能以SDK退出0替代网格验收。输入为父程序写出的有界binary STL；输出为原始有界索引协议，不通过自动修复的STL导入器接受外部候选。实际最终STL仍回读并逐三角形精确比较。
+Orca CLI → 当前进程后台线程 → 内部 C++20 静态适配库的 `rebuildMesh` → CGAL 复检/比较/回变换/凸包 → 独立目录的 STL 与报告。适配接口只传普通数组/标量/报告字符串，SDK类型不泄漏到Orca；有界内存STL维持原加载语义（每面50字节＋84字节），无中间文件或IPC。关闭加载telemetry，记录跳面/复制顶点和实际参数；加载漏面拒绝。MR网格/临时转换缓冲先离开作用域，再进行独立复检；库内部缓存可能驻留。最终STL回读逐三角形精确比较，不能以SDK成功替代网格验收。
 
-嵌套 runner 显式开启 `include_caller_memory`：中间Orca worker与sidecar的采样RSS相加，查询失败不当零，共享页重复计数偏保守；只适用于不再创建子进程的两进程链。Windows祖先Job继续约束总内存。时间传剩余预算，不重新获得完整超时；sidecar有真实直接父PID的WorkerGuard，外层取消或父亡时不会任其继续运行。默认Alpha Wrap不启用累计RSS路径，普通进程调用不增加该开销。
+复用重建独占槽、私有输入及选项快照。`InProcessReconstructionControl` 由调用线程每20ms采样进程RSS、截止时间与取消；SDK回调只读原子停止状态，不调用GUI/外部回调。先做有溢出/体素网格范围检查的启发式准入估算，未知RSS失败关闭；估算不是峰值上界，采样预算也不是硬内存限制。SDK取消、CGAL/凸包阶段检查共享预算，不重置时钟；不可中断阶段可能延迟取消。任何回调异常先取消并join，不detach、不在主进程使用WorkerGuard/RLIMIT/kill。同进程无法隔离SDK崩溃。旧Alpha Wrap进程监督保持；已移除不再使用的嵌套sidecar累计RSS选项。
 
-MeshLib报告保留 `model_reconstruction_v1`，增加 backend/sdk_version、输入/候选/worker SHA256、SDK原报告、输入缺陷、独立输出复检和分阶段耗时。双向距离复用AlphaWrap的同一有界采样函数，只作偏差告警，不是最大误差证明。候选通过仍需确认间隙、薄壁和独立部件，`shape_confirmation=not_confirmed`、`print_ready=false`、`applied=false`。不按“只留最大部件”或样本专用阈值删除碎片，不硬编码7部件；因此 Q 对照的79,400面/7部件（额外删除3小壳后的结果）不是首版无删除后端的必达值。无效候选不导出为成功STL，原件始终保留。
+MeshLib报告保留 `model_reconstruction_v1`，增加 backend/sdk_version、输入/候选SHA256、`engine.sdk`原报告、输入缺陷、独立输出复检和分阶段耗时；`execution`记录同进程PID、非硬超时/无崩溃隔离，`admission`及`resource_limits`记录估算、预算模式和观测峰值RSS。SDK身份哈希不是原生代码沙箱。双向距离复用AlphaWrap的同一有界采样函数，只作偏差告警，不是最大误差证明。候选通过仍需确认间隙、薄壁和独立部件，`shape_confirmation=not_confirmed`、`print_ready=false`、`applied=false`。不按“只留最大部件”或样本专用阈值删除碎片，不硬编码7部件；Q对照79,400面/7部件包含额外删壳，不是无删除后端必达值。无效/取消/超时结果不导出成功STL，原件保留。
 
-此处只集成本机评估代码；SDK商业再分发授权未取得，源码不含SDK，安装包不增加SDK或worker。构建与依赖边界见[构建模块](build.md)；实际通过/失败和耗时见[执行记录](../validation/2026-10-04-smart-print-engine.md)，不能从接口存在推定Windows/Linux或实机通过。
+同一个Orca构建管理适配层，不单独发布它。SDK商业再分发授权未取得，源码不含SDK，用户后续自行打包，本轮不制作捆绑包。默认OFF不依赖SDK；ON配置覆盖macOS14+/arm64、Windows MSVC x64及Linux x64/arm64，后两者仍为待原生验证的实验适配，须满足静态宿主依赖及对应ABI限制。实际MRMesh/MRVoxels内容哈希校验允许路径迁移，Windows用宽字符模块定位并输出UTF-8路径；缺库仍可在系统加载阶段阻止程序启动，不保证JSON。不把配置级测试当跨平台运行通过。构建方式见[内部适配层说明](../../../src/meshlib/README.md)和[构建模块](build.md)；实际结果见[执行记录](../validation/2026-10-04-smart-print-engine.md)。
 
 ### 既有检测与修复路径
 
@@ -82,6 +82,8 @@ GUI 修复入口经 FixModelByCgal 调用模型修复核心。repair_model 创�
 
 候选的 3D 凸包也在 worker 内计算、复检并以有界协议返回，主线程只验收和安装，不再执行 QHull；安装后清除体积二维投影及实例轮廓缓存，避免沿用原模型的排布范围。计时／内存预算覆盖 worker 的重建、严格几何检查和凸包处理，不包括主进程的有界读写、预览截面和导出，不能称整个 UI 操作具有同一个硬截止时间。
 
+以上受限子进程、预封口和协议传输描述仅适用于默认 Alpha Wrap。MeshLib 的生成、坐标验收和凸包在同进程后台任务中完成，其协作预算从准入估算前开始，覆盖输入检测、SDK、候选/坐标验收和凸包；初始 STL 读取/工作副本准备及最终 CLI 导出/回读/哈希不在此预算内。两端复用几何验收规则，不共用停止机制。
+
 ## 配置与约束
 
 几何是否需要修复、是否允许拆壳／删除非三维部件、是否允许清除绘制与能否保色是独立政策。GUI／CLI 的默认策略必须分别查看调用处，不能因为共用 CGAL 就认为都允许丢弃材质。相同修复选项下应按同一规则保留几何与属性；现存入口差异需记录原因／影响，新改动不能只更新一端。
@@ -96,11 +98,15 @@ GUI 修复入口经 FixModelByCgal 调用模型修复核心。repair_model 创�
 
 双向距离为采样估计，不能表述为最大误差保证；超过阈值只告警。缺陷优先重建不以输入代数体积／内部见证点证明结构保持，`interior_check_status=not_preserved`、`reference_interior_check_complete=false`；原有孔、空腔和薄壁可能被填充、合并或加厚，GUI 必须提示并确认。独立 `model_reconstruction_v1` 区分 `candidate_ready`、几何检测、人工确认、采用与试切片；首版 `trial_slice=not_run`、`print_ready=false`，GUI 可明确采用为待试切片候选。网格七项通过不意味着无悬空或能生成首层路径；外部诊断试切片结果单独记录，不伪装为自动流程已执行。check-model v4 原字段和退出码保留，仅显式 --repair-evidence 时附加上述 boundary；旧普通 repair JSON 和高级修复策略不变。
 
+Alpha Wrap 的预封口、三档粗化和 worker 平台限制不适用于 MeshLib；MeshLib 不粗化/回退，使用上文同进程协作控制。面数限制及自动预算分档共用，但 MeshLib 统计整个 Orca 进程的 RSS，不是仅 SDK 增量内存。
+
+CLI可用`--reconstruction-memory-mb`显式传128–4096的整数MiB，复用`options.process.memory_limit_mb`并保持调用者预算优先，不再次按物理RAM缩小；不传则默认行为不变。此为服务调用配置，不是新修复策略；没有容器cgroup/Job自动探测，应用外多个作业的总资源由调用方管理。GUI无新增资源输入框，两端核心处理同一预算的规则相同。
+
 ## 失败与取消
 
 单体积失败或用户取消可导致整个事务回退；CGAL 单次内部操作不保证即时可中断。检查函数抛错不能转换成“需要修复”继续更重操作。成功写文件也不证明修复后的网格正确。
 
-上述线程取消约束属于旧高级修复；独立重建通过终止并回收专用子进程处理取消／超时。启动失败、内存预算、进程崩溃、引擎异常、报告／网格截断或校验不匹配均不得交付候选，不自动重启 worker。只有 worker 内受控的细分预算／候选不合格允许上述有界粗化尝试。GUI 等待／审阅期间源网格、体积元数据、变换或相关配置变化后丢弃旧候选，不覆盖现场。
+上述线程取消约束属于旧高级修复；Alpha Wrap 重建通过终止并回收专用子进程处理取消／超时。启动失败、内存预算、进程崩溃、引擎异常、报告／网格截断或校验不匹配均不得交付候选，不自动重启 worker。只有 Alpha Wrap worker 内受控的细分预算／候选不合格允许上述有界粗化尝试。MeshLib 在停止请求后等待后台线程返回，不能承诺硬截止或隔离原生崩溃。GUI 等待／审阅期间源网格、体积元数据、变换或相关配置变化后丢弃旧候选，不覆盖现场。
 
 ## 修改与验证
 

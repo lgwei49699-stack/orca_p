@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:ce66e92622d1bbffebde48c7c17fa892a33dca48398b028658948dca7034aa27",
-  "reason": "增加单侧细分穿透、绕序/面序、接触/折角/多邻面/T接点、预算和默认关闭回归；schema2支持面与防降级及失败归因规则测试，CLI plane_limit断言原码和细分原因。不改变SDK或下载工具；合成规则用例不冒充高级后端端到端残留样本。"
+  "source_fingerprint": "sha256:ddc914fdb498f0c68b83dcb8e440da3a45c877c01cca42d505dc6c96d4357f92",
+  "reason": "MeshLib CLI回归改为同进程SDK，覆盖PID、参数/内存预算、旧worker参数拒绝、候选独立检查和失败保护；新增协作控制及平台配置测试，移除sidecar工具。保留已提交证据分类测试；Mac实测、配置模拟与Windows/Linux原生待验分开，不含下载工具变更。"
 }
 -->
 
@@ -25,10 +25,13 @@
 - [test_cli_model_reconstruction.py](../../../scripts/test_cli_model_reconstruction.py)：针对已有应用创建隔离 STL 夹具、逐例目录和独立重建协议审计；保存二进制／输入 hash、stdout/stderr、报告及汇总，不构建、不切片、不打印。
 - [test_cli_model_check.py](../../../scripts/test_cli_model_check.py)：沿用既有检测／显式组合高级修复回归，核对默认 v4 精确六字段及显式 `--repair-evidence` 的可选 `boundary`；分别验证开关、非法组合、原字段／退出码和产物一致性，不新增自动修复命令或实际打印任务。
 - [test_gmp_platform_selection.py](../../../scripts/tests/test_gmp_platform_selection.py)：在临时 CMake 脚本中执行 GMP 配方、捕获 ExternalProject/复制参数，验证目标架构对应的版本、校验值及旧补丁/预编译路径；不修改真实构建目录，不等于目标系统编译运行。
+- [test_meshlib_platform_config.py](../../../scripts/tests/test_meshlib_platform_config.py)：隔离SDK夹具与CMake项目执行实际平台、版本、文件布局、CRT及依赖属性检查，覆盖OFF、Mac arm64、Windows MSVC x64、Linux x64/arm64。模拟目标注册与编译器变量，不执行目标系统编译/加载；不能据此宣称跨平台运行通过。
 
 ## 核心流程
 
-`scripts/test_cli_meshlib_reconstruction.py` 针对已有应用及独立sidecar做小夹具回归，不构建/下载SDK、不打印。覆盖候选独立检测与哈希、参数互斥、程序缺失/协议失败、原件/旧输出保护，以及默认Alpha Wrap对照；实际资源失败原因单独记录，不把提前内存拒绝当作超时验证。sidecar本身另有 `tools/meshlib-worker/test_worker.py` 验证参数/有界输入和协议；累计RSS、嵌套取消及父亡回收由现有Process测试覆盖。CLI测试通过不能替代结构保留或实机打印验收。
+`scripts/test_cli_meshlib_reconstruction.py` 针对已编入SDK的应用做同进程小夹具回归，不构建/下载SDK、不打印。核对报告PID与真实应用PID，POSIX采样子进程列表（采样非完整系统追踪），校验候选独立检测/哈希、参数互斥、旧worker选项拒绝、超细体素准入拒绝及原件/旧输出保护。`--expect-unavailable` 验证SDK关闭构建；可传实际超时模型，协作超时与提前内存拒绝分别断言。隐藏 `[MeshLibInProcessIntegration]` 检查同进程成功、取消、超时、标准/未知回调异常及随后恢复；`[InProcessReconstruction]` 覆盖时钟/RSS故障、粘滞停止和准入数值边界。旧Alpha Wrap Process监督回归不变，原sidecar协议工具/嵌套选项已删除。通过不代表结构保留或实机打印验收。
+
+显式内存预算回归覆盖非法/缺失整数、2048/4096保持原值并成功、128预算不被抬高且准入拒绝，以及MeshLib与默认Alpha Wrap预算一致。Windows控制台使用安全编码回退，进程树采样标明不可用，不把空列表冒充无子进程证明。运行库迁移、完整Q模型与原流程Computer Use复验另记主任务证据，不由配置夹具推断。
 
 `gfd_modal_dialog_tests` 补充 MainFrame→子面板→栈上原生／自管模态的关闭回归：模态期间退出被否决，嵌套同样保护，非关联窗口不阻塞；结束模态并退出作用域后允许 owner 正常销毁。本轮 Mac arm64 87 项检查通过；15:29 用户日志进一步验证设备框下两次退出拦截、取消恢复和应用正常析构。嵌套打印设置和 Windows 仍按 [Advancer3 续修交接](../validation/2026-10-09-adv3-custom-feasibility.md) 验收。
 
