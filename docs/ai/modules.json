@@ -359,6 +359,8 @@
         "src/libslic3r/InProcessReconstructionControl.hpp",
         "src/libslic3r/ModelCheckWorkflow.cpp",
         "src/libslic3r/ModelCheckWorkflow.hpp",
+        "src/libslic3r/ModelStageReport.cpp",
+        "src/libslic3r/ModelStageReport.hpp",
         "src/libslic3r/ModelInspection.cpp",
         "src/libslic3r/ModelInspection.hpp",
         "src/libslic3r/ModelPreparation.cpp",
@@ -404,7 +406,8 @@
         "tests/libslic3r/test_mesh_slice_diagnostics.cpp",
         "scripts/test_cli_model_reconstruction.py",
         "scripts/test_cli_meshlib_reconstruction.py",
-        "scripts/test_cli_model_check.py"
+        "scripts/test_cli_model_check.py",
+        "scripts/test_cli_model_stage_report.py"
       ],
       "test_note": "旧修复按 `[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]` 回归；独立重建按 `[MeshReconstruction],[ModelReconstruction],[ReconstructionProcess]` 及 CLI 专项检查健康/不支持输入、变换后最终网格、候选不污染源、取消/超时/内存/异常输出。新增只读证据投影及 `[MeshSliceDiagnostics]` 回归，既有check-model脚本核对v4旧字段/退出码和boundary扩展；不新增自动编排，参考 Z 截面不等于实际试切片。GUI 确认、Undo、备份和同参试切片按交接记录另验，无匹配不能计为通过。"
     },
@@ -1726,6 +1729,7 @@
         "scripts/orca_extra_profile_check.py",
         "scripts/orca_filament_lib.py",
         "scripts/test_cli_model_check.py",
+        "scripts/test_cli_model_stage_report.py",
         "scripts/test_cli_model_color.py",
         "scripts/test_cli_meshlib_reconstruction.py",
         "scripts/test_cli_model_reconstruction.py",

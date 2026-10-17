@@ -22,6 +22,9 @@ struct ModelCheckWorkflowOptions
     // Only meaningful with advanced_repair + repair_evidence. This records a
     // caller policy for recommendations; the workflow never closes/rebuilds.
     bool allow_boundary_closure = false;
+    // Server integration only; defaults preserve the v4 report and workload.
+    bool        stage_report = false;
+    std::string reference_file;
     // Check-only capacity is independent of the repair engine's own budgets.
     // Keep bounded geometry and intersection work; never downsample for inspection.
     std::size_t            max_input_bytes = 256 * 1024 * 1024;

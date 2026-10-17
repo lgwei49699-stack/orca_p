@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:e29899e85b903361acdd2730d73c607c932b33fcb1b686707632dbf74ff018b9",
-  "reason": "MeshLib显式重建改为Orca同进程SDK调用，移除worker路径参数；补128–4096MiB显式预算和中英文帮助，报告协作限制及失败边界。默认AlphaWrap、普通GUI/检测/修复/切片业务不变，不自动调用或采用候选；保留已提交的证据分类和归因规则，SDK开关与跨平台验收边界明确。 本次只修改变换JSON：越界/无归属实例各自独立返回盘号，XY居中、Z归零；普通实例实际坐标保持。用归属加只读几何查询避免显式贴床后旧盘外缓存误判，不改真实模型/3MF/GUI。11组成对CLI回归及两个用户场景通过。"
+  "source_fingerprint": "sha256:113d3e1c183b1982f08677715f7bee82fe14f5282bb4fce6f205082726f686d7",
+  "reason": "新增显式 model-stage-report/reference，仅检查和独立重建支持；旧 v4、普通修复/切片及 GUI 默认行为不变。阶段报告身份、错误参数和真实 MeshLib 的 CLI 回归通过，业务采用由后端执行。"
 }
 -->
 
@@ -18,6 +18,8 @@
 - [OrcaSlicer.hpp](../../../src/OrcaSlicer.hpp)：CLI 动作与配置成员的接口边界。
 
 ## 核心流程
+
+业务阶段交付仅显式 `--model-stage-report` 生效，允许在check-model及独立重建入口输出固定 `model-stage.json`；`--model-reference` 指定统一原始STL基准，不能单独使用。其他动作/无动作GUI拒绝这两个显式选项，不默默改变普通切片。旧result.json与reconstruction.json语义不变，默认不增加比较成本；新报告必须与exit0、实际产物hash共同验收。后端选择与失败兜底不放进Orca路由，见[修复模块](model-repair.md)。
 
 独立 `--reconstruct-model` 的可选本机评估后端使用 `--reconstruction-engine meshlib --reconstruction-voxel-mm <毫米>`，仍要求风险确认和新输出目录。同一Orca进程内部调用SDK，不再接受 `--reconstruction-worker-path`，不启动MeshLib或Orca修复子进程；默认Alpha Wrap保留原worker。普通检测/高级修复/切片的业务不变，不新增自动编排或原生GUI入口。引擎/体素仅在此入口解析；未编入SDK、参数混用或失败不静默回退。启用SDK构建依赖本地动态库，缺库可在进程启动阶段失败。输出仍为 `candidate.stl`、`reconstruction.json`，报告包含同进程身份与协作预算边界；成功仅表示候选及导出验收完成。详细结果/授权/结构保留边界见[模型修复](model-repair.md)。
 

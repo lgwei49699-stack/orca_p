@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model-repair",
-  "source_fingerprint": "sha256:1c3dc94481e512f38798ca6b13ce9e54787024aa27ba3f6f7e2682abe10cf203",
-  "reason": "本次仅调整macOS可选运行库准备目录、构建RPATH及本地打包说明；编译时身份记录签名后的最终库内容，运行校验不弱化。默认AlphaWrap、GUI入口、修复算法和CLI参数保持；不包含工作区模型阶段报告改动。平台配置测试不等于Windows/Linux原生运行验收。"
+  "source_fingerprint": "sha256:e3febdb7a85f6ba9d4455d1f7241127e259c5b1d8db6e11b3b62b6c9acafac22",
+  "reason": "新增显式单次阶段交付报告，绑定原件/比较基准/实际回读产物的 SHA256，记录双向采样和完整共享边部件统计；部分高级成果可比较，重建验收不放宽。业务阈值和编排不进入 Orca，默认旧 CLI/GUI 路径保持；契约测试锁定计算口径。 10-18 仅同步后端单一修复流程说明，去掉业务版本/开关，Orca共享核心及GUI/CLI行为和源码指纹未变。"
 }
 -->
 
@@ -25,6 +25,18 @@
 - [ReconstructionProcess.cpp](../../../src/libslic3r/ReconstructionProcess.cpp)：直接启动当前应用的专用 worker、取消／超时／内存监测及退出回收，不复用 GUI 的 detached 启动路径。
 
 ## 核心流程
+
+### 业务分阶段交付报告（CLI 显式开启）
+
+`--model-stage-report` 只适用于 `--check-model`（可组合高级修复/证据）和独立 `--reconstruct-model`。可选 `--model-reference ORIGINAL.stl` 固定所有阶段比较基准，缺省为当前输入。新 `ModelStageReport` 复用有界无修复 STL 解析和现有采样距离，输出目录固定 `model-stage.json`；协议 `orca_model_stage_v1` 包含阶段、输入/基准/产物 SHA256、相对文件路径、回读校验、七类检查、双向采样/包围盒变化、完整连通部件数和重建建议。输入/基准只读，产物必须在输出目录内且不是输入；已有报告不覆盖。
+
+报告只在单次流程正常完成后发布，回读物理三角面须与实际检查网格一致，并再次核对输入/基准/产物哈希。原子无覆盖发布不表示整个进程已经成功：消费者仍须同时要求退出码0、报告协议/身份匹配和实际文件哈希，失败调用不捡目录残留文件。高级阶段可保留部分修复，不套用重建完整通过规则；重建复用已完成的独立检查，不重复全量相交检查。
+
+显式报告模式的 prepared/result 检测和截面证据直接读取实际 STL 原始浮点坐标；不使用 Model 导入居中再平移后可能发生微小舍入的视图。修复算法仍使用原有 Model 路径，严格三角面一致性不放宽；普通未启用报告的检查与 GUI 路径不变。非整数坐标方块/补面回归防止误拒合法导出，真实70de初次失败和修正复测见[本轮验证](../validation/2026-10-17-model-repair-staged-gui.md)。
+
+距离比较允许两侧只读排除退化/重复面，并记录数量；原始包围盒与部件计数仍包含这些面。部件按精确坐标焊接后的共享边连通定义统计，点接触不合并；不等于设计零件或部件对应。采样不是最大误差证明。Orca 不做业务阈值选用，也不编排下一阶段；PDS 采用唯一修复流程、固定实际参数并持久兜底，不按业务版本分流，见[业务接入方案](../../../doc/model-repair-business-integration-design.md)。
+
+默认不传参数时不加载额外基准、不比较、不输出sidecar，v4六字段、普通修复及默认Alpha Wrap行为保持。原生GUI无此报告入口，不增加GUI参数或自动选用；共享修复/重建验收规则未改变。新增契约回归 `scripts/test_cli_model_stage_report.py`，包含前后端固定的距离采样与部件统计口径断言；运行结果与未验平台见[执行记录](../validation/2026-10-17-model-repair-staged-gui.md)。
 
 ### MeshLib 本机评估后端（仅 CLI）
 

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "raft",
-  "source_fingerprint": "sha256:13117dd1dd3c7f40a94e74871b45b047a78c54ab1d5da1f14c803bb5d81c6ea5",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入RaftPlan/RaftGeometry/RaftMerge；筏层分块、平滑、气隙、阶段参数和GUI筏层面板均未改变。"
+  "source_fingerprint": "sha256:2c18612c9955d0fbda1520297943efaaa79674da3a38a60c49769a86c6768c12",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入RaftPlan/RaftGeometry/RaftMerge；筏层分块、平滑、气隙、阶段参数和GUI筏层面板均未改变。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。"
 }
 -->
 

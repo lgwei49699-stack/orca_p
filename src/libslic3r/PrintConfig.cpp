@@ -8471,6 +8471,19 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli_params = "0|1";
     def->set_default_value(new ConfigOptionBool(false));
 
+    def          = this->add("model_stage_report", coBool);
+    def->label   = L("Export model stage report");
+    def->tooltip = L("With --check-model or --reconstruct-model, write model-stage.json with artifact identity and sampled changes. "
+                     "STL only; does not select a model. Disabled by default.");
+    def->cli     = "model-stage-report";
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def          = this->add("model_reference", coString);
+    def->label   = L("Model comparison reference");
+    def->tooltip = L("Original uncolored STL used as the comparison reference. Requires --model-stage-report; defaults to the input.");
+    def->cli     = "model-reference";
+    def->set_default_value(new ConfigOptionString());
+
     def             = this->add("auto_repair_model", coBool);
     def->label      = L("Automatically repair imported model");
     def->tooltip    = L("Automatically repair STL mesh connectivity and normals while importing the model. With --repair-model cgal, "

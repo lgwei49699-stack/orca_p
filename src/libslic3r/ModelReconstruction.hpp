@@ -60,6 +60,11 @@ int run_model_reconstruction_worker(const std::string& task_directory);
 // Public standalone CLI. STL only for v1 to avoid geometry-only import silently
 // discarding material/texture semantics. Writes to a new, nonexistent directory.
 int run_model_reconstruction_cli(const std::string& executable, const std::vector<std::string>& args);
+
+// Reuse the standalone parser for explicit stage reports: one bounded,
+// uncolored STL snapshot, no import repair, hash of the bytes actually parsed.
+TriangleMesh read_bounded_model_stl(const std::string& path, std::string& sha256);
+std::string  model_mesh_file_sha256(const std::string& path);
 } // namespace Slic3r
 
 #endif

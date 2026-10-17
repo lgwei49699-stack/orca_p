@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:b7981f3469b83cae11f5cc6ab7254b6bbfc2b2a52fdff540d6b61116a3a694f1",
-  "reason": "保留MeshLib同进程CLI、协作预算及内存帮助的中英文说明；合并云预设跨机型替换保护和未绑定机型两条提示，不删除任一侧翻译，不新增修复GUI菜单。占位符/msgfmt与真实界面排版分开验证，见主记录。"
+  "source_fingerprint": "sha256:0b0049d589063147faf7307247bcab16a9162ea21872720b061286a1a6753e8c",
+  "reason": "保留MeshLib同进程CLI、协作预算及内存帮助的中英文说明；合并云预设跨机型替换保护和未绑定机型两条提示，不删除任一侧翻译，不新增修复GUI菜单。占位符/msgfmt与真实界面排版分开验证，见主记录。 10-17 新报告参数、错误及帮助新增英文与简中，msgfmt格式检查通过；原GUI翻译保持，无新GUI控件。"
 }
 -->
 

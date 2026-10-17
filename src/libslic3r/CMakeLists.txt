@@ -310,6 +310,8 @@ set(lisbslic3r_sources
     ModelPreparation.cpp
     ModelCheckWorkflow.cpp
     ModelCheckWorkflow.hpp
+    ModelStageReport.cpp
+    ModelStageReport.hpp
     MTUtils.hpp
     MultiMaterialSegmentation.cpp
     MultiMaterialSegmentation.hpp

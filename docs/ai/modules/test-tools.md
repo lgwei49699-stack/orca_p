@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:92b9766529c8b6bdd884e639da1129faf8e9c19d1f32472ab07b8f69fa55a87b",
-  "reason": "本次仅纳入macOS构建/打包测试：真实Mach-O依赖闭包、迁移、同名库隔离、签名哈希不变和错误拒绝；构建缓存及CMake准备目录门槛回归。47项脚本/配置测试通过，配置模拟与目标平台运行验收分开；GUI/目标系统未验范围见打包记录。保留HEAD既有分盘及修复测试，不包含工作区阶段报告、Thingi10K下载或其他业务变更。"
+  "source_fingerprint": "sha256:b89fe8fd1225b651872d4a2837f4ae02e063581fa2492e288ccaec81cb90b14b",
+  "reason": "新增隔离的阶段报告 CLI 契约测试，覆盖旧入口、文件身份、回读、比较基准、采样/部件统计口径、非法选项和报告防覆盖，并显式执行真实 MeshLib。未纳入下载工具或其他任务测试；本机运行与 GUI/目标平台待验范围分开。"
 }
 -->
 
@@ -28,6 +28,8 @@
 - [test_meshlib_platform_config.py](../../../scripts/tests/test_meshlib_platform_config.py)：隔离SDK夹具与CMake项目执行实际平台、版本、文件布局、CRT及依赖属性检查，覆盖OFF、Mac arm64、Windows MSVC x64、Linux x64/arm64。模拟目标注册与编译器变量，不执行目标系统编译/加载；不能据此宣称跨平台运行通过。
 
 ## 核心流程
+
+`scripts/test_cli_model_stage_report.py` 在隔离目录验证显式阶段报告：旧v4兼容、原件/基准/回读产物身份、双向变化与部件统计、错误参数/已有报告保护，并可显式开启真实MeshLib案例。额外锁定距离采样和部件统计的协议字符串，部件统计须明确完成，避免计算口径与后端接受规则漂移。无匹配新构建不得运行旧程序证明改动；默认跳过SDK案例不算通过，结果写新证据目录，不改根result.json。后端两个仓库的纯mock及真实本地CLI契约测试另见业务接入记录，不启动远端中间件。
 
 `scripts/test_cli_meshlib_reconstruction.py` 针对已编入SDK的应用做同进程小夹具回归，不构建/下载SDK、不打印。核对报告PID与真实应用PID，POSIX采样子进程列表（采样非完整系统追踪），校验候选独立检测/哈希、参数互斥、旧worker选项拒绝、超细体素准入拒绝及原件/旧输出保护。`--expect-unavailable` 验证SDK关闭构建；可传实际超时模型，协作超时与提前内存拒绝分别断言。隐藏 `[MeshLibInProcessIntegration]` 检查同进程成功、取消、超时、标准/未知回调异常及随后恢复；`[InProcessReconstruction]` 覆盖时钟/RSS故障、粘滞停止和准入数值边界。旧Alpha Wrap Process监督回归不变，原sidecar协议工具/嵌套选项已删除。通过不代表结构保留或实机打印验收。
 

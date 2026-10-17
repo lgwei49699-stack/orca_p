@@ -410,6 +410,23 @@ nlohmann::json compare_reconstruction_meshes(const TriangleMesh&              so
     return metrics;
 }
 
+nlohmann::json compare_model_stage_meshes(const TriangleMesh& source_mm, const TriangleMesh& candidate_mm)
+{
+    const auto source  = read_soup(source_mm, RECONSTRUCTION_MAX_INPUT_FACES, true);
+    const auto output  = read_soup(candidate_mm, RECONSTRUCTION_MAX_INPUT_FACES, true);
+    auto       metrics = comparison_metrics(source, output, 0.25);
+    metrics.erase("deviation_warning_mm");
+    metrics.erase("deviation_warning");
+    metrics["status"]                              = "completed";
+    metrics["distance_method"]                     = "sampled_vertices_edge_midpoints_and_face_centroids";
+    metrics["distance_is_upper_bound"]             = false;
+    metrics["reference_excluded_degenerate_faces"] = source.removed_degenerate;
+    metrics["reference_excluded_duplicate_faces"]  = source.removed_duplicates;
+    metrics["candidate_excluded_degenerate_faces"] = output.removed_degenerate;
+    metrics["candidate_excluded_duplicate_faces"]  = output.removed_duplicates;
+    return metrics;
+}
+
 bool reconstruct_mesh(const TriangleMesh&              source_mm,
                       TriangleMesh&                    candidate_mm,
                       nlohmann::json&                  report,

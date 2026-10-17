@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "arrangement",
-  "source_fingerprint": "sha256:09b38921653f4c58dbde71160d5c775471e2bc240304be0e42ec89cefd098abe",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI专用repair_evidence_close_boundaries及证据帮助，只作用模型检测组合；不改变Arrange/ModelArrange、盘归属、间距、筏层预留或GUI摆盘行为。 本次共享分盘与GUI源码无变化，仅补充CLI输出投影边界：越界独立返回盘/居中/Z0，普通实例仍取实际底面。贴床后的CLI分类只读复用check_outside，未修改盘成员；本次无新增GUI验收项。"
+  "source_fingerprint": "sha256:83c1be113e2089ff092488426c75c42de25208ca9a76b052fba9d0ba4e76ea69",
+  "reason": "本次仅因共享 PrintConfig.cpp 新增 CLI misc 的 model_stage_report/reference 更新复核指纹；未修改 Arrange、盘归属、坐标输出或 GUI 分盘行为，不新增本模块业务验证结论。"
 }
 -->
 

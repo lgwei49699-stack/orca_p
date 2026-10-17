@@ -1,7 +1,9 @@
 #include "ModelCheckWorkflow.hpp"
+#include "I18N.hpp"
 #include "ModelInspection.hpp"
 #include "ModelRepairEvidence.hpp"
 #include "ModelReconstruction.hpp"
+#include "ModelStageReport.hpp"
 #include "Model.hpp"
 #include "PrintConfig.hpp"
 #include "Format/OBJ.hpp"
@@ -15,6 +17,7 @@
 #include <iomanip>
 #include <limits>
 #include <locale>
+#include <optional>
 #include <stdexcept>
 
 namespace Slic3r {
@@ -238,6 +241,14 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
                                   {{"requested", options.advanced_repair}, {"status", options.advanced_repair ? "not_started" : "not_requested"}}}};
     if (options.allow_boundary_closure && (!options.advanced_repair || !options.repair_evidence))
         throw std::invalid_argument("Boundary closure evidence requires advanced repair and repair evidence.");
+    if (!options.stage_report && !options.reference_file.empty())
+        throw std::invalid_argument(L("--model-reference requires --model-stage-report."));
+    if (options.stage_report && (!options.export_format.empty() && options.export_format != "stl"))
+        throw std::invalid_argument(L("Stage reports support only STL output."));
+    std::optional<ModelStageReportContext> stage_context;
+    TriangleMesh                           stage_mesh;
+    if (options.stage_report)
+        stage_context = prepare_model_stage_report(options.input_file, options.reference_file, options.output_directory);
     auto inspection_options = options.inspection_options;
     // The same pair search supplies evidence for the inspected serialized mesh.
     // Normal checks and ordinary advanced repair retain their old work budget.
@@ -296,12 +307,21 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
     report.check["prepared_model"]        = baseline.string();
     report.check["prepared_output_files"] = report.output_files;
     DynamicPrintConfig working_config;
-    bool               ignored      = false;
-    Model              working      = load_working_model(baseline.string(), working_config, options.ignore_materials, ignored);
-    report.failure_stage            = "inspection";
-    auto before                     = inspect_model_mesh(working.mesh(), inspection_options);
+    bool               ignored = false;
+    Model              working = load_working_model(baseline.string(), working_config, options.ignore_materials, ignored);
+    report.failure_stage       = "inspection";
+    // Model import recenters float vertices and may lose a few coordinate bits
+    // when restoring the volume transform. The stage contract must inspect the
+    // actual serialized triangles, not a numerically changed reimport view.
+    std::string serialized_sha256;
+    auto        inspected_baseline  = stage_context ? read_bounded_model_stl(baseline.string(), serialized_sha256) : working.mesh();
+    auto        before              = inspect_model_mesh(inspected_baseline, inspection_options);
     report.check["before_advanced"] = before;
     publish_check(report, before, baseline.string(), "serialized_prepared");
+    if (stage_context)
+        stage_mesh = std::move(inspected_baseline);
+    else
+        inspected_baseline = TriangleMesh{};
     if (options.advanced_repair) {
         if (before.at("mesh_status") == "passed") {
             report.check["advanced_repair"]["status"] = "not_needed";
@@ -353,9 +373,9 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
         DynamicPrintConfig reloaded_config;
         Model              reloaded = load_working_model(output.string(), reloaded_config, options.ignore_materials, ignored);
         report.failure_stage        = "inspection";
-        auto       retained_mesh    = reloaded.mesh();
+        auto       retained_mesh    = stage_context ? read_bounded_model_stl(output.string(), serialized_sha256) : reloaded.mesh();
         const auto after            = inspect_model_mesh(retained_mesh, inspection_options);
-        if (!options.repair_evidence)
+        if (!options.repair_evidence && !stage_context)
             retained_mesh = TriangleMesh{};
         // Allocate the complete publication before replacing the retained
         // baseline report. An allocation/serialization failure must not mix stages.
@@ -370,11 +390,20 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
         }
         report = std::move(accepted);
         publish_section_evidence(report, reloaded, &retained_mesh);
+        if (stage_context)
+            stage_mesh = std::move(retained_mesh);
     } else {
-        publish_section_evidence(report, working);
+        publish_section_evidence(report, working, stage_context ? &stage_mesh : nullptr);
     }
     if (options.advanced_repair && options.repair_evidence)
         require_completed_evidence(report);
+    if (stage_context) {
+        report.failure_stage = "stage_report";
+        write_model_stage_report(*stage_context, options.output_directory, report.check.at("working_model").get<std::string>(), stage_mesh,
+                                 report.check.at("inspection"), options.advanced_repair ? "advanced" : "check",
+                                 report.check.at("advanced_repair").at("status").get<std::string>(),
+                                 check_boundary(report.check).at("reconstruction"));
+    }
     report.check["operation_status"] = "completed";
 }
 

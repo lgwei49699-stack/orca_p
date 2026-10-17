@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:7f670b3a3a6b3b222d0ce62e461018a1251c64f70893810ef4bdbdf17364625c",
-  "reason": "仅提交macOS构建与MeshLib本地打包：读取ON缓存自动选择至少14.0，拒绝显式旧系统及未准备的-b缓存；库副本先重定位/签名再记录SHA256，补齐PRIVATE静态依赖的构建RPATH，App/DMG检查依赖闭包及签名。普通OFF最低版本和Windows/Linux适配保持；47项脚本/配置测试通过，实际应用验证和GUI/目标系统边界见打包记录。不包含模型阶段报告或其他业务改动。"
+  "source_fingerprint": "sha256:a8ac342d9885538aea00cba8558c89e4d52702accd140507b0ed7742d6c353c8",
+  "reason": "仅将 ModelStageReport.cpp/.hpp 加入既有 libslic3r，复用现有 CGAL/OpenSSL/Boost，无新增目标、SDK 或平台开关；macOS arm64 Release 构建身份已核对，Windows/Linux 原生及 GUI 验收仍待执行。"
 }
 -->
 
@@ -21,6 +21,8 @@
 - [build_macos_zstd.sh](../../../scripts/build_macos_zstd.sh) 与 [bundle_macos_zstd.sh](../../../scripts/bundle_macos_zstd.sh)：固定运行库构建、架构/最低系统验证与包内重定位；构建入口和独立 DMG 入口共用。
 
 ## 核心流程
+
+`ModelStageReport.cpp/.hpp` 加入既有libslic3r目标，复用已链接的CGAL、OpenSSL与Boost，不新增程序或SDK依赖。只在显式CLI报告中调用；默认SDK OFF/ON及GUI链接边界不变。
 
 `src/meshlib` 是根CMake管理的内部静态适配库，不再构建独立MeshLib程序。默认 `ORCA_MESHLIB_LOCAL_EVALUATION=OFF` 编译C++17无SDK桩；ON只将适配实现编成C++20并私有包含SDK头，链接固定3.1.3.429的MRMesh/MRVoxels，主Orca业务仍C++17。关闭该目标LTO、隐藏内联符号，避免SDK头污染旧TBB/Eigen/OpenVDB；实际macOS两级命名空间链接探针通过不代表其他平台ABI兼容。
 

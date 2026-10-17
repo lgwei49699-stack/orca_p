@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "support",
-  "source_fingerprint": "sha256:aff2a7a269e5341bef6143b777ed5b4430ce19fdead660fb87051111d5c64396",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不被SupportMaterial/TreeSupport消费；支撑阈值、间隙、悬空告警和GUI支撑设置保持，证据流程不生成支撑路径。"
+  "source_fingerprint": "sha256:fa506ab24a42547809be33e8b3fea0a18d52020d48dfda67dcdaefba4d2e0c24",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不被SupportMaterial/TreeSupport消费；支撑阈值、间隙、悬空告警和GUI支撑设置保持，证据流程不生成支撑路径。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。"
 }
 -->
 

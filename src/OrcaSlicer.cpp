@@ -1609,6 +1609,9 @@ int CLI::run(int argc, char **argv)
     const bool repair_evidence_requested = m_config.opt_bool("repair_evidence");
     const bool boundary_policy_requested = std::find(m_requested_options.begin(), m_requested_options.end(),
                                                      "repair_evidence_close_boundaries") != m_requested_options.end();
+    const bool stage_options_requested   = std::any_of(m_requested_options.begin(), m_requested_options.end(), [](const auto& key) {
+        return key == "model_stage_report" || key == "model_reference";
+    });
     if (std::find(m_actions.begin(), m_actions.end(), "check_model") != m_actions.end()) {
         ModelCheckWorkflowReport check_report;
         int                      code = CLI_SUCCESS;
@@ -1616,11 +1619,18 @@ int CLI::run(int argc, char **argv)
         try {
             // This is a model-only entry point, before printer/material catalog
             // loading, arrangement, bed transforms and the normal slice path.
-            const std::set<std::string> allowed_options{"check_model",     "repair_model",
-                                                        "export_obj",      "export_stl",
-                                                        "outputdir",       "debug",
-                                                        "datadir",         "repair_ignore_materials",
-                                                        "repair_evidence", "repair_evidence_close_boundaries"};
+            const std::set<std::string> allowed_options{"check_model",
+                                                        "repair_model",
+                                                        "export_obj",
+                                                        "export_stl",
+                                                        "outputdir",
+                                                        "debug",
+                                                        "datadir",
+                                                        "repair_ignore_materials",
+                                                        "repair_evidence",
+                                                        "repair_evidence_close_boundaries",
+                                                        "model_stage_report",
+                                                        "model_reference"};
             for (const auto& key : m_requested_options)
                 if (allowed_options.count(key) == 0)
                     throw std::invalid_argument("--check-model does not accept this slicing/transform option: " + key);
@@ -1645,6 +1655,8 @@ int CLI::run(int argc, char **argv)
             options.allow_boundary_closure = m_config.opt_bool("repair_evidence_close_boundaries");
             options.ignore_materials       = m_config.opt_bool("repair_ignore_materials");
             options.export_format          = m_config.opt_bool("export_obj") ? "obj" : (m_config.opt_bool("export_stl") ? "stl" : "");
+            options.stage_report           = m_config.opt_bool("model_stage_report");
+            options.reference_file         = m_config.opt_string("model_reference");
             run_model_check_workflow(options, check_report);
         } catch (const std::invalid_argument& error) {
             code    = CLI_INVALID_PARAMS;
@@ -1699,6 +1711,12 @@ int CLI::run(int argc, char **argv)
     }
     sliced_info.cgal_repair_requested     = cgal_repair_requested;
     sliced_info.repair_evidence_requested = repair_evidence_requested;
+    if (stage_options_requested) {
+        const std::string message = L("--model-stage-report and --model-reference require --check-model or --reconstruct-model.");
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        return CLI_INVALID_PARAMS;
+    }
     if (boundary_policy_requested) {
         boost::nowide::cerr << boundary_policy_usage_error << std::endl;
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, boundary_policy_usage_error, sliced_info);

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:79a47384b6c5fc1a7c8084d4a0f7c74f9c3af5e40ff28febad25ff6f44dbdd16",
-  "reason": "合并云导入预设的gfd-cloud机器子目录、保存/重载与三档旧名称兼容，默认save_current_preset调用保持原公共目录。保留CLI专用默认关闭的repair_evidence/close_boundaries选项，不把其纳入机器/耗材/工艺配置。正文补存储边界，合并后验证见主记录。"
+  "source_fingerprint": "sha256:c5c18ab8d6c1e280f935449d0403ae00714547c7fb1208db8ab9802909636dc6",
+  "reason": "合并云导入预设的gfd-cloud机器子目录、保存/重载与三档旧名称兼容，默认save_current_preset调用保持原公共目录。保留CLI专用默认关闭的repair_evidence/close_boundaries选项，不把其纳入机器/耗材/工艺配置。正文补存储边界，合并后验证见主记录。 10-17 仅CLI misc新增默认关闭model_stage_report及默认空model_reference，不属于工艺/机器/耗材参数，未新增GUI面板或配置覆盖。"
 }
 -->
 
@@ -32,6 +32,8 @@
 `PresetUpdater::sync` 获取更新，`config_update` 处理安装及通知；重新加载前检查未保存预设。AppConfig 保存应用偏好／启用选择，PrintConfig 描述打印参数，两者不是同一份配置。
 
 ## 配置与约束
+
+`model_stage_report`（默认false）及`model_reference`（默认空）仅在CLI misc定义中供业务报告使用；不属于打印机、耗材或工艺参数，不加入GUI面板/持久预设，也不更改修复或切片默认值。后端阈值与流程版本由PDS保存，Orca不新增业务选择预设。
 
 父项提供基础、子项显式值覆盖；机器／耗材／工艺及模型覆盖由不同阶段合成。renamed_from 是旧名称迁移别名，不是当前默认耗材选择。资源版本变化也不等于已覆盖用户本地参数。
 
