@@ -4,7 +4,7 @@
 {
   "id": "arrangement",
   "source_fingerprint": "sha256:09b38921653f4c58dbde71160d5c775471e2bc240304be0e42ec89cefd098abe",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI专用repair_evidence_close_boundaries及证据帮助，只作用模型检测组合；不改变Arrange/ModelArrange、盘归属、间距、筏层预留或GUI摆盘行为。"
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI专用repair_evidence_close_boundaries及证据帮助，只作用模型检测组合；不改变Arrange/ModelArrange、盘归属、间距、筏层预留或GUI摆盘行为。 本次共享分盘与GUI源码无变化，仅补充CLI输出投影边界：越界独立返回盘/居中/Z0，普通实例仍取实际底面。贴床后的CLI分类只读复用check_outside，未修改盘成员；本次无新增GUI验收项。"
 }
 -->
 
@@ -32,6 +32,8 @@ GUI ArrangeJob 在主线程准备实例与锁定项，在工作线程调用 arra
 当前分支可检索的配置键：`print_sequence`、`brim_type`、`brim_width`、`brim_object_gap`、`raft_mode`、`bed_exclude_area`、`printable_area`。定义与默认值集中于 PrintConfig；实际生效仍要读取对象覆盖后的值。
 
 ## 失败与取消
+
+CLI `--export-model-transforms` 为越界或无归属实例各分配一个只存在于 JSON 的返回盘号，XY 为床面包围盒中心、Z为0；普通盘内实例仍保留实际底面Z（允许正值或负值），详见[CLI模块](cli.md)及[验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)。这不创建实际盘、不改变GUI、核心排布、盘归属和保存重开；不能将该返回盘号用于推断真实盘数或可打印性。
 
 检查候选是否越床、碰固定物体／禁放区和真正分到几盘，再提交变换。取消不应移动半批对象。GUI 成功通知和 CLI 返回成功都不能代替几何验收。
 

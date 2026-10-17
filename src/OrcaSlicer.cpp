@@ -6509,13 +6509,16 @@ int CLI::run(int argc, char **argv)
             if (std::abs(rounded - 1.0) < 1e-9) return 1.0;
             return rounded;
         };
-        
-        // Build a map of instance ObjectID to plate_index by iterating through all plates
-        // This ensures we get the correct plate assignment after arrange
-        // Note: contain_instance uses object/instance indices (not ObjectIDs), so we need to use indices
-        std::map<int, int> instance_to_plate;
-        int plate_count = partplate_list.get_plate_count();
-        
+
+        // Only fully contained instances retain their actual plate in the JSON.
+        // Check current geometry: ensure_on_bed may have changed Z since the
+        // plate's outside-instance cache was populated. Do not mutate membership.
+        std::map<size_t, int> instance_to_plate;
+        const int             plate_count       = partplate_list.get_plate_count();
+        int                   next_export_plate = plate_count;
+        const BoundingBox     export_bed_box    = get_extents(get_bed_shape(m_print_config));
+        const Vec2d           export_bed_center(unscale<double>(export_bed_box.center().x()), unscale<double>(export_bed_box.center().y()));
+
         // partplate_list uses the first model (m_models[0]) for indexing
         if (!m_models.empty()) {
             Model& model = m_models[0];
@@ -6527,7 +6530,7 @@ int CLI::run(int argc, char **argv)
                         ModelObject* obj = model.objects[obj_idx];
                         for (size_t inst_idx = 0; inst_idx < obj->instances.size(); inst_idx++) {
                             ModelInstance* instance = obj->instances[inst_idx];
-                            if (plate->contain_instance(obj_idx, inst_idx)) {
+                            if (plate->contain_instance(obj_idx, inst_idx) && !plate->check_outside(obj_idx, inst_idx)) {
                                 instance_to_plate[instance->id().id] = plate_idx;
                             }
                         }
@@ -6535,7 +6538,7 @@ int CLI::run(int argc, char **argv)
                 }
             }
         }
-        
+
         for (auto& model : m_models) {
             for (ModelObject* obj : model.objects) {
                 for (ModelInstance* instance : obj->instances) {
@@ -6581,54 +6584,14 @@ int CLI::run(int argc, char **argv)
                         clean_value(scale.y()), 
                         clean_value(scale.z())
                     };
-                    
-                    // Get plate index: first try the map we built, then use find_instance
-                    int plate_idx = -1;
-                    auto it = instance_to_plate.find(instance->id().id);
-                    if (it != instance_to_plate.end()) {
-                        plate_idx = it->second;
-                    } else {
-                        // Fallback to find_instance if not in map
-                        // find_instance uses object/instance indices, need to find them first
-                        if (!m_models.empty()) {
-                            Model& model = m_models[0];
-                            int obj_idx = -1, inst_idx = -1;
-                            for (size_t i = 0; i < model.objects.size(); i++) {
-                                if (model.objects[i]->id().id == obj->id().id) {
-                                    obj_idx = (int)i;
-                                    for (size_t j = 0; j < model.objects[i]->instances.size(); j++) {
-                                        if (model.objects[i]->instances[j]->id().id == instance->id().id) {
-                                            inst_idx = (int)j;
-                                            break;
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                            if (obj_idx >= 0 && inst_idx >= 0) {
-                                plate_idx = partplate_list.find_instance(obj_idx, inst_idx);
-                            }
-                        }
-                    }
-                    
-                    // If still not found, try to determine from position or default to plate 0
-                    if (plate_idx == -1) {
-                        if (auto_plate_value != 0 && oriented_or_arranged) {
-                            // Multi-plate arrange should have assigned the instance to a plate.
-                            // If not found, it might be out of bounds - check all plates by position
-                            for (int i = 0; i < plate_count; i++) {
-                                Slic3r::GUI::PartPlate* plate = partplate_list.get_plate(i);
-                                if (plate && plate->intersect_instance(obj->id().id, instance->id().id)) {
-                                    plate_idx = i;
-                                    break;
-                                }
-                            }
-                        }
-                        // If still not found, default to plate 0 (for auto_plate=0 or unarranged cases)
-                        if (plate_idx == -1) {
-                            plate_idx = 0;
-                        }
-                    }
+
+                    // Each outside/unassigned instance gets a separate, centered output plate with its bottom at Z=0.
+                    // These indices exist only in model_transforms: do not create plates or
+                    // change model positions, 3MF membership, or slicing behavior here.
+                    const auto it                = instance_to_plate.find(instance->id().id);
+                    const bool export_separately = it == instance_to_plate.end();
+                    const int  plate_idx         = export_separately ? next_export_plate++ : it->second;
+
                     transform["plate_index"] = plate_idx;
 
                     // Export plate-local XY coordinates in resolved multi-plate mode.
@@ -6643,10 +6606,15 @@ int CLI::run(int argc, char **argv)
                             export_y -= plate_origin.y();
                         }
                     }
+                    if (export_separately) {
+                        export_x = export_bed_center.x();
+                        export_y = export_bed_center.y();
+                    }
+                    const double export_z = export_separately ? 0.0 : bbox.min.z();
                     transform["position"] = {
                         clean_value(export_x),
                         clean_value(export_y),
-                        clean_value(bbox.min.z())  // after ensure_on_bed this should be 0
+                        clean_value(export_z)
                     };
                     
                     model_transforms_json.push_back(transform);
@@ -6654,7 +6622,7 @@ int CLI::run(int argc, char **argv)
                     BOOST_LOG_TRIVIAL(info) << "Model: " << obj->name 
                                             << ", Instance: " << instance->id().id
                                             << ", Plate: " << plate_idx
-                                            << ", Position: (" << export_x << "," << export_y << "," << bbox.min.z() << ")"
+                                            << ", Position: (" << export_x << "," << export_y << "," << export_z << ")"
                                             << ", Rotation (deg): (" << euler.x()*180.0/M_PI << "," << euler.y()*180.0/M_PI << "," << euler.z()*180.0/M_PI << ")"
                                             << ", Scale: (" << scale.x() << "," << scale.y() << "," << scale.z() << ")";
                 }
