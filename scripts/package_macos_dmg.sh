@@ -169,14 +169,8 @@ if [[ "$INCLUDE_VALIDATOR" -eq 1 && -d "$STAGE_DIR/OrcaSlicer_profile_validator.
     STAGED_APPS+=("$STAGE_DIR/OrcaSlicer_profile_validator.app")
 fi
 for staged_app in "${STAGED_APPS[@]}"; do
-    if [[ -n "$SIGN_IDENTITY" ]]; then
-        echo "Signing staged app with identity: $SIGN_IDENTITY"
-        codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$staged_app"
-    else
-        # Seal the completed bundle, including copied resources. A linker-only
-        # signature is not a valid app-bundle signature. This is NOT notarization.
-        codesign --force --deep --sign - "$staged_app"
-    fi
+    python3 "$PROJECT_DIR/scripts/macos_runtime_bundle.py" finalize \
+        --app "$staged_app" --identity "${SIGN_IDENTITY:--}"
 done
 
 echo "Verifying staged app signatures (integrity only, not Gatekeeper approval)..."

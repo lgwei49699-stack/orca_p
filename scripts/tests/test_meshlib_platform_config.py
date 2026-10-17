@@ -71,6 +71,7 @@ class MeshLibPlatformConfigTests(unittest.TestCase):
             "ORCA_MESHLIB_LOCAL_EVALUATION": enabled,
             "ORCA_MESHLIB_SDK_ROOT": str(sdk_root) if sdk_root is not None else "",
             "ORCA_MESHLIB_EXTRA_INCLUDE_DIRS": "",
+            "ORCA_MESHLIB_RUNTIME_DIR": "",
             "SLIC3R_STATIC": True,
             "CMAKE_SYSTEM_NAME": system,
             "CMAKE_SYSTEM_PROCESSOR": arch or ("arm64" if system == "Darwin" else "AMD64" if system == "Windows" else "x86_64"),
@@ -91,7 +92,7 @@ class MeshLibPlatformConfigTests(unittest.TestCase):
             "CMAKE_DL_LIBS": "dl" if system == "Linux" else "",
         }
         values.update(extra or {})
-        cached_names = {"ORCA_MESHLIB_SDK_ROOT", "ORCA_MESHLIB_EXTRA_INCLUDE_DIRS"}
+        cached_names = {"ORCA_MESHLIB_SDK_ROOT", "ORCA_MESHLIB_EXTRA_INCLUDE_DIRS", "ORCA_MESHLIB_RUNTIME_DIR"}
         setup = "".join(f'set({key} "{cmake_quote(int(value) if isinstance(value, bool) else value)}")\n'
                         for key, value in values.items() if key not in cached_names)
         # Dependency fixtures are real imported CMake targets. The production
@@ -140,6 +141,21 @@ class MeshLibPlatformConfigTests(unittest.TestCase):
         self.assertIn(fragment.lower(), output.lower())
         if before_adapter:
             self.assertFalse(any("MeshLibAdapter.cpp" in row for row in registrations), output)
+
+    def test_macos_prepared_runtime_hashes_and_transitive_search_path(self):
+        sdk, _, _ = self.sdk("Darwin")
+        prepared = self.root / "prepared runtime/MeshLib"
+        prepared.mkdir(parents=True)
+        options = {"ORCA_MESHLIB_RUNTIME_DIR": str(prepared)}
+        self.rejected(self.configure(sdk_root=sdk, extra=options), "prepared runtime directory")
+        (prepared / "meshlib-runtime.json").write_text('{}\n')
+        for name in ("libMRMesh.dylib", "libMRVoxels.dylib"):
+            (prepared / name).write_bytes(("FAKE prepared signed runtime " + name).encode())
+        registrations, identity, _ = self.accepted(self.configure(sdk_root=sdk, extra=options))
+        self.assertIn("capture.target_link_libraries=orca_meshlib_adapter;INTERFACE;-Wl,-rpath," + str(prepared.parent),
+                      registrations)
+        for name in ("libMRMesh.dylib", "libMRVoxels.dylib"):
+            self.assertIn(hashlib.sha256((prepared / name).read_bytes()).hexdigest(), identity)
 
     def test_sdk_off_does_not_require_sdk_on_any_platform(self):
         for system in ("Darwin", "Windows", "Linux", "UnsupportedOS"):

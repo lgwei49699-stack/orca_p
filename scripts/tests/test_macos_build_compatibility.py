@@ -92,6 +92,7 @@ class MacBuildCompatibilityTests(unittest.TestCase):
         scripts.mkdir()
         shutil.copyfile(ROOT / "build_release_macos.sh", self.root / "build_release_macos.sh")
         shutil.copyfile(ROOT / "scripts/bundle_macos_zstd.sh", scripts / "bundle_macos_zstd.sh")
+        shutil.copyfile(ROOT / "scripts/macos_runtime_bundle.py", scripts / "macos_runtime_bundle.py")
         (scripts / "run_gettext.sh").write_text("#!/bin/sh\nexit 0\n")
         (scripts / "run_gettext.sh").chmod(0o755)
         resources = self.root / "resources"
@@ -194,6 +195,21 @@ else:
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("rerun without -b", result.stderr)
         self.assertFalse((build / "OrcaSlicer").exists())
+
+    def test_meshlib_rejects_old_explicit_target_and_unprepared_cached_build(self):
+        self.prepare_build_entry()
+        build = self.root / "build/arm64"
+        build.mkdir(parents=True)
+        (build / "CMakeCache.txt").write_text(
+            "ORCA_MESHLIB_LOCAL_EVALUATION:BOOL=ON\nCMAKE_OSX_DEPLOYMENT_TARGET:STRING=11.3\n")
+        result = self.run_build_entry("arm64", "-t", "11.3")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MeshLib requires macOS 14.0+", result.stderr)
+        result = self.run_build_entry("arm64", "-b")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("OSX_DEPLOYMENT_TARGET: 14.0", result.stdout)
+        self.assertIn("rerun without -b", result.stderr)
+        self.assertFalse((self.root / "cmake-calls.jsonl").exists())
 
     def test_universal_has_both_runtime_slices_and_valid_signature(self):
         self.prepare_build_entry()

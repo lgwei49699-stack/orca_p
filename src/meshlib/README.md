@@ -4,7 +4,7 @@
 
 MeshLib 3.1.3.429 作为 Orca 的内部库接入，不再构建 `OrcaMeshLibWorker`，没有第二套程序版本、跨进程参数或中间报告文件。当前只开放显式 CLI 后端；默认 Alpha Wrap、原生 GUI、高级修复及只读证据流程不自动改用 MeshLib。
 
-SDK 商业再分发授权尚未取得。本目录仅包含第一方适配代码，不包含 SDK，也不自动下载、安装或打包 SDK。本机评估通过不代表可以商业发布。
+本目录仅包含第一方适配代码，不包含 SDK，也不自动下载或安装 SDK。macOS 发布脚本可为用户已配置的本地 SDK 制作 arm64 / macOS 14.0+ 测试包；本机打包验证不代表商业再分发授权或公证通过。
 
 ## 调用与构建
 
@@ -44,7 +44,9 @@ cmake --build build/arm64 --config Release --target OrcaSlicer libslic3r_tests
 
 开启后动态运行库随主程序启动加载。Windows 需要在程序目录或受控 DLL 搜索路径中提供 SDK 及其传递依赖；Unix 构建树通过显式 SDK RPATH 查找。校验实际加载 MRMesh/MRVoxels 的 SHA256，不再要求构建机器上的绝对位置，允许保持内容不变的文件迁移。更改运行库内容（包括重写加载命令、重新签名）后，需要重新确定身份并验证，不能绕过校验。若库缺失，系统加载器可能在 CLI 启动前终止，无法输出结构化报告。
 
-本轮只提供代码与验证，不生成安装包、Docker 镜像或自动复制 SDK。用户后续打包时仍需完整依赖、合适的相对加载路径及签名；“同一可执行程序内调用”不等于“只有一个文件”。
+macOS 本地打包使用 `./build_release_macos.sh -sxa arm64 -c Release`：读取既有 MeshLib ON 缓存，将默认目标设为至少 14.0（保留缓存中更高的版本），在构建目录准备完整动态库闭包，独立放入 `Contents/Frameworks/MeshLib`。库副本先重定位和 ad-hoc 签名，再通过 `ORCA_MESHLIB_RUNTIME_DIR` 供 CMake 链接并记录最终 SHA256；原 SDK 及其头文件不变。App / DMG 封装保留这些库的字节，并验证所有非系统依赖可在包内解析、架构及最低系统兼容。清单位于 `Contents/Resources/meshlib-runtime.json`。
+
+已有使用原 SDK 的旧包须重新配置和编译，不能只复制 DLL/dylib 或仅重新生成 DMG；`-b` 遇到未准备的缓存会拒绝。当前 MeshLib 包仅支持 ad-hoc 本地签名，`--sign` Developer ID 流程会明确拒绝，须另行实现匹配签名身份的编译流程。普通 SDK OFF 包保留现有签名参数。Windows/Linux、镜像和外部发布不在此任务范围；验证及 GUI 交接见[打包记录](../../docs/ai/validation/2026-10-17-macos-meshlib-packaging.md)。
 
 ### 服务端调用
 

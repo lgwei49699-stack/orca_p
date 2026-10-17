@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:2be075df5c2605571eba308e238ccab45c806629e70d00a74a8b198c0087fcf1",
-  "reason": "内部MeshLib适配库补Windows MSVC x64和Linux x64/arm64受控配置，固定官方布局/版本/运行库hash，拒绝Debug CRT和共享旧依赖等已知混用；MSVC与Unix编译参数分离、PIC及Linux已知静态库符号隐藏。OFF不依赖SDK，不改主业务C++17，不复制或打包SDK；跨平台配置测试与Mac实测分开，目标OS ABI/运行验收仍待执行。"
+  "source_fingerprint": "sha256:7f670b3a3a6b3b222d0ce62e461018a1251c64f70893810ef4bdbdf17364625c",
+  "reason": "仅提交macOS构建与MeshLib本地打包：读取ON缓存自动选择至少14.0，拒绝显式旧系统及未准备的-b缓存；库副本先重定位/签名再记录SHA256，补齐PRIVATE静态依赖的构建RPATH，App/DMG检查依赖闭包及签名。普通OFF最低版本和Windows/Linux适配保持；47项脚本/配置测试通过，实际应用验证和GUI/目标系统边界见打包记录。不包含模型阶段报告或其他业务改动。"
 }
 -->
 
@@ -26,7 +26,7 @@
 
 ON要求64位和Orca静态依赖：macOS arm64显式最低14.0；Windows MSVC x64使用匹配工具集的官方非IteratorDebug SDK、Release系配置及/MD，拒绝/MT、/MDd和非零iterator ABI；Linux x64/arm64支持官方include/MeshLib及lib/MeshLib布局，针对已知静态依赖archive隐藏导出，防止旧符号干扰SDK，但此配置不证明ELF绑定安全。Windows/Linux输出实验提示，需目标平台编译运行验收，不能将配置测试写成原生通过。OFF保留原平台/最低版本。
 
-SDK版本校验：Unix读固定config_cmake.h，Windows读完整发行目录app/Release/mr.version；MRMesh/MRVoxels运行库内容哈希进入私有模板，不再固化构建机绝对路径。Windows运行期使用宽字符WinAPI按函数地址定位DLL；Unix使用dladdr，适配层启用PIC。哈希不覆盖所有传递依赖，也不是加载沙箱。Unix仅设置构建树SDK RPATH，Windows运行需要在受控DLL搜索路径提供配套依赖；缺库仍可能早于CLI解析失败。用户后续自行打包，本轮不下载/安装/复制/打包SDK、不创建镜像，未取得商业再分发授权。具体构建/迁移边界见[适配层说明](../../../src/meshlib/README.md)。仍由同一Orca调用SDK，无额外修复程序；默认Alpha Wrap不变。
+SDK版本校验：Unix读固定config_cmake.h，Windows读完整发行目录app/Release/mr.version；MRMesh/MRVoxels运行库内容哈希进入私有模板，不再固化构建机绝对路径。Windows运行期使用宽字符WinAPI按函数地址定位DLL；Unix使用dladdr，适配层启用PIC。哈希不覆盖所有传递依赖，也不是加载沙箱。直接 CMake 的 Unix 评估构建使用构建树 SDK RPATH，Windows运行需要在受控DLL搜索路径提供配套依赖；缺库仍可能早于CLI解析失败。macOS 发布脚本现在支持用户已配置 SDK 的本地测试包：先处理库副本，再链接及记录最终哈希，不修改原始 SDK、不下载/安装 SDK、不创建服务端镜像。打包成功不代表商业授权或公证完成。具体构建/迁移边界见[适配层说明](../../../src/meshlib/README.md)。仍由同一Orca调用SDK，无额外修复程序；默认Alpha Wrap不变。
 
 只读 `ModelRepairEvidence.cpp/.hpp` 编入现有 libslic3r；`test_model_repair_evidence.cpp` 和 `test_mesh_slice_diagnostics.cpp` 注册到现有 libslic3r_tests。证据由默认关闭的非动作选项 `--repair-evidence` 接入：仅检测组合高级修复的残缺结果可能追加单 Z 切层和同轮有效区域观察；普通修复／重建只投影已有报告。默认协议与扫描路径保留，不新增自动编排、GUI 菜单、依赖或 worker。现有高级修复、重建和构建目标保持，应用与测试必须使用同一源码身份；macOS 构建通过不代表 Windows/Linux 已运行验证。
 
@@ -41,6 +41,12 @@ SDK版本校验：Unix读固定config_cmake.h，Windows读完整发行目录app/
 公开产品版本由 `version.inc` 的 `SoftFever_VERSION` 更新为 `2.3.2.2-Release`，用于本次 Windows GFD 模态退出修复；内部兼容版本 `SLIC3R_VERSION=01.10.01.50` 保持不变。此次更新需重新生成版本头及应用元数据，旧运行／打包副本不会自动变为新版本。Mac 用户日志已确认取消及下发成功后的模态收尾；Windows 系统验收仍待同步新源码后执行。
 
 架构、生成器、Release 配置和依赖前缀必须匹配。应用版本与资源包版本独立。Windows 动态库、macOS rpath/zstd 和 Linux 分发标识是不同打包责任，不能只改一个文件名推定完成。
+
+若既有 `build/arm64` 缓存启用了 `ORCA_MESHLIB_LOCAL_EVALUATION=ON`，发布脚本自动选择至少 macOS 14.0，保留缓存中更高版本；显式 `-t` 低于 14.0 提前拒绝，不关闭后端。普通 SDK OFF 构建仍默认 11.3。本地维护台的应用构建和 CI 命令显示同一 `-t` 参数，第三方依赖任务不改变默认。此前默认 11.3 覆盖 ON 缓存的失败原因见[构建恢复记录](../validation/2026-10-17-cli-oversized-arrangement.md)。
+
+[scripts/macos_runtime_bundle.py](../../../scripts/macos_runtime_bundle.py) 从 MRMesh/MRVoxels 递归收集非系统依赖，校验 arm64 和目标最低版本，在 `build/arm64/meshlib-runtime/MeshLib` 准备副本：ID 使用 `@rpath/MeshLib/`、内部依赖使用 `@loader_path/`，清除 SDK 自带开发机 RPATH，再逐库 ad-hoc 签名。CMake 的 `ORCA_MESHLIB_RUNTIME_DIR` 指向这些最终文件，原有运行时 SHA256 检查保留。`-b` 只接受已配置的准备目录和匹配最低版本，否则要求重新配置。
+
+构建完成后复制闭包至 `Contents/Frameworks/MeshLib`，避开应用自己的同名 zstd；清单存于 Resources。App/DMG 收尾清理主程序构建 RPATH，递归验证每个非系统加载依赖的包内路径、架构、最低版本及清单哈希，缺库/逃逸路径/旧 SDK 引用均失败。MeshLib 包封装只签外层 App，不以 `--deep` 重签已哈希的子库，再严格验证完整签名和库哈希。当前 MeshLib 仅支持 ad-hoc 本地包，Developer ID 参数会明确拒绝，不能对库重签后沿用旧编译身份；普通 OFF 包保留原签名流程。实际验证与维护台操作见[打包记录](../validation/2026-10-17-macos-meshlib-packaging.md)。
 
 Mac 应用构建先在 `build/<arch>/macos-zstd/<最低系统版本>` 构建既有固定版本 zstd 1.5.7，
 每次校验源码压缩包 SHA256，保留已解压源码时间戳以支持增量编译；未改 Homebrew 或第三方快照。

@@ -42,7 +42,7 @@ while getopts ":dpa:snt:xbc:1h" opt; do
         echo "   -a: Set ARCHITECTURE (arm64 or x86_64 or universal)"
         echo "   -s: Build slicer only"
         echo "   -n: Nightly build"
-        echo "   -t: Specify minimum version of the target platform, default is 11.3"
+        echo "   -t: Minimum macOS version (11.3 normally; at least 14.0 with cached MeshLib ON)"
         echo "   -x: Use Ninja Multi-Config CMake generator, default is Xcode"
         echo "   -b: Build without reconfiguring CMake"
         echo "   -c: Set CMake build configuration, default is Release"
@@ -81,9 +81,42 @@ if [ -z "$DEPS_CMAKE_GENERATOR" ]; then
   export DEPS_CMAKE_GENERATOR="Unix Makefiles"
 fi
 
-if [ -z "$OSX_DEPLOYMENT_TARGET" ]; then
-  export OSX_DEPLOYMENT_TARGET="11.3"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+function cached_value() {
+    local cache="$PROJECT_DIR/build/$ARCH/CMakeCache.txt"
+    if [ -f "$cache" ]; then
+        sed -n "s/^$1:[^=]*=//p" "$cache" | head -n 1
+    fi
+}
+
+MESHLIB_ENABLED="$(cached_value ORCA_MESHLIB_LOCAL_EVALUATION | tr '[:lower:]' '[:upper:]')"
+case "$MESHLIB_ENABLED" in
+    ON|TRUE|YES|1) MESHLIB_ENABLED=ON ;;
+    *) MESHLIB_ENABLED=OFF ;;
+esac
+if [ "$MESHLIB_ENABLED" = ON ] && [ "$BUILD_TARGET" != deps ]; then
+    if [ "$ARCH" != arm64 ]; then
+        echo "error: MeshLib packaging currently supports arm64 only" >&2
+        exit 1
+    fi
+    if [ -z "$OSX_DEPLOYMENT_TARGET" ]; then
+        OSX_DEPLOYMENT_TARGET="$(cached_value CMAKE_OSX_DEPLOYMENT_TARGET)"
+        OSX_DEPLOYMENT_TARGET="$(python3 - "$OSX_DEPLOYMENT_TARGET" <<'PY'
+import re, sys
+value = sys.argv[1]
+print(value if re.fullmatch(r'\d+(\.\d+){0,2}', value) and int(value.split('.')[0]) >= 14 else '14.0')
+PY
+)"
+    fi
+    python3 - "$OSX_DEPLOYMENT_TARGET" <<'PY'
+import re, sys
+value = sys.argv[1]
+if not re.fullmatch(r'\d+(\.\d+){0,2}', value) or int(value.split('.')[0]) < 14:
+    sys.exit('error: MeshLib requires macOS 14.0+; use -t 14.0 (or newer)')
+PY
 fi
+export OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET:-11.3}"
 
 echo "Build params:"
 echo " - ARCH: $ARCH"
@@ -106,7 +139,6 @@ echo
 # 	exit 1
 # fi
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_BUILD_DIR="$PROJECT_DIR/build/$ARCH"
 DEPS_DIR="$PROJECT_DIR/deps"
 DEPS_BUILD_DIR="$DEPS_DIR/build/$ARCH"
@@ -155,6 +187,21 @@ function pack_deps() {
 }
 
 function build_slicer() {
+    local meshlib_args=()
+    if [ "$MESHLIB_ENABLED" = ON ]; then
+        MESHLIB_RUNTIME_DIR="$PROJECT_DIR/build/$ARCH/meshlib-runtime/MeshLib"
+        if [ "$BUILD_ONLY" = 1 ] && {
+            [ "$(cached_value ORCA_MESHLIB_RUNTIME_DIR)" != "$MESHLIB_RUNTIME_DIR" ] ||
+            [ "$(cached_value CMAKE_OSX_DEPLOYMENT_TARGET)" != "$OSX_DEPLOYMENT_TARGET" ];
+        }; then
+            echo "error: cached MeshLib runtime/target is not prepared for packaging; rerun without -b" >&2
+            exit 1
+        fi
+        python3 "$PROJECT_DIR/scripts/macos_runtime_bundle.py" prepare-meshlib \
+            --sdk "$(cached_value ORCA_MESHLIB_SDK_ROOT)" \
+            --output "$MESHLIB_RUNTIME_DIR" --minimum "$OSX_DEPLOYMENT_TARGET"
+        meshlib_args=(-DORCA_MESHLIB_RUNTIME_DIR:PATH="$MESHLIB_RUNTIME_DIR")
+    fi
     # Boost iostreams may otherwise discover a Homebrew runtime requiring a
     # newer OS than the app. Use one pinned prefix for all slices of universal.
     local runtime_architectures="$ARCH"
@@ -184,6 +231,7 @@ function build_slicer() {
                     -G "${SLICER_CMAKE_GENERATOR}" \
                     -DBBL_RELEASE_TO_PUBLIC=1 \
                     -DORCA_TOOLS=ON \
+                    "${meshlib_args[@]}" \
                     ${ORCA_UPDATER_SIG_KEY:+-DORCA_UPDATER_SIG_KEY="$ORCA_UPDATER_SIG_KEY"} \
                     -DCMAKE_PREFIX_PATH="$DEPS/usr/local" \
                     -Dzstd_DIR:PATH="$zstd_config_dir" \
@@ -264,8 +312,11 @@ function finalize_macos_app() {
     bash "$PROJECT_DIR/scripts/bundle_macos_zstd.sh" "$app"
     mkdir -p "$app/Contents/Resources/licenses"
     cp "$MACOS_ZSTD_DIR/install/zstd-LICENSE.txt" "$app/Contents/Resources/licenses/zstd-LICENSE.txt"
-    codesign --force --deep --sign - "$app"
-    codesign --verify --deep --strict "$app"
+    if [ "$MESHLIB_ENABLED" = ON ]; then
+        python3 "$PROJECT_DIR/scripts/macos_runtime_bundle.py" bundle-meshlib \
+            --app "$app" --stage "$MESHLIB_RUNTIME_DIR"
+    fi
+    python3 "$PROJECT_DIR/scripts/macos_runtime_bundle.py" finalize --app "$app"
 }
 
 function build_universal() {

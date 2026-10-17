@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model-repair",
-  "source_fingerprint": "sha256:43f4e2b619d8ddaa4050b72a0fa46c070193861cc15fe14c159eb3276b08c1ac",
-  "reason": "MeshLib从独立sidecar改为内部C++20适配库，私有网格/配置、SDK回调异常收口与协作RSS/超时/取消、后台join后再交付。保持独立完整网格/变换/STL回读验收及形状未确认语义；默认OFF、AlphaWrap和GUI路径不变，保留已提交证据规则。新增平台配置与运行库身份、移除旧worker和累计RSS，Mac实测与Windows/Linux待验分别记录。"
+  "source_fingerprint": "sha256:1c3dc94481e512f38798ca6b13ce9e54787024aa27ba3f6f7e2682abe10cf203",
+  "reason": "本次仅调整macOS可选运行库准备目录、构建RPATH及本地打包说明；编译时身份记录签名后的最终库内容，运行校验不弱化。默认AlphaWrap、GUI入口、修复算法和CLI参数保持；不包含工作区模型阶段报告改动。平台配置测试不等于Windows/Linux原生运行验收。"
 }
 -->
 
@@ -36,7 +36,7 @@ Orca CLI → 当前进程后台线程 → 内部 C++20 静态适配库的 `rebui
 
 MeshLib报告保留 `model_reconstruction_v1`，增加 backend/sdk_version、输入/候选SHA256、`engine.sdk`原报告、输入缺陷、独立输出复检和分阶段耗时；`execution`记录同进程PID、非硬超时/无崩溃隔离，`admission`及`resource_limits`记录估算、预算模式和观测峰值RSS。SDK身份哈希不是原生代码沙箱。双向距离复用AlphaWrap的同一有界采样函数，只作偏差告警，不是最大误差证明。候选通过仍需确认间隙、薄壁和独立部件，`shape_confirmation=not_confirmed`、`print_ready=false`、`applied=false`。不按“只留最大部件”或样本专用阈值删除碎片，不硬编码7部件；Q对照79,400面/7部件包含额外删壳，不是无删除后端必达值。无效/取消/超时结果不导出成功STL，原件保留。
 
-同一个Orca构建管理适配层，不单独发布它。SDK商业再分发授权未取得，源码不含SDK，用户后续自行打包，本轮不制作捆绑包。默认OFF不依赖SDK；ON配置覆盖macOS14+/arm64、Windows MSVC x64及Linux x64/arm64，后两者仍为待原生验证的实验适配，须满足静态宿主依赖及对应ABI限制。实际MRMesh/MRVoxels内容哈希校验允许路径迁移，Windows用宽字符模块定位并输出UTF-8路径；缺库仍可在系统加载阶段阻止程序启动，不保证JSON。不把配置级测试当跨平台运行通过。构建方式见[内部适配层说明](../../../src/meshlib/README.md)和[构建模块](build.md)；实际结果见[执行记录](../validation/2026-10-04-smart-print-engine.md)。
+同一个Orca构建管理适配层，不单独发布它。源码不含 SDK；macOS 构建脚本为用户已配置的 SDK 制作本地 arm64 / 14.0+ 包，副本重定位和签名后才编译其身份哈希，运行期校验不弱化。外部商业发布与公证不在本轮范围。默认OFF不依赖SDK；ON配置覆盖macOS14+/arm64、Windows MSVC x64及Linux x64/arm64，后两者仍为待原生验证的实验适配，须满足静态宿主依赖及对应ABI限制。实际MRMesh/MRVoxels内容哈希校验允许路径迁移，Windows用宽字符模块定位并输出UTF-8路径；缺库仍可在系统加载阶段阻止程序启动，不保证JSON。不把配置级测试当跨平台运行通过。构建方式见[内部适配层说明](../../../src/meshlib/README.md)和[构建模块](build.md)；实际结果见[执行记录](../validation/2026-10-04-smart-print-engine.md)。
 
 ### 既有检测与修复路径
 

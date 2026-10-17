@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:eff937f71c044472b9ce0838901ce3ea0c8313cf65d531286457964a4adda63c",
-  "reason": "保留MeshLib同进程、协作预算、旧worker参数拒绝、平台配置及重建证据回归；合并新增云工艺/耗材机器目录保存、重载和参数隔离测试。Mac运行与配置模拟、Windows/Linux及GUI待验分开记录，不包含stash中的下载工具变更。 新增11组成对CLI回归，覆盖混合、正负Z、显式贴床后缓存、单盘/默认多盘、重开重排、矩形床及37越界实例；比较开/关JSON后的真实网格/变换/打印开关/盘成员完全一致。22次当前CLI运行通过，未新增共享算法或GUI测试。"
+  "source_fingerprint": "sha256:92b9766529c8b6bdd884e639da1129faf8e9c19d1f32472ab07b8f69fa55a87b",
+  "reason": "本次仅纳入macOS构建/打包测试：真实Mach-O依赖闭包、迁移、同名库隔离、签名哈希不变和错误拒绝；构建缓存及CMake准备目录门槛回归。47项脚本/配置测试通过，配置模拟与目标平台运行验收分开；GUI/目标系统未验范围见打包记录。保留HEAD既有分盘及修复测试，不包含工作区阶段报告、Thingi10K下载或其他业务变更。"
 }
 -->
 
@@ -69,6 +69,8 @@ Windows GUI 采集脚本使用 PowerShell 5.1 与内嵌 C# P/Invoke，默认延�
 
 10-15维护台双槽回归允许macOS标准GUI与一个CLI并行，全部CLI独立datadir/输出目录；构建、打包、重置/清理/恢复持全程独占锁，兼容旧服务锁。编辑版GUI命令按实际步骤归独占槽；前端依服务端execution_slot及能力位启用并行，旧服务安全保持互斥。Node覆盖双向启动、独立日志/取消、刷新恢复、未知槽拒绝及迟到响应；Python临时目录验证跨服务冲突、启动失败释放、维护操作期间锁与预览token保留、不构造SQLite及外部应用进程门禁。141项Python和38项Node通过；浏览器实跑GUI常驻下两次cube证据检测、cube/dragon普通切片通过，不代表打印质量或原生修复再验收。Windows仅模拟独占分支，未宣称Windows/Linux现场通过。
 
+10-17 本地维护台应用构建和 CI 命令依据 MeshLib ON 缓存显示 `-t 14.0`（保留更高目标）；OFF 和第三方依赖任务保持原命令。DMG 任务经正式脚本完成依赖和签名完整性检查。69 项后端测试含 ON/旧缓存/高版本/OFF 与 CI 对照；当前服务及实际应用验证见[打包记录](../validation/2026-10-17-macos-meshlib-packaging.md)。
+
 ## 配置与约束
 
 测试源码、测试程序、应用与资源配置四者身份应匹配，聚焦结果包含于完整结果时不重复计数。docs/ai/modules.json 是范围清单，新增文件必须分配模块或说明排除原因。
@@ -91,7 +93,7 @@ Windows GUI 采集在 2026-10-09 收到同事现场 JSON：64 位 Windows PowerS
 
 `test_macos_build_compatibility.py` 使用隔离目录、真实 clang/lipo/签名工具，替换主应用和上游库
 耗时构建后执行实际构建入口；包含 `-b` 缓存一致性、资源软链接保护/其他用户可读权限、
-双架构库和原依赖缺失。
+双架构库和原依赖缺失，以及 MeshLib 显式旧版本拒绝和未准备缓存的 `-b` 拒绝。
 告警能力用最小 C/C++ 工程配置/编译，验证不支持时不传选项、C 源不接收 C++ 特有选项。
 另在配置阶段独立模拟编译器 ID、版本和能力，覆盖 8 个组合及 `VERSION_GREATER 15` 边界，
 不依赖宿主版本来断言支持分支。每组用独立构建目录，检查 C/C++ 命令均存在及选项归属；
@@ -141,3 +143,5 @@ GFD 模态回归使用真实 wx 窗口和事件循环，保留其他已禁用窗
 Advancer3 专项扩展为四喷嘴、12 工艺和六耗材的有效配置与兼容关系测试。网页测试 `node --test tests/web/guide_filaments.test.cjs` 同时载入首次向导和耗材管理脚本，验证完整身份、精确型号过滤、默认材料和桥接提交；运行结果见同一 Advancer3 记录，不代替实际 GUI。
 
 Advancer3 下发协议专项目标 `gfd_print_options_tests` 位于 `tests/slic3rutils`，只链接 test_common 与 nlohmann_json，不发起网络或打印。覆盖实际 PMC 槽位结构、非法数据、ms／调平和旧机型载荷保持；验证身份和 GUI 交接见[Advancer3 记录](../validation/2026-10-09-adv3-custom-feasibility.md)。
+
+`test_macos_runtime_bundle.py` 用实际 Mach-O 和签名工具覆盖传递依赖、同名 zstd 隔离、源 SDK 字节不变、移走 SDK/准备目录后的迁移运行、二次封装哈希不变，以及缺库、架构/最低系统不匹配、旧链接和哈希篡改拒绝。小型夹具通过不代替真实应用/目标系统验收。

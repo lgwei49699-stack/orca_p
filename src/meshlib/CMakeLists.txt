@@ -128,6 +128,14 @@ else()
     endif()
     if(APPLE)
         set(_runtime_dir "${_sdk_prefix}/lib")
+        set(ORCA_MESHLIB_RUNTIME_DIR "" CACHE PATH "Prepared macOS runtime directory; populated by build_release_macos.sh before hashing")
+        if(ORCA_MESHLIB_RUNTIME_DIR)
+            if(NOT IS_ABSOLUTE "${ORCA_MESHLIB_RUNTIME_DIR}" OR
+               NOT EXISTS "${ORCA_MESHLIB_RUNTIME_DIR}/meshlib-runtime.json")
+                message(FATAL_ERROR "ORCA_MESHLIB_RUNTIME_DIR must be an absolute prepared runtime directory; use build_release_macos.sh to prepare it.")
+            endif()
+            set(_runtime_dir "${ORCA_MESHLIB_RUNTIME_DIR}")
+        endif()
         set(_runtime_suffix ".dylib")
     else()
         set(_runtime_dir "${_sdk_prefix}/lib/MeshLib")
@@ -180,10 +188,17 @@ target_include_directories(orca_meshlib_adapter SYSTEM BEFORE PRIVATE
 target_link_libraries(orca_meshlib_adapter PRIVATE orca_meshlib_sdk_mesh orca_meshlib_sdk_voxels OpenSSL::Crypto ${CMAKE_DL_LIBS})
 
 if(NOT WIN32)
-    # Build-tree lookup only. No install/package target or global search path is
-    # changed. Official SDK dependencies live beside MR libraries (and, on Linux,
+    # Build-tree lookup. Prepared macOS IDs include the MeshLib subdirectory.
+    # Official SDK dependencies live beside MR libraries (and, on Linux,
     # in lib/MeshLib/lib for .deb or prefix/lib for the portable vcpkg archive).
     set(_runtime_dirs "${_runtime_dir}")
+    if(APPLE AND ORCA_MESHLIB_RUNTIME_DIR)
+        get_filename_component(_runtime_parent "${_runtime_dir}" DIRECTORY)
+        # The project's legacy CMP0099 behavior does not propagate link options
+        # through libslic3r's PRIVATE static dependency. A link interface item
+        # also reaches test executables and the unbundled development app.
+        target_link_libraries(orca_meshlib_adapter INTERFACE "-Wl,-rpath,${_runtime_parent}")
+    endif()
     if(NOT APPLE)
         list(APPEND _runtime_dirs "${_runtime_dir}/lib" "${_sdk_prefix}/lib")
     endif()
@@ -229,5 +244,5 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endforeach()
 endif()
 
-# Deliberately no SDK download, install, copy, or distribution target. Commercial
-# redistribution authorization has not been obtained for this local evaluation.
+# No SDK download/install target. The macOS shell entry prepares local copies
+# before configuration; runtime_identity.hpp hashes the finalized signed bytes.

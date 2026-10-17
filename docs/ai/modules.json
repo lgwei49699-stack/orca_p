@@ -1665,6 +1665,7 @@
         "scripts/Dockerfile",
         "scripts/build_macos_zstd.sh",
         "scripts/bundle_macos_zstd.sh",
+        "scripts/macos_runtime_bundle.py",
         "scripts/disable_validation.entitlements",
         "scripts/flatpak/.gitignore",
         "scripts/flatpak/README.md",
@@ -1693,7 +1694,8 @@
         "version.inc"
       ],
       "watch": [
-        "deps/GMP/GMP.cmake"
+        "deps/GMP/GMP.cmake",
+        "src/meshlib/CMakeLists.txt"
       ],
       "entrypoints": [
         "CMakeLists.txt",
@@ -1704,6 +1706,7 @@
       "tests": [
         "scripts/tests/test_bundle_macos_zstd.py",
         "scripts/tests/test_macos_build_compatibility.py",
+        "scripts/tests/test_macos_runtime_bundle.py",
         "scripts/tests/test_gmp_platform_selection.py",
         "scripts/tests/test_meshlib_platform_config.py"
       ],
@@ -1734,6 +1737,7 @@
         "scripts/test_repair_acceptance_helpers.py",
         "scripts/tests/test_bundle_macos_zstd.py",
         "scripts/tests/test_macos_build_compatibility.py",
+        "scripts/tests/test_macos_runtime_bundle.py",
         "scripts/tests/test_check_ai_module_docs.py",
         "scripts/tests/test_gmp_platform_selection.py",
         "scripts/tests/test_meshlib_platform_config.py",
