@@ -4960,8 +4960,8 @@ int CLI::run(int argc, char **argv)
                     volumes_before_global_transform.emplace(volume->id().id, volume->get_matrix());
     std::map<size_t, Matrix3d> global_object_linear;
     const auto                 invalid_transform_export = [&]() {
-        const std::string reason = "Global volume transforms cannot be represented by one rotation and scale in model_transforms. "
-                                                   "Use per-model transforms or export the transformed 3MF without --export-model-transforms.";
+        const std::string reason = "Model transforms cannot be represented by one rotation and scale in model_transforms. "
+                                                   "Export the transformed 3MF without --export-model-transforms.";
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, reason, sliced_info);
     };
 
@@ -6673,11 +6673,15 @@ int CLI::run(int argc, char **argv)
                     // Convention: M = R_z(rz)*R_y(ry)*R_x(rx), apply as extrinsic X→Y→Z
                     Vec3d euler = Geometry::extract_euler_angles(R_total);
                     Vec3d scale = instance->get_scaling_factor();
-                    if (export_global_transform) {
+                    // Compose the actual linear transform: reflection needs signed
+                    // scale, and non-uniform instance scale does not commute with
+                    // orientation. Decompose only after applying both in order.
+                    if (export_global_transform || instance->is_left_handed() || orient_it != oriented_rotation_map.end()) {
                         Matrix3d linear = instance->get_matrix().linear();
                         if (orient_it != oriented_rotation_map.end())
                             linear = linear * orient_it->second;
-                        linear = linear * global_object_linear.at(obj->id().id);
+                        if (export_global_transform)
+                            linear = linear * global_object_linear.at(obj->id().id);
                         for (int axis = 0; axis < 3; ++axis)
                             scale[axis] = linear.col(axis).norm();
                         if (!linear.allFinite() || scale.minCoeff() < 1e-12) {

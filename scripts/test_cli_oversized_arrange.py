@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 import struct
 import subprocess
 import xml.etree.ElementTree as ET
@@ -123,6 +124,34 @@ def check_transform_vertices(row, actual, vertices):
     physical = actual["vertices"]
     for source, target in ((projected, physical), (physical, projected)):
         assert all(any(max(abs(a - b) for a, b in zip(p, q)) < 1e-4 for q in target) for p in source), (row, source, target)
+
+
+def write_tetrahedron(path):
+    """Use an asymmetric solid: a box cannot expose a lost mirror direction."""
+    vertices = [(0, 0, 0), (10, 0, 0), (0, 7, 0), (1, 2, 5)]
+    faces = [(0, 2, 1), (0, 1, 3), (1, 2, 3), (2, 0, 3)]
+    data = b"mirror transform fixture".ljust(80, b"\0") + struct.pack("<I", len(faces))
+    for face in faces:
+        data += struct.pack("<12fH", 0, 0, 0, *(v for i in face for v in vertices[i]), 0)
+    path.write_bytes(data)
+    return vertices
+
+
+def set_instance_linear(source, target, diagonal, rotation):
+    """Change the saved instance, preserving its mesh and existing translation."""
+    ET.register_namespace("", CORE[1:-1])
+    ET.register_namespace("p", PRODUCTION[1:-1])
+    c, s = math.cos(math.radians(rotation)), math.sin(math.radians(rotation))
+    x, y, z = diagonal
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(target, "w") as output:
+        model = ET.fromstring(archive.read("3D/3dmodel.model"))
+        items = model.find(CORE + "build")
+        assert len(items) == 1
+        values = items[0].get("transform", IDENTITY).split()
+        values[:9] = map(str, (c * x, s * x, 0, -s * y, c * y, 0, 0, 0, z))
+        items[0].set("transform", " ".join(values))
+        for entry in archive.infolist():
+            output.writestr(entry, ET.tostring(model) if entry.filename == "3D/3dmodel.model" else archive.read(entry))
 
 
 def main():
@@ -392,6 +421,60 @@ def main():
                             extra=("--rotate-x", "35"), ensure_on_bed=True)
     for row, actual, original in zip(rows, state["instances"], before["instances"]):
         check_transform_vertices(row, actual, original["vertices"])
+    # Mirror is an instance transform in an existing 3MF, independent of CLI
+    # global/per-model options. Check all axis combinations and their composition
+    # with existing rotation, scale and orientation in both output modes.
+    tetrahedron = work / "mirror-tetrahedron.stl"
+    vertices = write_tetrahedron(tetrahedron)
+    mirror_seed, _, _ = paired("mirror-seed", [tetrahedron], set(), mode=0, arrange=False,
+                               extra=("--model", tetrahedron.name, "--model-position", "50,50,0"))
+    mirror_cases = [(f"axes-{mask}", tuple(-1 if mask & (1 << axis) else 1 for axis in range(3)),
+                     0, False, ()) for mask in range(8)]
+    mirror_cases += [("rotated-scaled", (-1.5, 1.5, 1.5), 37, False, ()),
+                     ("nonuniform", (-1.5, 1, 2), 23, False, ()),
+                     ("oriented", (-1, 1, 1), 0, False, ("--orient", "1")),
+                     ("oriented-nonuniform-odd-mirror", (-1.5, 1, 2), 23, False, ("--orient", "1")),
+                     ("oriented-axis-scale", (1.5, 1, 1), 23, False, ("--orient", "1")),
+                     ("arranged", (-1, 1, 1), 37, True, ()),
+                     ("global", (-1, 1, 1), 0, False, ("--rotate", "25", "--scale", "1.2")),
+                     ("sliced", (-1, 1, 1), 0, False, ("--slice", "0"))]
+    for label, diagonal, angle, arrange, options in mirror_cases:
+        mirrored = work / f"mirror-{label}.3mf"
+        set_instance_linear(mirror_seed, mirrored, diagonal, angle)
+        for mode in (0, 1):
+            name = f"mirror-{label}-{mode}"
+            _, rows, state = paired(name, [mirrored], set(), mode=mode, arrange=arrange,
+                                    ensure_on_bed=True, extra=options)
+            assert len(rows) == len(state["instances"]) == 1
+            check_transform_vertices(rows[0], state["instances"][0], vertices)
+            if label == "sliced":
+                paths = []
+                for case in (name, name + "-no-json"):
+                    text = (work / case / "output/plate_1.gcode").read_text(encoding="utf-8")
+                    assert re.search(r"^G1 .*\b[XY][-\d.]+.*\bE[\d.]+", text, re.MULTILINE), case
+                    paths.append([line.split(";", 1)[0].strip() for line in text.splitlines()
+                                  if line.startswith(("G0 ", "G1 "))])
+                assert paths[0] == paths[1], "Exporting mirror JSON changed the toolpath"
+    # Orientation after nonuniform scaling can produce nonorthogonal axes even
+    # without an odd reflection. Reject misleading JSON while retaining the
+    # actual transformed 3MF when JSON is not requested.
+    for label, diagonal in (("positive", (1.5, 1, 2)), ("even-mirror", (1.5, -1, -2))):
+        fixture = work / f"oriented-shear-{label}.3mf"
+        set_instance_linear(mirror_seed, fixture, diagonal, 23)
+        for mode in (0, 1):
+            name = f"oriented-shear-{label}-{mode}"
+            run(name, [fixture], mode=mode, arrange=False, ensure_on_bed=True, extra=("--orient", "1"), error=-2)
+            _, _, state, result = run(name + "-no-json", [fixture], mode=mode, arrange=False,
+                                      ensure_on_bed=True, extra=("--orient", "1"), export=False)
+            actual = state["instances"][0]
+            assert len(state["instances"]) == len(actual["parts"]) == 1
+            basis = transformed(transformed([(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)],
+                                            actual["parts"][0][1]), actual["transform"])
+            axes = [tuple(p[i] - basis[0][i] for i in range(3)) for p in basis[1:]]
+            assert any(abs(sum(a * b for a, b in zip(axes[i], axes[j]))) > 1e-4
+                       for i, j in ((0, 1), (0, 2), (1, 2))), "Expected an affine transform that rotation/scale cannot encode"
+            result["passed"] = True
+            save_json(work / "results.json", results)
     # Output-only plate indices are not limited by the physical 36-plate cap.
     many = [work / f"overflow-{i}.stl" for i in range(37)]
     for path in many:
