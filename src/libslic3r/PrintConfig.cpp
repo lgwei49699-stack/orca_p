@@ -8310,6 +8310,13 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli_params = "\"filament1.json;filament2.json;...\"";
     def->set_default_value(new ConfigOptionStrings());
 
+    def          = this->add("slice_analysis_report", coBool);
+    def->label   = L("Slice Analysis Report");
+    def->tooltip = L("Write read-only per-plate slice metrics to plate_N.analysis.json. Requires --slice and --outputdir; does not change "
+                     "printing parameters.");
+    def->cli     = "slice-analysis-report";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("variable_layer_height_mode", coString);
     def->label = L("Variable Layer Height Mode");
     def->tooltip = L("Control variable layer height profiles in CLI slicing: preserve keeps an existing profile, adaptive replaces it with an automatically generated profile, and reset removes it.");

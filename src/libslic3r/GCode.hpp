@@ -171,7 +171,7 @@ struct LayerResult {
 class GCode {
 
 public:
-    GCode() :
+    explicit GCode(bool collect_analysis = false) :
     	m_origin(Vec2d::Zero()),
         m_enable_loop_clipping(true),
         m_resonance_avoidance(true),
@@ -193,6 +193,7 @@ public:
         m_second_layer_things_done(false),
         m_silent_time_estimator_enabled(false),
         m_last_obj_copy(nullptr, Point(std::numeric_limits<coord_t>::max(), std::numeric_limits<coord_t>::max())),
+        m_processor(collect_analysis),
         // BBS
         m_toolchange_count(0),
         m_nominal_z(0.)

@@ -2409,7 +2409,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
 // It is up to the caller to show an error message.
 std::string Print::export_gcode(const std::string& path_template, GCodeProcessorResult* result,
                                 ThumbnailsGeneratorCallback thumbnail_cb, bool force_toolchange_for_single_extruder,
-                                bool embed_thumbnail_image)
+                                bool embed_thumbnail_image, bool collect_analysis)
 {
     // Also guard callers exporting restored/generated paths without process().
     // Reject before creating a G-code file, using the same GUI/CLI error path.
@@ -2428,7 +2428,7 @@ std::string Print::export_gcode(const std::string& path_template, GCodeProcessor
     this->set_status(80, message);
 
     // The following line may die for multiple reasons.
-    GCode gcode;
+    GCode gcode(collect_analysis);
     gcode.writer().set_force_toolchange_for_single_extruder(force_toolchange_for_single_extruder);
     //BBS: compute plate offset for gcode-generator
     const Vec3d origin = this->get_plate_origin();

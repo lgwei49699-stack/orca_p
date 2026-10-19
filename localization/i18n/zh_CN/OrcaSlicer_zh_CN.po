@@ -19898,3 +19898,31 @@ msgstr "--model-stage-report 和 --model-reference 需要配合 --check-model �
 #: src/libslic3r/ModelReconstruction.cpp
 msgid "Optional business report: --model-stage-report [0|1] --model-reference ORIGINAL.stl\nWrites model-stage.json in the output directory. Reference defaults to the input; no automatic adoption.\n"
 msgstr "可选业务报告：--model-stage-report [0|1] --model-reference ORIGINAL.stl\n在输出目录中生成 model-stage.json。默认以输入为比较基准，不自动采用模型。\n"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Slice Analysis Report"
+msgstr "切片指标报告"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Write read-only per-plate slice metrics to plate_N.analysis.json. Requires --slice and --outputdir; does not change printing parameters."
+msgstr "将每盘的只读切片指标写入 plate_N.analysis.json。需要配合 --slice 和 --outputdir 使用，不修改打印参数。"
+
+#: src/OrcaSlicer.cpp
+msgid "--slice-analysis-report requires one --slice action and an explicit --outputdir."
+msgstr "--slice-analysis-report 需要配合一个 --slice 动作和明确的 --outputdir 使用。"
+
+#: src/OrcaSlicer.cpp
+msgid "Slice analysis report already exists; use a fresh output directory."
+msgstr "切片指标报告已存在，请使用新的输出目录。"
+
+#: src/OrcaSlicer.cpp
+msgid "Could not write the slice analysis report."
+msgstr "无法写入切片指标报告。"
+
+#: src/OrcaSlicer.cpp
+msgid "Slice analysis requires the generated G-code statistics."
+msgstr "切片指标报告需要本次生成的 G-code 统计。"
+
+#: src/OrcaSlicer.cpp
+msgid "Slice analysis failed; the generated G-code has been retained."
+msgstr "切片指标报告生成失败，已生成的 G-code 已保留。"

@@ -872,7 +872,7 @@ public:
     std::string         export_gcode(const std::string& path_template, GCodeProcessorResult* result,
                                      ThumbnailsGeneratorCallback thumbnail_cb = nullptr,
                                      bool force_toolchange_for_single_extruder = false,
-                                     bool embed_thumbnail_image = true);
+                                     bool embed_thumbnail_image = true, bool collect_analysis = false);
     //return 0 means successful
     int                 export_cached_data(const std::string& dir_path, bool with_space=false);
     int                 load_cached_data(const std::string& directory);
@@ -926,6 +926,8 @@ public:
     //BBS: Function to get m_brimMap;
     std::map<ObjectID, ExtrusionEntityCollection>&
         get_brimMap() { return m_brimMap; }
+    const std::map<ObjectID, ExtrusionEntityCollection>& get_brimMap() const { return m_brimMap; }
+    const std::map<ObjectID, ExtrusionEntityCollection>& get_supportBrimMap() const { return m_supportBrimMap; }
 
     // How many of PrintObject::copies() over all print objects are there?
     // If zero, then the print is empty and the print shall not be executed.

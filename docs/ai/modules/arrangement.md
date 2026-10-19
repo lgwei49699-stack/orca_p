@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "arrangement",
-  "source_fingerprint": "sha256:83c1be113e2089ff092488426c75c42de25208ca9a76b052fba9d0ba4e76ea69",
-  "reason": "本次仅因共享 PrintConfig.cpp 新增 CLI misc 的 model_stage_report/reference 更新复核指纹；未修改 Arrange、盘归属、坐标输出或 GUI 分盘行为，不新增本模块业务验证结论。"
+  "source_fingerprint": "sha256:a6cd4c843be87f0919e5180890ed3965da4615efef4f82676810b3836e255015",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI专用repair_evidence_close_boundaries及证据帮助，只作用模型检测组合；不改变Arrange/ModelArrange、盘归属、间距、筏层预留或GUI摆盘行为。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-17 按用户最终限定撤回实际分盘和GUI修改；Arrange/ModelArrange/PartPlate/ArrangeJob与本轮起点一致，只说明CLI返回JSON的虚拟盘号边界。 最新明确约定：CLI独立返回盘的XY居中、Z归零，普通盘内实例保留实际正/负底面；同步日志，真实模型/GUI/3MF不变。第10组成对回归覆盖两类模型的正/负Z；历史归零/撤销过程保留在验证记录，本文按最终规则说明。 提交前复现并修正贴床后盘外缓存过期：CLI只读查询当前几何，不改缓存或盘归属；补第11组成对回归，验证贴床后正常模型的原盘号/XY与3MF保持。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。"
 }
 -->
 

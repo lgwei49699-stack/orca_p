@@ -66,6 +66,7 @@
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Slicing.hpp"
+#include "libslic3r/SliceAnalysis.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/GCode/Thumbnails.hpp"
 #include "libslic3r/SLAPrint.hpp"
@@ -146,6 +147,41 @@ static std::vector<coordf_t> cli_generate_variable_layer_height_profile(
         profile = smooth_height_profile(profile, print_object.slicing_parameters(), smoothing_params);
     }
     return profile;
+}
+
+static boost::filesystem::path cli_slice_analysis_path(const std::string& output_directory, int plate_index)
+{
+    return boost::filesystem::path(output_directory) / ("plate_" + std::to_string(plate_index) + ".analysis.json");
+}
+
+static void cli_write_slice_analysis(const Print&                print,
+                                     const GCodeProcessorResult& gcode,
+                                     const std::string&          output_directory,
+                                     int                         plate_index,
+                                     const std::string&          gcode_file)
+{
+    namespace fs               = boost::filesystem;
+    json report                = make_slice_analysis_report(print, gcode);
+    report["plate_index"]      = plate_index;
+    report["gcode_file"]       = fs::path(gcode_file).filename().string();
+    const fs::path destination = cli_slice_analysis_path(output_directory, plate_index);
+    const fs::path temporary   = fs::path(output_directory) / fs::unique_path("slice-analysis-%%%%-%%%%.tmp");
+    try {
+        boost::nowide::ofstream out(temporary.string(), std::ios::binary | std::ios::trunc);
+        out << report.dump(2) << '\n';
+        out.close();
+        if (!out)
+            throw std::runtime_error(L("Could not write the slice analysis report."));
+        // Publish only a complete new file. Unlike rename on POSIX, this does
+        // not replace an old report or another invocation's result.
+        fs::create_hard_link(temporary, destination);
+        boost::system::error_code ignored;
+        fs::remove(temporary, ignored);
+    } catch (...) {
+        boost::system::error_code ignored;
+        fs::remove(temporary, ignored);
+        throw;
+    }
 }
 
 std::map<int, std::string> cli_errors =
@@ -1558,6 +1594,14 @@ int CLI::run(int argc, char **argv)
     long long global_begin_time = 0, global_current_time;
     sliced_info_t sliced_info;
     std::map<std::string, std::string> record_key_values;
+
+    const bool slice_analysis_requested = m_config.opt_bool("slice_analysis_report");
+    if (slice_analysis_requested && (std::count(m_actions.begin(), m_actions.end(), "slice") != 1 || outfile_dir.empty())) {
+        const std::string message = L("--slice-analysis-report requires one --slice action and an explicit --outputdir.");
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        return CLI_INVALID_PARAMS;
+    }
 
     enum class CLIVariableLayerHeightMode { Preserve, Adaptive, Reset };
     std::string variable_layer_height_mode_name = m_config.opt_string("variable_layer_height_mode");
@@ -7069,6 +7113,27 @@ int CLI::run(int argc, char **argv)
             bool pre_check = (plate_to_slice == 0)?true:false;
             bool finished = false;
 
+            if (slice_analysis_requested) {
+                try {
+                    boost::filesystem::create_directories(outfile_dir);
+                    // Check all selected plates before generating any G-code.
+                    for (int index = 0; index < partplate_list.get_plate_count(); ++index) {
+                        if (plate_to_slice != 0 && plate_to_slice != index + 1)
+                            continue;
+                        auto* plate = partplate_list.get_plate(index);
+                        if (plate_to_slice == 0 && (plate->empty() || plate->is_all_instances_unprintable()))
+                            continue;
+                        const auto path = cli_slice_analysis_path(outfile_dir, index + 1);
+                        if (boost::filesystem::exists(path) || boost::filesystem::is_symlink(path))
+                            throw std::runtime_error(L("Slice analysis report already exists; use a fresh output directory."));
+                    }
+                } catch (const std::exception& error) {
+                    boost::nowide::cerr << error.what() << std::endl;
+                    record_exit_reson(outfile_dir, CLI_RESULT_WRITE_ERROR, 0, error.what(), sliced_info);
+                    flush_and_exit(CLI_RESULT_WRITE_ERROR);
+                }
+            }
+
             /*if (opt_key == "export_gcode" && printer_technology == ptSLA) {
                 boost::nowide::cerr << "error: cannot export G-code for an FFF configuration" << std::endl;
                 record_exit_reson(outfile_dir, 1, 0, cli_errors[1], sliced_info);
@@ -7600,7 +7665,7 @@ int CLI::run(int argc, char **argv)
                                     }
                                     BOOST_LOG_TRIVIAL(info) << "process finished, will export gcode temporily to " << outfile << std::endl;
                                     temp_time = (long long)Slic3r::Utils::get_current_time_utc();
-                                    outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true, true);
+                                    outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true, true, slice_analysis_requested);
                                     if (cgal_repair_requested) {
                                         // Some diagnostics (notably empty extrusion layers) are
                                         // emitted during G-code generation, after the earlier check.
@@ -7638,6 +7703,22 @@ int CLI::run(int argc, char **argv)
                                     }
                                     const PrintStatistics& print_statistics = print_fff->print_statistics();
                                     sliced_plate_info.total_filament_g = print_statistics.total_weight;
+
+                                    if (slice_analysis_requested) {
+                                        try {
+                                            if (gcode_result == nullptr)
+                                                throw std::runtime_error(L("Slice analysis requires the generated G-code statistics."));
+                                            cli_write_slice_analysis(*print_fff, *gcode_result, outfile_dir, index + 1, outfile);
+                                        } catch (const std::exception& error) {
+                                            const std::string message =
+                                                L("Slice analysis failed; the generated G-code has been retained.") + std::string(" ") +
+                                                error.what();
+                                            boost::nowide::cerr << message << std::endl;
+                                            sliced_info.sliced_plates.push_back(sliced_plate_info);
+                                            record_exit_reson(outfile_dir, CLI_RESULT_WRITE_ERROR, index + 1, message, sliced_info);
+                                            flush_and_exit(CLI_RESULT_WRITE_ERROR);
+                                        }
+                                    }
 
                                     //outfile_final = (dynamic_cast<Print*>(print))->print_statistics().finalize_output_path(outfile);
                                     //m_fff_print->export_gcode(m_temp_output_path, m_gcode_result, [this](const ThumbnailsParams& params) { return this->render_thumbnails(params); });

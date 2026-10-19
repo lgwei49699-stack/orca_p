@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:a8ac342d9885538aea00cba8558c89e4d52702accd140507b0ed7742d6c353c8",
-  "reason": "仅将 ModelStageReport.cpp/.hpp 加入既有 libslic3r，复用现有 CGAL/OpenSSL/Boost，无新增目标、SDK 或平台开关；macOS arm64 Release 构建身份已核对，Windows/Linux 原生及 GUI 验收仍待执行。"
+  "source_fingerprint": "sha256:6511a52b8248e02a76ccbaf9d42bae4e870f698b3d180bf6d7f8ce22deb0a638",
+  "reason": "复核统一精确集合helper仍编入既有libslic3r_cgal，复用CGAL/GMP/MPFR及其编译选项，无新依赖下载、平台分支或程序；CGAL对象隐藏于constShape实现。整数构造不依赖Windows long宽度，有理数转换用CGAL Fraction_traits而非特定后端。Mac arm64 Release应用及fff_print_tests最小构建通过，统一NonZero和平衡并集均为当前构建；不以此声称Windows/Linux原生通过。原MeshLib OFF/ON、SDK约束、runtime打包/签名与发布脚本未变，其证据与本次分析分开记录。"
 }
 -->
 
@@ -21,6 +21,10 @@
 - [build_macos_zstd.sh](../../../scripts/build_macos_zstd.sh) 与 [bundle_macos_zstd.sh](../../../scripts/bundle_macos_zstd.sh)：固定运行库构建、架构/最低系统验证与包内重定位；构建入口和独立 DMG 入口共用。
 
 ## 核心流程
+
+`SliceAnalysis.cpp/.hpp` 加入现有 libslic3r，`test_slice_analysis.cpp` 加入现有 fff_print_tests；复用 JSON/Boost 与现有切片数据，不新增 SDK、独立进程、依赖或打包选项。本次仅最小应用/测试目标验证，平台和 GUI 状态见[实施记录](../validation/2026-10-18-slice-analysis.md)。
+
+统一名义连通集合测量的 `SliceAnalysisGeometry.cpp/.hpp` 编入现有 `libslic3r_cgal`，复用项目已链接的 CGAL/GMP/MPFR。CGAL 类型与浮点舍入编译选项不进入普通 SliceAnalysis 目标，对外提供隐藏几何实现的Region及Boost有理数；整数输入不依赖平台long宽度或先转double。无新依赖下载或平台分支；Mac实际构建与Windows/Linux待验证状态分别记录。
 
 `ModelStageReport.cpp/.hpp` 加入既有libslic3r目标，复用已链接的CGAL、OpenSSL与Boost，不新增程序或SDK依赖。只在显式CLI报告中调用；默认SDK OFF/ON及GUI链接边界不变。
 

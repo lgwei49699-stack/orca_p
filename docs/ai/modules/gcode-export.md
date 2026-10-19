@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gcode-export",
-  "source_fingerprint": "sha256:e755e17d225d8bd57225aa3afa1a15c312c31eb97e89d66cb78156a0d58f950e",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，只在模型检测组合解释；GCode/GCodeWriter、指令风格、速度流量、后处理及GUI导出路径未改，证据流程不输出G-code。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。"
+  "source_fingerprint": "sha256:d9729bbc3ee9a3cc06aba000693f3e397d233b5f0f8d88d4283f0e142d77f5dc",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，只在模型检测组合解释；GCode/GCodeWriter、指令风格、速度流量、后处理及GUI导出路径未改，证据流程不输出G-code。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 复核GCode构造的collect_analysis仅传解析器，不修改写入器、速度/挤出/冷却/后处理。正文补默认false的内部导出边界，CLI40组指令/配置/统计严格等价，原GCode七项回归通过；GUI待用户兼容验证。"
 }
 -->
 
@@ -21,6 +21,8 @@
 ## 核心流程
 
 GCode 消费 Print 的层和挤出集合，协调工具顺序、接缝、回抽和空移；GCodeWriter 输出机器指令，CoolingBuffer/FanMover/PressureEqualizer 等进一步处理。配置块、缩略图和自定义起止代码随导出写入。
+
+`Print::export_gcode` 末尾的内部 `collect_analysis=false` 仅决定其 `GCode`/`GCodeProcessor` 是否额外收集报告统计；CLI显式报告传true，既有GUI和普通调用使用默认false。构造开关经过导出初始化的reset保持，普通估时/耗材与最终M73等后处理不依赖该统计，不改变打印参数或路径。没有新增用户配置，也不从模型/预设推断启用报告。
 
 `total_layer_count`、导出总层数与按层进度使用实际将输出的层组数：工具顺序建立后，以 `process_layer` 相同的“extruders 非空”条件计数，在展开启动代码前完成。复用 `collect_layers_to_print` 的真实层组与 Z 合并规则；逐层按全盘合并、逐对象按各对象实例数累加。不能只看模型层 `has_extrusions`，否则会漏掉支撑、筏层或擦料塔独占的层。空组仍留在原输出管线，不通过删层改变几何、冷却或已有空层检查；逐对象缓存层组，避免对每个副本重复收集/校验。
 

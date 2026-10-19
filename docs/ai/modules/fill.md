@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "fill",
-  "source_fingerprint": "sha256:c9ac10b2762e9a6e686d42cb1d050ccf7fee2a13fa24aaf9f854c645b0e7d702",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助仅供模型建议，未传入Fill；密度、图案、搭墙延伸、顶底填充和GUI工艺控件均未改变，证据流程不生成填充。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。"
+  "source_fingerprint": "sha256:c648ec3e7984de70c02e399e7075e9e74c439f9559f5a2a0ceab27c889080d0c",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助仅供模型建议，未传入Fill；密度、图案、搭墙延伸、顶底填充和GUI工艺控件均未改变，证据流程不生成填充。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。"
 }
 -->
 
