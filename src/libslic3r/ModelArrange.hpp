@@ -33,6 +33,13 @@ bool            prepare_mixed_raft_clearance(ArrangePolygons&          selected,
                                              ArrangePolygons&          fixed,
                                              const DynamicPrintConfig& config,
                                              const ArrangeParams&      params);
+// Opt in a uniform, support-free Cura V1 job to model-only pair spacing. Does
+// not change saved configs or the ordinary inflation used by the fallback.
+// Call on normal GUI/CLI arrange jobs, not synthetic Fill Bed instance copies.
+bool            prepare_compact_raft_arrangement(ArrangePolygons&          selected,
+                                                 ArrangePolygons&          fixed,
+                                                 const DynamicPrintConfig& config,
+                                                 const ArrangeParams&      params);
 ArrangePolygon  get_arrange_poly(const Model &model);
 bool apply_arrange_polys(ArrangePolygons &polys, ModelInstancePtrs &instances, VirtualBedFn);
 

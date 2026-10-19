@@ -10,7 +10,9 @@
 #include "Support/SupportGridParams.hpp"
 
 #include <boost/log/trivial.hpp>
+#include <cmath>
 #include <map>
+#include <optional>
 #include <set>
 
 namespace Slic3r {
@@ -332,6 +334,102 @@ bool prepare_mixed_raft_clearance(ArrangePolygons&          selected,
         BOOST_LOG_TRIVIAL(debug) << "[arrange-diag] mixed_raft name=" << item->name << " raft=" << has_raft(cfg)
                                  << " minimum_inflation_mm=" << item->minimum_inflation;
     }
+    return true;
+}
+
+bool prepare_compact_raft_arrangement(ArrangePolygons&          selected,
+                                      ArrangePolygons&          fixed,
+                                      const DynamicPrintConfig& config,
+                                      const ArrangeParams&      params)
+{
+    for (ArrangePolygons* items : {&selected, &fixed})
+        for (ArrangePolygon& item : *items)
+            item.compact_raft_obstacle_margin = 0.;
+    if (params.is_seq_print || selected.empty() ||
+        std::any_of(selected.begin(), selected.end(), [](const ArrangePolygon& item) { return item.is_virt_object; }))
+        return false;
+    if (const auto* technology = config.option<ConfigOptionEnum<PrinterTechnology>>("printer_technology");
+        technology && technology->value != ptFFF)
+        return false;
+
+    PrintConfig print_config;
+    print_config.apply(config, true);
+    if (print_config.skirt_loops.value > 0 || print_config.nozzle_diameter.values.empty())
+        return false;
+    PrintObjectConfig defaults;
+    defaults.apply(config, true);
+    std::optional<PrintObjectConfig> common;
+    std::set<const ModelObject*>     objects;
+    std::vector<ArrangePolygon*>     participants;
+    int                              common_extruder = -1;
+    for (ArrangePolygons* items : {&selected, &fixed}) {
+        for (ArrangePolygon& item : *items) {
+            if (item.is_wipe_tower)
+                return false;
+            if (item.is_virt_object)
+                continue;
+            if (!item.model_instance || !item.allow_raft_bed_clipping || item.extrude_ids.size() != 1 ||
+                (items == &fixed && item.bed_idx < 0))
+                return false;
+            const ModelObject* object = item.model_instance->get_object();
+            // Multiple candidates referencing one source also include synthetic
+            // Fill Bed copies, even before those copies become ModelInstances.
+            if (object->instances.size() != 1 || !objects.insert(object).second || object->has_custom_layering() ||
+                object->is_mm_painted() || has_manual_support(*object))
+                return false;
+            for (const ModelVolume* volume : object->volumes) {
+                if (!volume->is_model_part())
+                    return false;
+                for (const auto& key : volume->config.keys())
+                    if (key != "extruder")
+                        return false;
+            }
+            const int tool = item.extrude_ids.front(); // one-based, including object/volume overrides
+            if (tool <= 0 || (common_extruder >= 0 && tool != common_extruder))
+                return false;
+            const PrintObjectConfig cfg = PrintObject::object_config_from_model_object(defaults, *object,
+                                                                                       print_config.filament_diameter.size());
+            if (cfg.raft_mode.value != RaftMode::CuraV1 || cfg.enable_support.value || cfg.enforce_support_layers.value > 0 ||
+                cfg.raft_base_layers.value <= 0 || cfg.raft_surface_layers.value <= 0 || cfg.raft_interface_layers.value < 0 ||
+                (cfg.support_filament.value != 0 && cfg.support_filament.value != tool) ||
+                (cfg.support_interface_filament.value != 0 && cfg.support_interface_filament.value != tool))
+                return false;
+            // Intentionally conservative: do not infer compatibility across
+            // different layer/raft/motion/geometry settings before slicing.
+            if (common && !common->equals(cfg))
+                return false;
+            common          = cfg;
+            common_extruder = tool;
+            participants.push_back(&item);
+        }
+    }
+    if (participants.size() < 2)
+        return false;
+
+    const auto&          cfg    = *common;
+    const double         nozzle = print_config.nozzle_diameter.get_at(common_extruder - 1);
+    const RaftPlanConfig plan   = resolve_cura_raft_plan_config(print_config, cfg, nozzle, nozzle);
+    if (!build_cura_raft_phase_plan(plan).validate())
+        return false;
+    const CuraV1RaftMargins margins{true, plan.base_config.margin, plan.interface_config.margin, plan.surface_config.margin,
+                                    plan.interface_config.layer_count > 0};
+    double                  full_margin = uses_offset_tree_raft(cfg.support_type.value, cfg.support_style.value) ? margins.widest() :
+                                                                                                                   margins.common_absolute();
+    if (!is_tree(cfg.support_type.value)) {
+        const Flow flow = Flow::new_from_config_width(frSupportMaterial,
+                                                      cfg.support_line_width.value > 0 ? cfg.support_line_width : cfg.line_width,
+                                                      float(nozzle), float(cfg.layer_height.value));
+        full_margin += SupportGridParams(cfg, flow).arrange_expansion();
+    }
+    double width = std::max(plan.base_config.line_width, plan.surface_config.line_width);
+    if (margins.has_interface)
+        width = std::max(width, plan.interface_config.line_width);
+    full_margin += width * 0.5 + 0.05;
+    if (!std::isfinite(full_margin) || full_margin <= 0.)
+        return false;
+    for (ArrangePolygon* item : participants)
+        item->compact_raft_obstacle_margin = std::max(full_margin, item->minimum_inflation);
+    BOOST_LOG_TRIVIAL(info) << "[arrange-diag] compact_raft eligible=" << participants.size() << " obstacle_margin_mm=" << full_margin;
     return true;
 }
 

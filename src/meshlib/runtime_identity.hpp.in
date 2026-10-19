@@ -1,0 +1,6 @@
+#pragma once
+
+// Identity follows the selected binaries, not the build machine's SDK path.
+// No SDK files are copied into the repository or installed by this target.
+inline constexpr char MESH_SHA256[] = "@_mesh_sha256@";
+inline constexpr char VOXELS_SHA256[] = "@_voxels_sha256@";

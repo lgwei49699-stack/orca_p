@@ -58,6 +58,13 @@
 	height: 160px;
 }
 
+.PrinterBlock img[src*="EP3"][src$="_cover.png"],
+.PrinterBlock img[src*="EPONE"][src$="_cover.png"]
+{
+	object-fit: contain;
+	object-position: center;
+}
+
 .PName
 {
 	font-weight: 700;

@@ -29,7 +29,6 @@
 #include <wx/imaglist.h>
 #include <wx/listctrl.h>
 #include <wx/menu.h>
-#include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
@@ -225,12 +224,12 @@ GFDDeviceSelectionDialog::GFDDeviceSelectionDialog(wxWindow*                pare
                                                    std::string              default_device_type,
                                                    std::vector<std::string> allowed_device_types,
                                                    PrintHandler             print_handler)
-    : wxDialog(parent,
-               wxID_ANY,
-               _L("打印机选择"),
-               wxDefaultPosition,
-               wxDefaultSize,
-               wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
+    : GFDDeviceSelectionDialogBase(parent,
+                                   wxID_ANY,
+                                   _L("打印机选择"),
+                                   wxDefaultPosition,
+                                   wxDefaultSize,
+                                   wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
     , m_gcode_path(std::move(gcode_path))
     , m_default_device_type(std::move(default_device_type))
     , m_allowed_device_types(std::move(allowed_device_types))
@@ -251,7 +250,6 @@ GFDDeviceSelectionDialog::GFDDeviceSelectionDialog(wxWindow*                pare
     sync_flat_button_parent_background(m_reset_button);
     sync_flat_button_parent_background(m_confirm_3mf_button);
     sync_flat_button_parent_background(m_confirm_button);
-    update_loading_panel_style();
     set_tip_message(_L("正在加载打印设备，请稍候..."));
     set_loading_state(true);
     CallAfter([this]() { load_devices(false); });
@@ -266,6 +264,26 @@ GFDDeviceSelectionDialog::~GFDDeviceSelectionDialog()
         m_device_worker->cancel_all();
         m_device_worker->wait_for_idle();
     }
+}
+
+int GFDDeviceSelectionDialog::ShowModal()
+{
+    m_modal_ending = false;
+    BOOST_LOG_TRIVIAL(info) << "GFD device selection modal begin";
+    const int ret_code = GFDDeviceSelectionDialogBase::ShowModal();
+    BOOST_LOG_TRIVIAL(info) << "GFD device selection modal returned"
+                            << ", return_code=" << ret_code << ", shown=" << IsShown() << ", modal=" << IsModal()
+                            << ", parent_enabled=" << (GetParent() != nullptr && GetParent()->IsEnabled());
+    return ret_code;
+}
+
+void GFDDeviceSelectionDialog::EndModal(int ret_code)
+{
+    BOOST_LOG_TRIVIAL(info) << "GFD device selection modal end requested"
+                            << ", return_code=" << ret_code << ", shown=" << IsShown() << ", modal=" << IsModal()
+                            << ", already_ending=" << m_modal_ending;
+    m_modal_ending = true;
+    GFDDeviceSelectionDialogBase::EndModal(ret_code);
 }
 
 void GFDDeviceSelectionDialog::build()
@@ -341,11 +359,17 @@ void GFDDeviceSelectionDialog::build()
     m_device_list->AppendColumn(_L("设备状态"), wxLIST_FORMAT_CENTER, FromDIP(150));
     m_device_list->AppendColumn(_L("固件版本号"), wxLIST_FORMAT_CENTER, FromDIP(180));
     main_sizer->Add(m_device_list, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(16));
-    build_loading_panel();
-
-    m_tip_label = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
+    // Keep status and progress in their own row. Overlaying a native list with
+    // a sibling panel can cause competing repaints on Windows.
+    m_tip_label = new wxStaticText(this, wxID_ANY, _L("正在加载打印设备，请稍候..."), wxDefaultPosition, wxDefaultSize,
+                                   wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END);
     m_tip_label->SetFont(Label::Body_13);
     main_sizer->Add(m_tip_label, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(10));
+
+    m_loading_gauge = new wxGauge(this, wxID_ANY, 100, wxDefaultPosition, FromDIP(wxSize(180, 4)), wxGA_HORIZONTAL);
+    // Reserve the small progress row so showing/hiding it never resizes the list.
+    main_sizer->Add(m_loading_gauge, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxRESERVE_SPACE_EVEN_IF_HIDDEN, FromDIP(8));
+    m_loading_gauge->Hide();
 
     if (!m_gcode_path.empty()) {
         auto* gcode_text = new wxStaticText(this, wxID_ANY, format_wxstr(_L("G-code 文件: %1%"), from_u8(m_gcode_path)));
@@ -427,7 +451,6 @@ void GFDDeviceSelectionDialog::bind_events()
     m_device_list->Bind(wxEVT_LIST_ITEM_UNCHECKED, [this](wxListEvent&) { update_confirm_button_state(); });
     m_device_list->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
         update_table_column_widths();
-        position_loading_panel();
         event.Skip();
     });
     Bind(
@@ -463,11 +486,6 @@ void GFDDeviceSelectionDialog::load_devices(bool keep_current_filters, bool allo
     const size_t query_generation = ++m_device_query_generation;
     const wxString loading_message = keep_current_filters ? _L("正在查找打印设备，请稍候...") : _L("正在加载打印设备，请稍候...");
     set_tip_message(loading_message);
-    if (m_loading_text != nullptr) {
-        m_loading_text->SetLabel(loading_message);
-        if (m_loading_panel != nullptr)
-            m_loading_panel->Layout();
-    }
     set_loading_state(true);
     sync_checked_keys_from_table();
 
@@ -677,8 +695,8 @@ void GFDDeviceSelectionDialog::reset_filters()
 
 void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
 {
-    if (m_print_submitting) {
-        BOOST_LOG_TRIVIAL(warning) << "GFD device selection confirm ignored: print submission already in progress";
+    if (m_print_submitting || m_modal_ending) {
+        BOOST_LOG_TRIVIAL(warning) << "GFD device selection confirm ignored: print submission in progress or dialog ending";
         return;
     }
 
@@ -748,11 +766,6 @@ void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
         m_print_submitting = true;
         const wxString submitting_message = _L("正在导出、上传并下发打印文件，请稍候...");
         set_tip_message(submitting_message);
-        if (m_loading_text != nullptr) {
-            m_loading_text->SetLabel(submitting_message);
-            if (m_loading_panel != nullptr)
-                m_loading_panel->Layout();
-        }
         set_loading_state(true);
         try {
             m_print_handler(this, m_selected_devices, m_use_3mf_file);
@@ -772,7 +785,7 @@ void GFDDeviceSelectionDialog::accept_selection(bool use_3mf_file)
     EndModal(wxID_OK);
 }
 
-void GFDDeviceSelectionDialog::complete_print_submission(bool success)
+void GFDDeviceSelectionDialog::complete_print_submission(bool success, bool cancelled)
 {
     if (!m_print_submitting)
         return;
@@ -784,7 +797,10 @@ void GFDDeviceSelectionDialog::complete_print_submission(bool success)
     }
 
     set_loading_state(false);
-    set_tip_message(_L("打印文件未成功下发，请检查提示后重试。"), true);
+    if (cancelled)
+        set_tip_message(_L("Print submission cancelled."));
+    else
+        set_tip_message(_L("打印文件未成功下发，请检查提示后重试。"), true);
     Raise();
 }
 
@@ -794,23 +810,19 @@ void GFDDeviceSelectionDialog::update_print_progress(const wxString& message, in
         return;
 
     set_tip_message(message);
-    if (m_loading_text != nullptr)
-        m_loading_text->SetLabel(message);
 
+    const bool was_determinate = m_loading_determinate;
     m_loading_determinate = percent >= 0;
     if (m_loading_gauge != nullptr) {
         if (m_loading_determinate) {
-            m_loading_gauge->SetRange(100);
-            m_loading_gauge->SetValue(std::clamp(percent, 0, 100));
+            const int value = std::clamp(percent, 0, 100);
+            if (!was_determinate || m_loading_gauge->GetValue() != value)
+                m_loading_gauge->SetValue(value);
         } else {
+            // Export callbacks also drive the animation while the exporter
+            // pumps paint/input events without dispatching wx timer events.
             m_loading_gauge->Pulse();
         }
-    }
-
-    if (m_loading_panel != nullptr) {
-        m_loading_panel->Layout();
-        m_loading_panel->Refresh();
-        m_loading_panel->Update();
     }
 }
 
@@ -927,19 +939,22 @@ void GFDDeviceSelectionDialog::set_tip_message(const wxString& message, bool is_
     if (m_tip_label == nullptr)
         return;
 
-    m_tip_label->SetLabel(message);
-    m_tip_label->SetForegroundColour(is_error ? wxColour(220, 38, 38) : wxGetApp().get_label_clr_default());
-    Layout();
+    if (m_tip_label->GetLabel() != message)
+        m_tip_label->SetLabel(message);
+    const wxColour colour = is_error ? wxColour(220, 38, 38) : wxGetApp().get_label_clr_default();
+    if (m_tip_label->GetForegroundColour() != colour) {
+        m_tip_label->SetForegroundColour(colour);
+        m_tip_label->Refresh(false);
+    }
 }
 
 void GFDDeviceSelectionDialog::set_loading_state(bool loading)
 {
-    m_loading = loading;
-    if (!loading)
-        m_loading_determinate = false;
+    if (m_loading == loading)
+        return;
 
-    if (loading)
-        update_loading_panel_style();
+    m_loading             = loading;
+    m_loading_determinate = false;
 
     if (m_search_button != nullptr)
         m_search_button->Enable(!loading);
@@ -955,13 +970,10 @@ void GFDDeviceSelectionDialog::set_loading_state(bool loading)
         m_status_choice->Enable(!loading);
     if (m_device_list != nullptr)
         m_device_list->Enable(!loading);
-    if (m_loading_panel != nullptr) {
-        position_loading_panel();
-        m_loading_panel->Show(loading);
+    if (m_loading_gauge != nullptr) {
+        m_loading_gauge->Show(loading);
         if (loading) {
-            m_loading_panel->Raise();
-            if (m_loading_gauge != nullptr)
-                m_loading_gauge->Pulse();
+            m_loading_gauge->Pulse();
             if (!m_loading_timer.IsRunning())
                 m_loading_timer.Start(120);
         }
@@ -971,59 +983,6 @@ void GFDDeviceSelectionDialog::set_loading_state(bool loading)
     }
 
     update_confirm_button_state();
-}
-
-void GFDDeviceSelectionDialog::build_loading_panel()
-{
-    m_loading_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, FromDIP(wxSize(360, 56)), wxBORDER_NONE);
-    m_loading_panel->SetDoubleBuffered(true);
-
-    auto* sizer = new wxBoxSizer(wxVERTICAL);
-    m_loading_text = new wxStaticText(m_loading_panel, wxID_ANY, _L("正在加载打印设备，请稍候..."), wxDefaultPosition, wxDefaultSize, wxALIGN_CENTER);
-    m_loading_text->SetFont(Label::Body_13);
-
-    m_loading_gauge = new wxGauge(m_loading_panel, wxID_ANY, 100, wxDefaultPosition, FromDIP(wxSize(180, 4)), wxGA_HORIZONTAL);
-
-    sizer->Add(m_loading_text, 0, wxALIGN_CENTER | wxTOP, FromDIP(8));
-    sizer->Add(m_loading_gauge, 0, wxALIGN_CENTER | wxTOP, FromDIP(10));
-    m_loading_panel->SetSizer(sizer);
-    m_loading_panel->Layout();
-    m_loading_panel->Hide();
-}
-
-void GFDDeviceSelectionDialog::update_loading_panel_style()
-{
-    if (m_loading_panel == nullptr)
-        return;
-
-    const bool dark = wxGetApp().dark_mode();
-    wxColour bg = dark ? wxColour(24, 24, 24) : wxColour(255, 255, 255);
-    if (m_device_list != nullptr) {
-        const wxColour list_bg = m_device_list->GetBackgroundColour();
-        if (list_bg.IsOk())
-            bg = list_bg;
-    }
-
-    const wxColour text = dark ? wxColour(245, 245, 245) : wxColour(42, 42, 42);
-    m_loading_panel->SetBackgroundColour(bg);
-    if (m_loading_text != nullptr) {
-        m_loading_text->SetForegroundColour(text);
-        m_loading_text->SetBackgroundColour(bg);
-    }
-    m_loading_panel->Refresh();
-}
-
-void GFDDeviceSelectionDialog::position_loading_panel()
-{
-    if (m_loading_panel == nullptr || m_device_list == nullptr)
-        return;
-
-    const wxPoint list_pos    = m_device_list->GetPosition();
-    const wxSize  list_size   = m_device_list->GetSize();
-    const wxSize  panel_size  = m_loading_panel->GetSize();
-    const int     panel_x     = list_pos.x + std::max(0, (list_size.x - panel_size.x) / 2);
-    const int     panel_y     = list_pos.y + std::max(0, (list_size.y - panel_size.y) / 2);
-    m_loading_panel->SetPosition(wxPoint(panel_x, panel_y));
 }
 
 std::string GFDDeviceSelectionDialog::build_query_url() const

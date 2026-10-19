@@ -47,3 +47,9 @@ dist/
 .mcp.json
 .codegraph
 .understand-anything
+
+# Only branch-maintained AI documentation is tracked under the otherwise ignored docs tree.
+!/docs/
+/docs/*
+!/docs/ai/
+!/docs/ai/**

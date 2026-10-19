@@ -1,5 +1,6 @@
 #include <catch2/catch.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 
@@ -51,6 +52,223 @@ DynamicPrintConfig unrafted_bed_config(double bed_size)
 }
 
 } // namespace
+
+TEST_CASE("Compact rafts only opt in uniform independent support-free objects", "[Arrange][Raft][Compact]")
+{
+    DynamicPrintConfig config = unrafted_bed_config(100.);
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    Model         model  = make_model(make_cube(20., 20., 2.));
+    ModelObject*  second = model.add_object(*model.objects.front());
+    ArrangeParams params;
+    bool          eligible            = false;
+    bool          duplicate_candidate = false;
+    bool          virtual_obstacle    = false;
+    bool          wipe_tower          = false;
+    bool          single_object       = false;
+    SECTION("uniform objects") { eligible = true; }
+    SECTION("a virtual exclusion is not an unrafted object")
+    {
+        eligible         = true;
+        virtual_obstacle = true;
+    }
+    SECTION("raft disabled") { second->config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy)); }
+    SECTION("support enabled") { second->config.set("enable_support", true); }
+    SECTION("forced support") { second->config.set("enforce_support_layers", 1); }
+    SECTION("skirt") { config.set("skirt_loops", 1); }
+    SECTION("sequential") { params.is_seq_print = true; }
+    SECTION("layer height differs") { second->config.set("layer_height", 0.16); }
+    SECTION("raft flow differs") { second->config.set_key_value("raft_base_flow", new ConfigOptionPercent(80.)); }
+    SECTION("segmentation differs") { second->config.set("raft_segmented", true); }
+    SECTION("multiple instances") { second->add_instance(); }
+    SECTION("synthetic Fill Bed copies") { duplicate_candidate = true; }
+    SECTION("another support filament") { second->config.set("support_filament", 2); }
+    SECTION("another model filament") { second->config.set("extruder", 2); }
+    SECTION("volume modifier") { second->volumes.front()->config.set("layer_height", 0.16); }
+    SECTION("single object keeps bed-fit behavior") { single_object = true; }
+    SECTION("wipe tower keeps ordinary reservations")
+    {
+        wipe_tower       = true;
+        virtual_obstacle = true;
+    }
+
+    ArrangePolygons selected{get_instance_arrange_poly(model.objects.front()->instances.front(), config)};
+    ArrangePolygons fixed{get_instance_arrange_poly(second->instances.front(), config)};
+    fixed.front().bed_idx = 0;
+    if (single_object)
+        fixed.clear();
+    if (duplicate_candidate)
+        selected.push_back(selected.front());
+    if (virtual_obstacle) {
+        fixed.emplace_back();
+        fixed.back().is_virt_object = true;
+        fixed.back().is_wipe_tower  = wipe_tower;
+    }
+    const double original = selected.front().minimum_inflation;
+    REQUIRE(prepare_compact_raft_arrangement(selected, fixed, config, params) == eligible);
+    REQUIRE(selected.front().minimum_inflation == original);
+    REQUIRE((selected.front().compact_raft_obstacle_margin > 0.) == eligible);
+    // Re-evaluation must clear an earlier eligibility proof.
+    params.is_seq_print = true;
+    REQUIRE_FALSE(prepare_compact_raft_arrangement(selected, fixed, config, params));
+    REQUIRE(selected.front().compact_raft_obstacle_margin == 0.);
+    for (const auto& item : fixed)
+        REQUIRE(item.compact_raft_obstacle_margin == 0.);
+}
+
+TEST_CASE("Compact rafts pack four large objects while preserving model spacing and fixed coordinates", "[Arrange][Raft][Compact]")
+{
+    const double bed_size  = GENERATE(100., 180.);
+    const bool   one_fixed = GENERATE(false, true);
+    const double distance  = GENERATE(0., 2.);
+    CAPTURE(bed_size, one_fixed, distance);
+    DynamicPrintConfig config = unrafted_bed_config(bed_size);
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    config.set("raft_base_margin", 5.);
+    config.set("raft_interface_margin", 4.);
+    config.set("raft_surface_margin", 3.);
+    const double side  = (bed_size - 8.) / 2.;
+    Model        model = make_model(make_cube(side, side, 2.));
+    model.objects.front()->instances.front()->set_offset(Vec3d(2., 2., 0.));
+    for (int i = 1; i < 4; ++i)
+        model.add_object(*model.objects.front());
+    ArrangePolygons selected, fixed;
+    for (size_t i = 0; i < model.objects.size(); ++i)
+        (one_fixed && i == 0 ? fixed : selected).push_back(get_instance_arrange_poly(model.objects[i]->instances.front(), config));
+    if (one_fixed)
+        fixed.front().bed_idx = 0;
+    ArrangeParams params;
+    params.parallel         = false;
+    params.min_obj_distance = scaled(distance);
+    params.progressind      = [](unsigned, std::string) {};
+    update_arrange_params(params, &config, selected);
+    update_selected_items_inflation(selected, &config, params);
+    update_unselected_items_inflation(fixed, &config, params);
+    const Points bed = get_shrink_bedpts(&config, params);
+    if (!one_fixed) {
+        ArrangePolygons baseline = selected;
+        arrangement::arrange(baseline, fixed, bed, params);
+        std::set<int> plates;
+        for (const auto& item : baseline) {
+            REQUIRE(item.bed_idx >= 0);
+            plates.insert(item.bed_idx);
+        }
+        REQUIRE(plates.size() > 1);
+    }
+    const Vec3d           fixed_offset   = model.objects.front()->instances.front()->get_offset();
+    const ArrangePolygons original_fixed = fixed;
+    REQUIRE(prepare_compact_raft_arrangement(selected, fixed, config, params));
+    arrangement::arrange(selected, fixed, bed, params);
+    const BoundingBox bounds(bed);
+    for (const auto& item : selected) {
+        REQUIRE(item.bed_idx == 0);
+        REQUIRE(bounds.contains(get_extents(item.transformed_poly())));
+        REQUIRE(item.minimum_inflation == Approx(5.)); // fallback reservation survives
+    }
+    ArrangePolygons all = selected;
+    all.insert(all.end(), fixed.begin(), fixed.end());
+    for (size_t i = 0; i < all.size(); ++i)
+        for (size_t j = i + 1; j < all.size(); ++j) {
+            REQUIRE(intersection_ex(offset_ex(all[i].transformed_poly(), scaled(0.999), ClipperLib::jtSquare),
+                                    offset_ex(all[j].transformed_poly(), scaled(0.999), ClipperLib::jtSquare))
+                        .empty());
+            if (one_fixed) {
+                // Do not recover a plate by stealing the fixed object's 2 mm
+                // gap: the previous 0.0002 mm shrink made the last slot unfit.
+                const BoundingBox a = get_extents(all[i].transformed_poly());
+                const BoundingBox b = get_extents(all[j].transformed_poly());
+                const coord_t gap = std::max({a.min.x() - b.max.x(), b.min.x() - a.max.x(), a.min.y() - b.max.y(), b.min.y() - a.max.y()});
+                REQUIRE(gap >= scaled(2. - 0.00001));
+            }
+        }
+    if (one_fixed) {
+        REQUIRE(model.objects.front()->instances.front()->get_offset().isApprox(fixed_offset));
+        REQUIRE(fixed.front().translation == original_fixed.front().translation);
+        REQUIRE(fixed.front().rotation == original_fixed.front().rotation);
+        REQUIRE(fixed.front().bed_idx == original_fixed.front().bed_idx);
+        REQUIRE(fixed.front().inflation == original_fixed.front().inflation);
+        REQUIRE(fixed.front().minimum_inflation == original_fixed.front().minimum_inflation);
+    }
+}
+
+TEST_CASE("Compact raft jobs preserve exclusions explicit spacing cancellation and multi-plate output", "[Arrange][Raft][Compact]")
+{
+    const int scenario = GENERATE(0, 1, 2, 3, 4, 5, 6);
+    CAPTURE(scenario);
+    DynamicPrintConfig config = unrafted_bed_config(100.);
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::CuraV1));
+    config.set("raft_base_margin", 5.);
+    Model model = make_model(make_cube(scenario == 3 ? 98. : 15., scenario == 3 ? 98. : 15., 2.));
+    model.add_object(*model.objects.front());
+    if (scenario == 6) {
+        model.objects[0]->arrange_group = "#FF0000";
+        model.objects[1]->arrange_group = "#00FF00";
+    }
+    ArrangePolygons selected, fixed;
+    for (auto* object : model.objects)
+        selected.push_back(get_instance_arrange_poly(object->instances.front(), config));
+    ArrangeParams params;
+    params.parallel         = false;
+    params.min_obj_distance = scaled(scenario == 2 ? 12. : 2.);
+    params.progressind      = [](unsigned, std::string) {};
+    ArrangePolygon obstacle;
+    obstacle.poly = ExPolygon(
+        Polygon{{scaled(42.), scaled(42.)}, {scaled(58.), scaled(42.)}, {scaled(58.), scaled(58.)}, {scaled(42.), scaled(58.)}});
+    obstacle.is_virt_object = true;
+    obstacle.bed_idx        = 0;
+    obstacle.inflation      = scaled(1.);
+    if (scenario == 0)
+        params.excluded_regions.push_back(obstacle);
+    if (scenario == 1)
+        fixed.push_back(obstacle);
+    update_arrange_params(params, &config, selected);
+    REQUIRE(prepare_compact_raft_arrangement(selected, fixed, config, params));
+    update_selected_items_inflation(selected, &config, params);
+    update_unselected_items_inflation(fixed, &config, params);
+    const ArrangePolygons before                  = selected;
+    bool                  canceled_during_packing = false;
+    size_t                published               = 0;
+    params.on_packed                              = [&](const ArrangePolygon&) { ++published; };
+    if (scenario == 4)
+        params.stopcondition = []() { return true; };
+    if (scenario == 5) {
+        params.progressind   = [&](unsigned, std::string) { canceled_during_packing = true; };
+        params.stopcondition = [&]() { return canceled_during_packing; };
+    }
+    const Points bed = get_shrink_bedpts(&config, params);
+    arrangement::arrange(selected, fixed, bed, params);
+    for (size_t i = 0; i < selected.size(); ++i) {
+        const auto& item = selected[i];
+        if (scenario == 4 || scenario == 5) {
+            REQUIRE(item.translation == before[i].translation);
+            REQUIRE(item.rotation == before[i].rotation);
+            REQUIRE(item.bed_idx == before[i].bed_idx);
+            continue;
+        }
+        REQUIRE(item.bed_idx >= 0);
+        REQUIRE(BoundingBox(bed).contains(get_extents(item.transformed_poly())));
+        if (scenario <= 1) {
+            REQUIRE(item.bed_idx == 0);
+            REQUIRE(
+                intersection_ex(offset_ex(item.transformed_poly(), scaled(item.compact_raft_obstacle_margin - 0.001), ClipperLib::jtSquare),
+                                offset_ex(obstacle.transformed_poly(), scaled(0.999), ClipperLib::jtSquare))
+                    .empty());
+        }
+    }
+    if (scenario == 2) {
+        REQUIRE(selected[0].bed_idx == selected[1].bed_idx);
+        REQUIRE(intersection_ex(offset_ex(selected[0].transformed_poly(), scaled(5.999), ClipperLib::jtSquare),
+                                offset_ex(selected[1].transformed_poly(), scaled(5.999), ClipperLib::jtSquare))
+                    .empty());
+    }
+    if (scenario == 3 || scenario == 6)
+        REQUIRE(selected[0].bed_idx != selected[1].bed_idx);
+    if (scenario == 4 || scenario == 5)
+        REQUIRE(published == 0);
+    else
+        REQUIRE(published == selected.size());
+    if (scenario == 5)
+        REQUIRE(canceled_during_packing);
+}
 
 TEST_CASE("Mixed raft preparation protects both movable and fixed objects without changing uniform scenes", "[Arrange][Raft][Clearance]")
 {

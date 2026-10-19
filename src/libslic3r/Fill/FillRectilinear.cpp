@@ -2767,12 +2767,16 @@ bool FillRectilinear::fill_surface_by_lines(const Surface *surface, const FillPa
     assert(params.density > 0.0001f && params.density <= 1.f);
     coord_t line_spacing = coord_t(scale_(this->spacing) / params.density);
 
+    // Normally hatch chords extend beyond the turn contour to overlap walls.
+    // With no surrounding walls that extension can bridge a concave notch in
+    // the centerline region; subsequent safety clipping would break the chord.
+    const double outer_offset = max_endpoint_overlap < 0. ?
+                                    this->overlap - (0.5 - INFILL_OVERLAP_OVER_SPACING) * this->spacing :
+                                    this->overlap - 0.5 * this->spacing +
+                                        std::min(double(INFILL_OVERLAP_OVER_SPACING) * this->spacing, max_endpoint_overlap);
     // On the polygons of poly_with_offset, the infill lines will be connected.
-    ExPolygonWithOffset poly_with_offset(
-        surface->expolygon, 
-        - rotate_vector.first, 
-        float(scale_(this->overlap - (0.5 - INFILL_OVERLAP_OVER_SPACING) * this->spacing)),
-        float(scale_(this->overlap - 0.5f * this->spacing)));
+    ExPolygonWithOffset poly_with_offset(surface->expolygon, -rotate_vector.first, float(scale_(outer_offset)),
+                                         float(scale_(this->overlap - 0.5f * this->spacing)));
     if (poly_with_offset.n_contours_inner == 0) {
         // Not a single infill line fits.
         //FIXME maybe one shall trigger the gap fill here?

@@ -266,12 +266,65 @@ void openFolderForFile(wxString const & file)
 #include <wx/osx/cocoa/dataview.h>
 #include <wx/osx/dataview.h>
 
+@interface wxCocoaOutlineView (Edit)
+- (void)objectListSingleClick:(id)sender;
+- (void)objectListDoubleClick:(id)sender;
+@end
+
+void Slic3r::GUI::mac_enable_object_list_editing(wxDataViewCtrl* control)
+{
+    auto* peer = static_cast<wxCocoaDataViewControl*>(control->GetDataViewPeer());
+    NSScrollView* scrollView = static_cast<NSScrollView*>(peer->GetWXWidget());
+    NSOutlineView* outlineView = static_cast<NSOutlineView*>(scrollView.documentView);
+    [outlineView setAction:@selector(objectListSingleClick:)];
+    [outlineView setDoubleAction:@selector(objectListDoubleClick:)];
+}
+
 @implementation wxCocoaOutlineView (Edit)
 
 bool addObserver = false;
 
+- (void)objectListSingleClick:(id)sender
+{
+    // The name column uses double-click/Return; icon and filament columns
+    // are explicit single-click actions. Accessibility queries never get here.
+    const NSInteger column = [self clickedColumn];
+    if (column > 0 && [self numberOfSelectedRows] == 1)
+        [self editColumn:column row:[self clickedRow] withEvent:nil select:YES];
+}
+
+- (void)objectListDoubleClick:(id)sender
+{
+    if ([self clickedColumn] == 0 && [self numberOfSelectedRows] == 1)
+        [self editColumn:0 row:[self clickedRow] withEvent:nil select:YES];
+}
+
 - (BOOL)outlineView: (NSOutlineView*) view shouldEditTableColumn:(nullable NSTableColumn *)tableColumn item:(nonnull id)item
 {
+    // AppKit also asks this from accessibilityIsAttributeSettable. This must
+    // remain a read-only query: sending EDITING_STARTED here can open editors
+    // or even change the model while an accessibility client reads the tree.
+    if (view != self || !tableColumn || !item || [self rowForItem:item] < 0)
+        return NO;
+    const NSUInteger column = [[self tableColumns] indexOfObjectIdenticalTo:tableColumn];
+    if (column == NSNotFound)
+        return NO;
+    wxDataViewCtrl* const dvc = implementation->GetDataViewCtrl();
+    wxDataViewColumn* const col = implementation->GetColumn(static_cast<unsigned int>(column));
+    const wxDataViewItem dv_item([static_cast<wxPointerObject*>(item) pointer]);
+    return dvc && dvc->GetModel() && col && dv_item.IsOk() && col->GetRenderer()->GetMode() == wxDATAVIEW_CELL_EDITABLE &&
+           dvc->GetModel()->IsEnabled(dv_item, col->GetModelColumn());
+}
+
+- (void)editColumn:(NSInteger)column row:(NSInteger)row withEvent:(nullable NSEvent*)nativeEvent select:(BOOL)select
+{
+    if (column < 0 || column >= [self numberOfColumns] || row < 0 || row >= [self numberOfRows])
+        return;
+    NSTableColumn* tableColumn = [[self tableColumns] objectAtIndex:column];
+    id item = [self itemAtRow:row];
+    if (![self outlineView:self shouldEditTableColumn:tableColumn item:item])
+        return;
+
     NSClipView * clipView = [[self enclosingScrollView] contentView];
     if (!addObserver) {
         addObserver = true;
@@ -282,17 +335,18 @@ bool addObserver = false;
                                                    object:clipView];
     }
 
-    wxDataViewColumn* const col((wxDataViewColumn *)[tableColumn getColumnPointer]);
+    wxDataViewColumn* const col = implementation->GetColumn(static_cast<unsigned int>(column));
     wxDataViewItem item2([static_cast<wxPointerObject *>(item) pointer]);
 
     wxDataViewCtrl* const dvc = implementation->GetDataViewCtrl();
-    // Before doing anything we send an event asking if editing of this item is really wanted.
+    // Only an actual editing request may dispatch the application's actions.
+    // Custom wx renderers veto native editing after opening their own editor.
     wxDataViewEvent event(wxEVT_DATAVIEW_ITEM_EDITING_STARTED, dvc, col, item2);
     dvc->GetEventHandler()->ProcessEvent( event );
     if( !event.IsAllowed() )
-        return NO;
+        return;
 
-    return YES;
+    [super editColumn:column row:row withEvent:nativeEvent select:select];
 }
 
 - (void)synchronizedViewContentBoundsDidChange:(NSNotification *)notification

@@ -5,6 +5,7 @@
 #include "libslic3r/ProjectTask.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include <functional>
+#include <optional>
 #include <stdexcept>
 
 namespace Slic3r {
@@ -81,6 +82,11 @@ struct PlateData
     }
 
     void parse_filament_info(GCodeProcessorResult *result);
+
+    // Export-time snapshot only; never persisted in project/backup metadata.
+    // Unknown callers conservatively retain non-empty plates for validation.
+    std::optional<bool> has_printable_instances;
+    bool is_selected_for_sliced_export(int export_plate_idx) const;
 
     int plate_index;
     std::vector<std::pair<int, int>> objects_and_instances;

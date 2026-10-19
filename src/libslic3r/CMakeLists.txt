@@ -296,6 +296,15 @@ set(lisbslic3r_sources
     Model.hpp
     ModelRepair.cpp
     ModelRepair.hpp
+    ModelRepairEvidence.cpp
+    ModelRepairEvidence.hpp
+    ModelReconstruction.cpp
+    ModelReconstruction.hpp
+    InProcessReconstructionControl.cpp
+    InProcessReconstructionControl.hpp
+    MeshReconstruction.hpp
+    ReconstructionProcess.cpp
+    ReconstructionProcess.hpp
     MeshRepairOutcome.hpp
     ModelInspection.hpp
     ModelPreparation.cpp
@@ -496,6 +505,7 @@ endif ()
 add_library(libslic3r STATIC ${lisbslic3r_sources} 
     "${CMAKE_CURRENT_BINARY_DIR}/libslic3r_version.h"
     ${OpenVDBUtils_SOURCES})
+target_link_libraries(libslic3r PRIVATE orca_meshlib_adapter)
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${lisbslic3r_sources})
 
 if (SLIC3R_STATIC)
@@ -513,6 +523,7 @@ add_library(libslic3r_cgal STATIC
     CutSurface.hpp CutSurface.cpp
     IntersectionPoints.hpp IntersectionPoints.cpp
     MeshBoolean.hpp MeshBoolean.cpp
+    MeshReconstruction.cpp
     ModelInspection.cpp
     TryCatchSignal.hpp TryCatchSignal.cpp
     Triangulation.hpp Triangulation.cpp
@@ -628,10 +639,12 @@ target_link_libraries(libslic3r
         ZLIB::ZLIB
     )
 
+# Artifact hashes for the optional MeshLib CLI backend; OpenSSL is already a
+# required project dependency. The optional MeshLib adapter is linked below.
+target_link_libraries(libslic3r PRIVATE OpenSSL::Crypto)
 if(NOT WIN32)
     # Link freetype for OCCT dependency (CAD operations need font rendering)
     target_link_libraries(libslic3r PRIVATE ${FREETYPE_LIBRARIES})
-    target_link_libraries(libslic3r PRIVATE OpenSSL::Crypto)
     if (NOT APPLE)
         target_link_libraries(libslic3r PRIVATE fontconfig)
     endif()

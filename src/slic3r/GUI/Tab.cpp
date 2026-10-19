@@ -913,8 +913,7 @@ void Tab::create_preset_tab()
                     m_preset_bundle->physical_printers.unselect_printer();
 
                 // select preset
-                std::string preset_name = m_presets_choice->GetString(selection).ToUTF8().data();
-                select_preset(Preset::remove_suffix_modified(preset_name));
+                select_preset(m_presets_choice->preset_name_for_selection(selection));
             }
         });
     }
@@ -1832,8 +1831,11 @@ void Tab::update_changed_ui()
 
     decorate();
 
-    wxTheApp->CallAfter([this]() {
-        if (parent()) //To avoid a crash, parent should be exist for a moment of a tree updating
+    // Detached editors (e.g. dynamic material parameters) can be destroyed
+    // before this refresh runs. Queue it on the tab so wx removes pending
+    // refreshes with their owner; a non-null parent pointer is not a lifetime guard.
+    CallAfter([this]() {
+        if (!IsBeingDeleted() && m_tabctrl != nullptr && !m_tabctrl->IsBeingDeleted())
             update_changed_tree_ui();
     });
     // BBS:
@@ -3390,7 +3392,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("raft_airgap", "support_settings_raft");
         optgroup->append_single_option_line("raft_layer_0_z_overlap", "support_settings_raft");
 
-        optgroup = page->new_optgroup(L("Raft Geometry (Trial)"), L"param_raft");
+        optgroup = page->new_optgroup(L("Raft Geometry"), L"param_raft");
         optgroup->append_single_option_line("raft_segmented", "support_settings_raft");
         optgroup->append_single_option_line("raft_chunk_size", "support_settings_raft");
         optgroup->append_single_option_line("raft_chunk_gap", "support_settings_raft");

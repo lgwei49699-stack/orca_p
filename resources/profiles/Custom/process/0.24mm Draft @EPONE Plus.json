@@ -1,0 +1,13 @@
+{
+  "type": "process",
+  "name": "0.24mm Draft @EPONE Plus",
+  "inherits": "0.24mm Draft @EPONE",
+  "from": "system",
+  "setting_id": "GFD_EPONEPLUS_P_024",
+  "instantiation": "true",
+  "compatible_printers": [
+    "EPONE Plus 0.4 nozzle",
+    "MyMarlin 0.4 nozzle"
+  ],
+  "print_settings_id": "0.24mm Draft @EPONE Plus"
+}

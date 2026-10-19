@@ -965,7 +965,13 @@ public:
     void                center_geometry_after_creation(bool update_source_offset = true);
 
     void                calculate_convex_hull();
-    const TriangleMesh& get_convex_hull() const;
+    // The caller must provide a validated convex hull matching the current mesh.
+    void set_convex_hull(TriangleMesh&& convex_hull)
+    {
+        m_convex_hull = std::make_shared<const TriangleMesh>(std::move(convex_hull));
+        invalidate_convex_hull_2d();
+    }
+    const TriangleMesh&                        get_convex_hull() const;
     const std::shared_ptr<const TriangleMesh>& get_convex_hull_shared_ptr() const { return m_convex_hull; }
     //BBS: add convex_hell_2d related logic
     const Polygon& get_convex_hull_2d(const Transform3d &trafo_instance) const;

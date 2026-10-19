@@ -54,10 +54,13 @@
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Geometry.hpp"
+#include "libslic3r/I18N.hpp"
 #include "libslic3r/GCode/PostProcessor.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/ModelRepair.hpp"
+#include "libslic3r/ModelReconstruction.hpp"
+#include "libslic3r/ModelRepairEvidence.hpp"
 #include "libslic3r/ModelCheckWorkflow.hpp"
 #include "libslic3r/Platform.hpp"
 #include "libslic3r/Exception.hpp"
@@ -81,7 +84,6 @@
 #include "libslic3r/FlushVolCalc.hpp"
 
 #include "libslic3r/Orient.hpp"
-#include "libslic3r/PNGReadWrite.hpp"
 
 #include "OrcaSlicer.hpp"
     // BBS: add exception handler for win32
@@ -248,6 +250,7 @@ typedef struct _sliced_info {
     std::vector<model_repair_info_t> model_repairs;
     std::vector<obj_export_info_t>   obj_exports;
     bool                             cgal_repair_requested{false};
+    bool                             repair_evidence_requested{false};
     bool                             repair_slice_requested{false};
     size_t                           repair_slices_completed{0};
     json                             model_transforms = nlohmann::json::array();
@@ -720,6 +723,8 @@ bool record_exit_reson(std::string                        outputdir,
                 repair_json["completed"]        = report.completed;
                 repair_json["can_continue"]     = report.can_continue();
                 repair_json["mesh_validated"]          = report.mesh_validated();
+                if (sliced_info.repair_evidence_requested)
+                    repair_json["boundary"] = model_repair_boundary(report);
                 repair_json["before"]                  = {{"facets", report.before_facets}, {"open_edges", report.before_open_edges}};
                 repair_json["repair_actions"]          = {{"objects", report.objects},
                                                           {"volumes", report.volumes},
@@ -831,37 +836,9 @@ static void attach_exported_model_paths(sliced_info_t&                          
     }
 }
 
-static int decode_png_to_thumbnail(std::string png_file, ThumbnailData& thumbnail_data)
+static int decode_png_to_thumbnail(const std::string& png_file, ThumbnailData& thumbnail_data)
 {
-    if (!boost::filesystem::exists(png_file))
-    {
-        BOOST_LOG_TRIVIAL(error) << boost::format("can not find file %1%")%png_file;
-        return -1;
-    }
-
-    const std::size_t &size  = boost::filesystem::file_size(png_file);
-    std::string png_buffer(size, '\0');
-    png_buffer.reserve(size);
-
-    boost::filesystem::ifstream ifs(png_file, std::ios::binary);
-    ifs.read(png_buffer.data(), png_buffer.size());
-    ifs.close();
-
-    Slic3r::png::ImageColorscale img;
-    Slic3r::png::ReadBuf rb{png_buffer.data(), png_buffer.size()};
-    BOOST_LOG_TRIVIAL(info) << boost::format("read png file %1%, size %2%")%png_file %size;
-
-    if ( !Slic3r::png::decode_colored_png(rb, img))
-    {
-        BOOST_LOG_TRIVIAL(error) << boost::format("decode png file %1% failed")%png_file;
-        return -2;
-    }
-
-    thumbnail_data.width = img.cols;
-    thumbnail_data.height = img.rows;
-    thumbnail_data.pixels = std::move(img.buf);
-
-    return 0;
+    return Slic3r::GCodeThumbnails::load_png_thumbnail(png_file, thumbnail_data) ? 0 : -2;
 }
 
 static bool load_cli_thumbnail_image_for_3mf(const std::string& png_file, ThumbnailData& thumbnail_data)
@@ -869,14 +846,15 @@ static bool load_cli_thumbnail_image_for_3mf(const std::string& png_file, Thumbn
     ThumbnailData source_thumbnail;
     const int decode_result = decode_png_to_thumbnail(png_file, source_thumbnail);
     if (decode_result != 0) {
-        BOOST_LOG_TRIVIAL(warning) << boost::format("decode --thumbnail-image failed, keep original thumbnail file path: %1%, result=%2%") %
+        BOOST_LOG_TRIVIAL(warning) << boost::format(
+                                          "decode --thumbnail-image failed, skip invalid thumbnail for gcode.3mf: %1%, result=%2%") %
                                           png_file % decode_result;
         return false;
     }
 
     thumbnail_data = Slic3r::GCodeThumbnails::resize_thumbnail_fit(source_thumbnail, 512, 512);
     if (!thumbnail_data.is_valid()) {
-        BOOST_LOG_TRIVIAL(warning) << boost::format("resize --thumbnail-image to 512x512 failed, keep original thumbnail file path: %1%") %
+        BOOST_LOG_TRIVIAL(warning) << boost::format("resize --thumbnail-image to 512x512 failed, skip thumbnail for gcode.3mf: %1%") %
                                           png_file;
         return false;
     }
@@ -1496,6 +1474,44 @@ int CLI::run(int argc, char **argv)
         return CLI_ENVIRONMENT_ERROR;
     }
 
+    const std::string boundary_policy_usage_error = L(
+        "--repair-evidence-close-boundaries requires --check-model, --repair-model cgal and --repair-evidence together.");
+    bool raw_boundary_policy_requested = false;
+    bool raw_reconstruction_requested  = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg(argv[i]);
+        if (arg == "--")
+            break;
+        raw_reconstruction_requested |= arg == "--reconstruct-model";
+        if (arg.empty() || arg.front() != '-')
+            continue;
+        const std::string token  = arg.substr(boost::starts_with(arg, "--") ? 2 : 1);
+        const std::string option = "repair-evidence-close-boundaries";
+        if (token == option || boost::starts_with(token, option + "=")) {
+            raw_boundary_policy_requested = true;
+            if (token != option && token != option + "=0" && token != option + "=1") {
+                boost::nowide::cerr << L("--repair-evidence-close-boundaries expects 0 or 1.") << std::endl;
+                return CLI_INVALID_PARAMS;
+            }
+        }
+    }
+    // Reconstruction has its own parser, before setup(). Reject this evidence
+    // policy even when explicitly disabled or paired with early --help.
+    if (raw_reconstruction_requested && raw_boundary_policy_requested) {
+        boost::nowide::cerr << boundary_policy_usage_error << std::endl;
+        return CLI_INVALID_PARAMS;
+    }
+
+    // Independent, headless reconstruction protocol. Never enter legacy repair,
+    // profile migration or GUI initialization in a resource-limited worker.
+    if (argc == 3 && std::string(argv[1]) == "--reconstruction-worker")
+        return Slic3r::run_model_reconstruction_worker(argv[2]);
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--reconstruct-model")
+            return Slic3r::run_model_reconstruction_cli(boost::dll::program_location().string(),
+                                                       std::vector<std::string>(argv + 1, argv + argc));
+    }
+
     if (!this->setup(argc, argv))
     {
         boost::nowide::cerr << "setup params error" << std::endl;
@@ -1589,7 +1605,10 @@ int CLI::run(int argc, char **argv)
                                                         [](const ModelCliSpec& spec) { return spec.arrange_group.has_value(); });
 
     // Validate before material catalog loading and before the no-action GUI branch.
-    const bool cgal_repair_requested   = std::find(m_actions.begin(), m_actions.end(), "repair_model") != m_actions.end();
+    const bool cgal_repair_requested     = std::find(m_actions.begin(), m_actions.end(), "repair_model") != m_actions.end();
+    const bool repair_evidence_requested = m_config.opt_bool("repair_evidence");
+    const bool boundary_policy_requested = std::find(m_requested_options.begin(), m_requested_options.end(),
+                                                     "repair_evidence_close_boundaries") != m_requested_options.end();
     if (std::find(m_actions.begin(), m_actions.end(), "check_model") != m_actions.end()) {
         ModelCheckWorkflowReport check_report;
         int                      code = CLI_SUCCESS;
@@ -1597,8 +1616,11 @@ int CLI::run(int argc, char **argv)
         try {
             // This is a model-only entry point, before printer/material catalog
             // loading, arrangement, bed transforms and the normal slice path.
-            const std::set<std::string> allowed_options{"check_model", "repair_model", "export_obj", "export_stl",
-                                                        "outputdir",   "debug",        "datadir",    "repair_ignore_materials"};
+            const std::set<std::string> allowed_options{"check_model",     "repair_model",
+                                                        "export_obj",      "export_stl",
+                                                        "outputdir",       "debug",
+                                                        "datadir",         "repair_ignore_materials",
+                                                        "repair_evidence", "repair_evidence_close_boundaries"};
             for (const auto& key : m_requested_options)
                 if (allowed_options.count(key) == 0)
                     throw std::invalid_argument("--check-model does not accept this slicing/transform option: " + key);
@@ -1611,27 +1633,39 @@ int CLI::run(int argc, char **argv)
                 throw std::invalid_argument("--check-model does not accept per-model slicing overrides.");
             if (cgal_repair_requested && m_config.opt_string("repair_model") != "cgal")
                 throw std::invalid_argument("--check-model supports only --repair-model cgal.");
+            if (boundary_policy_requested && (!cgal_repair_requested || !repair_evidence_requested))
+                throw std::invalid_argument(boundary_policy_usage_error);
             if (m_config.opt_bool("export_obj") && m_config.opt_bool("export_stl"))
                 throw std::invalid_argument("Choose one model check export format: OBJ or STL.");
             ModelCheckWorkflowOptions options;
-            options.input_file       = boost::filesystem::absolute(m_input_files.front()).string();
-            options.output_directory = outfile_dir;
-            options.advanced_repair  = cgal_repair_requested;
-            options.ignore_materials = m_config.opt_bool("repair_ignore_materials");
-            options.export_format    = m_config.opt_bool("export_obj") ? "obj" : (m_config.opt_bool("export_stl") ? "stl" : "");
+            options.input_file             = boost::filesystem::absolute(m_input_files.front()).string();
+            options.output_directory       = outfile_dir;
+            options.advanced_repair        = cgal_repair_requested;
+            options.repair_evidence        = repair_evidence_requested;
+            options.allow_boundary_closure = m_config.opt_bool("repair_evidence_close_boundaries");
+            options.ignore_materials       = m_config.opt_bool("repair_ignore_materials");
+            options.export_format          = m_config.opt_bool("export_obj") ? "obj" : (m_config.opt_bool("export_stl") ? "stl" : "");
             run_model_check_workflow(options, check_report);
         } catch (const std::invalid_argument& error) {
             code    = CLI_INVALID_PARAMS;
             message = error.what();
+            if (check_report.failure_kind.empty())
+                check_report.failure_kind = "invalid_arguments";
         } catch (const std::bad_alloc&) {
             code    = CLI_OUT_OF_MEMORY;
             message = "Insufficient memory while checking the model.";
+            if (check_report.failure_kind.empty())
+                check_report.failure_kind = "memory_allocation_failed";
         } catch (const std::exception& error) {
             code    = check_report.repair_attempted ? CLI_MODEL_REPAIR_ERROR : CLI_MODEL_CHECK_ERROR;
             message = error.what();
+            if (check_report.failure_kind.empty() && !check_report.repair_no_progress)
+                check_report.failure_kind = "execution_failed";
         } catch (...) {
             code    = CLI_MODEL_CHECK_ERROR;
             message = "Unexpected model check failure.";
+            if (check_report.failure_kind.empty())
+                check_report.failure_kind = "execution_failed";
         }
         if (check_report.check.empty())
             check_report.check = {{"check_complete", false},
@@ -1641,6 +1675,8 @@ int CLI::run(int argc, char **argv)
                                    {{"requested", cgal_repair_requested},
                                     {"status", cgal_repair_requested ? "not_started" : "not_requested"}}}};
         if (code != CLI_SUCCESS) {
+            if (!check_report.failure_kind.empty())
+                check_report.check["failure_kind"] = check_report.failure_kind;
             check_report.check["operation_error"] = message;
             check_report.check["operation_status"] = "failed";
             if (check_report.check.contains("advanced_repair") && check_report.check["advanced_repair"].value("status", "") == "running") {
@@ -1653,12 +1689,27 @@ int CLI::run(int argc, char **argv)
         // diagnostic tree. Remaining issue counts describe the retained model.
         if (!check_report.repair.failures.empty())
             check_report.check["repair_message"] = check_report.repair.failures.front().message;
+        // Preserve the explicit opt-in even when argument validation failed
+        // before the shared workflow could initialize its internal report.
+        check_report.check["repair_evidence_requested"] = repair_evidence_requested;
         sliced_info.model_checks.push_back(std::move(check_report.check));
         if (!record_exit_reson(outfile_dir, code, 0, message, sliced_info))
             return CLI_RESULT_WRITE_ERROR;
         return code;
     }
-    sliced_info.cgal_repair_requested = cgal_repair_requested;
+    sliced_info.cgal_repair_requested     = cgal_repair_requested;
+    sliced_info.repair_evidence_requested = repair_evidence_requested;
+    if (boundary_policy_requested) {
+        boost::nowide::cerr << boundary_policy_usage_error << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, boundary_policy_usage_error, sliced_info);
+        return CLI_INVALID_PARAMS;
+    }
+    if (repair_evidence_requested && !cgal_repair_requested) {
+        const std::string message = "--repair-evidence requires --check-model, --repair-model cgal or --reconstruct-model.";
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        return CLI_INVALID_PARAMS;
+    }
     sliced_info.repair_slice_requested = cgal_repair_requested &&
         std::find(m_actions.begin(), m_actions.end(), "slice") != m_actions.end();
     if (sliced_info.repair_slice_requested &&
@@ -5542,6 +5593,7 @@ int CLI::run(int argc, char **argv)
 
                 arrangement::update_arrange_params(arrange_cfg, &m_print_config, selected);
                 prepare_mixed_raft_clearance(selected, unselected, m_print_config, arrange_cfg);
+                prepare_compact_raft_arrangement(selected, unselected, m_print_config, arrange_cfg);
                 arrangement::update_selected_items_inflation(selected, &m_print_config, arrange_cfg);
                 arrangement::update_unselected_items_inflation(unselected, &m_print_config, arrange_cfg);
                 arrangement::update_selected_items_axis_align(selected, &m_print_config, arrange_cfg);
@@ -5971,6 +6023,7 @@ int CLI::run(int argc, char **argv)
 
                 arrangement::update_arrange_params(arrange_cfg, &m_print_config, selected);
                 prepare_mixed_raft_clearance(selected, unselected, m_print_config, arrange_cfg);
+                prepare_compact_raft_arrangement(selected, unselected, m_print_config, arrange_cfg);
                 arrangement::update_selected_items_inflation(selected, &m_print_config, arrange_cfg);
                 arrangement::update_unselected_items_inflation(unselected, &m_print_config, arrange_cfg);
                 arrangement::update_selected_items_axis_align(selected, &m_print_config, arrange_cfg);
@@ -6456,13 +6509,16 @@ int CLI::run(int argc, char **argv)
             if (std::abs(rounded - 1.0) < 1e-9) return 1.0;
             return rounded;
         };
-        
-        // Build a map of instance ObjectID to plate_index by iterating through all plates
-        // This ensures we get the correct plate assignment after arrange
-        // Note: contain_instance uses object/instance indices (not ObjectIDs), so we need to use indices
-        std::map<int, int> instance_to_plate;
-        int plate_count = partplate_list.get_plate_count();
-        
+
+        // Only fully contained instances retain their actual plate in the JSON.
+        // Check current geometry: ensure_on_bed may have changed Z since the
+        // plate's outside-instance cache was populated. Do not mutate membership.
+        std::map<size_t, int> instance_to_plate;
+        const int             plate_count       = partplate_list.get_plate_count();
+        int                   next_export_plate = plate_count;
+        const BoundingBox     export_bed_box    = get_extents(get_bed_shape(m_print_config));
+        const Vec2d           export_bed_center(unscale<double>(export_bed_box.center().x()), unscale<double>(export_bed_box.center().y()));
+
         // partplate_list uses the first model (m_models[0]) for indexing
         if (!m_models.empty()) {
             Model& model = m_models[0];
@@ -6474,7 +6530,7 @@ int CLI::run(int argc, char **argv)
                         ModelObject* obj = model.objects[obj_idx];
                         for (size_t inst_idx = 0; inst_idx < obj->instances.size(); inst_idx++) {
                             ModelInstance* instance = obj->instances[inst_idx];
-                            if (plate->contain_instance(obj_idx, inst_idx)) {
+                            if (plate->contain_instance(obj_idx, inst_idx) && !plate->check_outside(obj_idx, inst_idx)) {
                                 instance_to_plate[instance->id().id] = plate_idx;
                             }
                         }
@@ -6482,7 +6538,7 @@ int CLI::run(int argc, char **argv)
                 }
             }
         }
-        
+
         for (auto& model : m_models) {
             for (ModelObject* obj : model.objects) {
                 for (ModelInstance* instance : obj->instances) {
@@ -6528,54 +6584,14 @@ int CLI::run(int argc, char **argv)
                         clean_value(scale.y()), 
                         clean_value(scale.z())
                     };
-                    
-                    // Get plate index: first try the map we built, then use find_instance
-                    int plate_idx = -1;
-                    auto it = instance_to_plate.find(instance->id().id);
-                    if (it != instance_to_plate.end()) {
-                        plate_idx = it->second;
-                    } else {
-                        // Fallback to find_instance if not in map
-                        // find_instance uses object/instance indices, need to find them first
-                        if (!m_models.empty()) {
-                            Model& model = m_models[0];
-                            int obj_idx = -1, inst_idx = -1;
-                            for (size_t i = 0; i < model.objects.size(); i++) {
-                                if (model.objects[i]->id().id == obj->id().id) {
-                                    obj_idx = (int)i;
-                                    for (size_t j = 0; j < model.objects[i]->instances.size(); j++) {
-                                        if (model.objects[i]->instances[j]->id().id == instance->id().id) {
-                                            inst_idx = (int)j;
-                                            break;
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                            if (obj_idx >= 0 && inst_idx >= 0) {
-                                plate_idx = partplate_list.find_instance(obj_idx, inst_idx);
-                            }
-                        }
-                    }
-                    
-                    // If still not found, try to determine from position or default to plate 0
-                    if (plate_idx == -1) {
-                        if (auto_plate_value != 0 && oriented_or_arranged) {
-                            // Multi-plate arrange should have assigned the instance to a plate.
-                            // If not found, it might be out of bounds - check all plates by position
-                            for (int i = 0; i < plate_count; i++) {
-                                Slic3r::GUI::PartPlate* plate = partplate_list.get_plate(i);
-                                if (plate && plate->intersect_instance(obj->id().id, instance->id().id)) {
-                                    plate_idx = i;
-                                    break;
-                                }
-                            }
-                        }
-                        // If still not found, default to plate 0 (for auto_plate=0 or unarranged cases)
-                        if (plate_idx == -1) {
-                            plate_idx = 0;
-                        }
-                    }
+
+                    // Each outside/unassigned instance gets a separate, centered output plate with its bottom at Z=0.
+                    // These indices exist only in model_transforms: do not create plates or
+                    // change model positions, 3MF membership, or slicing behavior here.
+                    const auto it                = instance_to_plate.find(instance->id().id);
+                    const bool export_separately = it == instance_to_plate.end();
+                    const int  plate_idx         = export_separately ? next_export_plate++ : it->second;
+
                     transform["plate_index"] = plate_idx;
 
                     // Export plate-local XY coordinates in resolved multi-plate mode.
@@ -6590,10 +6606,15 @@ int CLI::run(int argc, char **argv)
                             export_y -= plate_origin.y();
                         }
                     }
+                    if (export_separately) {
+                        export_x = export_bed_center.x();
+                        export_y = export_bed_center.y();
+                    }
+                    const double export_z = export_separately ? 0.0 : bbox.min.z();
                     transform["position"] = {
                         clean_value(export_x),
                         clean_value(export_y),
-                        clean_value(bbox.min.z())  // after ensure_on_bed this should be 0
+                        clean_value(export_z)
                     };
                     
                     model_transforms_json.push_back(transform);
@@ -6601,7 +6622,7 @@ int CLI::run(int argc, char **argv)
                     BOOST_LOG_TRIVIAL(info) << "Model: " << obj->name 
                                             << ", Instance: " << instance->id().id
                                             << ", Plate: " << plate_idx
-                                            << ", Position: (" << export_x << "," << export_y << "," << bbox.min.z() << ")"
+                                            << ", Position: (" << export_x << "," << export_y << "," << export_z << ")"
                                             << ", Rotation (deg): (" << euler.x()*180.0/M_PI << "," << euler.y()*180.0/M_PI << "," << euler.z()*180.0/M_PI << ")"
                                             << ", Scale: (" << scale.x() << "," << scale.y() << "," << scale.z() << ")";
                 }
@@ -7086,6 +7107,13 @@ int CLI::run(int argc, char **argv)
                         start_time = (long long)Slic3r::Utils::get_current_time_utc();
                         //get the current partplate
                         Slic3r::GUI::PartPlate* part_plate = partplate_list.get_plate(index);
+                        // All-plate slicing, like the GUI, skips plates explicitly
+                        // excluded from printing. Do not skip enabled out-of-bounds
+                        // models or a plate explicitly requested by its index.
+                        if (plate_to_slice == 0 && (part_plate->empty() || part_plate->is_all_instances_unprintable())) {
+                            BOOST_LOG_TRIVIAL(info) << "Skip non-printing plate " << index + 1;
+                            continue;
+                        }
                         part_plate->get_print(&print, &gcode_result, &print_index);
 
                         print_fff = dynamic_cast<Print *>(print);
@@ -7796,11 +7824,11 @@ int CLI::run(int argc, char **argv)
             if (!nozzle_diameter_str.empty())
                 plate_data->nozzle_diameters = nozzle_diameter_str;
             if (use_cli_thumbnail_for_this_plate) {
+                // Never package the original file after a failed decode.
+                plate_data->thumbnail_file.clear();
                 if (load_cli_thumbnail_image_for_3mf(cli_thumbnail_image_path, plate_data->plate_thumbnail)) {
-                    plate_data->thumbnail_file.clear();
                     need_create_thumbnail_group = true;
                 } else {
-                    plate_data->thumbnail_file = cli_thumbnail_image_path;
                     plate_data->plate_thumbnail.reset();
                 }
                 plate_data->no_light_thumbnail_file.clear();

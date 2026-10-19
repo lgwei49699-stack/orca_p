@@ -33,12 +33,6 @@ function HandleStudio(pVal)
 	}
 }
 
-function GetFilamentShortname( sName )
-{
-	let sShort=sName.split('@')[0].trim();
-	
-	return sShort;
-}
 
 
 function SortUI()
@@ -54,6 +48,10 @@ function SortUI()
 			ModelList.push(OneMode);
 	}
 	
+    $('#MachineList .CValues label:gt(0)').remove();
+    $('#FilatypeList .CValues label:gt(0)').remove();
+    $('#VendorList .CValues label:gt(0)').remove();
+    $('#MachineList').show();
 	//model
 	let HtmlMode='';
 	nMode=ModelList.length;
@@ -71,128 +69,7 @@ function SortUI()
 		$('#MachineList').hide();
 	}
 	
-	//Filament
-	let HtmlFilament='';
-	let SelectNumber=0;
-
-	var TypeHtmlArray={};
-    var VendorHtmlArray={};
-	var GenericFilamentHtmlArray={};
-	var NonGenericFilamentHtmlArray={};
-	for( let key in m_ProfileItem['filament'] )
-	{
-		let OneFila=m_ProfileItem['filament'][key];
-		
-		//alert(JSON.stringify(OneFila));
-		
-		let fWholeName=OneFila['name'].trim();
-		let fShortName=GetFilamentShortname( OneFila['name'] );
-		let fVendor=OneFila['vendor'];
-		let fType=OneFila['type'];
-		let fSelect=OneFila['selected'];
-		let fModel=OneFila['models']
-		
-		
-        let bFind=false;		
-		//let bCheck=$("#MachineList input:first").prop("checked");
-		if( fModel=='')
-		{
-			// Orca: hide
-			bFind=true;
-		}
-		else
-		{
-			//check in modellist		    
-		    let nModelAll=ModelList.length;
-		    for(let m=0;m<nModelAll;m++)
-		    {
-	    		let sOne=ModelList[m];
-			
-				let OneName=sOne['model'];
-				let NozzleArray=sOne["nozzle_selected"].split(';');
-				
-				let nNozzle=NozzleArray.length;
-				
-				for( let b=0;b<nNozzle;b++ )
-				{
-					let nowModel= OneName+"++"+NozzleArray[b];
-					if(fModel.indexOf(nowModel)>=0)
-					{
-						bFind=true;
-						break;
-					}
-				}
-			}
-		}
-		
-		if(bFind)
-		{
-			//Type
-			let LowType=fType.toLowerCase();
-		    if(!TypeHtmlArray.hasOwnProperty(LowType))
-		    {
-				/* ORCA use label tag to allow checkbox to toggle when user ckicked to text */
-			    let HtmlType='<label><input type="checkbox" filatype="'+fType+'" onChange="FilaClick()"   />'+fType+'</label>';
-			
-				TypeHtmlArray[LowType]=HtmlType;
-		    }
-			
-			//Vendor
-			let lowVendor=fVendor.toLowerCase();
-			if(!VendorHtmlArray.hasOwnProperty(lowVendor))
-		    {
-				/* ORCA use label tag to allow checkbox to toggle when user ckicked to text */
-			    let HtmlVendor='<label><input type="checkbox" vendor="'+fVendor+'"  onChange="VendorClick()" />'+fVendor+'</label>';
-				
-				VendorHtmlArray[lowVendor]=HtmlVendor;
-		    }
-			
-			//Filament
-			let pFila=$("#ItemBlockArea input[vendor='"+fVendor+"'][filatype='"+fType+"'][name='"+fShortName+"']");
-	        if(pFila.length==0)
-		    {
-				/* ORCA use label tag to allow checkbox to toggle when user ckicked to text */
-			    let HtmlFila='<label class="MItem"><input type="checkbox" vendor="'+fVendor+'"  filatype="'+fType+'" filalist="'+fWholeName+';'+'"  model="'+fModel+'" name="'+fShortName+'" />'+fShortName+'</label>';
-			
-			    // Separate generic and non-generic filaments
-			    if(fVendor.toLowerCase() === 'generic') {
-				    GenericFilamentHtmlArray[fShortName] = HtmlFila;
-			    } else {
-				    NonGenericFilamentHtmlArray[fShortName] = HtmlFila;
-			    }
-		    } 
-			else
-			{
-				let strModel=pFila.attr("model");
-				let strFilalist=pFila.attr("filalist");
-				
-				if(strModel == '' || fModel == '')
-					pFila.attr("model", '');
-				else
-					pFila.attr("model", strModel+fModel);
-					
-				pFila.attr("filalist", strFilalist+fWholeName+';');
-			}
-			
-		    if(fSelect*1==1)
-			{
-				//alert( fWholeName+' - '+fShortName+' - '+fVendor+' - '+fType+' - '+fSelect+' - '+fModel );
-					
-				$("#ItemBlockArea input[vendor='"+fVendor+"'][filatype='"+fType+"'][name='"+fShortName+"']").prop("checked",true);
-				SelectNumber++;
-			}
-//			else
-//				$("#ItemBlockArea input[vendor='"+fVendor+"'][model='"+fModel+"'][filatype='"+fType+"'][name='"+key+"']").prop("checked",false);			
-		}
-	} 
-	
-	// Append filaments in order: generic first, then non-generic
-	for(let key in GenericFilamentHtmlArray) {
-		$("#ItemBlockArea").append(GenericFilamentHtmlArray[key]);
-	}
-	for(let key in NonGenericFilamentHtmlArray) {
-		$("#ItemBlockArea").append(NonGenericFilamentHtmlArray[key]);
-	}
+    const {SelectNumber, TypeHtmlArray, VendorHtmlArray} = RenderFilamentRows(m_ProfileItem);
 
 	//Sort TypeArray
 	let TypeAdvNum=FilamentPriority.length;
@@ -423,7 +300,7 @@ function ChooseDefaultFilament()
 	}	
 	
 	//DefaultMaterialList
-	let DefaultMaterialString=new Array();
+	let DefaultMaterialString='';
 	let nMode=m_ProfileItem["model"].length;
 	for(let n=0;n<nMode;n++)
 	{
@@ -449,25 +326,8 @@ function ChooseDefaultFilament()
 		let OneFF=OneNode.getElementsByTagName("input")[0];
 		$(OneFF).prop("checked",false);
 		
-	    let filamentList=GetFilamentShortname(OneFF.getAttribute("filalist")); 
-		//alert(filamentList);
-		let filamentArray=filamentList.split(';')
-		
-		let HasModel=false;
-		let NowFilaLength=filamentArray.length;
-		for(let p=0;p<NowFilaLength;p++)
-		{
-			let NowFila=filamentArray[p];
-		
-			if( NowFila!='' && DefaultMaterialArray.indexOf(NowFila)>-1)
-			{
-				HasModel=true;
-				break;
-			}
-		}
-			
-		if(HasModel)
-		    $(OneFF).prop("checked",true);
+        if (IsDefaultFilament(OneFF.getAttribute("name"), DefaultMaterialArray))
+            $(OneFF).prop("checked", true);
 	}
 	
 	ShowNotice(0);
@@ -514,15 +374,7 @@ function ResponseFilamentResult()
 	let FilaArray=new Array();
 	for(let n=0;n<nAll;n++)
 	{
-		let sName=FilaSelectedList[n].getAttribute("name");
-		
-	    for( let key in m_ProfileItem['filament'] )
-	    {
-			let FName=GetFilamentShortname(key);
-			
-			if(FName==sName)
-				FilaArray.push(key);
-		}
+        FilaArray.push(FilaSelectedList[n].getAttribute("name"));
 	}
 	
 	var tSend={};

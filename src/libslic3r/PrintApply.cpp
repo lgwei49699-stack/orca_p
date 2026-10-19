@@ -940,7 +940,12 @@ static PrintObjectRegions* generate_print_object_regions(
 
     all_regions.clear();
 
-    bool reuse_old = print_object_regions_old && !print_object_regions_old->layer_ranges.empty();
+    // A mesh replacement may preserve some volume extents while changing the
+    // instance transform in the same apply (for example, reconstruction plus
+    // placing on the bed). Check partially valid caches here as well: otherwise
+    // they are rebuilt in old coordinates and invalidate the next unchanged apply.
+    const bool reuse_old = print_object_regions_old && !layer_ranges_regions.empty() &&
+                           trafos_differ_in_rotation_by_z_and_mirroring_by_xy_only(out->trafo_bboxes, trafo);
 
     if (reuse_old) {
         // Reuse old bounding boxes of some ModelVolumes and their ranges.
@@ -956,6 +961,7 @@ static PrintObjectRegions* generate_print_object_regions(
             r.fuzzy_skin_painted_regions.clear();
         }
     } else {
+        out->clear();
         out->trafo_bboxes = trafo;
         layer_ranges_regions.reserve(model_layer_ranges.size());
         for (const auto &range : model_layer_ranges)

@@ -1,5 +1,7 @@
 #include "ModelCheckWorkflow.hpp"
 #include "ModelInspection.hpp"
+#include "ModelRepairEvidence.hpp"
+#include "ModelReconstruction.hpp"
 #include "Model.hpp"
 #include "PrintConfig.hpp"
 #include "Format/OBJ.hpp"
@@ -9,6 +11,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/nowide/fstream.hpp>
 #include <array>
+#include <chrono>
 #include <iomanip>
 #include <limits>
 #include <locale>
@@ -110,6 +113,86 @@ json business_issue_counts(const json& inspection)
     return counts;
 }
 
+json check_boundary(const json& check);
+
+void publish_section_evidence(ModelCheckWorkflowReport& report, const Model& model, const TriangleMesh* inspected_mesh = nullptr)
+{
+    if (!report.check.value("repair_evidence_requested", false) || !report.repair.can_continue())
+        return;
+    // Only the currently published prepared or round-tripped model is measured.
+    // The opt-in combined workflow checks completion after observation; legacy
+    // callers never enter this path.
+    const auto started = std::chrono::steady_clock::now();
+    try {
+        if (model_inspection_boundary(report.check.at("inspection")).value("status", "") != "defects_detected")
+            return;
+        const auto reason                          = model.objects.size() == 1 && model.objects.front() ?
+                                                         model_reconstruction_ineligibility(*model.objects.front()) :
+                                                         std::string("Reconstruction requires exactly one model object.");
+        report.check["reconstruction_eligibility"] = {{"status", reason.empty() ? "eligible" : "unsupported"}, {"reason", reason}};
+        // Do not flatten multiple parts, modifiers or painted attributes into
+        // an apparent reconstructable solid. Their ordinary workflow is intact.
+        if (!reason.empty()) {
+            report.check["section_evidence"] = {{"status", "not_run"}, {"reason", "reconstruction_unsupported"}};
+            return;
+        }
+        const auto preliminary = check_boundary(report.check).at("reconstruction");
+        if (preliminary.value("assessment", "") == "evidence_present") {
+            report.check["section_evidence"] = {{"status", "not_run"}, {"reason", "reconstruction_evidence_already_present"}};
+            return;
+        }
+        if (preliminary.value("assessment", "") == "blocked") {
+            report.check["section_evidence"] = {{"status", "not_run"}, {"reason", "mesh_evidence_not_completed"}};
+            return;
+        }
+        report.check["section_evidence"] = inspected_mesh ? inspect_model_section_evidence(*inspected_mesh) :
+                                                            inspect_model_section_evidence(model.mesh());
+    } catch (const std::bad_alloc&) {
+        report.check["section_evidence"] = {{"status", "incomplete"}, {"reason", "memory_allocation_failed"}};
+    } catch (const std::exception&) {
+        report.check["section_evidence"] = {{"status", "failed"}, {"reason", "execution_failed"}};
+    } catch (...) {
+        report.check["section_evidence"] = {{"status", "failed"}, {"reason", "execution_failed"}};
+    }
+    // Includes model.mesh() preparation when it could not be reused. The inner
+    // elapsed_ms deliberately measures only the shared section assessment.
+    report.check["section_evidence"]["workflow_elapsed_ms"] =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+}
+
+json check_boundary(const json& check)
+{
+    ModelRepairEvidencePolicy policy;
+    policy.allow_boundary_closure = check.value("allow_boundary_closure", false);
+    return model_check_boundary(check.value("inspection", json()), check.value("repair_evidence", json::object()),
+                                check.value("section_evidence", json::object()), check.value("failure_kind", std::string{}),
+                                check.value("reconstruction_eligibility", json::object()), policy);
+}
+
+void require_completed_evidence(ModelCheckWorkflowReport& report)
+{
+    // Reuse the public boundary validation, including coherent plane/region
+    // counters. Neither a bare "completed" nor a generic "undetermined" proves
+    // that the requested workflow ran to completion.
+    const auto  boundary   = check_boundary(report.check);
+    const auto& result     = boundary.at("reconstruction");
+    const auto  assessment = result.value("assessment", "");
+    const auto  reason     = result.value("reason", "");
+    if (assessment == "not_needed" && reason == "no_detected_mesh_defects")
+        return; // Healthy final mesh: section work is deliberately unnecessary.
+    if (result.value("applicability", "") == "eligible" &&
+        ((assessment == "undetermined" && reason == "no_conclusive_region_failure") ||
+         (assessment == "evidence_present" && (reason == "no_effective_regions" || reason == "proper_crossing_after_repair" ||
+                                               reason == "open_boundaries_under_closed_solid_policy"))))
+        return;
+    report.failure_stage = "repair_evidence";
+    // Keep the existing workflow failure kind and CLI exit semantics. The
+    // boundary projection preserves a known failing substage/cause separately
+    // so, for example, a section plane budget is not reported as an engine fault.
+    report.failure_kind  = "repair_evidence_incomplete";
+    throw std::runtime_error("Repair evidence did not complete; see the boundary details.");
+}
+
 } // namespace
 
 json model_check_business_result(const json& checks, int return_code, const std::string& error)
@@ -127,6 +210,8 @@ json model_check_business_result(const json& checks, int return_code, const std:
                                   {"input_materials_ignored", check.value("input_materials_ignored", false)},
                                   {"repair_status", status},
                                   {"issues", business_issue_counts(inspection)}};
+        if (check.value("repair_evidence_requested", false))
+            summary["boundary"] = check_boundary(check);
         // Presentation-only reduction: aggregate completeness still includes
         // internal structural checks. Do not turn unknown findings into a pass.
         result["model_checks"].push_back(std::move(summary));
@@ -134,10 +219,12 @@ json model_check_business_result(const json& checks, int return_code, const std:
     return result;
 }
 
-void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelCheckWorkflowReport& report)
+static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& options, ModelCheckWorkflowReport& report)
 {
     report                    = {};
     report.check              = {{"schema_version", 2},
+                                 {"repair_evidence_requested", options.repair_evidence},
+                                 {"allow_boundary_closure", options.allow_boundary_closure},
                                  {"input_file", options.input_file},
                                  {"check_complete", false},
                                  {"mesh_status", "unknown"},
@@ -149,14 +236,23 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
                                  {"slicing", "not_requested"},
                                  {"advanced_repair",
                                   {{"requested", options.advanced_repair}, {"status", options.advanced_repair ? "not_started" : "not_requested"}}}};
+    if (options.allow_boundary_closure && (!options.advanced_repair || !options.repair_evidence))
+        throw std::invalid_argument("Boundary closure evidence requires advanced repair and repair evidence.");
+    auto inspection_options = options.inspection_options;
+    // The same pair search supplies evidence for the inspected serialized mesh.
+    // Normal checks and ordinary advanced repair retain their old work budget.
+    if (options.advanced_repair && options.repair_evidence)
+        inspection_options.classify_proper_crossings = true;
     std::string source_format = fs::path(options.input_file).extension().string();
     boost::algorithm::to_lower(source_format);
     if (source_format != ".stl" && source_format != ".obj")
         throw std::invalid_argument("--check-model requires one STL or OBJ input.");
     if (!options.export_format.empty() && options.export_format != "obj" && options.export_format != "stl")
         throw std::invalid_argument("Invalid model check export format.");
-    if (fs::file_size(options.input_file) > options.max_input_bytes)
+    if (fs::file_size(options.input_file) > options.max_input_bytes) {
+        report.failure_kind = "resource_limit";
         throw std::runtime_error("Model check input exceeds the " + std::to_string(options.max_input_bytes) + " byte limit.");
+    }
     DynamicPrintConfig config;
     MeshRepairReport   import_report;
     const bool         repair_stl = source_format == ".stl";
@@ -164,9 +260,11 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
                                      &import_report);
     report.check["input_materials_ignored"] = report.input_materials_ignored;
     const auto triangle_count               = model.mesh().its.indices.size();
-    if (triangle_count == 0 || triangle_count > options.inspection_options.max_triangles)
+    if (triangle_count == 0 || triangle_count > options.inspection_options.max_triangles) {
+        report.failure_kind = triangle_count == 0 ? "input_failed" : "resource_limit";
         throw std::runtime_error("Model check requires 1 to " + std::to_string(options.inspection_options.max_triangles) +
                                  " decoded triangles.");
+    }
     // Match ordinary Orca source import instead of independently deleting
     // zero-area records: even a zero-area triangle can participate in paired
     // edge topology. OBJ keeps its native import/material handling, not ADMesh.
@@ -183,6 +281,7 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
         report.check["basic_repair"]["normals_fixed"]               = import_report.normals_fixed;
     }
 
+    report.failure_stage  = "io";
     const fs::path parent = fs::absolute(options.output_directory.empty() ? "." : options.output_directory);
     fs::create_directories(parent);
     const fs::path run = parent / fs::unique_path("model-check-%%%%-%%%%-%%%%");
@@ -190,6 +289,7 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
         throw std::runtime_error("Could not create a private model check output directory.");
     // Always persist the decoded baseline: import normalization and OBJ color
     // subdivision mean that an unchanged cleanup count need not equal raw input.
+    report.failure_stage                  = "export";
     const fs::path baseline               = run / ("prepared" + source_format);
     report.output_files                   = save_working_model(baseline, model, config);
     report.check["working_model"]         = baseline.string();
@@ -198,21 +298,25 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
     DynamicPrintConfig working_config;
     bool               ignored      = false;
     Model              working      = load_working_model(baseline.string(), working_config, options.ignore_materials, ignored);
-    auto               before       = inspect_model_mesh(working.mesh(), options.inspection_options);
+    report.failure_stage            = "inspection";
+    auto before                     = inspect_model_mesh(working.mesh(), inspection_options);
     report.check["before_advanced"] = before;
     publish_check(report, before, baseline.string(), "serialized_prepared");
     if (options.advanced_repair) {
         if (before.at("mesh_status") == "passed") {
             report.check["advanced_repair"]["status"] = "not_needed";
         } else {
+            report.failure_stage                      = "repair";
             report.repair_attempted                   = true;
             report.check["advanced_repair"]["status"] = "running";
             ModelRepairOptions repair_options;
-            repair_options.allow_partial                     = true;
-            repair_options.preserve_annotations              = !options.ignore_materials;
-            repair_options.allow_annotation_clearing         = options.ignore_materials;
-            repair_options.remove_non_3d_parts               = options.ignore_materials;
-            const bool ok                                    = repair_model(working, report.repair, repair_options);
+            repair_options.allow_partial             = true;
+            repair_options.preserve_annotations      = !options.ignore_materials;
+            repair_options.allow_annotation_clearing = options.ignore_materials;
+            repair_options.remove_non_3d_parts       = options.ignore_materials;
+            const bool ok                            = repair_model(working, report.repair, repair_options);
+            if (options.repair_evidence)
+                report.check["repair_evidence"] = model_repair_boundary(report.repair);
             report.check["advanced_repair"]["engine_status"] = report.repair.status();
             report.check["advanced_repair"]["committed"]     = report.repair.committed;
             // The shared engine returns false for an unchanged unresolved mesh
@@ -221,6 +325,7 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
             // must still remain fatal even when unresolved items were recorded.
             const bool unchanged_unresolved = !report.repair.committed && report.repair.unresolved != 0;
             if (!report.repair.can_continue() || (!ok && !unchanged_unresolved)) {
+                report.failure_kind                               = report.repair.canceled ? "canceled" : "repair_failed";
                 report.check["advanced_repair"]["status"]         = "failed";
                 report.check["advanced_repair"]["retained_stage"] = "prepared";
                 throw std::runtime_error("Advanced repair failed; the prepared working model was retained.");
@@ -228,19 +333,30 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
             if (!report.repair.committed) {
                 report.check["advanced_repair"]["status"]         = "unresolved";
                 report.check["advanced_repair"]["retained_stage"] = "prepared";
-                throw std::runtime_error("Advanced repair produced no retainable change; see the remaining inspection findings.");
+                if (!options.repair_evidence) {
+                    report.repair_no_progress = true;
+                    throw std::runtime_error("Advanced repair produced no retainable change; see the remaining inspection findings.");
+                }
+                // Normal no-progress is a model outcome in the opt-in workflow,
+                // not an execution error. Still honor requested export/recheck
+                // and validate its evidence before reporting operation completed.
             }
         }
     }
     // Export the advanced result or an explicitly requested format conversion.
     // Recheck the serialized/reimported artifact, not a different in-memory mesh.
     if (report.repair.committed || !options.export_format.empty()) {
+        report.failure_stage      = "export";
         const std::string  format = options.export_format.empty() ? source_format.substr(1) : options.export_format;
         const fs::path     output = run / ("result." + format);
         const auto         files  = save_working_model(output, working, working_config);
         DynamicPrintConfig reloaded_config;
         Model              reloaded = load_working_model(output.string(), reloaded_config, options.ignore_materials, ignored);
-        const auto         after    = inspect_model_mesh(reloaded.mesh(), options.inspection_options);
+        report.failure_stage        = "inspection";
+        auto       retained_mesh    = reloaded.mesh();
+        const auto after            = inspect_model_mesh(retained_mesh, inspection_options);
+        if (!options.repair_evidence)
+            retained_mesh = TriangleMesh{};
         // Allocate the complete publication before replacing the retained
         // baseline report. An allocation/serialization failure must not mix stages.
         auto accepted = report;
@@ -253,7 +369,50 @@ void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelChe
             accepted.check["advanced_repair"]["retained_stage"] = "advanced";
         }
         report = std::move(accepted);
+        publish_section_evidence(report, reloaded, &retained_mesh);
+    } else {
+        publish_section_evidence(report, working);
     }
+    if (options.advanced_repair && options.repair_evidence)
+        require_completed_evidence(report);
     report.check["operation_status"] = "completed";
+}
+
+void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelCheckWorkflowReport& report)
+{
+    const auto record_failure = [&](const std::string& kind) {
+        if (!report.repair_no_progress) {
+            if (report.failure_kind.empty())
+                report.failure_kind = kind;
+            report.check["failure_kind"]  = report.failure_kind;
+            report.check["failure_stage"] = report.failure_stage;
+            if (report.repair_attempted && options.repair_evidence)
+                report.check["repair_evidence"] = model_repair_boundary(report.repair);
+        }
+    };
+    try {
+        run_model_check_workflow_impl(options, report);
+    } catch (const std::bad_alloc&) {
+        record_failure("memory_allocation_failed");
+        throw;
+    } catch (const ModelInspectionLimitError&) {
+        record_failure("resource_limit");
+        throw;
+    } catch (const fs::filesystem_error&) {
+        record_failure("io_failed");
+        throw;
+    } catch (const std::invalid_argument&) {
+        record_failure(report.failure_stage == "input" ? "input_failed" : report.failure_stage + "_failed");
+        throw;
+    } catch (const std::exception&) {
+        record_failure(report.failure_stage == "input" || report.failure_stage == "io" || report.failure_stage == "inspection" ||
+                               report.failure_stage == "repair" || report.failure_stage == "export" ?
+                           report.failure_stage + "_failed" :
+                           "execution_failed");
+        throw;
+    } catch (...) {
+        record_failure("execution_failed");
+        throw;
+    }
 }
 } // namespace Slic3r

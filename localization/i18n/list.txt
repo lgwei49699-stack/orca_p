@@ -1,3 +1,4 @@
+src/OrcaSlicer.cpp
 src/slic3r/GUI/DeviceTab/uiAmsHumidityPopup.h
 src/slic3r/GUI/DeviceTab/uiAmsHumidityPopup.cpp
 src/slic3r/GUI/DeviceTab/uiDeviceUpdateVersion.h
@@ -27,6 +28,7 @@ src/slic3r/GUI/GUI_AuxiliaryList.cpp
 src/slic3r/GUI/GUI_Init.cpp
 src/slic3r/GUI/GUI_Factories.cpp
 src/slic3r/GUI/GUI_ObjectList.cpp
+src/slic3r/GUI/ModelReconstructionDialog.cpp
 src/slic3r/GUI/GUI_ObjectSettings.cpp
 src/slic3r/GUI/GUI_ObjectLayers.cpp
 src/slic3r/GUI/GUI_ObjectTable.cpp
@@ -146,6 +148,9 @@ src/libslic3r/PrintObjectSlice.cpp
 src/libslic3r/PlaceholderParser.cpp
 src/libslic3r/Support/TreeSupport.cpp
 src/libslic3r/Model.cpp
+src/libslic3r/ModelReconstruction.cpp
+src/libslic3r/MeshReconstruction.cpp
+src/libslic3r/ReconstructionProcess.cpp
 src/libslic3r/Format/OBJ.cpp
 src/slic3r/GUI/CalibrationWizardPage.cpp
 src/slic3r/GUI/CalibrationPanel.cpp
@@ -177,3 +182,5 @@ src/slic3r/Utils/Flashforge.cpp
 src/slic3r/GUI/Jobs/OAuthJob.cpp
 src/slic3r/GUI/BackgroundSlicingProcess.cpp
 src/slic3r/GUI/Gizmos/GLGizmoBrimEars.cpp
+src/slic3r/GUI/GFDConsumableMappingDialog.cpp
+src/slic3r/GUI/GFDDeviceSelectionDialog.cpp

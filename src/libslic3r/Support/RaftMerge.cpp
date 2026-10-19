@@ -2,7 +2,7 @@
 #include "RaftGeometry.hpp"
 
 #include "../ClipperUtils.hpp"
-#include "../Fill/FillBase.hpp"
+#include "../Fill/FillRectilinear.hpp"
 #include "../GCode/ConflictChecker.hpp"
 #include "../I18N.hpp"
 #include "../Print.hpp"
@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -201,6 +202,63 @@ struct MergedLayer
     bool                      preserve_support = false;
 };
 
+// Keep a finished chunk atomic for G-code's recursive support-path ordering.
+// Classify only paths already clipped to the disjoint solid regions, so a leaf
+// cannot cross between islands. Preserve homogeneous nested collections (walls,
+// loops and clipped runs), splitting only collection ownership, never geometry.
+bool group_raft_paths_by_island(ExtrusionEntityCollection& paths, const ExPolygons& islands, const std::function<void()>& cancel)
+{
+    if (islands.size() < 2 || paths.empty())
+        return true;
+    std::vector<BoundingBox> bounds;
+    for (const ExPolygon& island : islands)
+        bounds.push_back(get_extents(island));
+    const size_t                                        unassigned = islands.size();
+    const std::function<size_t(const ExtrusionEntity&)> owner      = [&](const ExtrusionEntity& entity) -> size_t {
+        cancel();
+        if (const auto* nested = dynamic_cast<const ExtrusionEntityCollection*>(&entity)) {
+            size_t common = unassigned;
+            for (const ExtrusionEntity* child : nested->entities) {
+                const size_t child_owner = owner(*child);
+                if (child_owner == unassigned || (common != unassigned && common != child_owner))
+                    return unassigned;
+                common = child_owner;
+            }
+            return common;
+        }
+        const Point& point = entity.first_point();
+        for (size_t i = 0; i < islands.size(); ++i)
+            if (bounds[i].contains(point) && islands[i].contains(point))
+                return i;
+        return unassigned;
+    };
+    std::vector<ExtrusionEntityCollection>            groups(islands.size());
+    const std::function<bool(const ExtrusionEntity&)> append = [&](const ExtrusionEntity& entity) {
+        const size_t index = owner(entity);
+        if (index != unassigned) {
+            groups[index].append(entity);
+            return true;
+        }
+        if (const auto* nested = dynamic_cast<const ExtrusionEntityCollection*>(&entity))
+            return std::all_of(nested->entities.begin(), nested->entities.end(),
+                               [&](const ExtrusionEntity* child) { return append(*child); });
+        return false;
+    };
+    for (const ExtrusionEntity* entity : paths.entities)
+        if (!append(*entity))
+            return false; // Leave the complete original collection intact.
+    ExtrusionEntityCollection grouped;
+    for (ExtrusionEntityCollection& group : groups)
+        if (!group.empty()) {
+            // The exporter chooses the nearest paths inside each group. Do not
+            // reverse an entire group while choosing the next chunk to visit.
+            group.no_sort = true;
+            grouped.append(std::move(group));
+        }
+    paths.swap(grouped);
+    return true;
+}
+
 void generate_shared_paths(MergedLayer& result, const BoundingBox& bounds, const Polygons& bed, const ExPolygons* uncut_areas = nullptr)
 {
     const auto& source  = result.sources.front();
@@ -232,6 +290,16 @@ void generate_shared_paths(MergedLayer& result, const BoundingBox& bounds, const
                 throw CanceledException();
         });
         fill_areas   = std::move(path_regions.fill_regions);
+        if (walls == 0 && pattern == ipZigZag) {
+            // There are no walls to overlap here. Both the turn contour AND
+            // the outer hatch contour must fit inside the final half-width +
+            // 0.001 mm clip. Otherwise a hatch chord may cross a concave notch
+            // in the centerline region and get split by the safety clip.
+            // Leave 0.001 mm between contours and another micron for rounding;
+            // preserve the requested hatch spacing, density and phase.
+            filler->overlap = std::min(0., 0.5 * filler->spacing - (0.5 * double(flow.width()) + 0.003));
+            static_cast<FillZigZag*>(filler.get())->max_endpoint_overlap = 0.001;
+        }
         if (path_regions.omitted_regions > 0)
             BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] omitted collapsed path regions=" << path_regions.omitted_regions
                                     << ", layer=" << source.index;
@@ -247,6 +315,12 @@ void generate_shared_paths(MergedLayer& result, const BoundingBox& bounds, const
     const size_t generated_entities = result.paths.entities.size();
     translate_paths(result.paths, fill_origin);
     clip_raft_paths_to_area(result.paths, intersection(to_polygons(result.areas), bed), uncut_areas != nullptr);
+    if (uncut_areas != nullptr && source.raft->object->config().raft_segmented.value &&
+        !group_raft_paths_by_island(result.paths, result.areas, [&source] {
+            if (source.raft->object->print()->canceled())
+                throw CanceledException();
+        }))
+        BOOST_LOG_TRIVIAL(warning) << "[Raft][Geometry] path grouping skipped: unknown island, layer=" << source.plan_index();
     if (uncut_areas != nullptr && result.paths.empty())
         BOOST_LOG_TRIVIAL(info) << "[Raft][Geometry] empty candidate, layer=" << source.plan_index() << ", z=" << source.layer().print_z
                                 << ", height=" << flow.height() << ", width=" << flow.width() << ", regions=" << result.areas.size()

@@ -80,13 +80,14 @@ def main():
     results = []
 
     def run(name, source, flags, expected_success, *, slice_job=False, expected_partial=False, extra_sources=(),
-            expected_open_before=None, expected_error=None):
+            expected_open_before=None, expected_error=None, evidence=False):
         case = work / name
         case.mkdir()
         data, output = case / "data", case / "output"
         data.mkdir()
         command = [str(binary), "--datadir", str(data), "--outputdir", str(output),
-                   "--repair-model", "cgal", *flags, str(source), *(str(p) for p in extra_sources)]
+                   "--repair-model", "cgal", *flags, *(('--repair-evidence',) if evidence else ()),
+                   str(source), *(str(p) for p in extra_sources)]
         (case / "command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")
         try:
             with (case / "run.log").open("wb") as log:
@@ -96,6 +97,19 @@ def main():
             assert process.returncode >= 0, f"Process crashed: {process.returncode}"
             assert (process.returncode == 0) == expected_success, report
             assert (report["return_code"] == 0) == expected_success, report
+            for repair in report.get("model_repairs", []):
+                if repair.get("engine") != "cgal":
+                    continue
+                if not evidence:
+                    assert "boundary" not in repair, repair
+                    continue
+                boundary = repair.get("boundary", {})
+                assert boundary.get("schema_version") == 1, repair
+                assert boundary.get("repair_status") == repair.get("status"), repair
+                assert boundary.get("execution_completed") == repair.get("can_continue"), repair
+                assert boundary.get("engine_mesh_validated") == repair.get("mesh_validated"), repair
+                assert boundary.get("full_inspection") == "not_established_by_repair_report", repair
+                assert boundary.get("printability") == "not_assessed", repair
             paths = [Path(p) if Path(p).is_absolute() else case / p for p in report.get("output_files", [])]
             if expected_success:
                 repairs = report["model_repairs"]
@@ -190,6 +204,27 @@ def main():
             if args.load_settings and success and fixture["name"] != "07-thin-solid":
                 run(name + "-slice", source, ["--load-settings", args.load_settings, "--load-filaments", args.load_filaments,
                                              "--arrange", "1", "--slice", "0"], True, slice_job=True)
+
+    # Evidence must not change the repair engine result or exported geometry.
+    for stem, success in (("01-missing-top", True), ("09-nonmanifold-edge", False)):
+        source = fixtures / (stem + ".obj")
+        plain, plain_paths = run(stem + "-evidence-default", source, ["--export-obj"], success)
+        observed, observed_paths = run(stem + "-evidence-enabled", source, ["--export-obj"], success, evidence=True)
+        disabled, disabled_paths = run(stem + "-evidence-disabled", source,
+                                       ["--export-obj", "--repair-evidence", "0"], success)
+        if plain is not None and observed is not None and disabled is not None:
+            try:
+                def stable_repairs(report):
+                    # Output paths differ only because these are isolated runs.
+                    return [{key: value for key, value in repair.items() if key not in ("boundary", "output_files")}
+                            for repair in report["model_repairs"]]
+                assert stable_repairs(plain) == stable_repairs(observed) == stable_repairs(disabled)
+                assert plain["return_code"] == observed["return_code"] == disabled["return_code"]
+                assert {path.name: path.read_bytes() for path in plain_paths} == {path.name: path.read_bytes() for path in observed_paths}
+                assert {path.name: path.read_bytes() for path in plain_paths} == {path.name: path.read_bytes() for path in disabled_paths}
+                results.append(dict(case=stem + "-evidence-readonly", passed=True))
+            except (AssertionError, OSError, KeyError) as error:
+                results.append(dict(case=stem + "-evidence-readonly", passed=False, error=str(error)))
 
     # The displaced corner is welded only by native STL import repair. Check
     # CGAL's input geometry, not just a log flag or the final repaired cube.

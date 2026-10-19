@@ -25,12 +25,13 @@ class WallToolPathsParams
 public:
     float   min_bead_width;
     float   min_feature_size;
-    float   min_length_factor;
+    // Fill generators retain the original half-width short-line threshold.
+    float   min_length_factor = 0.5f;
     float   wall_transition_length;
     float   wall_transition_angle;
     float   wall_transition_filter_deviation;
     int     wall_distribution_count;
-    bool    is_top_or_bottom_layer;
+    bool    is_top_or_bottom_layer = false;
 };
 
 WallToolPathsParams make_paths_params(const int layer_id, const PrintObjectConfig &print_object_config, const PrintConfig &print_config);

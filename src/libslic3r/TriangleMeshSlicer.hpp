@@ -6,6 +6,8 @@
 #include "Polygon.hpp"
 #include "ExPolygon.hpp"
 
+struct indexed_triangle_set;
+
 namespace Slic3r {
 
 struct MeshSlicingParams
@@ -46,14 +48,47 @@ struct MeshSlicingParamsEx : public MeshSlicingParams
     double        resolution { 0 };
 };
 
-// All the following slicing functions shall produce consistent results with the same mesh, same transformation matrix and slicing parameters.
-// Namely, slice_mesh_slabs() shall produce consistent results with slice_mesh() and slice_mesh_ex() in the sense, that projections made by 
-// slice_mesh_slabs() shall fall onto slicing planes produced by slice_mesh().
+// Observations made while chaining one horizontal section, before any polygon
+// union or offset. They describe only the requested plane, not mesh validity or
+// printability: for example, a missing horizontal cap may leave no open chains.
+struct MeshSliceDiagnostic
+{
+    size_t open_chains_before_gap_closing{0};
+    size_t remaining_open_chains{0};
+    double remaining_open_length_mm{0.};
+    // At least one nonzero-distance connection was made by the existing gap
+    // closing heuristic. Coincident endpoints alone do not set this flag.
+    bool gap_closing_used{false};
+    // Closed loops after chaining, before slicing-mode filtering or region
+    // construction. Absolute signed areas are summed; overlapping loops and
+    // holes are counted independently, so this is not a solid cross-section
+    // area and cannot by itself establish lost geometry.
+    size_t closed_loops{0};
+    double closed_loop_area_mm2{0.};
+};
+
+struct MeshSlicingDiagnosticResult
+{
+    std::vector<Polygons> slices;
+    // One entry per requested Z, including planes with no intersections.
+    std::vector<MeshSliceDiagnostic> diagnostics;
+};
+
+struct MeshSlicingDiagnosticResultEx
+{
+    std::vector<ExPolygons> slices;
+    // Observations from the same mesh cut, before polygon-to-region conversion.
+    std::vector<MeshSliceDiagnostic> diagnostics;
+};
+
+// All the following slicing functions shall produce consistent results with the same mesh, same transformation matrix and slicing
+// parameters. Namely, slice_mesh_slabs() shall produce consistent results with slice_mesh() and slice_mesh_ex() in the sense, that
+// projections made by slice_mesh_slabs() shall fall onto slicing planes produced by slice_mesh().
 //
 // If a slicing plane slices a horizontal face of a mesh exactly,
 // an upward facing horizontal face is is considered on slicing plane,
 // while a downward facing horizontal face is considered not on slicing plane.
-// 
+//
 // slice_mesh_slabs() thus projects an upward facing horizontal slice to the slicing plane,
 // while slice_mesh_slabs() projects a downward facing horizontal slice to the slicing plane above if it exists.
 
@@ -62,6 +97,15 @@ std::vector<Polygons>           slice_mesh(
     const std::vector<float>         &zs,
     const MeshSlicingParams          &params,
     std::function<void()>             throw_on_cancel = []{});
+
+// Uses the same slicing and loop construction as slice_mesh(), without changing
+// its output. Z values must be sorted, as for slice_mesh(). Lengths are measured
+// in millimeters after params.trafo. The input mesh is never modified.
+MeshSlicingDiagnosticResult slice_mesh_with_diagnostics(
+    const indexed_triangle_set& mesh,
+    const std::vector<float>&   zs,
+    const MeshSlicingParams&    params,
+    std::function<void()>       throw_on_cancel = [] {});
 
 // Specialized version for a single slicing plane only, running on a single thread.
 Polygons                        slice_mesh(
@@ -75,10 +119,17 @@ std::vector<ExPolygons>         slice_mesh_ex(
     const MeshSlicingParamsEx        &params,
     std::function<void()>             throw_on_cancel = []{});
 
-inline std::vector<ExPolygons>  slice_mesh_ex(
-    const indexed_triangle_set       &mesh,
-    const std::vector<float>         &zs,
-    std::function<void()>             throw_on_cancel = []{})
+// Applies exactly the same region construction, slicing modes, closing,
+// offsets and simplification as slice_mesh_ex(), using one mesh cut. The
+// diagnostics refer to the raw closed loops, not the final effective regions.
+MeshSlicingDiagnosticResultEx slice_mesh_ex_with_diagnostics(
+    const indexed_triangle_set& mesh,
+    const std::vector<float>&   zs,
+    const MeshSlicingParamsEx&  params,
+    std::function<void()>       throw_on_cancel = [] {});
+
+inline std::vector<ExPolygons> slice_mesh_ex(
+    const indexed_triangle_set& mesh, const std::vector<float>& zs, std::function<void()> throw_on_cancel = [] {})
 {
     return slice_mesh_ex(mesh, zs, MeshSlicingParamsEx{}, throw_on_cancel);
 }

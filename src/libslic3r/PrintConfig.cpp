@@ -3019,7 +3019,8 @@ void PrintConfigDef::init_fff_params()
 
     def                = this->add("nozzle_hrc", coInt);
     def->label         = L("Nozzle HRC");
-    def->tooltip       = L("The nozzle's hardness. Zero means no checking for nozzle's hardness during slicing.");
+    def->tooltip       = L("The nozzle's hardness. Zero uses the default hardness for the selected nozzle type. "
+                                 "If the nozzle type is also undefined, nozzle hardness checking is skipped.");
     def->sidetext      = L("HRC");
     def->min           = 0;
     def->max           = 500;
@@ -4282,7 +4283,7 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Raft");
     def->tooltip  = L("Split large Cura-style rafts into sections before generating walls and infill. Each raft phase is processed "
                        "independently. Cuts may cross model contact areas and leave marks on the model bottom. "
-                       "This trial applies to compatible single-instance objects, one active filament and by-layer printing. Ordinary "
+                       "Applies to compatible single-instance objects, one active filament and by-layer printing. Ordinary "
                        "support paths are preserved.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
@@ -4298,7 +4299,7 @@ void PrintConfigDef::init_fff_params()
         "raft_smoothing", L("Raft outline smoothing"),
         L("Round inward raft corners and fill small raft holes using closing, then clean thin edges using the brim line width. "
           "Zero disables closing; edge cleanup still runs when segmentation is enabled. Printable bed exclusions stay clear. "
-          "Uses the same trial compatibility restrictions as raft segmentation."),
+          "Uses the same compatibility restrictions as raft segmentation."),
         "mm", 0.0, 20.0, 0.0, comAdvanced);
 
     add_cura_raft_int("raft_base_layers", L("Raft base layers"),
@@ -6213,18 +6214,18 @@ void PrintConfigDef::init_fff_params()
     def->min = 0;
     def->set_default_value(new ConfigOptionPercent(25));
 
-    def = this->add("min_length_factor", coFloat);
-    def->label = L("Minimum wall length");
+    def           = this->add("min_length_factor", coFloat);
+    def->label    = L("Short wall filtering factor");
     def->category = L("Quality");
-    def->tooltip = L("Adjust this value to prevent short, unclosed walls from being printed, which could increase print time. "
-    "Higher values remove more and longer walls.\n\n"
-    "NOTE: Bottom and top surfaces will not be affected by this value to prevent visual gaps on the outside of the model. "
-    "Adjust 'One wall threshold' in the Advanced settings below to adjust the sensitivity of what is considered a top-surface. "
-    "'One wall threshold' is only visible if this setting is set above the default value of 0.5, or if single-wall top surfaces is enabled.");
-    def->sidetext = "mm";	// milimeters, don't need translation
-    def->mode = comAdvanced;
-    def->min = 0.0;
-    def->max = 25.0;
+    def->tooltip  = L("Multiplier for filtering short, open center walls. For each candidate path, the threshold is its smallest "
+                       "actual line width multiplied by this value. For example, 0.5 uses half that width. This setting does not "
+                       "change line width.\n\n"
+                       "Higher values remove more short walls to reduce travel and print time. Set to 0 to disable this filtering, "
+                       "except on the first and last model layers, which retain the default factor of 0.5 to avoid visible gaps.");
+    def->sidetext = L("times");
+    def->mode     = comAdvanced;
+    def->min      = 0.0;
+    def->max      = 25.0;
     def->set_default_value(new ConfigOptionFloat(0.5));
 
     def = this->add("initial_layer_min_bead_width", coPercent);
@@ -8447,6 +8448,27 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->tooltip = L("With --repair-model cgal or --check-model, import OBJ geometry without reading MTL libraries, colors or UVs. "
                      "Cannot be combined with material bindings, color grouping or multicolor OBJ export.");
     def->cli     = "repair-ignore-materials";
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def          = this->add("repair_evidence", coBool);
+    def->label   = L("Include model repair evidence");
+    def->tooltip = L(
+        "With --check-model, --repair-model cgal or --reconstruct-model, include read-only repair boundary evidence. "
+        "With --check-model and --repair-model cgal, reuse proper-crossing classification first; decisive evidence skips Z sections. "
+        "Only unresolved residual defects may additionally require bounded Z sections. "
+        "Does not automatically reconstruct or adopt a model; disabled by default.");
+    def->cli        = "repair-evidence";
+    def->cli_params = "0|1";
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def          = this->add("repair_evidence_close_boundaries", coBool);
+    def->label   = L("Allow boundary-closure reconstruction recommendations");
+    def->tooltip = L(
+        "Requires --check-model, --repair-model cgal and --repair-evidence together. "
+        "The caller confirms that the input should be a closed solid and that remaining open boundaries may be filled. "
+        "Only affects the reconstruction recommendation; does not close boundaries, reconstruct or adopt a model. Disabled by default.");
+    def->cli        = "repair-evidence-close-boundaries";
+    def->cli_params = "0|1";
     def->set_default_value(new ConfigOptionBool(false));
 
     def             = this->add("auto_repair_model", coBool);

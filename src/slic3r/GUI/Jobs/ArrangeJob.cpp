@@ -492,6 +492,7 @@ void ArrangeJob::process(Ctl &ctl)
     const coord_t requested_distance = params.min_obj_distance;
     update_arrange_params(params, m_plater->config(), m_selected);
     prepare_mixed_raft_clearance(m_selected, m_unselected, global_config, params);
+    prepare_compact_raft_arrangement(m_selected, m_unselected, global_config, params);
     update_selected_items_inflation(m_selected, m_plater->config(), params);
     update_unselected_items_inflation(m_unselected, m_plater->config(), params);
     update_selected_items_axis_align(m_selected, m_plater->config(), params);

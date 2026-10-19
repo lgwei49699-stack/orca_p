@@ -22,3 +22,16 @@ endif()
 
 catch_discover_tests(${_TEST_NAME}_tests TEST_PREFIX "${_TEST_NAME}: ")
 # add_test(${_TEST_NAME}_tests ${_TEST_NAME}_tests "${CATCH_EXTRA_ARGS} exclude:[NotWorking]")
+
+# Protocol tests require neither a desktop nor the slicer GUI library.
+add_executable(gfd_cloud_config_tests test_gfd_cloud_config.cpp)
+target_include_directories(gfd_cloud_config_tests PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/deps_src)
+target_link_libraries(gfd_cloud_config_tests PRIVATE test_common nlohmann_json)
+set_property(TARGET gfd_cloud_config_tests PROPERTY FOLDER "tests")
+catch_discover_tests(gfd_cloud_config_tests TEST_PREFIX "cloud: ")
+
+add_executable(gfd_print_options_tests test_gfd_print_options.cpp)
+target_include_directories(gfd_print_options_tests PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/deps_src)
+target_link_libraries(gfd_print_options_tests PRIVATE test_common nlohmann_json)
+set_property(TARGET gfd_print_options_tests PROPERTY FOLDER "tests")
+catch_discover_tests(gfd_print_options_tests TEST_PREFIX "cloud-print: ")

@@ -1262,10 +1262,27 @@ void PresetCollection::load_presets(
     if (presets_loaded.size() > 0)
         m_presets.insert(m_presets.end(), std::make_move_iterator(presets_loaded.begin()), std::make_move_iterator(presets_loaded.end()));
     std::sort(m_presets.begin() + m_num_default_presets, m_presets.end());
-    //BBS: add config related logs
-    BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": loaded %1% presets from %2%, type %3%")%presets_loaded.size() %dir %Preset::get_type_string(m_type);
-    //this->select_preset(first_visible_idx());
-    if (! errors_cummulative.empty())
+    // Cloud imports are stored by machine. Preset names remain unique in the
+    // collection, while these directories keep the files independent on disk.
+    if (subdir == PRESET_PRINT_NAME || subdir == PRESET_FILAMENT_NAME || subdir == PRESET_PRINTER_NAME) {
+        const fs::path cloud_dir = dir / "gfd-cloud";
+        if (fs::exists(cloud_dir)) {
+            std::vector<fs::path> machine_dirs;
+            for (const auto& entry : fs::directory_iterator(cloud_dir))
+                if (fs::is_directory(entry.path()))
+                    machine_dirs.emplace_back(entry.path());
+            std::sort(machine_dirs.begin(), machine_dirs.end());
+            for (const fs::path& machine_dir : machine_dirs)
+                load_presets(cloud_dir.string(), machine_dir.filename().string(), substitutions, substitution_rule);
+            m_dir_path = dir.string();
+        }
+    }
+    // BBS: add config related logs
+    BOOST_LOG_TRIVIAL(debug) << __FUNCTION__
+                             << boost::format(": loaded %1% presets from %2%, type %3%") % presets_loaded.size() % dir %
+                                    Preset::get_type_string(m_type);
+    // this->select_preset(first_visible_idx());
+    if (!errors_cummulative.empty())
         throw Slic3r::RuntimeError(errors_cummulative);
 }
 
@@ -1566,10 +1583,16 @@ void PresetCollection::save_user_presets(const std::string& dir_path, const std:
     //for (it = my_presets.begin(); it != my_presets.end(); it++) {
     for (auto it = m_presets.begin(); it != m_presets.end(); it++) {
         Preset* preset = &m_presets[it - m_presets.begin()];
-        if (!preset->is_user()) continue;
-        if (preset->sync_info != "save") continue;
+        if (!preset->is_user())
+            continue;
+        if (preset->sync_info != "save")
+            continue;
         preset->sync_info.clear();
-        preset->file = path_for_preset(*preset);
+        const fs::path previous_file(preset->file);
+        if (previous_file.parent_path().parent_path().filename().string() == "gfd-cloud")
+            preset->file = (dir / "gfd-cloud" / previous_file.parent_path().filename() / previous_file.filename()).make_preferred().string();
+        else
+            preset->file = path_for_preset(*preset);
 
         if (preset->is_custom_defined()) {
             preset->save(nullptr);
@@ -2256,7 +2279,12 @@ std::map<std::string, std::vector<Preset const *>> PresetCollection::get_filamen
 }
 
 //BBS: add project embedded preset logic
-void PresetCollection::save_current_preset(const std::string &new_name, bool detach, bool save_to_project, Preset* _curr_preset, const Preset* _current_printer)
+void PresetCollection::save_current_preset(const std::string& new_name,
+                                           bool               detach,
+                                           bool               save_to_project,
+                                           Preset*            _curr_preset,
+                                           const Preset*      _current_printer,
+                                           const std::string& storage_subdir)
 {
     Preset curr_preset = _curr_preset ? *_curr_preset : m_edited_preset;
     //BBS: add lock logic for sync preset in background
@@ -2335,7 +2363,8 @@ void PresetCollection::save_current_preset(const std::string &new_name, bool det
         preset.is_default  = false;
         preset.is_system   = false;
         preset.is_external = false;
-        preset.file        = this->path_for_preset(preset);
+        preset.file        = storage_subdir.empty() ? this->path_for_preset(preset) :
+                                                      (fs::path(m_dir_path) / storage_subdir / (new_name + ".json")).make_preferred().string();
         // The newly saved preset will be activated -> make it visible.
         preset.is_visible  = true;
         // Just system presets have aliases

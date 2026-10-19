@@ -1,5 +1,11 @@
 # STL / OBJ 检测与修复流程
 
+2026-10-16 当前证据协议 v2：组合 `--check-model --repair-model cgal --repair-evidence` 复用相交对分类，补充有界单侧共面邻接证明和失败原因归因。高级正常结束后，明确的表面穿透，或明确允许封口时的残留开放边，可直接给出重建建议并跳过截面预检；其余保留一次有界 Z 预检。只提供建议，不调用重建或采用候选。封口策略默认关闭，显式 `--repair-evidence-close-boundaries 1` 声明输入应为闭合实体且允许封口；该参数只能用于上述三项组合，不能借此给开放薄片自动加厚。
+
+2026-10-15 组合完成语义：仅上述组合将“流程完成”和“模型修好”分开。高级修复正常无进展、最终检测和证据评估完成时返回 `0`、`error_string=""`，仍报告 `repair_status=unresolved` 与实际缺陷；明确几何依据可以免预检。实际执行的预检异常／超限／未完成仍非零，部分修复也不例外。无此选项、显式 `0`、普通修复及独立重建沿用原语义。
+
+2026-10-14 只读证据扩展：默认保留 `--check-model` **schema_version=4 的原六字段、退出码与扫描路径**。仅显式加 `--repair-evidence` 时增加 `boundary`（自身 `schema_version=1`）；普通 CGAL 的 `model_repairs[]` 与独立重建报告也按此选项附加各自投影。它是报告选项，不是自动修复动作，不新增 GUI 菜单、不调度或采用重建。旧调用无需更改字段白名单；缺失 boundary 表示未提供证据，不补成通过。当前协议见第 2 节，验证见本批主记录。
+
 2026-09-17 入库前核对：**v4 已有用户构建及实际 CLI 运行证据，完整 v4 回归仍待补验**。9 月 16 日 macOS arm64 / Release 日志包含应用及检测测试重新编译、链接完成；9 月 17 日检测／组合修复结果均符合 v4 字段结构，真实模型开放边 3→0、退化面 1→0、自交计数 60→56，仍为部分修复。此次仅核对既有证据、更新文档并执行静态检查，未重新编译或运行测试；不将下述 9 月 15 日完整专项通过记录当作 v4 已通过的证明。证据与未验收范围见第 7 节。
 
 2026-09-16 输出精简：`--check-model` 对外摘要升级为 **schema_version=4**，顶层仅 return_code／error_string／model_checks，模型摘要保留状态、整体检查完整性、材质降级标记、修复状态和七项当前问题。按用户确认删除 output_files，不再返回输入／输出路径、建议动作、底层修复消息、部件摘要或修复前数量。内部文件导出、检测／修复／保色／部分成果门禁不变。当前字段以第 2 节为准。
@@ -19,7 +25,7 @@
 3. 只读检查工作副本，执行与 demo 对齐的七项几何检测和两项补充检查（分离部件、内部包含关系）。
 4. 默认到此结束，返回现有 result.json，由调用方决定是否高级修复。
 5. 显式追加 --repair-model cgal 时复用既有部分修复策略，不循环修复。
-6. 有可保留高级修改：导出 result.stl / result.obj，再只读校验实际文件；高级失败或没有修改：保留 prepared。
+6. 有可保留高级修改：导出 result.stl / result.obj，再只读校验实际文件；高级失败或没有修改：保留 prepared。新证据组合正常无进展时仍执行显式格式导出，并针对最终产物预检一次；格式转换不记作修复成果。
 
 输入原文件或已有的模型成果都走同一流程，无须额外阶段参数。同一次任务里的副本检查／导出校验只读取和检测，不再执行 ADMesh 或 CGAL 修复，不改写文件；它不等同于发起一次新任务。原文件始终不覆盖，检测通过不代表已验证可打印。
 
@@ -39,6 +45,11 @@
 ./build/arm64/OrcaSlicer/OrcaSlicer.app/Contents/MacOS/OrcaSlicer \
   --check-model --repair-model cgal \
   --outputdir /absolute/repair-output /absolute/input.stl
+
+# 同一流程，按需附加判断依据；仅残留缺陷时执行一次 Z 几何预检
+./build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer \
+  --check-model --repair-model cgal --repair-evidence \
+  --outputdir /absolute/evidence-output /absolute/input.stl
 ```
 
 若分两次执行，第二次可使用已确认的上次模型成果作为输入，参数不变，仍先原生导入自动处理再检测。JSON 不再提供文件路径，模型文件管理需由调用方另行负责；本次不新增获取接口或更改导出目录规则。
@@ -47,7 +58,8 @@
 不新增模型 ID、哈希绑定服务或版本数据库；调用方已有本次输入，使用当前输出文件和修复状态关联即可，不在结果中重复输入路径。
 
 - check-only 发现问题可以退出 0，表示返回了结果，**不是模型无问题**。看 mesh_status / check_complete。
-- 参数错误、导入/资源/IO 异常、高级修复失败或无可保留修改返回非零。新增检测失败码 -27；其他沿用既有错误码。
+- 参数错误、导入/资源/IO 异常、高级修复执行失败返回非零。新增检测失败码 -27；其他沿用既有错误码。
+- 旧组合高级修复无可保留修改仍返回 -25（常见 shell 码231）。新证据组合正常无进展且证据完整有效返回0；模型仍为unresolved，不是修复成功。新组合部分修复／无进展后的预检失败或不完整返回非零，原因保留在boundary，不新增数值错误码。健康结果无需预检；已知几何缺陷阻断内部包含分析可能使check_complete=false，不能仅用此字段判断流程是否完成。
 - 不接受 --slice、位置/旋转/缩放、材质绑定、配置加载、--auto-repair-model 等参数，避免改变检测对象。允许 --debug / --datadir。
 - 有 MTL 时保留支持的面颜色；MTL 缺失沿用共享几何降级并报告 input_materials_ignored；损坏的已有 MTL、非法几何仍拒绝。
 - 仅需几何可加 --repair-ignore-materials，本入口允许它配合 check-only。带色 OBJ 不静默导出 STL，须选 OBJ 或显式忽略材质。
@@ -55,9 +67,9 @@
 
 ### JSON 字段（对外 schema_version=4）
 
-可视化核对页：[JSON 返回字段说明](model-check-json.html)（离线 HTML，含逐字段解释和典型结果示例；不执行检测或修复）。
+可视化核对页：[JSON 返回字段说明](model-check-json.html)（离线 HTML，仅解释旧六字段与历史示例，尚未覆盖 `boundary`；不执行检测或修复）。新版字段以本节为准。
 
-固定使用业务摘要，不新增“简洁／详细”开关。以下是完整的成功示例（说明性路径，并非已执行的测试结果）：
+默认固定使用原六字段业务摘要。以下是显式 `--repair-evidence` 后健康模型仅检测的示例（并非已执行的测试结果）；不传或传 `--repair-evidence 0` 时没有整个 `boundary` 字段：
 
 ```json
 {
@@ -77,6 +89,33 @@
       "degenerate": {"count": 0, "complete": true},
       "duplicate": {"count": 0, "complete": true},
       "orientation": {"count": 0, "complete": true}
+    },
+    "boundary": {
+      "schema_version": 2,
+      "inspection": {
+        "status": "passed",
+        "known_defects": [],
+        "incomplete_checks": [],
+        "structural_blockers": [],
+        "basic_checks_complete": true,
+        "inspection_complete": true,
+        "has_geometry_defects": false,
+        "printability": "not_assessed"
+      },
+      "repair": {"status": "not_run"},
+      "proper_crossings": {"status": "not_run"},
+      "sections": {"status": "not_run"},
+      "reconstruction": {
+        "assessment": "not_needed",
+        "reason": "no_detected_mesh_defects",
+        "applicability": "not_evaluated",
+        "necessity": "not_established",
+        "automatic_adoption": false,
+        "printability": "not_assessed",
+        "evidence_scope": "not_assessed",
+        "printer_layer_plan": false,
+        "policy": {"version": 1, "allow_boundary_closure": false}
+      }
     }
   }]
 }
@@ -100,8 +139,35 @@
 | input_materials_ignored | 成功导入时是否按纯几何忽略源材质，包含缺 MTL 自动降级或显式忽略；不是完整材质／UV 往返保证，导入失败时不据此判断保色成功 |
 | repair_status | 高级修复状态，枚举见下表，不表示原生 STL 导入是否自动处理过 |
 | issues | 七项当前问题摘要，键和计数口径见第 4 节。每项仅含 count 与 complete；根本没有取得检测时整个字段为 null，不伪造七个 0 |
+| boundary | 仅 --repair-evidence 启用时附加的只读证据对象，当前内部 schema_version=2，含 inspection／repair／proper_crossings／sections／reconstruction；兼容读取历史1，不补造新证据；不是 issues.boundary 的开放边计数，也不表示自动执行下一步 |
 
-`issues.*.complete=false` 时，count 只是已确认数量的下界（展示“至少 N”）；**0 且未检查完整不等于没有问题**。业务只展示当前数量，不再携带修复前对照或部件结构详情。整体 `check_complete=false` 仍须提示“存在未能完整判定的检查”，不能仅凭七个 0 显示通过。
+`issues.*.complete=false` 时，count 只是已确认数量的下界（展示“至少 N”）；**0 且未检查完整不等于没有问题**。`issues` 只展示当前数量，不携带修复前对照；新增 `boundary` 可说明结构分析受阻原因，但不恢复旧逐部件执行树或面／边坐标详情。整体 `check_complete=false` 仍须提示“存在未能完整判定的检查”，不能仅凭七个 0 显示通过。
+
+`boundary` 的主要状态：
+
+| 字段 | 枚举／含义 |
+|---|---|
+| inspection.status | not_run：未检测；passed：完整范围通过；defects_detected：已有完整缺陷证据；incomplete：未能完整判定。known_defects 保留已观测阳性，不能因其余检查未知而丢掉 |
+| repair.status | not_run／completed／incomplete／failed／canceled：高级修复是否正常执行；execution_completed 不等于产生了修改，也不等于完整网格通过 |
+| sections.status | not_run／completed／incomplete／failed／canceled：附加截面证据的执行状态；只有 completed 才能按完整采样范围解读计数 |
+| proper_crossings | 仅组合高级修复评估时分类；当前摘要自身 schema_version=2，status/detected 表示覆盖范围内的表面穿透存在性，search_complete 表示原搜索完整；classification_complete/budget_exhausted 单独说明本次分类完成/预算情况。pairs_checked/total_pairs 只计原相交对，不计支持邻面；witness 给出原面对/交段和 kind/source/support_faces。elapsed_ms 仅分类耗时（含需要时的邻接扫描），不含原搜索 |
+| reconstruction.assessment | not_needed：当前完整检查无网格缺陷；evidence_present：高级正常结束、完整已知缺陷和重建准入通过，命中下述三条之一；undetermined：未取得明确依据，本次不升级；blocked：不完整、失败、取消或不适用 |
+
+重建建议依次判断：`proper_crossing_after_repair`（精确非零交线上的双侧跨面证明，详见下段）；`open_boundaries_under_closed_solid_policy`（policy.allow_boundary_closure=true 且仍有开放边）；`no_effective_regions`（原完整参考截面全空规则）。前两项不需要全空截面，`sections.status=not_run/reason=reconstruction_evidence_already_present` 是正常短路，不是评估失败。没有新增相交对全搜索，不按显示前200对抽样；一个精确阳性可提前结束存在性分类，无阳性须完成声明范围的分类，原搜索截断或分类超限均不能建议。原七项计数不改，共面重叠/点边接触、非流形数量不独立触发。
+
+穿透分类保留原“双三角片各自严格跨越对方平面”快速路径；若交线恰落在其中一片的边上，只在另一片仍严格跨面时补查该边的邻面。整条非零交段必须精确落边，全网格该边恰有两个有效邻面，两个邻面共面且第三顶点位于对方平面两侧，支持面不重复。见证 `triangle_interiors` 含两片，`coplanar_edge_patches` 含三片；`source=intersection_pair`，支持面不是新增自交对。只在需要时扫描一次网格建立有限邻接，默认最多4096个候选和300万扫描面；无交对或原快速路径命中不作邻接扫描。预算不足返回 incomplete，不把未完成分类当“没有穿透”。
+
+这是 `triangle_interiors_and_coplanar_edge_patches` 范围内的存在性判定，不是完整实体重叠检测。双方都需邻面补证、仅共享多面边、任意折角邻接仍不作阳性证明：两实体边接触也可能重组出看似交叉的面片，不能因此推荐重建。阴性只表示本次范围内未取得该证据，不保证所有穿透均不存在；其他两条依据仍按原规则判断。
+
+`sections` 只在显式“检测＋高级修复＋repair-evidence”、高级执行正常结束、当前保留网格仍有完整缺陷证据且通过既有重建准入、没有上述直接几何依据时运行。健康模型、普通只检测、默认旧调用、失败/未知不新增截面扫描。未改网格复用原检查；改动后保留实际导出回读检测，并复用该网格进行预检。开放边策略默认false；真正的杯口若内外壁在杯沿相连，并不是网格开放边。
+
+只切当前坐标 Z 一次，在同一批轮廓上按普通 `slice_mesh_ex` 的规则构造有效区域，不重切、不运行墙/填充/支撑/G-code。报告有效区域数、各截面面积总和（不是体积）、无区域平面数、闭圈存在却无区域的数量，以及开链/补缝和最多16个位置样本。开链、单空层、面积变化或自交计数都不能单独触发重建。参考中间平面间距不超过0.2mm，最多2000平面、300万输入面/顶点、1000万潜在三角面-层位相交及30秒协作预算；超限不偷降采样，不保证单次旧调用硬中断。`elapsed_ms` 为内部观察，`workflow_elapsed_ms` 还包含工作流为观察准备/合并网格的时间。
+
+CLI 仍不加载工艺，因此 `coverage=reference_z_midplanes / printer_layer_plan=false`，不能冒充用户真实层位；共享 C++ 接口可接受调用方的完整层位与有效切层参数，但本轮没有让 GUI 自动执行新评估。普通切片只共用区域转换和全空层提前拒绝保护。参数主动收缩、简化或采用非 Regular 填充模式时，空区域结果不当作网格导致的重建依据；本轮保守限定阳性范围，不改变实际切片配置。
+
+`evidence_present / no_effective_regions` 说明该 Z 计划下确实没有形成有效区域，可供后端决定是否尝试重建；仍不是设计意图、全部工艺或候选质量保证。`applicability=eligible/unsupported/not_evaluated` 独立记录准入，`necessity=not_established / automatic_adoption=false` 保留形状及解决手段边界。unknown／incomplete、超时、内存不足或取消不能推动升级。输入/检测超限标记 `failure_kind=resource_limit`，不匹配英文报错猜原因；未取得检测仍保留 `issues=null`。
+
+证据流程未完成仍保留既有数值退出码及包装原因 `failure_kind=repair_evidence_incomplete`。能从失败子阶段取得明确依据时，`reconstruction.failure_stage` 为 `sections/inspection/proper_crossings`，`failure_cause` 保留具体原因，`failure_category` 按资源/取消/输入/执行分类。例如截面 `plane_limit` 属于 resource，不再被包装成通用 execution。未知原因仍按 execution，已完成观察里的历史 reason 不影响当前失败，早期 IO 等失败不会被后续摘要覆盖；这些字段不允许失败升级为重建建议。
 
 | repair_status | 含义 |
 |---|---|
@@ -110,18 +176,20 @@
 | not_needed | 原生导入后的检查已通过，无需 CGAL |
 | repaired | 高级成果已导出并复检通过 |
 | partially_repaired | 已保留有效进展，但仍有问题或未完成的判断；不能显示“全部修复成功” |
-| unresolved | 高级修复无可保留进展，返回非零，保留本次基础副本 |
+| unresolved | 高级修复无可保留进展，保留本次基础几何；旧组合非零，新证据组合在完整有效评估后返回0 |
 | failed | 高级处理／导出复检失败，返回非零，保留此前已发布的基础副本（若有） |
 
 业务接入建议：先看 return_code，再用 mesh_status / check_complete 展示当前模型结论；用 repair_status 展示修复程度。只有 `return_code=0 && mesh_status=passed && check_complete=true` 才能显示“当前检查通过”，**仍不等于切片或打印已验证**。模型导出行为不变，但本摘要不再提供路径或下载文件组。失败时可能保留基础副本，也可能存在未验收候选，不能仅凭文件存在就当作成功修复成果。
 
-从 v3 迁移：删除顶层 `output_files` 及摘要里的 `input_file`、`working_model`、`next_action`、`repair_message`、`supplementary`、`issues_before_repair`。不要再依赖移除的字段判断成功或读取路径。之前 v4 草案中的 output_files 也已移除；不改写历史文件。底层详细报告与日志保留，业务只读本节三个顶层字段和六个摘要字段。当前验收范围见第 7 节。
+特别注意无进展：正常执行但无可保留修改时，`boundary.repair.execution_completed=true`，不是执行异常。仅新证据组合在最终检测及有效预检完整完成后返回0/空error_string，同时保留`repair_status=unresolved`；未请求证据或显式关闭时仍按旧协议返回非零。新组合的部分修复若预检超限或异常也非零，保留成果与具体原因；不新增数值退出码。调用端根据0/非零判断流程完成，再读repair_status与boundary处理模型结果，不据此直接重建。新增boundary不增加模型ID、输入／输出路径、下载组或后台任务信息，原有单STL／OBJ、变换、材质及文件保护限制继续适用。
+
+从 v3 迁移：删除顶层 `output_files` 及摘要里的 `input_file`、`working_model`、`next_action`、`repair_message`、`supplementary`、`issues_before_repair`。之前 v4 草案中的 output_files 也已移除；不改写历史文件。v4 旧六字段默认不变，只有选择 --repair-evidence 的调用端解析新增 boundary，缺失不能补造证据。当前验收见第 7 节及[本批主记录](../docs/ai/validation/2026-10-04-smart-print-engine.md)。
 
 从 v1／v2 迁移：issues 从 inspection 中提升，修复状态从 advanced_repair.status 提升为 repair_status；切片占位、model_repairs、repair_validation、obj_exports、basic_repair、before_advanced / after_advanced / inspection、prepared_model / final_output_files，以及几何明细和逐部件执行树均不属于当前检测摘要。
 
-**这是对外协议变更，调用方须同步；新构建运行后生效，历史结果文件不自动重写。** 本地维护台支持 v4 并兼容历史 v1／v2／v3。单独 CGAL 修复、不带 --check-model 的普通切片输出仍保持原有 model_repairs / repair_validation 等字段，不在本次精简范围内。
+**历史 v1／v2／v3 迁移到 v4 需调用方同步；本次默认六字段不再变化，仅主动开启证据的调用端需要解析扩展。** 新构建运行后生效，历史结果文件不自动重写。本地维护台支持 v4 并兼容历史 v1／v2／v3。单独 CGAL 修复、不带 --check-model 的普通切片输出仍保持原有 model_repairs / repair_validation 等字段，不在本次精简范围内。
 
-### 单独 CGAL 修复（当前仍为旧 JSON）
+### 单独 CGAL 修复（沿用旧 JSON，可选只读 boundary）
 
 不需要分类检测报告，只修复并导出模型时，可以不加 `--check-model`：
 
@@ -140,9 +208,11 @@
 |---|---|---|
 | `--check-model` | 原生导入准备后做七项及两项内部补充检查，不执行 CGAL | v4 检测摘要 |
 | `--check-model --repair-model cgal` | 上述检测＋按需高级修复、导出只读复检 | v4 检测与修复摘要 |
-| `--repair-model cgal --export-obj` | 单独高级修复并导出，仍做修复过程必需的几何校验 | **旧修复格式，本轮尚未精简** |
+| `--repair-model cgal --export-obj` | 单独高级修复并导出，仍做修复过程必需的几何校验 | **默认旧修复格式不变；仅 --repair-evidence 开启时追加 boundary，未实施后续精简方案** |
 
 单独修复当前使用 `model_repairs[].status`、`model_repairs[].mesh_validated`、`repair_validation` 等旧字段，不返回 `model_checks`。它的修复内部校验不等于 demo 的七项／两项完整分类报告；没有分类报告不表示没有做任何校验，也不能按“七项全部为 0”处理。退出码 0 不代表全部问题已修复，更不代表打印已验证。
+
+10-14 仅启用 --repair-evidence 时在普通 CGAL 结果中附加 `model_repairs[].boundary`（schema_version=1）：只投影本次修复是否执行完毕、实际变更、未解决／失败和引擎校验；`full_inspection=not_established_by_repair_report`、`printability=not_assessed`，不额外执行完整检测或截面分析。现有 `--reconstruct-model` 的 `reconstruction.json` 同样按此选项附加 `boundary`，只说明候选状态、已有度量／预闭合及形状风险，不改变风险确认、候选保存和人工采用。三个入口按各自用途解析；普通修复报告不能冒充包含最终完整检测和预检的组合报告。
 
 **2026-09-20：CGAL 前的 STL 自动修复开关（已通过用户新构建的 CLI 回归）。** 复用既有 `--auto-repair-model 0|1`，不新增同义开关。只有显式传入时才改变原来的 CGAL 导入行为：
 
@@ -159,7 +229,7 @@
 --auto-repair-model 1 --repair-model cgal --slice 0
 ```
 
-同样适用于 `--export-stl` / `--export-obj`。自动修复仅改变内存中的 STL 导入结果，不覆盖源文件；CGAL 仍按既有部分修复、保色、失败与切片警告门禁处理。`model_repairs` 继续只记录 CGAL 报告，其中 `before` 是本次导入处理后的网格，并不是原文件的缺陷统计；没有新增 JSON 字段。`--debug 3` 日志会记录 CGAL 前自动修复是否启用及最终 `auto_repair_model` 值。
+同样适用于 `--export-stl` / `--export-obj`。自动修复仅改变内存中的 STL 导入结果，不覆盖源文件；CGAL 仍按既有部分修复、保色、失败与切片警告门禁处理。`model_repairs` 继续只记录 CGAL 报告，其中 `before` 是本次导入处理后的网格，并不是原文件的缺陷统计；9 月 20 日该开关改动当时没有新增 JSON 字段，10 月 14 日另提供显式 --repair-evidence 才开启的只读 boundary。`--debug 3` 日志会记录 CGAL 前自动修复是否启用及最终 `auto_repair_model` 值。
 
 OBJ 仍使用原生 OBJ 导入与材质规则，不执行 ADMesh。独立 `--check-model` 仍固定按原生导入准备，不接受 `--auto-repair-model` 或 `--slice`；不能把这个开关用于改变检测入口。以上组合须使用包含本次修改的新构建，旧版本仍会强制关闭 CGAL 前的自动修复。
 
@@ -304,12 +374,54 @@ OBJ 仍使用原生 OBJ 导入与材质规则，不执行 ADMesh。独立 `--che
 - 不删空对象、不得静默丢失支持的涂色、可保留其他有效修改等保护仍优先。仅有一个低于阈值的小实体时，清理会因删空保护失败并保留原件，而不是提交空模型。
 - `10×10×0.001 mm` 的正常闭合薄片仍超过这些阈值，既有薄实体验收保留；低于阈值的薄片／微小部件，不能再沿用此前“一律保留”的预期。没有新增用户配置项。
 
+### 5.3 精确接缝与内部隔板预处理（2026-09-29，待新构建验证）
+
+显式高级修复在原 polygon-soup 定向／拆点前增加一条受限路径，避免把 CAD 残留内部隔板的三面共边拆开后再补成大面：
+
+1. 精确共线的边界 T 接缝只用已有顶点细分原三角面，不移动坐标、不按距离吸附、不添加补洞面。
+2. 按正常双面共边分组，只选择边界全部属于三面共边的平面 patch 作为待清理隔板；不按面积大小、最大壳体或面编号删除。
+3. 保留面必须能够直接形成不拆点、闭合、无自交、无非流形顶点的三角网格。每个待删三角面的重心必须在其实体内部，且与保留表面的精确交集只能位于该三角面的边上；面积重叠、内部穿过外壁／通孔都拒绝。不是只查重心或包围盒。
+4. 整体校验成功后才采用候选，再通过原有朝向、保形、float 网格及上层修复复检。此路径的保形基准排除已经证明严格位于实体内部的隔板，但保留所有外表面；没有放宽既有容差。
+5. 新尝试仅处理不超过 20,000 面的清理后 soup，边界查询预算 2,000,000 次、最多 8 轮／1,024 次细分、待删面上限 2,048、相交证据上限 20,000。超限／校验失败不发布局部成果，回到原修复流程。不是降低模型检测或普通修复的容量上限。
+
+保色、取消、异常回滚和部分修复语义不变；待清理内部面上存在无法保留的涂色时，GUI 严格保色仍拒绝事务。没有新增 CLI 参数或业务 JSON 字段，也不改普通导入自动修复。通过的候选记录 `event=soup_topology_certified`，含细分数、内部删面数及 `moved_vertices=0, hole_patches=0`。
+
+真实夹具及来源见 `tests/data/model_repair_topology/README.md`；新增聚焦过滤器 `[ModelRepair][SoupTopology]` 已纳入固定完整专项。独立原型在原坐标及模拟 ModelVolume 居中后均为 856 面、七项检查完整且归零；这是几何可行性证据，不能替代新 C++ 构建、GUI 修复或完整切片验证。
+
+用户重建 OrcaSlicer 和 `libslic3r_tests` 后，先执行该聚焦过滤器，再执行 `[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]`。随后复测原文件的 GUI／CLI 修复、保存重读、通孔及逐层切片；本轮尚未编译、运行新测试、验证实际 G-code 或提交。
+
+内部位置查询采用仓库固定 CGAL 接口；仅在网格闭合、无自交后使用 [CGAL 5.6.3 Side_of_triangle_mesh](https://doc.cgal.org/5.6.3/Polygon_mesh_processing/classCGAL_1_1Side__of__triangle__mesh.html)，并增加逐三角面相交证据，避免将采样内部误当成完整包含。
+
+2026-09-29 12:38 用户构建未完成：实际日志为 `planning/build/macos-build-arm64-20260929-123810-740591.log`（消息中的 `123851-261159` 文件未找到）。`MeshBoolean.cpp` 编译完成，但 `test_model_repair.cpp:917` 直接复制 `FacetsAnnotation`，其拷贝构造为私有且显式，导致测试目标编译失败、整体构建中止，未完成应用／测试链接。本次仅将测试快照改为复制并精确比较公开的 `get_data()`，不修改类型访问权限或生产逻辑；旧对象指针相等断言改为 `REQUIRE`，避免事务结果异常时继续解引用失效对象。AI 未编译、未运行旧测试；须用户重新构建后再运行上述专项，不能把单个源文件编译成功当作修复或切片验收。
+
+2026-09-29 后续构建／入库审查基线：用户 `123851-261159.log` 已完成修正后的应用及测试链接。核对源码与二进制身份后，拓扑聚焦 4 用例／591 断言、固定完整专项 183 用例／14,333 断言通过；CLI 检测／材质／无切片导出验收分别为 76／30／59 项通过，退出均为 0。托架独立修复导出 862→856 面，重读为 856 面且 `not_needed`；聚焦包含于完整专项，不相加。证据 `planning/repair/precommit-20260929-MFW3EM/`。这些结果覆盖下节备份改动之前的基线，不代替新代码验收；真实 GUI 自动备份恢复和 Undo/Redo 尚未验证。
+
+### 5.4 GUI 修复后的对象备份刷新（2026-09-29，构建与验证记录）
+
+原 GUI 高级修复虽然已将候选提交到场景，但只刷新了渲染／切片／对象列表，没有刷新自动备份的对象网格子文件。实际托架日志记录场景已为 856 面，后续周期元数据备份仍引用修复前的 862 面对象文件；这不是正式保存 3MF 丢失修复的结论。
+
+- 在实际场景提交、最终落床及界面相关调整完成后，按 `changed_object_indices` 调用现有 `save_object_mesh` 队列入口，再请求 `backup_soon` 元数据备份。每个变更对象保存完整 volume／实例快照，而不是只保存被选中的一个 volume；未改变对象不重存。
+- 私有 staging 不启用备份；取消、失败、无改动、准备提交失败或场景冲突均在 GUI 提交前返回，不进入此调用。共享派发策略另检查报告成功／已提交／完成、无取消／致命失败和备份启用状态。允许已接受的部分修复成果进入备份，不要求 `unresolved=0`。
+- 对象入队异常不回滚已经成功的场景提交，仍尝试其他变更对象；本轮有任何对象入队失败时不主动请求后续元数据备份。元数据入队异常也单独记录。界面给出中英文警告，要求手动保存项目，日志区分 `backup_queued`／`backup_queue_failed`／`backup_skipped`。
+- **这是异步备份入队，不是磁盘保存完成的承诺。** 现有后台写入错误、周期备份和整体多文件原子性机制未重构；不能把 `backup_queued` 当作崩溃恢复验收通过。入队异常时用户仍需手动保存，不依赖不完整自动备份。
+- 不在 `Model::commit_move_object_volume_structures` 的 `noexcept` 提交里增加分配／文件 I/O，不更改 CGAL 策略、网格／涂色保护、CLI、JSON 协议或普通导入自动修复。
+
+新增 5 个 `[ModelRepair][Backup]` 用例定义：实际 staging→场景提交后的批量对象快照／落床／涂色与变换；报告门禁；部分修复仅保存变更对象；对象／元数据队列标准与非标准异常不撤销提交；缺失对象／volume／实例不错误请求元数据。这些是共享派发策略和内存快照测试，不是后台 ZIP 落盘／崩溃恢复／原生 GUI 交互测试。
+
+本轮仅修改范围格式化、源码审阅、`git diff --check` 及中英文 PO 格式校验；未编译、未运行旧程序证明新改动通过、未提交。用户重建 **OrcaSlicer 和 libslic3r_tests** 后，先运行 `[ModelRepair][Backup]`，再执行固定完整专项 `[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]`。GUI 使用原托架验证：成功后先出现 `scene_committed` 再出现 `backup_queued`，对象文件更新为 856 面；完成自动备份后恢复项目并核对网格、涂色和实例变换，再测重复修复无改动、取消、失败、部分批量修复及 Undo/Redo。仅日志入队成功或原有 183 用例通过不足以完成这项验收。
+
+2026-09-29 15:52 新构建复测：实际用户构建日志为 `planning/build/macos-build-arm64-20260929-154950-944697.log`，消息中的 `155014-276513.log` 本地不存在。新 GUI／测试源码均已编译，应用和测试链接完成；源码哈希与修正快照相同，打包与链接应用一致，运行前后关键身份未变。macOS arm64 / Release：备份专项 **5 用例／138 断言**、固定完整专项 **188 用例／14,471 断言**均退出 0；聚焦包含于完整专项，不相加。`git diff --check` 和 PO 格式校验通过。证据、命令及哈希见 `planning/repair/backup-retest-20260929-cjlj46/validation.json`，日志为同目录 `focused.log`、`full.log`。本轮未修改生产／测试源码、未自行编译、未提交，未重跑 CLI；此前 CLI 数字仍只属于先前基线。
+
+这次验证覆盖共享备份派发及内存快照，不证明异步对象子文件和项目元数据已成功落盘或恢复。完整测试仍有既有 `/orcaslicer_model` 只读路径日志及故意无效输入产生的拒绝警告；不能据测试通过忽略这些边界。实际 GUI 自动备份恢复和 Undo/Redo 仍须按上段流程验证；未验证完整 CTest、跨平台和实机。构建保留 Homebrew zstd 面向 macOS 26.0、应用目标 11.3 的链接警告，本次本机通过不代表旧 macOS 兼容验收。
+
+2026-09-29 16:09–16:24 Computer Use 补证：在同一构建的独立托架测试场景中，高级修复实际完成 862→856 面／未配对边 118→0，约 3 秒后对象网格子文件及元数据完成写入。Undo 后磁盘恢复 862 面，Redo 后恢复 856 面；两组备份模型 XML 分别与原始／首次修复完全一致。重复修复提示“模型无需修复”。普通另存为项目 ZIP 校验通过，顶点／三角面与修复备份一致。此轮补上真实异步落盘和单对象 Undo/Redo 证据，不代表崩溃恢复通过：自动恢复入口未执行，普通项目重开被 macOS 文件对话框的 Computer Use 输入问题阻断，本轮没有切片。无涂色、单实例，GUI 取消／失败／部分批量及跨平台仍待验证。操作干扰、产物、时间线和哈希详见 `planning/repair/gui-backup-validation-20260929-8veTn0/VALIDATION.md`；未改生产／测试源码、未编译／提交，未重复执行或累加 15:52 专项统计。
+
 ## 6. 实现和验收入口
 
 - [ModelInspection](../src/libslic3r/ModelInspection.cpp)：几何检测、精确清理计划，编入 libslic3r_cgal。
 - [ModelPreparation](../src/libslic3r/ModelPreparation.cpp)：保留的独立精确清理工具，不再作为默认检测入口的预处理。
 - [ModelCheckWorkflow](../src/libslic3r/ModelCheckWorkflow.cpp)：导入、保存、检测、既有高级修复、导出复检；无 GUI/Gateway 依赖。
-- [CLI](../src/OrcaSlicer.cpp)：参数边界与原子 JSON 写入；--check-model 使用 ModelCheckWorkflow 中的业务摘要序列化，旧切片／修复输出不变。
+- [CLI](../src/OrcaSlicer.cpp)：参数边界与原子 JSON 写入；--check-model 使用 ModelCheckWorkflow 中的业务摘要序列化，默认六字段及旧切片／修复协议保留，10-14 仅显式 --repair-evidence 才追加只读 boundary。
 - [单元用例](../tests/libslic3r/test_model_inspection.cpp)：[ModelRepair][Inspection] / [ModelRepair][Preparation]，已包含在完整专项。
 - [新 CLI 验收](../scripts/test_cli_model_check.py)：STL/OBJ、新流程、部分修复、缺 MTL、失败保留、参数保护和 v4 字段白名单。实际产物检查面数／颜色，修复前基线由独立 check-only 调用获取，不因移除前后摘要放宽成果断言。内部动作统计留在 C++ 与旧修复专项。可选与 demo 对比七项及整体检查完整性，不要求返回部件／面／边明细。
 

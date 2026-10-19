@@ -1,5 +1,15 @@
 get_filename_component(_TEST_NAME ${CMAKE_CURRENT_LIST_DIR} NAME)
 
+add_executable(reconstruction_worker_test_helper
+    reconstruction_worker_test_helper.cpp
+    ../../src/libslic3r/ReconstructionProcess.cpp)
+set_target_properties(reconstruction_worker_test_helper PROPERTIES MACOSX_BUNDLE FALSE)
+target_include_directories(reconstruction_worker_test_helper PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(reconstruction_worker_test_helper PRIVATE Threads::Threads boost_libs)
+if(WIN32)
+    target_link_libraries(reconstruction_worker_test_helper PRIVATE Psapi.lib)
+endif()
+
 add_executable(${_TEST_NAME}_tests 
 	${_TEST_NAME}_tests.cpp
 	test_3mf.cpp
@@ -7,7 +17,10 @@ add_executable(${_TEST_NAME}_tests
 	test_clipper_offset.cpp
 	test_clipper_utils.cpp
 	test_config.cpp
+	test_epone_presets.cpp
+	test_advancer3_presets.cpp
 	test_thumbnail.cpp
+	test_png_decode.cpp
 	test_elephant_foot_compensation.cpp
 	test_geometry.cpp
 	test_placeholder_parser.cpp
@@ -17,7 +30,14 @@ add_executable(${_TEST_NAME}_tests
 	test_mutable_priority_queue.cpp
 	test_stl.cpp
 	test_meshboolean.cpp
+	test_model.cpp
 	test_model_repair.cpp
+	test_model_repair_evidence.cpp
+	test_mesh_slice_diagnostics.cpp
+	test_mesh_reconstruction.cpp
+	test_reconstruction_process.cpp
+	test_inprocess_reconstruction_control.cpp
+	test_model_reconstruction.cpp
 	test_model_inspection.cpp
 	# test_marchingsquares.cpp
 	test_timeutils.cpp
@@ -38,6 +58,8 @@ if (TARGET OpenVDB::openvdb)
 endif()
     
 target_link_libraries(${_TEST_NAME}_tests test_common libslic3r)
+add_dependencies(${_TEST_NAME}_tests reconstruction_worker_test_helper)
+target_compile_definitions(${_TEST_NAME}_tests PRIVATE RECONSTRUCTION_TEST_HELPER="$<TARGET_FILE:reconstruction_worker_test_helper>")
 target_include_directories(${_TEST_NAME}_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/libslic3r)
 set_property(TARGET ${_TEST_NAME}_tests PROPERTY FOLDER "tests")
 

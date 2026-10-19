@@ -9,6 +9,7 @@
 #include "BitmapComboBox.hpp"
 #include "MainFrame.hpp"
 #include "slic3r/Utils/UndoRedo.hpp"
+#include "slic3r/Utils/MacDarkMode.hpp"
 
 #include "OptionsGroup.hpp"
 #include "Tab.hpp"
@@ -23,6 +24,8 @@
 #include "Widgets/ProgressDialog.hpp"
 #include "SingleChoiceDialog.hpp"
 #include "StepMeshDialog.hpp"
+#include "ModelReconstructionDialog.hpp"
+#include "libslic3r/ModelReconstruction.hpp"
 
 #include <boost/algorithm/string.hpp>
 #include <array>
@@ -30,8 +33,11 @@
 #include <wx/listbook.h>
 #include <wx/numformatter.h>
 #include <wx/headerctrl.h>
+#include <wx/msgdlg.h>
+#include <wx/stdpaths.h>
 
 #include "slic3r/Utils/FixModelByCgal.hpp"
+#include "slic3r/Utils/ModelRepairBackup.hpp"
 #include "libslic3r/Format/bbs_3mf.hpp"
 #include "libslic3r/PrintConfig.hpp"
 
@@ -521,6 +527,7 @@ void ObjectList::create_objects_ctrl()
     // Therefore, force set column width.
 #ifdef __WXOSX__
         dataview_remove_insets(this);
+        mac_enable_object_list_editing(this);
         for (int cn = colName; cn < colCount; cn++)
             GetColumn(cn)->SetWidth(m_columns_width[cn] * em);
 #endif
@@ -1448,7 +1455,7 @@ void ObjectList::list_manipulation(const wxPoint& mouse_pos, bool evt_context_me
             GLCanvas3D *cnv    = plater->canvas3D();
             int obj_idx, vol_idx;
             get_selected_item_indexes(obj_idx, vol_idx, item);
-            if (obj_idx != -1) {
+            if (obj_idx >= 0 && m_objects && static_cast<size_t>(obj_idx) < m_objects->size() && (*m_objects)[obj_idx]) {
                 Plater::TakeSnapshot(plater, "Shift objects to bed");
                 (*m_objects)[obj_idx]->ensure_on_bed();
                 cnv->reload_scene(true, true);
@@ -5591,6 +5598,162 @@ void ObjectList::rename_item()
         update_name_in_model(item);
 }
 
+void ObjectList::reconstruct_model()
+{
+    auto*      plater = wxGetApp().plater();
+    auto*      parent = find_toplevel_parent(plater);
+    const auto notify = [parent](const wxString& message) {
+        wxMessageBox(message, _L("Reconstruct model"), wxOK | wxICON_INFORMATION, parent);
+    };
+    if (printer_technology() != ptFFF || plater->get_current_canvas3D()->get_canvas_type() != GLCanvas3D::ECanvasType::CanvasView3D ||
+        !plater->get_view3D_canvas3D()->get_gizmos_manager().check_gizmos_closed_except(GLGizmosManager::Undefined)) {
+        notify(_L("Close the active editing tool and select one ordinary object in the Prepare view using an FFF printer."));
+        return;
+    }
+    std::vector<std::pair<int, int>> targets;
+    get_model_repair_selection_indexes(targets);
+    if (targets.size() != 1) {
+        notify(_L("Select exactly one object for reconstruction."));
+        return;
+    }
+    Model&       model        = plater->model();
+    const size_t object_index = static_cast<size_t>(targets.front().first);
+    if (object_index >= model.objects.size() || model.objects[object_index] == nullptr)
+        return;
+    ModelObject*      original = model.objects[object_index];
+    const std::string reason   = model_reconstruction_ineligibility(*original);
+    if (!reason.empty()) {
+        notify(_L("This object cannot be reconstructed:") + "\n" + wxGetTranslation(from_u8(reason)));
+        return;
+    }
+
+    try {
+        const ObjectID                  object_id       = original->id();
+        const std::string               source_identity = model_reconstruction_source_identity(*original);
+        const RepairMetadataFingerprint volume_metadata = model_volume_repair_metadata_fingerprint(*original->volumes.front());
+        const DynamicPrintConfig        preset_config   = wxGetApp().preset_bundle->full_config();
+        const DynamicPrintConfig        plater_config   = *plater->config();
+        auto&                           plates          = plater->get_partplate_list();
+        const int                       plate_index     = plates.find_instance(static_cast<int>(object_index), 0);
+        const DynamicPrintConfig        plate_config = plate_index >= 0 ? *plates.get_plate(plate_index)->config() : DynamicPrintConfig{};
+        const auto                      source_is_current = [&]() {
+            if (object_index >= model.objects.size() || model.objects[object_index] != original || original->id() != object_id ||
+                model_reconstruction_source_identity(*original) != source_identity ||
+                model_volume_repair_metadata_fingerprint(*original->volumes.front()) != volume_metadata ||
+                wxGetApp().preset_bundle->full_config() != preset_config || *plater->config() != plater_config ||
+                plates.find_instance(static_cast<int>(object_index), 0) != plate_index)
+                return false;
+            return plate_index < 0 || *plates.get_plate(plate_index)->config() == plate_config;
+        };
+        const auto notify_stale = [&]() {
+            notify(_L("The source model or its settings changed. The reconstruction candidate was discarded."));
+        };
+        ModelReconstructionOptions options;
+        options.process = model_reconstruction_process_options(original->volumes.front()->mesh().its.indices.size(), options.process,
+                                                                total_physical_memory());
+        if (!show_model_reconstruction_settings(parent, options))
+            return;
+        if (!source_is_current()) {
+            notify_stale();
+            return;
+        }
+        options.executable = into_u8(wxStandardPaths::Get().GetExecutablePath());
+        ModelReconstructionResult result;
+        bool                      canceled = false;
+        {
+            ProgressDialog progress(_L("Reconstructing model"), _L("Generating and checking a separate candidate..."), 100, parent,
+                                    wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_AUTO_HIDE, true);
+            options.process.is_canceled = [&]() { return canceled; };
+            options.process.on_tick     = [&]() {
+                if (!progress.Pulse(_L("Generating and checking a separate candidate...")))
+                    canceled = true;
+            };
+            if (!progress.Update(0))
+                return;
+            result = reconstruct_model_candidate(model, object_index, options);
+            if (!canceled && result.candidate_model)
+                canceled = !progress.Update(100);
+        }
+        if (canceled || result.status == "canceled") {
+            notify(_L("Reconstruction was canceled. The original model was kept."));
+            return;
+        }
+        if (!source_is_current()) {
+            notify_stale();
+            return;
+        }
+        if (result.status != "candidate_ready" || !result.candidate_model || object_index >= result.candidate_model->objects.size() ||
+            result.candidate_model->objects[object_index] == nullptr) {
+            notify(_L("Reconstruction did not produce an applicable candidate. The original model was kept.") + "\n" +
+                   wxGetTranslation(from_u8(result.message)));
+            return;
+        }
+        ModelObject* candidate    = result.candidate_model->objects[object_index];
+        bool         place_on_bed = false;
+        if (!show_model_reconstruction_preview(parent, *original, *candidate, result, options.mesh.max_deviation_mm, place_on_bed))
+            return;
+        if (!source_is_current()) {
+            notify_stale();
+            return;
+        }
+        // Moving in Z is an explicit review choice. Never silently normalize
+        // placement (including an intentional sinking) while applying a mesh.
+        if (place_on_bed)
+            candidate->translate_instances(Vec3d(0., 0., -candidate->min_z()));
+        auto                 prepared = model.prepare_move_object_volume_structures(*result.candidate_model, {object_index});
+        Plater::TakeSnapshot snapshot(plater, L("Apply reconstructed model"));
+        const bool           prevent_list_events = m_prevent_list_events;
+        m_prevent_list_events                    = true;
+        UnselectAll();
+        m_last_selected_item  = wxDataViewItem{};
+        m_config              = nullptr;
+        m_prevent_list_events = prevent_list_events;
+        if (!m_prevent_canvas_selection_update)
+            update_selections_on_canvas();
+        part_selection_changed();
+        model.commit_move_object_volume_structures(std::move(prepared));
+
+        // Post-commit refresh and backup failures do not undo a successful
+        // geometry transaction, and must not claim the original was retained.
+        bool refresh_failed = false;
+        try {
+            original->invalidate_bounding_box();
+            plater->changed_mesh(static_cast<int>(object_index));
+            notify_instance_updated(static_cast<int>(object_index));
+            update_info_items(object_index);
+            add_volumes_to_object_in_list(object_index);
+            update_item_error_icon(static_cast<int>(object_index), -1);
+            update_item_error_icon(static_cast<int>(object_index), 0);
+            update_plate_values_for_items();
+            select_item(m_objects_model->GetItemById(static_cast<int>(object_index)));
+            update_selection_mode();
+            selection_changed();
+        } catch (...) {
+            refresh_failed = true;
+        }
+        bool backup_failed = false;
+        if (model.is_need_backup()) {
+            try {
+                Slic3r::save_object_mesh(*original);
+                Slic3r::backup_soon();
+            } catch (...) {
+                backup_failed = true;
+            }
+        }
+        wxString message = _L("The reconstructed candidate was applied. Diagnostic slicing is still pending. "
+                              "Slice again and inspect the layers before printing. Undo restores the previous model.");
+        if (refresh_failed)
+            message +=
+                "\n" +
+                _L("The model was applied, but the scene could not be fully refreshed. Save the project and reopen it before slicing.");
+        if (backup_failed)
+            message += "\n" + _L("Automatic backup could not be scheduled. Save the project manually.");
+        notify(message);
+    } catch (const std::exception& error) {
+        notify(_L("Reconstruction could not be completed:") + "\n" + wxGetTranslation(from_u8(error.what())));
+    }
+}
+
 void ObjectList::fix_through_cgal()
 {
     // Do not fix anything when a gizmo is open. There might be issues with updates
@@ -5740,9 +5903,11 @@ void ObjectList::fix_through_cgal()
     if (completed)
         completed = progress_dlg.Update(100, "");
 
-    const auto notify = [plater](const wxString& message) {
+    const auto notify = [plater](const wxString& message, bool warning = false) {
         plater->get_notification_manager()->push_notification(NotificationType::CgalFinished,
-                                                              NotificationManager::NotificationLevel::PrintInfoShortNotificationLevel,
+                                                              warning ?
+                                                                  NotificationManager::NotificationLevel::WarningNotificationLevel :
+                                                                  NotificationManager::NotificationLevel::PrintInfoShortNotificationLevel,
                                                               into_u8(message));
     };
 
@@ -5894,6 +6059,19 @@ void ObjectList::fix_through_cgal()
     }
     plater->sidebar().obj_list()->update_plate_values_for_items();
 
+    // changed_mesh() refreshes the scene, but does not refresh the per-object
+    // mesh files used by crash recovery. Queue the committed, adjusted objects
+    // before requesting the next metadata backup; never back up staging here.
+    const ModelRepairBackupResult backup_result = queue_committed_model_repair_backup(
+        model, staged_repair.report, [](ModelObject& object) { Slic3r::save_object_mesh(object); }, [] { Slic3r::backup_soon(); });
+    BOOST_LOG_TRIVIAL(info) << "CGAL GUI model repair: transaction=" << staged_repair.transaction_id << ", event="
+                            << (backup_result.failed()        ? "backup_queue_failed" :
+                                backup_result.metadata_queued ? "backup_queued" :
+                                                                "backup_skipped")
+                            << ", queued_objects=" << backup_result.queued_objects << ", failed_objects=" << backup_result.failed_objects
+                            << ", metadata_queued=" << backup_result.metadata_queued
+                            << ", metadata_failed=" << backup_result.metadata_failed;
+
     // Restore by stable object / volume IDs only. A repaired or split volume
     // intentionally receives a new ID; in that case selecting its object row
     // is safer than retaining or guessing a stale part selection.
@@ -6010,7 +6188,9 @@ void ObjectList::fix_through_cgal()
         }
         message += "\n" + _L("Check the slicing result before printing. Partial repair does not mean the mesh is fully valid.");
     }
-    notify(message);
+    if (backup_result.failed())
+        message += "\n\n" + _L("Repair changes were kept, but automatic backup could not be scheduled. Save the project manually.");
+    notify(message, backup_result.failed());
 }
 
 void ObjectList::simplify()
@@ -6114,6 +6294,8 @@ void ObjectList::OnEditingStarted(wxDataViewEvent &event)
     event.Veto(); // Not edit with NSTableView's text
     auto col = event.GetColumn();
     auto item = event.GetItem();
+    if (!item.IsOk() || m_prevent_list_events)
+        return;
     if (col == colPrint) {
         toggle_printable_state();
         return;
@@ -6141,10 +6323,12 @@ void ObjectList::OnEditingStarted(wxDataViewEvent &event)
     }
     else if (col == colSinking) {
         Plater *    plater = wxGetApp().plater();
-        GLCanvas3D *cnv    = plater->canvas3D();
-        Plater::TakeSnapshot(plater, "Shift objects to bed");
-        int obj_idx, vol_idx;
+        GLCanvas3D* cnv    = plater->canvas3D();
+        int         obj_idx, vol_idx;
         get_selected_item_indexes(obj_idx, vol_idx, item);
+        if (obj_idx < 0 || !m_objects || static_cast<size_t>(obj_idx) >= m_objects->size() || !(*m_objects)[obj_idx])
+            return;
+        Plater::TakeSnapshot(plater, "Shift objects to bed");
         (*m_objects)[obj_idx]->ensure_on_bed();
         cnv->reload_scene(true, true);
         update_info_items(obj_idx);

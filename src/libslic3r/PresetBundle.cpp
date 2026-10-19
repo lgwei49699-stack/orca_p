@@ -55,7 +55,8 @@ static bool gfd_use_printer_default_filament(const Preset& printer_preset)
 {
     const std::string printer_model = printer_preset.config.opt_string("printer_model");
     return printer_model == "EP3" || printer_model == "EP3 Pro" || printer_model == "EP3Plus" || printer_model == "EP3 Plus" ||
-           printer_model == "EPONE" || printer_model == "EPONE Pro" || printer_model == "EPONEPro" || printer_model == "EP7";
+           printer_model == "EPONE" || printer_model == "EPONE Pro" || printer_model == "EPONEPro" || printer_model == "EPONE Plus" ||
+           printer_model == "EPONEPlus" || printer_model == "EP7";
 }
 
 static std::string gfd_first_default_filament_profile(const Preset& printer_preset)
@@ -135,7 +136,8 @@ static std::string gfd_epone_pro_material_name(const std::string& name, const st
 
 static bool gfd_preset_name_targets_epone(const std::string& name, const std::unordered_map<std::string, std::string>& printer_name_map)
 {
-    if (boost::contains(name, " @EPONE Pro"))
+    // Plus is a separate model, not a source for the legacy EPONE-to-Pro copies.
+    if (boost::contains(name, " @EPONE Pro") || boost::contains(name, " @EPONE Plus") || boost::contains(name, " @EPONEPlus"))
         return false;
 
     if (boost::contains(name, " @EPONE"))

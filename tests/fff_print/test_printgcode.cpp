@@ -2,6 +2,10 @@
 
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/GCodeReader.hpp"
+#include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/Layer.hpp"
+#include "libslic3r/Print.hpp"
+#include "libslic3r/Utils.hpp"
 
 #include "test_data.hpp"
 
@@ -12,6 +16,165 @@
 
 using namespace Slic3r;
 using namespace Slic3r::Test;
+
+TEST_CASE("Exported total layer counts match emitted layers", "[PrintGCode][LayerCount]")
+{
+    const int  layout      = GENERATE(0, 1, 2);
+    const bool sequential  = layout == 1;
+    const bool prime_tower = layout == 2;
+    // No raft, legacy raft, and Cura raft.
+    const int raft = GENERATE(0, 1, 2);
+    // Healthy, empty tail, internal gap, one object's empty tail, support-only tail.
+    const int empty_layer = GENERATE(0, 1, 2, 3, 4);
+    CAPTURE(sequential, prime_tower, raft, empty_layer);
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {240., 0.}, {240., 240.}, {0., 240.}}));
+    config.set_key_value("bed_exclude_area", new ConfigOptionPoints());
+    config.set_key_value("print_sequence",
+                         new ConfigOptionEnum<PrintSequence>(sequential ? PrintSequence::ByObject : PrintSequence::ByLayer));
+    config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(raft == 2 ? RaftMode::CuraV1 : RaftMode::Legacy));
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(stNormalAuto));
+    config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(smsGrid));
+    config.set_key_value("brim_type", new ConfigOptionEnum<BrimType>(btNoBrim));
+    config.set("skirt_loops", 0);
+    config.set("enable_support", false);
+    config.set("enable_prime_tower", prime_tower);
+    if (prime_tower) {
+        config.set_num_filaments(2);
+        config.set_num_extruders(2);
+        config.set_key_value("filament_diameter", new ConfigOptionFloats({1.75, 1.75}));
+        config.set_key_value("nozzle_diameter", new ConfigOptionFloats({0.4, 0.4}));
+        config.set_key_value("filament_colour", new ConfigOptionStrings({"#00FF00", "#FF0000"}));
+        config.set("single_extruder_multi_material", true);
+        config.set_key_value("flush_volumes_matrix", new ConfigOptionFloats({0., 60., 60., 0.}));
+        config.set_key_value("wipe_tower_x", new ConfigOptionFloats({180.}));
+        config.set_key_value("wipe_tower_y", new ConfigOptionFloats({160.}));
+    }
+    config.set("layer_height", 0.2);
+    config.set("initial_layer_print_height", 0.2);
+    config.set("raft_layers", raft ? 3 : 0);
+    config.set("raft_base_layers", 1);
+    config.set("raft_interface_layers", 1);
+    config.set("raft_surface_layers", 1);
+    config.set("before_layer_change_gcode", std::string("G92 E0\n; observed_total={total_layer_count}"));
+    config.set("machine_start_gcode", std::string("SET_PRINT_STATS_INFO TOTAL_LAYER={total_layer_count}"));
+    config.set("machine_end_gcode", std::string("; end_total={total_layer_count}"));
+    // Supply enum maps for configuration serialization, as in other export fixtures.
+    for (const auto& key : config.keys()) {
+        auto*       value = dynamic_cast<ConfigOptionEnumsGeneric*>(config.option(key));
+        const auto* def   = print_config_def.get(key);
+        if (value && !value->keys_map && def && def->enum_keys_map) {
+            auto* mapped   = new ConfigOptionEnumsGeneric(def->enum_keys_map);
+            mapped->values = value->values;
+            config.set_key_value(key, mapped);
+        }
+    }
+    struct ExportGuard
+    {
+        std::string             previous_resources = resources_dir();
+        boost::filesystem::path path               = boost::filesystem::temp_directory_path() /
+                                       boost::filesystem::unique_path("orca-layer-count-%%%%-%%%%.gcode");
+        ExportGuard() { set_resources_dir(std::string(TEST_DATA_DIR) + "/../../resources"); }
+        ~ExportGuard()
+        {
+            set_resources_dir(previous_resources);
+            boost::system::error_code ignored;
+            boost::filesystem::remove(path, ignored);
+        }
+    } output;
+    Model model;
+    // Two different objects and an extra instance: by-layer must merge their
+    // Z levels, while sequential printing must count each instance separately.
+    for (int i = 0; i < 2; ++i) {
+        auto* object = model.add_object();
+        object->name = "layer count " + std::to_string(i);
+        auto* volume = object->add_volume(make_cube(8. + i, 8., 2.), ModelVolumeType::MODEL_PART, false);
+        if (prime_tower)
+            volume->config.set("extruder", i + 1);
+        object->add_instance()->set_offset(Vec3d(40. + 70. * i, 40., 0.));
+        if (i == 0)
+            object->add_instance()->set_offset(Vec3d(40., 120., 0.));
+    }
+    Print print;
+    print.set_status_silent();
+    for (auto* object : model.objects)
+        print.auto_assign_extruders(object);
+    print.apply(model, config);
+    INFO(print.validate().string);
+    REQUIRE(print.validate().string.empty());
+    print.process();
+    REQUIRE(print.objects().size() == 2);
+    if (prime_tower) {
+        CAPTURE(print.config().enable_prime_tower.value, print.config().filament_diameter.size(), print.extruders().size());
+        REQUIRE(print.extruders().size() == 2);
+        REQUIRE(print.has_wipe_tower());
+        REQUIRE(print.tool_ordering().has_wipe_tower());
+        REQUIRE(print.wipe_tower_data().number_of_toolchanges > 0);
+    }
+    const size_t object_layers = print.objects().front()->layers().size();
+    REQUIRE(object_layers > 3);
+    size_t raft_layers = 0;
+    for (const auto* layer : print.objects().front()->support_layers())
+        if (layer->has_extrusions())
+            ++raft_layers;
+    CHECK((raft_layers > 0) == (raft != 0));
+    if (empty_layer) {
+        for (auto* object : print.objects()) {
+            if (empty_layer == 3 && object != print.objects().front())
+                continue;
+            auto* layer = empty_layer == 2 ? object->layers()[object_layers / 2] : object->layers().back();
+            for (auto* region : layer->regions()) {
+                region->perimeters.clear();
+                region->fills.clear();
+            }
+            REQUIRE_FALSE(layer->has_extrusions());
+            if (empty_layer == 4) {
+                auto*         support = object->add_support_layer(int(object->support_layers().size()), 0, layer->height, layer->print_z);
+                ExtrusionPath path(erSupportMaterial, 0.09, 0.45f, float(layer->height));
+                path.polyline = Polyline({Point::new_scale(1., 1.), Point::new_scale(4., 1.)});
+                support->support_fills.append(path);
+            }
+        }
+        // Rebuild tool selection from the injected no-path layer, without
+        // regenerating its perimeters/infill or changing planned layer count.
+        config.set("prime_tower_width", config.opt_float("prime_tower_width") + 1.);
+        print.apply(model, config);
+        REQUIRE_FALSE(print.is_step_done(psWipeTower));
+        REQUIRE(print.objects().front()->is_step_done(posInfill));
+        print.process();
+        REQUIRE(print.objects().front()->layers().size() == object_layers);
+    }
+    GCodeProcessorResult result;
+    print.export_gcode(output.path.string(), &result);
+    std::ifstream input(output.path.string());
+    REQUIRE(input.good());
+    const std::string gcode{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    const std::string layer_tag = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Layer_Change) + "\n";
+    size_t            emitted   = 0;
+    for (size_t pos = 0; (pos = gcode.find(layer_tag, pos)) != std::string::npos; pos += layer_tag.size())
+        ++emitted;
+    const size_t skipped  = empty_layer == 1 || empty_layer == 2 ? (sequential ? 3 : 1) : empty_layer == 3 && sequential ? 2 : 0;
+    const size_t expected = (object_layers + raft_layers) * (sequential ? 3 : 1) - skipped;
+    if (!prime_tower)
+        REQUIRE(emitted == expected);
+    // Wipe-tower gap layers may have no model/support extrusions. Their actual
+    // emitted tags, not the planned support-layer list, are the source of truth.
+    REQUIRE(emitted > 0);
+    const auto check_count = [&](const std::string& prefix) {
+        size_t occurrences = 0;
+        for (size_t pos = 0; (pos = gcode.find(prefix, pos)) != std::string::npos; pos += prefix.size()) {
+            ++occurrences;
+            CHECK(std::stoul(gcode.substr(pos + prefix.size())) == emitted);
+        }
+        REQUIRE(occurrences > 0);
+        return occurrences;
+    };
+    CHECK(check_count("\nSET_PRINT_STATS_INFO TOTAL_LAYER=") == 1);
+    CHECK(check_count("\n; total layer number: ") == 1);
+    CHECK(check_count("\n; total layers count = ") == 1);
+    CHECK(check_count("\n; end_total=") == 1);
+    CHECK(check_count("\n; observed_total=") == emitted);
+}
 
 boost::regex perimeters_regex("G1 X[-0-9.]* Y[-0-9.]* E[-0-9.]* ; perimeter");
 boost::regex infill_regex("G1 X[-0-9.]* Y[-0-9.]* E[-0-9.]* ; infill");

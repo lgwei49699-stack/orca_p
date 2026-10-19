@@ -1,0 +1,14 @@
+{
+    "type": "machine_model",
+    "name": "Advancer3",
+    "model_id": "Advancer3",
+    "nozzle_diameter": "0.25;0.4;0.6;0.8",
+    "machine_tech": "FFF",
+    "family": "Custom",
+    "bed_model": "advancer3_bed_model.stl",
+    "bed_texture": "advancer3_bed_texture.png",
+    "hotend_model": "advancer3_hotend_model.stl",
+    "url": "",
+    "default_materials": "Generic PLA @Advancer3;Generic PLA @Advancer3 0.25 nozzle;Generic PETG @Advancer3;Generic PETG @Advancer3 0.25 nozzle;Generic ABS @Advancer3;Generic ABS @Advancer3 0.25 nozzle",
+    "gfd_device_type": "Advancer3"
+}

@@ -10,17 +10,30 @@ Object will be raised by this number of support layers.
 
 Z gap between object and raft. Ignored for soluble interface.
 
-## Raft geometry trial: segmentation and smoothing
+## Compact arrangement for compatible Cura-style rafts
 
-The advanced **Raft Geometry (Trial)** group is available in Cura-style mode.
+The September 23 change passed the matching macOS arm64 / Release arrangement
+and raft regression suites; validation scope and remaining limitations are recorded below.
+On rectangular beds, normal GUI and CLI arrangement may use model
+spacing for uniform, support-free, single-instance CuraV1 objects with one active
+filament and by-layer printing. Automatic spacing reserves approximately 2 mm
+between models; an explicit object spacing takes precedence. Raft expansion may
+overlap and merge during slicing. Bed boundaries, exclusion areas, fixed objects
+and color grouping remain constraints. Mixed raft-on/off jobs and unsupported
+combinations retain their existing arrangement rules. See the
+[scope and validation record](raft_compact_arrange_progress.md).
+
+## Raft geometry: segmentation and smoothing
+
+The advanced **Raft Geometry** group is available in Cura-style mode.
 `raft_segmented` is off by default; its reference size (`raft_chunk_size`) is
 40 mm and its gap (`raft_chunk_gap`) is 0.8 mm. Independent outline smoothing
-(`raft_smoothing`) defaults to 0, disabled. These are opt-in trial settings,
+(`raft_smoothing`) defaults to 0, disabled. These are opt-in settings,
 not new printer defaults or a guarantee of easier removal.
 
 The implementation processes compatible single-instance objects during by-layer
 printing with one active filament, including individual large models. The
-September 22 extension (pending a matching build and tests) also handles normal
+September 22 extension, verified by the matching raft regression suite, also handles normal
 and tree supports using generator-recorded raft ownership. It regenerates only
 raft paths, reserves ordinary support material at overlapping physical heights,
 and retains ordinary support paths on their original objects. Different geometry
@@ -59,10 +72,10 @@ baseline; empty or out-of-region path results also retain it. Existing mixed-raf
 clearance checks still block export. Neither feature changes model geometry,
 flow, air gap, layer heights or arrangement spacing.
 
-中文入口：**工艺 → 筏层 → 筏层形状（试用）**。分块和平滑均默认关闭；
+中文入口：**工艺 → 筏层 → 筏层形状**。分块和平滑均默认关闭；
 首次对照可用分块参考尺寸 40 mm、缝宽 0.8 mm，平滑单独从 1 mm 试起。
 适用范围为有效 CuraV1、逐层打印、单耗材的兼容单实例对象。
-2026-09-22 新增带普通／树状支撑的实现，待新构建验证：通过生成端来源标记只重建筏层，
+2026-09-22 新增带普通／树状支撑的实现，已通过对应构建的筏层专项：通过生成端来源标记只重建筏层，
 同物理高度的支撑占地从新筏层中扣除，普通支撑保留原对象、坐标、层高及流量。
 筏层上方的支撑脚不全面禁止切缝跨越，但会参与孤立基底的承托判定。
 旧缓存缺少来源标记、跨对象支撑本身重叠或工艺不兼容时沿用原处理。

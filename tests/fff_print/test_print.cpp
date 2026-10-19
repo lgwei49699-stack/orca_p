@@ -3,11 +3,127 @@
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Layer.hpp"
+#include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/Utils.hpp"
 
 #include "test_data.hpp"
 
 using namespace Slic3r;
 using namespace Slic3r::Test;
+
+TEST_CASE("Mesh replacement updates region transforms before slicing and export", "[Print][PrintApplyCache]")
+{
+    // Mesh only, Z placement, Z scale, tilt, and a compatible XY rotation.
+    const int  mode             = GENERATE(0, 1, 2, 3, 4);
+    const bool use_layer_ranges = GENERATE(false, true);
+    CAPTURE(mode, use_layer_ranges);
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set("before_layer_change_gcode", std::string("G92 E0"));
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {200., 0.}, {200., 200.}, {0., 200.}}));
+    config.set_key_value("bed_exclude_area", new ConfigOptionPoints());
+    // Full defaults need enum maps for G-code configuration serialization.
+    for (const auto& key : config.keys()) {
+        auto*       value = dynamic_cast<ConfigOptionEnumsGeneric*>(config.option(key));
+        const auto* def   = print_config_def.get(key);
+        if (value && !value->keys_map && def && def->enum_keys_map) {
+            auto* mapped   = new ConfigOptionEnumsGeneric(def->enum_keys_map);
+            mapped->values = value->values;
+            config.set_key_value(key, mapped);
+        }
+    }
+    struct ExportGuard
+    {
+        std::string             previous_resources = resources_dir();
+        boost::filesystem::path path               = boost::filesystem::temp_directory_path() /
+                                       boost::filesystem::unique_path("orca-apply-cache-%%%%-%%%%.gcode");
+        ExportGuard() { set_resources_dir(std::string(TEST_DATA_DIR) + "/../../resources"); }
+        ~ExportGuard()
+        {
+            set_resources_dir(previous_resources);
+            boost::system::error_code ignored;
+            boost::filesystem::remove(path, ignored);
+        }
+    } output;
+    Model        model;
+    ModelObject* object = model.add_object();
+    object->name        = "replaced mesh";
+    ModelVolume* volume = object->add_volume(make_cube(10., 10., 2.), ModelVolumeType::MODEL_PART, false);
+    // Keep another volume to exercise reused as well as replaced extents.
+    TriangleMesh unchanged = make_cube(3., 3., 2.);
+    unchanged.translate(15., 0., 0.);
+    object->add_volume(std::move(unchanged), ModelVolumeType::MODEL_PART, false);
+    if (use_layer_ranges) {
+        object->layer_config_ranges[{0., 1.}].set("wall_loops", 3);
+        object->layer_config_ranges[{0., 1.}].set("layer_height", 0.2);
+    }
+    object->add_instance()->set_offset(Vec3d(80., 80., 0.));
+    Print print;
+    print.auto_assign_extruders(object);
+    print.set_status_silent();
+    print.apply(model, config);
+
+    // Reconstruction replaces the volume and may also adjust instance Z in
+    // the same transaction. Opening an already rebuilt project misses this.
+    TriangleMesh replacement = make_cube(10., 10., 2.1);
+    replacement.translate(0., 0., -0.05);
+    volume->set_mesh(std::move(replacement));
+    volume->calculate_convex_hull();
+    volume->set_new_unique_id();
+    if (mode == 1)
+        object->instances.front()->set_offset(Z, 0.05);
+    else if (mode == 2)
+        object->instances.front()->set_scaling_factor(Z, 1.1);
+    else if (mode == 3)
+        object->instances.front()->set_rotation(X, 0.1);
+    else if (mode == 4)
+        object->instances.front()->set_rotation(Z, 0.1);
+    object->invalidate_bounding_box();
+    print.apply(model, config);
+    INFO(print.validate().string);
+    REQUIRE(print.validate().string.empty());
+    if (mode != 4) {
+        // Reusing an XY-rotated cache is intentional. For all other cases the
+        // region bounds must match a fresh Print, including unchanged volumes.
+        Print fresh;
+        fresh.apply(model, config);
+        const auto* actual   = print.objects().front()->shared_regions();
+        const auto* expected = fresh.objects().front()->shared_regions();
+        CHECK(actual->trafo_bboxes.matrix().isApprox(expected->trafo_bboxes.matrix()));
+        REQUIRE(actual->layer_ranges.size() == expected->layer_ranges.size());
+        for (size_t i = 0; i < actual->layer_ranges.size(); ++i) {
+            const auto& a = actual->layer_ranges[i];
+            const auto& e = expected->layer_ranges[i];
+            REQUIRE(a.volumes.size() == e.volumes.size());
+            for (size_t j = 0; j < a.volumes.size(); ++j) {
+                CHECK(a.volumes[j].volume_id == e.volumes[j].volume_id);
+                CHECK(a.volumes[j].bbox.min().isApprox(e.volumes[j].bbox.min()));
+                CHECK(a.volumes[j].bbox.max().isApprox(e.volumes[j].bbox.max()));
+            }
+        }
+    }
+    print.process();
+    GCodeProcessorResult gcode;
+    print.export_gcode(output.path.string(), &gcode);
+    REQUIRE(boost::filesystem::file_size(output.path) > 0);
+    REQUIRE(print.is_step_done(psGCodeExport));
+    REQUIRE(print.objects().front()->is_step_done(posSlice));
+    REQUIRE(print.objects().front()->is_step_done(posInfill));
+    CHECK(print.apply(model, config) == Print::APPLY_STATUS_UNCHANGED);
+    CHECK(print.objects().front()->is_step_done(posSlice));
+    CHECK(print.objects().front()->is_step_done(posInfill));
+    CHECK(print.is_step_done(psGCodeExport));
+    CHECK(print.apply(model, config) == Print::APPLY_STATUS_UNCHANGED);
+
+    SECTION("Real configuration changes still invalidate slices and G-code") { config.set("layer_height", 0.15); }
+    SECTION("Real placement changes still invalidate slices and G-code")
+    {
+        object->instances.front()->set_offset(Z, object->instances.front()->get_offset().z() + 0.1);
+        object->invalidate_bounding_box();
+    }
+    REQUIRE(print.apply(model, config) == Print::APPLY_STATUS_INVALIDATED);
+    CHECK_FALSE(print.objects().front()->is_step_done(posSlice));
+    CHECK_FALSE(print.is_step_done(psGCodeExport));
+}
 
 SCENARIO("PrintObject: Perimeter generation", "[PrintObject]") {
     GIVEN("20mm cube and default config") {

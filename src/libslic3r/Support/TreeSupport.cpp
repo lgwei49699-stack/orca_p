@@ -752,97 +752,131 @@ void TreeSupport::detect_overhangs(bool check_support_necessity/* = false*/)
     std::chrono::time_point<clock_> t0{ clock_::now() };
     // main part of overhang detection can be parallel
     tbb::concurrent_vector<ExPolygons> overhangs_all_layers(m_object->layer_count());
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, m_object->layer_count()),
-        [&](const tbb::blocked_range<size_t>& range) {
-            for (size_t layer_nr = range.begin(); layer_nr < range.end(); layer_nr++) {
-                if (m_object->print()->canceled())
-                    break;
+    std::vector<unsigned char>         detection_limited(m_object->layer_count(), 0);
+    std::vector<unsigned char>         sharp_tail_found(m_object->layer_count(), 0);
+    std::vector<double>                cantilever_distances(m_object->layer_count(), 0.);
+    const bool                         check_printed_regions = check_support_necessity && m_object->is_step_done(posPerimeters) &&
+                                       m_object->is_step_done(posInfill);
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, m_object->layer_count()), [&](const tbb::blocked_range<size_t>& range) {
+        for (size_t layer_nr = range.begin(); layer_nr < range.end(); layer_nr++) {
+            if (m_object->print()->canceled())
+                break;
 
-                if (!is_auto(stype) && layer_nr > enforce_support_layers)
-                    continue;
+            if (!is_auto(stype) && layer_nr > enforce_support_layers)
+                continue;
 
-                Layer* layer = m_object->get_layer(layer_nr);
+            Layer* layer = m_object->get_layer(layer_nr);
 
-                if (layer->lower_layer == nullptr) {
-                    for (auto& slice : layer->lslices_extrudable) {
-                        auto bbox_size = get_extents(slice).size();
-                        if (!((bbox_size.x() > length_thresh_well_supported && bbox_size.y() > length_thresh_well_supported))
-                            && g_config_support_sharp_tails) {
-                            layer->sharp_tails.push_back(slice);
-                            layer->sharp_tails_height.push_back(layer->height);
+            if (layer->lower_layer == nullptr) {
+                for (auto& slice : layer->lslices_extrudable) {
+                    auto bbox_size = get_extents(slice).size();
+                    if (!((bbox_size.x() > length_thresh_well_supported && bbox_size.y() > length_thresh_well_supported)) &&
+                        g_config_support_sharp_tails) {
+                        layer->sharp_tails.push_back(slice);
+                        layer->sharp_tails_height.push_back(layer->height);
+                    }
+                }
+                continue;
+            }
+
+            Layer*   lower_layer        = layer->lower_layer;
+            coordf_t lower_layer_offset = layer_nr < enforce_support_layers ? -0.15 * extrusion_width :
+                                                                              (float) lower_layer->height / tan(threshold_rad);
+            // lower_layer_offset = std::min(lower_layer_offset, extrusion_width);
+            coordf_t    support_offset_scaled = scale_(lower_layer_offset);
+            ExPolygons& curr_polys            = layer->lslices_extrudable;
+            ExPolygons& lower_polys           = lower_layer->lslices_extrudable;
+
+            // normal overhang
+            ExPolygons lower_layer_offseted = offset_ex(lower_polys, support_offset_scaled, SUPPORT_SURFACES_OFFSET_PARAMETERS);
+            overhangs_all_layers[layer_nr]  = std::move(diff_ex(curr_polys, lower_layer_offseted));
+
+            double duration{std::chrono::duration_cast<second_>(clock_::now() - t0).count()};
+            if (duration > 30 || overhangs_all_layers[layer_nr].size() > 100) {
+                BOOST_LOG_TRIVIAL(info) << "Overhang detection limited: layer_nr=" << layer_nr << " duration=" << duration
+                                        << " regions=" << overhangs_all_layers[layer_nr].size()
+                                        << " reason=" << (duration > 30 ? "time_budget" : "region_budget");
+                detection_limited[layer_nr] = 1;
+                continue;
+            }
+            if (is_auto(stype) && config_detect_sharp_tails) {
+                // Only the warning pass may exclude unprinted slice artifacts.
+                // Use deposited line width (including infill/gap fill), not an area
+                // threshold: small regions with real extrusion must still warn.
+                ExPolygons printed_regions;
+                bool       printed_regions_ready = false;
+                // BBS detect sharp tail
+                for (const ExPolygon& expoly : curr_polys) {
+                    bool is_sharp_tail = false;
+                    // 1. nothing below
+                    // this is a sharp tail region if it's floating and non-ignorable
+                    if (!overlaps(offset_ex(expoly, 0.1 * extrusion_width_scaled), lower_polys)) {
+                        is_sharp_tail = !offset_ex(expoly, -0.1 * extrusion_width_scaled).empty();
+                    }
+
+                    if (is_sharp_tail && check_printed_regions) {
+                        if (!printed_regions_ready) {
+                            Polygons footprint;
+                            for (const LayerRegion* region : layer->regions()) {
+                                region->perimeters.polygons_covered_by_width(footprint, 0.f);
+                                region->fills.polygons_covered_by_width(footprint, 0.f);
+                            }
+                            printed_regions       = union_ex(footprint);
+                            printed_regions_ready = true;
+                        }
+                        if (!overlaps(ExPolygons{expoly}, printed_regions)) {
+                            BOOST_LOG_TRIVIAL(debug) << "Ignoring unprinted floating section: layer_nr=" << layer_nr;
+                            is_sharp_tail = false;
                         }
                     }
-                    continue;
-                }
 
-                Layer* lower_layer = layer->lower_layer;
-                coordf_t lower_layer_offset = layer_nr < enforce_support_layers ? -0.15 * extrusion_width : (float)lower_layer->height / tan(threshold_rad);
-                //lower_layer_offset = std::min(lower_layer_offset, extrusion_width);
-                coordf_t support_offset_scaled = scale_(lower_layer_offset);
-                ExPolygons& curr_polys = layer->lslices_extrudable;
-                ExPolygons& lower_polys = lower_layer->lslices_extrudable;
+                    if (is_sharp_tail) {
+                        layer->sharp_tails.push_back(expoly);
+                        layer->sharp_tails_height.push_back(0);
 
-                // normal overhang
-                ExPolygons lower_layer_offseted = offset_ex(lower_polys, support_offset_scaled, SUPPORT_SURFACES_OFFSET_PARAMETERS);
-                overhangs_all_layers[layer_nr] = std::move(diff_ex(curr_polys, lower_layer_offseted));
-
-                double duration{ std::chrono::duration_cast<second_>(clock_::now() - t0).count() };
-                if (duration > 30 || overhangs_all_layers[layer_nr].size() > 100) {
-                    BOOST_LOG_TRIVIAL(info) << "detect_overhangs takes more than 30 secs, skip cantilever and sharp tails detection: layer_nr=" << layer_nr << " duration=" << duration;
-                    config_detect_sharp_tails = false;
-                    config_remove_small_overhangs = false;
-                    continue;
-                }
-                if (is_auto(stype) && config_detect_sharp_tails)
-                {
-                    // BBS detect sharp tail
-                    for (const ExPolygon& expoly : curr_polys) {
-                        bool  is_sharp_tail = false;
-                        // 1. nothing below
-                        // this is a sharp tail region if it's floating and non-ignorable
-                        if (!overlaps(offset_ex(expoly, 0.1 * extrusion_width_scaled), lower_polys)) {
-                            is_sharp_tail = !offset_ex(expoly, -0.1 * extrusion_width_scaled).empty();
-                        }
-
-                        if (is_sharp_tail) {
-                            layer->sharp_tails.push_back(expoly);
-                            layer->sharp_tails_height.push_back(0);
-
-                            has_sharp_tails = true;
+                        sharp_tail_found[layer_nr] = 1;
 #ifdef SUPPORT_TREE_DEBUG_TO_SVG
-							SVG::export_expolygons(debug_out_path("sharp_tail_orig_%.02f.svg", layer->print_z), { expoly });
+                        SVG::export_expolygons(debug_out_path("sharp_tail_orig_%.02f.svg", layer->print_z), {expoly});
 #endif
-						}
-                    }
-                }
-
-
-                // check cantilever
-                // lower_layer_offset may be very small, so we need to do max and then add 0.1
-                lower_layer_offseted = offset_ex(lower_layer_offseted, scale_(std::max(extrusion_width - lower_layer_offset, 0.) + 0.1));
-                for (ExPolygon& poly : overhangs_all_layers[layer_nr]) {
-                    auto cluster_boundary_ex = intersection_ex(poly, lower_layer_offseted);
-                    Polygons cluster_boundary = to_polygons(cluster_boundary_ex);
-                    if (cluster_boundary.empty()) continue;
-                    double dist_max = 0;
-                    for (auto& pt : poly.contour.points) {
-                        double dist_pt = std::numeric_limits<double>::max();
-                        for (auto& ply : cluster_boundary) {
-                            double d = ply.distance_to(pt);
-                            dist_pt = std::min(dist_pt, d);
-                        }
-                        dist_max = std::max(dist_max, dist_pt);
-                    }
-                    if (dist_max > scale_(3)) {  // is cantilever if the farmost point is larger than 3mm away from base
-                        max_cantilever_dist = std::max(max_cantilever_dist, dist_max);
-                        layer->cantilevers.emplace_back(poly);
-                        BOOST_LOG_TRIVIAL(debug) << "found a cantilever cluster. layer_nr=" << layer_nr << dist_max;
-                        has_cantilever = true;
                     }
                 }
             }
+
+            // check cantilever
+            // lower_layer_offset may be very small, so we need to do max and then add 0.1
+            lower_layer_offseted = offset_ex(lower_layer_offseted, scale_(std::max(extrusion_width - lower_layer_offset, 0.) + 0.1));
+            for (ExPolygon& poly : overhangs_all_layers[layer_nr]) {
+                auto     cluster_boundary_ex = intersection_ex(poly, lower_layer_offseted);
+                Polygons cluster_boundary    = to_polygons(cluster_boundary_ex);
+                if (cluster_boundary.empty())
+                    continue;
+                double dist_max = 0;
+                for (auto& pt : poly.contour.points) {
+                    double dist_pt = std::numeric_limits<double>::max();
+                    for (auto& ply : cluster_boundary) {
+                        double d = ply.distance_to(pt);
+                        dist_pt  = std::min(dist_pt, d);
+                    }
+                    dist_max = std::max(dist_max, dist_pt);
+                }
+                if (dist_max > scale_(3)) { // is cantilever if the farmost point is larger than 3mm away from base
+                    cantilever_distances[layer_nr] = std::max(cantilever_distances[layer_nr], dist_max);
+                    layer->cantilevers.emplace_back(poly);
+                    BOOST_LOG_TRIVIAL(debug) << "found a cantilever cluster. layer_nr=" << layer_nr << dist_max;
+                }
+            }
         }
-    ); // end tbb::parallel_for
+    }); // end tbb::parallel_for
+
+    // Do not let workers race on global flags/distances or disable other layers
+    // depending on thread scheduling. Aggregate after all layer checks complete.
+    has_sharp_tails = std::any_of(sharp_tail_found.begin(), sharp_tail_found.end(), [](unsigned char value) { return value != 0; });
+    max_cantilever_dist = cantilever_distances.empty() ? 0. : *std::max_element(cantilever_distances.begin(), cantilever_distances.end());
+    has_cantilever      = max_cantilever_dist > 0.;
+    if (std::any_of(detection_limited.begin(), detection_limited.end(), [](unsigned char value) { return value != 0; })) {
+        config_detect_sharp_tails     = false;
+        config_remove_small_overhangs = false;
+    }
 
     BOOST_LOG_TRIVIAL(info) << "max_cantilever_dist=" << max_cantilever_dist;
     if (check_support_necessity)

@@ -1,0 +1,13 @@
+{
+  "type": "process",
+  "name": "0.20mm Standard @EPONE Plus",
+  "inherits": "0.20mm Standard @EPONE",
+  "from": "system",
+  "setting_id": "GFD_EPONEPLUS_P_020",
+  "instantiation": "true",
+  "compatible_printers": [
+    "EPONE Plus 0.4 nozzle",
+    "MyMarlin 0.4 nozzle"
+  ],
+  "print_settings_id": "0.20mm Standard @EPONE Plus"
+}

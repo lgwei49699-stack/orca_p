@@ -55,6 +55,7 @@
 #include <string_view>
 
 #include "GUI_App.hpp"
+#include "GFDModalDialog.hpp"
 #include "UnsavedChangesDialog.hpp"
 #include "MsgDialog.hpp"
 #include "Notebook.hpp"
@@ -65,6 +66,7 @@
 #include "NetworkTestDialog.hpp"
 #include "ConfigWizard.hpp"
 #include "Widgets/Button.hpp"
+#include "Widgets/StaticBox.hpp"
 #include "Widgets/TextInput.hpp"
 #include "Widgets/SwitchButton.hpp"
 #include "Widgets/WebView.hpp"
@@ -79,6 +81,7 @@
 #include <wx/grid.h>
 #include <wx/scrolwin.h>
 #include <wx/timer.h>
+#include <wx/dcclient.h>
 
 #ifdef _WIN32
 #include <dbt.h>
@@ -226,6 +229,19 @@ void apply_dialog_action_button_style(Button* button, ButtonStyle style, const w
     button->SetSize(size);
 }
 
+void apply_cloud_button_style(Button* button, bool selected = false)
+{
+    button->SetStyle(selected ? ButtonStyle::Confirm : ButtonStyle::Regular, ButtonType::Expanded);
+    button->SetCornerRadius(button->FromDIP(6));
+    button->SetBorderWidth(0);
+    // Neutral actions keep a grey focus cue; green is reserved for the selected upload mode.
+    button->SetBackgroundColor(StateColor(std::pair<wxColour, int>(wxColour("#DFDFDF"), StateColor::Disabled),
+                                          std::pair<wxColour, int>(wxColour(selected ? "#00796B" : "#CECECE"), StateColor::Pressed),
+                                          std::pair<wxColour, int>(wxColour(selected ? "#00897B" : "#CECECE"), StateColor::Focused),
+                                          std::pair<wxColour, int>(wxColour(selected ? "#26A69A" : "#D4D4D4"), StateColor::Hovered),
+                                          std::pair<wxColour, int>(wxColour(selected ? "#009688" : "#DFDFDF"), StateColor::Normal)));
+}
+
 struct GFDPrinterState
 {
     std::string selected_printer_model;
@@ -266,11 +282,11 @@ GFDPrinterState current_gfd_printer_state()
     return state;
 }
 
-class GFDUploadConfigDialog : public wxDialog
+class GFDUploadConfigDialog : public GFDCloudConfigDialog
 {
 public:
-    explicit GFDUploadConfigDialog(wxWindow* parent)
-        : wxDialog(parent, wxID_ANY, _L("上传配置"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX)
+    explicit GFDUploadConfigDialog(wxWindow* parent, std::function<bool(wxWindow*, GFDCloudConfigInfo&)> choose_target)
+        : GFDCloudConfigDialog(parent, _L("Upload configuration")), m_choose_target(std::move(choose_target))
     {
         build();
         bind_events();
@@ -287,7 +303,33 @@ public:
         return m_remarks_input != nullptr ? m_remarks_input->GetValue() : wxString(wxEmptyString);
     }
 
+    std::string        fineness() const { return GFD::CLOUD_FINENESS[std::max(0, m_quality_choice->GetSelection())]; }
+    const std::string& cloud_config_id() const { return m_target.id; }
+
+    nlohmann::json metadata_changes() const
+    {
+        nlohmann::json changes = nlohmann::json::object();
+        if (!m_target.id.empty()) {
+            const std::string name = into_u8(config_name().Trim(true).Trim(false));
+            const std::string info = into_u8(remarks().Trim(true).Trim(false));
+            if (into_u8(config_name()) != m_target.name)
+                changes["name"] = name;
+            if (into_u8(remarks()) != m_target.info)
+                changes["info"] = info;
+        }
+        return changes;
+    }
+
 private:
+    std::function<bool(wxWindow*, GFDCloudConfigInfo&)> m_choose_target;
+    GFDCloudConfigInfo                                  m_target;
+    wxChoice*                                           m_quality_choice{nullptr};
+    wxStaticText*                                       m_target_label{nullptr};
+    wxStaticText*                                       m_metadata_note{nullptr};
+    Button*                                             m_new_button{nullptr};
+    Button*                                             m_choose_button{nullptr};
+    wxString                                            m_new_name;
+    wxString                                            m_new_remarks;
     ::TextInput*  m_name_input{nullptr};
     wxTextCtrl*   m_remarks_input{nullptr};
     wxStaticText* m_tip_label{nullptr};
@@ -297,12 +339,67 @@ private:
     void build()
     {
         SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
-        const wxSize client_size(FromDIP(460), FromDIP(350));
+        const wxSize client_size(FromDIP(460), FromDIP(500));
         SetClientSize(client_size);
         SetMinClientSize(client_size);
 
         auto* main_sizer = new wxBoxSizer(wxVERTICAL);
         main_sizer->AddSpacer(FromDIP(20));
+
+        auto* target_row = new wxBoxSizer(wxHORIZONTAL);
+        m_new_button     = new Button(this, _L("New scheme"));
+        m_choose_button  = new Button(this, _L("Upload to existing scheme"));
+        update_target_buttons();
+        target_row->Add(m_new_button, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(8));
+        target_row->Add(m_choose_button, 0, wxALIGN_CENTER_VERTICAL);
+        target_row->AddStretchSpacer();
+        main_sizer->Add(target_row, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+        main_sizer->AddSpacer(FromDIP(8));
+        auto* target_hint = new ::Label(this, ::Label::Body_12,
+                                        _L("Add another profile type to an existing scheme, or replace an uploaded type."));
+        target_hint->Wrap(FromDIP(412));
+        main_sizer->Add(target_hint, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+        m_target_label = new wxStaticText(this, wxID_ANY, _L("New scheme: Standard profile required"), wxDefaultPosition, wxDefaultSize,
+                                          wxST_ELLIPSIZE_END | wxST_NO_AUTORESIZE);
+        m_target_label->SetMinSize(wxSize(-1, FromDIP(36)));
+        main_sizer->AddSpacer(FromDIP(12));
+        main_sizer->Add(m_target_label, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+        main_sizer->AddSpacer(FromDIP(8));
+        auto* quality_row = new wxBoxSizer(wxHORIZONTAL);
+        quality_row->Add(new wxStaticText(this, wxID_ANY, _L("Profile type")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+        m_quality_choice = new wxChoice(this, wxID_ANY);
+        for (const char* quality : GFD::CLOUD_FINENESS)
+            m_quality_choice->Append(gfd_cloud_quality_label(quality));
+        m_quality_choice->SetSelection(0);
+        m_quality_choice->Disable();
+        quality_row->Add(m_quality_choice, 1);
+        main_sizer->Add(quality_row, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, FromDIP(24));
+        m_new_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            if (m_target.id.empty())
+                return;
+            m_target = GFDCloudConfigInfo();
+            m_name_input->GetTextCtrl()->SetValue(m_new_name);
+            m_remarks_input->SetValue(m_new_remarks);
+            m_quality_choice->SetSelection(0);
+            m_quality_choice->Disable();
+            update_target_summary();
+            m_name_input->GetTextCtrl()->SetFocus();
+        });
+        m_choose_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+            GFDCloudConfigInfo selected;
+            if (!m_choose_target || !m_choose_target(this, selected))
+                return;
+            if (m_target.id.empty()) {
+                m_new_name    = config_name();
+                m_new_remarks = remarks();
+            }
+            m_target = std::move(selected);
+            m_name_input->GetTextCtrl()->SetValue(from_u8(m_target.name));
+            m_remarks_input->SetValue(from_u8(m_target.info));
+            m_quality_choice->SetSelection(0);
+            m_quality_choice->Enable();
+            update_target_summary();
+        });
 
         auto* name_label = new wxStaticText(this, wxID_ANY, _L("配置名称"), wxDefaultPosition, wxDefaultSize, 0);
         name_label->SetFont(::Label::Body_13);
@@ -330,13 +427,20 @@ private:
         m_remarks_input->SetBackgroundColour(*wxWHITE);
         main_sizer->Add(m_remarks_input, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
 
-        main_sizer->AddSpacer(FromDIP(10));
+        m_metadata_note = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+                                           wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END);
+        m_metadata_note->SetFont(::Label::Body_12);
+        m_metadata_note->SetMinSize(wxSize(-1, m_metadata_note->GetCharHeight()));
+        main_sizer->AddSpacer(FromDIP(8));
+        main_sizer->Add(m_metadata_note, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
 
         m_tip_label = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
         m_tip_label->SetFont(::Label::Body_12);
         m_tip_label->SetForegroundColour(wxColour(220, 38, 38));
         main_sizer->Add(m_tip_label, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
-        main_sizer->AddSpacer(FromDIP(18));
+        main_sizer->AddSpacer(FromDIP(8));
+        add_progress_footer(main_sizer);
+        main_sizer->AddSpacer(FromDIP(16));
 
         auto* button_row = new wxBoxSizer(wxHORIZONTAL);
         button_row->AddStretchSpacer(1);
@@ -354,18 +458,50 @@ private:
 
         main_sizer->Add(button_row, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, FromDIP(24));
 
-        SetSizer(main_sizer);
+        SetSizerAndFit(main_sizer);
+        SetMinSize(GetSize());
         Layout();
         CentreOnParent();
     }
 
     void bind_events()
     {
-        m_cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_CANCEL); });
+        m_cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { cancel(); });
         m_confirm_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { on_confirm(); });
         m_name_input->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent&) { on_confirm(); });
         m_name_input->GetTextCtrl()->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { clear_tip(); });
         m_remarks_input->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { clear_tip(); });
+        m_quality_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { update_target_summary(); });
+    }
+
+    void update_target_buttons()
+    {
+        const bool existing = !m_target.id.empty();
+        apply_cloud_button_style(m_new_button, !existing);
+        apply_cloud_button_style(m_choose_button, existing);
+        for (Button* button : {m_new_button, m_choose_button}) {
+            button->SetFont(::Label::Body_12);
+            button->SetPaddingSize(FromDIP(wxSize(12, 5)));
+            button->SetMinSize(FromDIP(wxSize(-1, 30)));
+        }
+    }
+
+    void update_target_summary()
+    {
+        const bool existing = !m_target.id.empty();
+        update_target_buttons();
+        wxString summary = _L("New scheme: Standard profile required");
+        if (existing) {
+            const bool replaces_file = m_target.for_quality(fineness()).has_file();
+            summary                  = wxString::Format(replaces_file ? _L("The %s profile already exists and will be replaced.") :
+                                                                        _L("The %s profile will be added to this scheme."),
+                                       gfd_cloud_quality_label(fineness()));
+        }
+        m_target_label->SetLabel(summary);
+        m_target_label->SetToolTip(summary);
+        m_metadata_note->SetLabel(existing ? _L("Name and remarks are shared by all profiles in this scheme.") : wxString());
+        m_metadata_note->SetToolTip(m_metadata_note->GetLabel());
+        Layout();
     }
 
     void clear_tip()
@@ -386,16 +522,22 @@ private:
         }
 
         clear_tip();
-        EndModal(wxID_OK);
+        submit();
     }
 };
 
 class GFDCloudImportDialog : public wxDialog
 {
 public:
-    GFDCloudImportDialog(wxWindow* parent, Plater* plater)
-        : wxDialog(parent, wxID_ANY, _L("云端导入"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
+    GFDCloudImportDialog(wxWindow* parent, Plater* plater, bool select_target = false)
+        : wxDialog(parent,
+                   wxID_ANY,
+                   select_target ? _L("Choose an existing scheme to upload to") : _L("云端导入"),
+                   wxDefaultPosition,
+                   wxDefaultSize,
+                   wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
         , m_plater(plater)
+        , m_select_target(select_target)
         , m_alive(std::make_shared<std::atomic_bool>(true))
         , m_loading_timer(this)
     {
@@ -404,7 +546,6 @@ public:
         bind_events();
         load_device_types();
         wxGetApp().UpdateDlgDarkUI(this);
-        update_loading_panel_style();
         set_loading_state(true);
 
         const auto alive = m_alive;
@@ -423,16 +564,18 @@ public:
             m_plater->cancel_cloud_config_requests();
     }
 
+    const GFDCloudConfigInfo& selected_config() const { return m_selected_config; }
+
     void refresh_configs() { fetch_configs_for_selected_device(); }
 
 private:
     Plater*                           m_plater{nullptr};
     wxChoice*                         m_device_choice{nullptr};
+    wxPanel*                          m_table_panel{nullptr};
+    wxPanel*                          m_header_panel{nullptr};
     wxScrolledWindow*                 m_config_list{nullptr};
     wxBoxSizer*                       m_config_list_sizer{nullptr};
     wxStaticText*                     m_tip_label{nullptr};
-    wxPanel*                          m_loading_panel{nullptr};
-    wxStaticText*                     m_loading_text{nullptr};
     wxGauge*                          m_loading_gauge{nullptr};
     Button*                           m_refresh_button{nullptr};
     Button*                           m_cancel_button{nullptr};
@@ -442,6 +585,17 @@ private:
     wxTimer                           m_loading_timer;
     size_t                            m_request_generation{0};
     bool                              m_loading{false};
+    bool                              m_select_target{false};
+    GFDCloudConfigInfo                m_selected_config;
+    struct WrappedRemark
+    {
+        wxPanel*      row;
+        wxStaticText* label;
+        wxString      text;
+        int           width{-1};
+    };
+    std::vector<WrappedRemark> m_wrapped_remarks;
+    bool                       m_remarks_layout_pending{false};
 
     void build()
     {
@@ -461,7 +615,7 @@ private:
         filter_row->Add(m_device_choice, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
 
         m_refresh_button = new Button(this, _L("刷新"));
-        apply_window_button_style(m_refresh_button, ButtonStyle::Regular);
+        apply_cloud_button_style(m_refresh_button);
         m_refresh_button->SetMinSize(wxSize(FromDIP(72), FromDIP(30)));
         filter_row->Add(m_refresh_button, 0, wxALIGN_CENTER_VERTICAL);
         filter_row->AddStretchSpacer(1);
@@ -469,30 +623,43 @@ private:
 
         main_sizer->AddSpacer(FromDIP(14));
 
-        m_config_list = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(872), FromDIP(390)),
-                                             wxBORDER_SIMPLE | wxVSCROLL);
+        m_table_panel     = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_SIMPLE);
+        auto* table_sizer = new wxBoxSizer(wxVERTICAL);
+        m_table_panel->SetSizer(table_sizer);
+        add_header_row();
+        m_config_list = new wxScrolledWindow(m_table_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE | wxVSCROLL);
+        m_config_list->SetMinSize(wxSize(0, 0));
         m_config_list->SetDoubleBuffered(true);
         m_config_list->SetScrollRate(0, FromDIP(12));
         m_config_list->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
         m_config_list_sizer = new wxBoxSizer(wxVERTICAL);
         m_config_list->SetSizer(m_config_list_sizer);
-        main_sizer->Add(m_config_list, 1, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
-        build_loading_panel();
+        table_sizer->Add(m_config_list, 1, wxEXPAND);
+        main_sizer->Add(m_table_panel, 1, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
 
         main_sizer->AddSpacer(FromDIP(10));
 
-        m_tip_label = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0);
+        auto* footer_row = new wxBoxSizer(wxHORIZONTAL);
+        m_tip_label      = new wxStaticText(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+                                            wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END);
         m_tip_label->SetFont(::Label::Body_13);
-        m_tip_label->SetForegroundColour(wxColour(220, 38, 38));
-        main_sizer->Add(m_tip_label, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+        m_tip_label->SetMinSize(wxSize(FromDIP(200), m_tip_label->GetCharHeight()));
+        footer_row->Add(m_tip_label, 1, wxALIGN_CENTER_VERTICAL);
+        m_loading_gauge = new wxGauge(this, wxID_ANY, 100, wxDefaultPosition, FromDIP(wxSize(180, 4)), wxGA_HORIZONTAL);
+        footer_row->Add(m_loading_gauge, 0, wxALIGN_CENTER_VERTICAL | wxRESERVE_SPACE_EVEN_IF_HIDDEN);
+        m_loading_gauge->Hide();
 
         auto* button_row = new wxBoxSizer(wxHORIZONTAL);
+        // Equal side columns keep the gauge centered, independent of the Cancel button.
+        button_row->SetMinSize(FromDIP(wxSize(200, 32)));
         button_row->AddStretchSpacer(1);
         m_cancel_button = new Button(this, _L("取消"));
-        apply_window_button_style(m_cancel_button, ButtonStyle::Regular);
+        apply_cloud_button_style(m_cancel_button);
         m_cancel_button->SetMinSize(wxSize(FromDIP(76), FromDIP(32)));
         button_row->Add(m_cancel_button, 0);
-        main_sizer->Add(button_row, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, FromDIP(24));
+        footer_row->Add(button_row, 1, wxALIGN_CENTER_VERTICAL);
+        main_sizer->Add(footer_row, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(24));
+        main_sizer->AddSpacer(FromDIP(12));
 
         SetSizer(main_sizer);
         Layout();
@@ -512,7 +679,8 @@ private:
         m_refresh_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { fetch_configs_for_selected_device(); });
         m_device_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { fetch_configs_for_selected_device(); });
         m_config_list->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
-            position_loading_panel();
+            align_header_with_list();
+            schedule_remarks_layout();
             event.Skip();
         });
         Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& event) {
@@ -541,6 +709,9 @@ private:
         if (!current_device_type.empty() && std::find(device_types.begin(), device_types.end(), current_device_type) == device_types.end())
             device_types.insert(device_types.begin(), current_device_type);
 
+        if (m_select_target && !current_device_type.empty())
+            device_types = {current_device_type};
+
         m_device_choice->Clear();
         for (const std::string& device_type : device_types)
             m_device_choice->Append(from_u8(device_type));
@@ -551,7 +722,7 @@ private:
             m_device_choice->SetSelection(0);
 
         if (m_tip_label != nullptr)
-            m_tip_label->SetLabel(_L("点击刷新获取当前机型的云端配置"));
+            set_status(_L("点击刷新获取当前机型的云端配置"));
     }
 
     std::string selected_device_type() const
@@ -569,14 +740,12 @@ private:
 
         const std::string device_type = selected_device_type();
         if (device_type.empty()) {
-            m_tip_label->SetLabel(_L("未找到可用机型"));
+            set_status(_L("未找到可用机型"));
             set_loading_state(false);
             return;
         }
 
-        m_tip_label->SetLabel(_L("正在获取云端配置..."));
-        if (m_loading_text != nullptr)
-            m_loading_text->SetLabel(_L("正在获取云端配置，请稍候..."));
+        set_status(_L("正在获取云端配置..."));
         set_loading_state(true);
 
         if (m_plater == nullptr) {
@@ -619,7 +788,7 @@ private:
                     return;
                 if (canceled) {
                     set_loading_state(false);
-                    m_tip_label->SetLabel(_L("操作已取消"));
+                    set_status(_L("操作已取消"));
                     return;
                 }
 
@@ -640,6 +809,10 @@ private:
                         result.error_message = "登录状态无效，请重新登录";
                 }
 
+                if (GFDAuthManager::current_auth_token(wxGetApp().app_config) != token) {
+                    fetch_configs_for_selected_device();
+                    return;
+                }
                 if (result.ok)
                     m_configs_environment = request_environment;
                 apply_cloud_config_response(std::move(result.configs), std::move(result.error_message), result.ok);
@@ -654,98 +827,44 @@ private:
             m_configs.clear();
             m_configs_environment.clear();
             rebuild_config_rows();
-            m_tip_label->SetLabel(from_u8(error_message.empty() ? "获取云端配置失败" : error_message));
+            set_status(from_u8(error_message.empty() ? "获取云端配置失败" : error_message));
             set_loading_state(false);
             return;
         }
 
         m_configs = std::move(configs);
         rebuild_config_rows();
-        m_tip_label->SetLabel(m_configs.empty() ? _L("当前机型暂无云端配置") : wxString(wxEmptyString));
+        set_status(m_configs.empty() ? _L("当前机型暂无云端配置") : wxString(wxEmptyString));
         set_loading_state(false);
+    }
+
+    void set_status(const wxString& text)
+    {
+        if (m_tip_label->GetLabel() != text)
+            m_tip_label->SetLabel(text);
+        m_tip_label->SetToolTip(text);
     }
 
     void set_loading_state(bool loading)
     {
+        if (m_loading == loading)
+            return;
         m_loading = loading;
-        if (loading)
-            update_loading_panel_style();
-
-        if (m_refresh_button != nullptr)
-            m_refresh_button->Enable(!loading);
-        if (m_device_choice != nullptr)
-            m_device_choice->Enable(!loading);
-        if (m_config_list != nullptr)
-            m_config_list->Enable(!loading);
-
-        if (m_loading_panel != nullptr) {
-            position_loading_panel();
-            m_loading_panel->Show(loading);
-            if (loading) {
-                m_loading_panel->Raise();
-                if (m_loading_gauge != nullptr)
-                    m_loading_gauge->Pulse();
-                if (!m_loading_timer.IsRunning())
-                    m_loading_timer.Start(120);
-            } else {
-                m_loading_timer.Stop();
-            }
+        m_refresh_button->Enable(!loading);
+        m_device_choice->Enable(!loading);
+        m_config_list->Enable(!loading);
+        m_loading_gauge->Show(loading);
+        if (loading) {
+            m_loading_gauge->Pulse();
+            m_loading_timer.Start(120);
+        } else {
+            m_loading_timer.Stop();
         }
-        Layout();
-    }
-
-    void build_loading_panel()
-    {
-        m_loading_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, FromDIP(wxSize(360, 56)), wxBORDER_NONE);
-        m_loading_panel->SetDoubleBuffered(true);
-
-        auto* sizer    = new wxBoxSizer(wxVERTICAL);
-        m_loading_text = new wxStaticText(m_loading_panel, wxID_ANY, _L("正在获取云端配置，请稍候..."), wxDefaultPosition, wxDefaultSize,
-                                          wxALIGN_CENTER);
-        m_loading_text->SetFont(::Label::Body_13);
-        m_loading_gauge = new wxGauge(m_loading_panel, wxID_ANY, 100, wxDefaultPosition, FromDIP(wxSize(180, 4)), wxGA_HORIZONTAL);
-
-        sizer->Add(m_loading_text, 0, wxALIGN_CENTER | wxTOP, FromDIP(8));
-        sizer->Add(m_loading_gauge, 0, wxALIGN_CENTER | wxTOP, FromDIP(10));
-        m_loading_panel->SetSizer(sizer);
-        m_loading_panel->Layout();
-        m_loading_panel->Hide();
-    }
-
-    void update_loading_panel_style()
-    {
-        if (m_loading_panel == nullptr)
-            return;
-
-        wxColour background = wxGetApp().dark_mode() ? wxColour(24, 24, 24) : wxColour(255, 255, 255);
-        if (m_config_list != nullptr && m_config_list->GetBackgroundColour().IsOk())
-            background = m_config_list->GetBackgroundColour();
-
-        const wxColour text = readable_text_colour(background);
-        m_loading_panel->SetBackgroundColour(background);
-        if (m_loading_text != nullptr) {
-            m_loading_text->SetForegroundColour(text);
-            m_loading_text->SetBackgroundColour(background);
-        }
-        m_loading_panel->Refresh();
-    }
-
-    void position_loading_panel()
-    {
-        if (m_loading_panel == nullptr || m_config_list == nullptr)
-            return;
-
-        const wxPoint list_pos   = m_config_list->GetPosition();
-        const wxSize  list_size  = m_config_list->GetSize();
-        const wxSize  panel_size = m_loading_panel->GetSize();
-        const int     panel_x    = list_pos.x + std::max(0, (list_size.x - panel_size.x) / 2);
-        const int     panel_y    = list_pos.y + std::max(0, (list_size.y - panel_size.y) / 2);
-        m_loading_panel->SetPosition(wxPoint(panel_x, panel_y));
     }
 
     wxStaticText* create_row_label(wxWindow* parent, const wxString& text, int min_width)
     {
-        auto* label = new wxStaticText(parent, wxID_ANY, text, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
+        auto* label = new wxStaticText(parent, wxID_ANY, text, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END | wxST_NO_AUTORESIZE);
         label->SetFont(::Label::Body_14);
         label->SetMinSize(wxSize(FromDIP(min_width), -1));
         label->SetForegroundColour(readable_text_colour(parent->GetBackgroundColour()));
@@ -794,15 +913,59 @@ private:
     {
         if (m_config_list_sizer == nullptr)
             return;
+        m_wrapped_remarks.clear();
         m_config_list_sizer->Clear(true);
+    }
+
+    void schedule_remarks_layout()
+    {
+        if (m_remarks_layout_pending)
+            return;
+        m_remarks_layout_pending = true;
+        const auto alive         = m_alive;
+        wxGetApp().CallAfter([this, alive] {
+            if (!alive || !alive->load())
+                return;
+            // Defer until the sizer has assigned column widths. Coalesce resize events
+            // and rewrap the original text so widening the dialog removes old breaks.
+            m_config_list->Freeze();
+            m_config_list->Layout();
+            const int client_width = m_config_list->GetClientSize().x;
+            bool      changed      = false;
+            for (auto& remark : m_wrapped_remarks) {
+                const int width = remark.label->GetClientSize().x;
+                if (width <= 0 || width == remark.width)
+                    continue;
+                remark.width = width;
+                wxClientDC dc(remark.label);
+                dc.SetFont(remark.label->GetFont());
+                wxString     wrapped;
+                const wxSize text_size = ::Label::split_lines(dc, width, remark.text, wrapped);
+                remark.label->SetLabel(wrapped);
+                remark.label->SetMinSize(wxSize(FromDIP(130), std::max(text_size.y, remark.label->GetCharHeight())));
+                remark.row->SetMinSize(wxSize(-1, remark.row->GetSizer()->GetMinSize().y));
+                changed = true;
+            }
+            if (changed) {
+                m_config_list->FitInside();
+                m_config_list->Layout();
+            }
+            align_header_with_list();
+            m_config_list->Thaw();
+            m_remarks_layout_pending = false;
+            // A changed row height may show or hide the vertical scrollbar.
+            if (client_width != m_config_list->GetClientSize().x)
+                schedule_remarks_layout();
+        });
     }
 
     void add_header_row()
     {
-        if (m_config_list_sizer == nullptr)
+        if (m_table_panel == nullptr)
             return;
 
-        auto* header_panel = new wxPanel(m_config_list);
+        auto* header_panel               = new wxPanel(m_table_panel);
+        m_header_panel                   = header_panel;
         const wxColour header_background = wxGetApp().dark_mode() ? wxColour(45, 45, 47) : wxColour(245, 245, 245);
         header_panel->SetBackgroundColour(header_background);
         header_panel->SetMinSize(wxSize(-1, FromDIP(38)));
@@ -810,12 +973,37 @@ private:
         row->AddSpacer(FromDIP(8));
         add_row_label(header_panel, row, _L("配置名称"), 120, 2);
         add_row_label(header_panel, row, _L("机型"), 70, 1);
-        add_row_label(header_panel, row, _L("方案文件"), 230, 4);
+        add_row_label(header_panel, row, _L("方案文件"), profile_column_min_width(), 4);
         add_row_label(header_panel, row, _L("备注"), 130, 2);
-        row->Add(create_row_label(header_panel, _L("操作"), 100), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+        row->Add(create_row_label(header_panel, _L("操作"), 108), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
         header_panel->SetSizer(row);
-        m_config_list_sizer->Add(header_panel, 0, wxEXPAND);
+        header_panel->SetMinSize(wxSize(-1, std::max(FromDIP(38), row->GetMinSize().y)));
+        m_table_panel->GetSizer()->Add(header_panel, 0, wxEXPAND | wxRIGHT);
     }
+
+    void align_header_with_list()
+    {
+        if (m_header_panel == nullptr || m_config_list == nullptr)
+            return;
+        const int scrollbar_width = std::max(0, m_config_list->GetSize().x - m_config_list->GetClientSize().x);
+        auto*     header_item     = m_table_panel->GetSizer()->GetItem(m_header_panel);
+        if (header_item->GetBorder() != scrollbar_width) {
+            header_item->SetBorder(scrollbar_width);
+            m_table_panel->Layout();
+        }
+    }
+
+    int quality_badge_width()
+    {
+        wxClientDC dc(this);
+        dc.SetFont(::Label::Body_12);
+        int width = FromDIP(62);
+        for (const char* quality : GFD::CLOUD_FINENESS)
+            width = std::max(width, dc.GetTextExtent(gfd_cloud_quality_label(quality)).x + FromDIP(12));
+        return width;
+    }
+
+    int profile_column_min_width() { return std::max(230, ToDIP(quality_badge_width()) + 8 + 150); }
 
     void add_config_row(size_t index)
     {
@@ -828,29 +1016,89 @@ private:
         const wxColour row_bg   = dark_mode ? (index % 2 == 0 ? wxColour(28, 28, 30) : wxColour(35, 35, 37)) :
                                               (index % 2 == 0 ? wxColour(255, 255, 255) : wxColour(250, 250, 250));
         row_panel->SetBackgroundColour(row_bg);
-        row_panel->SetMinSize(wxSize(-1, FromDIP(44)));
 
         auto* row = new wxBoxSizer(wxHORIZONTAL);
         row->AddSpacer(FromDIP(8));
         add_row_label(row_panel, row, from_u8(config.name), 120, 2);
         add_row_label(row_panel, row, from_u8(config.device_type), 70, 1);
-        std::string config_file_display = boost::algorithm::trim_copy(config.config_file_name);
-        if (config_file_display.empty() ||
-            config_file_display.find("://") != std::string::npos ||
-            config_file_display.find('/') != std::string::npos ||
-            config_file_display.find('\\') != std::string::npos)
-            config_file_display = Http::get_filename_from_url(!config.config_file_url.empty() ? config.config_file_url : config_file_display);
-        if (config_file_display.empty())
-            config_file_display = !config.config_file_name.empty() ? config.config_file_name : config.config_file_url;
-        add_row_label(row_panel, row, from_u8(config_file_display), 230, 4);
-        add_row_label(row_panel, row, from_u8(config.info), 130, 2);
+        auto* profile_column = new wxBoxSizer(wxVERTICAL);
+        auto* action_column  = new wxBoxSizer(wxVERTICAL);
+        profile_column->SetMinSize(wxSize(FromDIP(profile_column_min_width()), -1));
+        action_column->SetMinSize(wxSize(FromDIP(108), -1));
+        for (const char* quality : GFD::CLOUD_FINENESS) {
+            const GFDCloudConfigInfo selected      = config.for_quality(quality);
+            auto*                    profile_row   = new wxBoxSizer(wxHORIZONTAL);
+            const wxColour           quality_color = quality == std::string("standard") ? wxColour(55, 130, 230) :
+                                                     quality == std::string("fast")     ? wxColour(190, 115, 20) :
+                                                                                          wxColour(0, 150, 115);
+            auto*                    badge         = new StaticBox(row_panel);
+            badge->SetCornerRadius(FromDIP(3));
+            badge->SetBorderWidth(FromDIP(1));
+            badge->SetBorderColor(StateColor(quality_color));
+            badge->SetBackgroundColor(StateColor(row_bg));
+            auto* quality_label = new wxStaticText(badge, wxID_ANY, gfd_cloud_quality_label(quality));
+            quality_label->SetFont(::Label::Body_12);
+            quality_label->SetForegroundColour(quality_color);
+            quality_label->SetBackgroundColour(row_bg);
+            auto* badge_sizer = new wxBoxSizer(wxVERTICAL);
+            badge_sizer->AddStretchSpacer(1);
+            badge_sizer->Add(quality_label, 0, wxALIGN_CENTER_HORIZONTAL);
+            badge_sizer->AddStretchSpacer(1);
+            badge->SetSizer(badge_sizer);
+            badge->SetMinSize(wxSize(quality_badge_width(), std::max(FromDIP(24), quality_label->GetBestSize().y + FromDIP(4))));
+            profile_row->Add(badge, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+            std::string file_name = selected.config_file_name;
+            if (file_name.empty() || file_name.find("://") != std::string::npos || file_name.find('/') != std::string::npos ||
+                file_name.find('\\') != std::string::npos)
+                file_name = Http::get_filename_from_url(selected.config_file_url);
+            const wxString file_label = !selected.has_file() ? _L("Not uploaded") :
+                                        file_name.empty()    ? _L("Embedded parameters") :
+                                                               from_u8(file_name);
+            profile_row->Add(create_row_label(row_panel, file_label, 150), 1, wxALIGN_CENTER_VERTICAL);
+            const int profile_height = std::max(FromDIP(34), badge->GetMinSize().y + FromDIP(8));
+            profile_row->SetMinSize(wxSize(-1, profile_height));
+            profile_column->Add(profile_row, 0, wxEXPAND);
 
-        auto* apply_button = new Button(row_panel, _L("设置此参数"));
-        apply_link_button_style(apply_button, row_bg);
-        apply_button->Bind(wxEVT_BUTTON, [this, index](wxCommandEvent&) { apply_config(index); });
-        row->Add(apply_button, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+            if (m_select_target)
+                continue;
+            auto* apply_button = new Button(row_panel, _L("Apply profile"));
+            apply_link_button_style(apply_button, row_bg);
+            apply_button->SetMinSize(wxSize(FromDIP(108), profile_height));
+            apply_button->Enable(selected.has_file());
+            apply_button->Bind(wxEVT_BUTTON, [this, index, quality = std::string(quality)](wxCommandEvent&) {
+                if (m_loading || index >= m_configs.size())
+                    return;
+                const GFDCloudConfigInfo selected = m_configs[index].for_quality(quality);
+                apply_config(selected, true);
+            });
+            action_column->Add(apply_button, 0, wxEXPAND);
+        }
+        if (m_select_target) {
+            auto* select_button = new Button(row_panel, _L("Select"));
+            apply_link_button_style(select_button, row_bg);
+            select_button->Bind(wxEVT_BUTTON, [this, index](wxCommandEvent&) {
+                if (m_loading || index >= m_configs.size())
+                    return;
+                m_selected_config = m_configs[index].for_quality("standard");
+                EndModal(wxID_OK);
+            });
+            action_column->AddStretchSpacer(1);
+            action_column->Add(select_button, 0, wxEXPAND);
+            action_column->AddStretchSpacer(1);
+        }
+        row->Add(profile_column, 4, wxEXPAND | wxRIGHT, FromDIP(8));
+        auto* remark = create_row_label(row_panel, from_u8(config.info), 130);
+        remark->SetWindowStyleFlag(wxST_NO_AUTORESIZE);
+        row->Add(remark, 2, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+        m_wrapped_remarks.push_back({row_panel, remark, from_u8(config.info)});
+        row->Add(action_column, 0, wxEXPAND | wxRIGHT, FromDIP(8));
 
-        row_panel->SetSizer(row);
+        auto* padded_row = new wxBoxSizer(wxVERTICAL);
+        padded_row->Add(row, 1, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(6));
+        row_panel->SetSizer(padded_row);
+        // An explicit single-line minimum overrides wxPanel's content best size.
+        // Size the panel from all three profiles so later rows cannot clip them.
+        row_panel->SetMinSize(wxSize(-1, padded_row->GetMinSize().y));
         m_config_list_sizer->Add(row_panel, 0, wxEXPAND);
     }
 
@@ -859,22 +1107,23 @@ private:
         if (m_config_list != nullptr)
             m_config_list->Freeze();
         clear_config_rows();
-        add_header_row();
         for (size_t i = 0; i < m_configs.size(); ++i)
             add_config_row(i);
         if (m_config_list != nullptr) {
             m_config_list->FitInside();
             m_config_list->Layout();
+            align_header_with_list();
             m_config_list->Refresh();
             m_config_list->Thaw();
         }
         Layout();
+        schedule_remarks_layout();
     }
 
     void apply_config(size_t index)
     {
         if (index >= m_configs.size() || m_plater == nullptr) {
-            m_tip_label->SetLabel(_L("请选择要导入的云端配置"));
+            set_status(_L("请选择要导入的云端配置"));
             return;
         }
 
@@ -888,7 +1137,7 @@ private:
 
         const std::string request_environment = GFD::Config::current_environment_name(wxGetApp().app_config);
         if (m_configs_environment.empty() || m_configs_environment != request_environment) {
-            m_tip_label->SetLabel(_L("云环境已变化，正在重新获取配置..."));
+            set_status(_L("云环境已变化，正在重新获取配置..."));
             fetch_configs_for_selected_device();
             return;
         }
@@ -901,37 +1150,35 @@ private:
         if (!GFDAuthManager::has_valid_session(wxGetApp().app_config)) {
             const auto   alive      = m_alive;
             const size_t generation = ++m_request_generation;
-            m_tip_label->SetLabel(_L("正在恢复登录状态..."));
+            set_status(_L("正在恢复登录状态..."));
             const bool login_started = GFDAuthManager::ensure_logged_in_async(
                 this, [this, alive, generation, config, allow_auth_retry](bool logged_in, std::string error_message) mutable {
                     if (!alive || !alive->load() || generation != m_request_generation)
                         return;
                     if (!logged_in) {
-                        m_tip_label->SetLabel(from_u8(error_message.empty() ? "登录状态无效，请重新登录" : error_message));
+                        set_status(from_u8(error_message.empty() ? "登录状态无效，请重新登录" : error_message));
                         return;
                     }
                     apply_config(config, allow_auth_retry);
                 });
             if (!login_started)
-                m_tip_label->SetLabel(_L("无法启动自动登录任务，请稍后重试"));
+                set_status(_L("无法启动自动登录任务，请稍后重试"));
             return;
         }
 
         if (request_environment != GFD::Config::current_environment_name(wxGetApp().app_config)) {
-            m_tip_label->SetLabel(_L("云环境已变化，正在重新获取配置..."));
+            set_status(_L("云环境已变化，正在重新获取配置..."));
             fetch_configs_for_selected_device();
             return;
         }
 
         const std::string token = GFDAuthManager::current_auth_token(wxGetApp().app_config);
         if (token.empty()) {
-            m_tip_label->SetLabel(_L("登录状态无效，请重新登录"));
+            set_status(_L("登录状态无效，请重新登录"));
             return;
         }
 
-        m_tip_label->SetLabel(_L("正在下载并解析云端配置..."));
-        if (m_loading_text != nullptr)
-            m_loading_text->SetLabel(_L("正在下载并解析云端配置，请稍候..."));
+        set_status(_L("正在下载并解析云端配置..."));
         set_loading_state(true);
 
         const auto   alive      = m_alive;
@@ -944,20 +1191,20 @@ private:
                     return;
                 if (canceled) {
                     set_loading_state(false);
-                    m_tip_label->SetLabel(_L("操作已取消"));
+                    set_status(_L("操作已取消"));
                     return;
                 }
 
                 if (request_environment != GFD::Config::current_environment_name(wxGetApp().app_config)) {
                     set_loading_state(false);
-                    m_tip_label->SetLabel(_L("云环境已变化，正在重新获取配置..."));
+                    set_status(_L("云环境已变化，正在重新获取配置..."));
                     fetch_configs_for_selected_device();
                     return;
                 }
 
                 if (result == nullptr) {
                     set_loading_state(false);
-                    m_tip_label->SetLabel(_L("云端配置应用失败"));
+                    set_status(_L("云端配置应用失败"));
                     return;
                 }
 
@@ -977,31 +1224,32 @@ private:
                 if (!result->ok) {
                     const std::string message = result->error_message.empty() ? "读取云端配置失败" : result->error_message;
                     set_loading_state(false);
-                    m_tip_label->SetLabel(from_u8(message));
+                    set_status(from_u8(message));
                     show_error(this, from_u8(message));
                     return;
                 }
 
-                m_tip_label->SetLabel(_L("正在准备云端参数确认..."));
-                if (m_loading_text != nullptr)
-                    m_loading_text->SetLabel(_L("正在准备云端参数确认，请稍候..."));
-                Layout();
+                // The prepared file is ready. Keep actions locked while applying it, but stop
+                // the network animation before replacement/success dialogs enter another modal loop.
+                m_loading_timer.Stop();
+                m_loading_gauge->Hide();
+                set_status(wxEmptyString);
 
                 std::string apply_error;
                 const bool  imported = m_plater != nullptr && m_plater->apply_prepared_cloud_config(config, *result, apply_error);
                 set_loading_state(false);
                 if (imported) {
-                    m_tip_label->SetLabel(_L("云端配置导入已处理"));
+                    set_status(_L("云端配置导入已处理"));
                     EndModal(wxID_CANCEL);
                 } else {
                     const std::string message = apply_error.empty() ? "云端配置应用失败" : apply_error;
-                    m_tip_label->SetLabel(from_u8(message));
+                    set_status(from_u8(message));
                     show_error(this, from_u8(message));
                 }
             });
         if (!queued) {
             set_loading_state(false);
-            m_tip_label->SetLabel(_L("无法启动云端配置导入任务"));
+            set_status(_L("无法启动云端配置导入任务"));
         }
     }
 };
@@ -3109,6 +3357,10 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     // declare events
     Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& event) {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< ": mainframe received close_widow event";
+        if (veto_close_with_modal_dialog(this, event)) {
+            BOOST_LOG_TRIVIAL(info) << "Main frame close deferred until the active modal dialog returns";
+            return;
+        }
         if (event.CanVeto() && m_plater != nullptr && m_plater->is_3mf_export_in_progress()) {
             event.Veto();
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": cancelled while a 3MF export is in progress";
@@ -6469,39 +6721,36 @@ void MainFrame::bind_gfd_config_buttons()
         if (m_gfd_config_operation_in_progress)
             return;
 
-        GFDUploadConfigDialog dialog(this);
-        if (dialog.ShowModal() != wxID_OK)
-            return;
-
-        const wxString name = dialog.config_name().Trim(true).Trim(false);
-        if (name.empty()) {
-            GUI::show_error(this, _L("请输入配置名称。"));
-            return;
-        }
-
-        const wxString remarks = dialog.remarks().Trim(true).Trim(false);
-        m_gfd_config_operation_in_progress = true;
-        update_gfd_config_buttons();
-        const auto callback_alive = m_gfd_config_callback_alive;
-        const bool started = m_plater->upload_current_config_to_cloud_async(
-            into_u8(name), into_u8(remarks), [this, callback_alive](GFDConfigUploadResult result, bool canceled) {
-                if (!callback_alive || !callback_alive->load())
-                    return;
-                m_gfd_config_operation_in_progress = false;
+        GFDUploadConfigDialog dialog(this, [this](wxWindow* parent, GFDCloudConfigInfo& selected) {
+            GFDCloudImportDialog picker(parent, m_plater, true);
+            if (picker.ShowModal() != wxID_OK)
+                return false;
+            selected     = picker.selected_config();
+            return true;
+        });
+        dialog.set_submit_handler(
+            [this, &dialog](GFDConfigUploadFinishedFn finished, GFDConfigUploadProgressFn progress) {
+                m_gfd_config_operation_in_progress = true;
                 update_gfd_config_buttons();
-                if (canceled)
-                    return;
-                if (!result.ok) {
-                    GUI::show_error(this, from_u8(result.error_message.empty() ? "上传配置失败" : result.error_message));
-                    return;
-                }
-                GUI::show_info(this, _L("上传配置成功。"), _L("提示"));
+                return m_plater->upload_current_config_to_cloud_async(into_u8(dialog.config_name().Trim(true).Trim(false)),
+                                                                      into_u8(dialog.remarks().Trim(true).Trim(false)), std::move(finished),
+                                                                      dialog.fineness(), dialog.cloud_config_id(),
+                                                                      dialog.metadata_changes(), std::move(progress), &dialog);
             });
-        if (!started) {
-            m_gfd_config_operation_in_progress = false;
-            update_gfd_config_buttons();
-            GUI::show_error(this, _L("当前已有云配置上传或保存任务，请稍后重试。"));
+        const int modal_result             = dialog.ShowModal();
+        m_gfd_config_operation_in_progress = false;
+        update_gfd_config_buttons();
+        if (modal_result != wxID_OK || dialog.was_canceled())
+            return;
+        const auto& result = dialog.result();
+        if (!result.ok) {
+            GUI::show_error(this, from_u8(result.error_message.empty() ? _u8L("Failed to upload configuration.") : result.error_message));
+            return;
         }
+        GUI::show_info(this,
+                       wxString::Format(_L("Uploaded the %s profile to cloud scheme “%s” successfully."),
+                                        gfd_cloud_quality_label(result.fineness), from_u8(result.scheme_name)),
+                       _L("Success"));
     });
     bind_gfd_config_button(m_plater->gfd_save_config_button(), "save_config", [this]() {
         if (m_gfd_config_operation_in_progress)
@@ -6521,7 +6770,10 @@ void MainFrame::bind_gfd_config_buttons()
                 GUI::show_error(this, from_u8(result.error_message.empty() ? "保存配置失败" : result.error_message));
                 return;
             }
-            GUI::show_info(this, _L("保存配置成功。"), _L("提示"));
+            GUI::show_info(this,
+                           wxString::Format(_L("Saved the %s profile to cloud scheme “%s” successfully."),
+                                            gfd_cloud_quality_label(result.fineness), from_u8(result.scheme_name)),
+                           _L("Success"));
         });
         if (!started) {
             m_gfd_config_operation_in_progress = false;

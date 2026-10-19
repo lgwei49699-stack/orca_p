@@ -2,12 +2,21 @@
 #define slic3r_ModelInspection_hpp_
 
 #include <cstddef>
+#include <stdexcept>
 #include <vector>
 #include <nlohmann/json.hpp>
 
 namespace Slic3r {
 class Model;
 class TriangleMesh;
+
+// Explicit geometry admission limits, distinct from malformed input or an
+// inspection execution error. The legacy runtime_error contract is preserved.
+class ModelInspectionLimitError : public std::runtime_error
+{
+public:
+    using std::runtime_error::runtime_error;
+};
 
 struct ModelInspectionOptions
 {
@@ -18,6 +27,14 @@ struct ModelInspectionOptions
     unsigned    max_intersections    = 20000;
     std::size_t max_solid_components = 128;
     std::size_t detail_limit         = 200;
+    // Optional existence test on existing intersection pairs; at most one side
+    // may use an exact two-face coplanar edge neighborhood. Shared-edge fans
+    // and two-sided patch assembly remain unproven. No second pair search/edits.
+    bool classify_proper_crossings = false;
+    // Only used after the strict triangle-interior fast path finds no witness.
+    // Exceeding either budget leaves the existence classification incomplete.
+    std::size_t max_crossing_neighborhood_candidates = 4096;
+    std::size_t max_crossing_neighborhood_faces      = 3000000;
 };
 
 // Seven geometry checks and two public supplemental checks, on the supplied mesh.

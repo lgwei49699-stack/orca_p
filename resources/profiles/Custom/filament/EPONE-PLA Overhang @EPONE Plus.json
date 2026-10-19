@@ -1,0 +1,15 @@
+{
+  "type": "filament",
+  "name": "EPONE-PLA Overhang @EPONE Plus",
+  "inherits": "EPONE-PLA Overhang @EPONE",
+  "from": "system",
+  "setting_id": "GFD_EPONEPLUS_FIL_PLA_OVERHANG",
+  "instantiation": "true",
+  "filament_settings_id": [
+    "EPONE-PLA Overhang @EPONE Plus"
+  ],
+  "compatible_printers": [
+    "EPONE Plus 0.4 nozzle",
+    "MyMarlin 0.4 nozzle"
+  ]
+}

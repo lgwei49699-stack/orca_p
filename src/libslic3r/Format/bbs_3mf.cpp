@@ -16,6 +16,7 @@
 #include "bbs_3mf.hpp"
 
 #include <limits>
+#include <atomic>
 #include <stdexcept>
 #include <iomanip>
 #include <set>
@@ -5861,8 +5862,10 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         bool _add_project_embedded_presets_to_archive(mz_zip_archive& archive, Model& model, std::vector<Preset*> project_presets);
         bool _add_model_config_file_to_archive(mz_zip_archive& archive, const Model& model, PlateDataPtrs& plate_data_list, const ObjectToObjectDataMap &objects_data, const DynamicPrintConfig& config, int export_plate_idx = -1, bool save_gcode = true, bool use_loaded_id = false);
         bool _add_cut_information_file_to_archive(mz_zip_archive &archive, Model &model);
-        bool _add_slice_info_config_file_to_archive(mz_zip_archive &archive, const Model &model, PlateDataPtrs &plate_data_list, const ObjectToObjectDataMap &objects_data, const DynamicPrintConfig& config);
-        bool _add_gcode_file_to_archive(mz_zip_archive& archive, const Model& model, PlateDataPtrs& plate_data_list, Export3mfProgressFn proFn = nullptr);
+        bool _add_slice_info_config_file_to_archive(mz_zip_archive& archive, const Model& model, PlateDataPtrs& plate_data_list,
+                                                    const ObjectToObjectDataMap& objects_data, const DynamicPrintConfig& config,
+                                                    int export_plate_idx);
+        bool _add_gcode_file_to_archive(mz_zip_archive& archive, const Model& model, PlateDataPtrs& plate_data_list, int export_plate_idx, Export3mfProgressFn proFn = nullptr);
         bool _add_custom_gcode_per_print_z_file_to_archive(mz_zip_archive& archive, Model& model, const DynamicPrintConfig* config);
         bool _add_auxiliary_dir_to_archive(mz_zip_archive &archive, const std::string &aux_dir, PackingTemporaryData &data);
 
@@ -5897,6 +5900,32 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         m_from_backup_save = store_params.strategy & SaveStrategy::Backup;
 
         m_use_loaded_id = store_params.strategy & SaveStrategy::UseLoadedId;
+
+        // A sliced-only package has no editable model to fall back to. Every
+        // selected non-empty plate must carry a usable slice, in GUI and CLI alike.
+        // Ordinary projects and incremental backups may still contain unsliced plates.
+        if (m_skip_model && m_save_gcode && !m_skip_static) {
+            bool found_plate = false;
+            for (const PlateData* plate : store_params.plate_data_list) {
+                if (plate == nullptr) {
+                    add_error("Missing plate data for sliced export");
+                    return false;
+                }
+                if (!plate->is_selected_for_sliced_export(store_params.export_plate_idx))
+                    continue;
+                found_plate = true;
+                boost::system::error_code error;
+                if (!plate->is_sliced_valid || plate->gcode_file.empty() || !boost::filesystem::is_regular_file(plate->gcode_file, error) ||
+                    error || boost::filesystem::file_size(plate->gcode_file, error) == 0 || error) {
+                    add_error("Missing or invalid G-code for plate " + std::to_string(plate->plate_index + 1));
+                    return false;
+                }
+            }
+            if (!found_plate) {
+                add_error("No sliced plate to export");
+                return false;
+            }
+        }
 
         if (auto info = store_params.model->model_info) {
             if (auto iter = info->metadata_items.find("Thumbnail_Small"); iter != info->metadata_items.end())
@@ -6335,6 +6364,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         if (!m_skip_static && m_save_gcode) {
             for (int i = 0; i < plate_data_list.size(); i++) {
                 PlateData *plate_data = plate_data_list[i];
+                if (m_skip_model && !plate_data->is_selected_for_sliced_export(export_plate_idx))
+                    continue;
                 if (!plate_data->gcode_file.empty() && plate_data->is_sliced_valid && boost::filesystem::exists(plate_data->gcode_file)) {
                     unsigned char digest[16];
                     MD5_CTX       ctx;
@@ -6367,7 +6398,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         // Adds gcode files ("Metadata/plate_1.gcode, plate_2.gcode, ...)
         // Before _add_model_config_file_to_archive, because we modify plate_data
         //if (!m_skip_static && !_add_gcode_file_to_archive(archive, model, plate_data_list, proFn)) {
-        if (!m_skip_static && m_save_gcode && !_add_gcode_file_to_archive(archive, model, plate_data_list, proFn)) {
+        if (!m_skip_static && m_save_gcode && !_add_gcode_file_to_archive(archive, model, plate_data_list, export_plate_idx, proFn)) {
             BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ":" << __LINE__ << boost::format(", _add_gcode_file_to_archive failed\n");
             return false;
         }
@@ -6396,7 +6427,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
         // Adds sliced info of plate file ("Metadata/slice_info.config")
         // This file contains all sliced info of all plates
-        if (!_add_slice_info_config_file_to_archive(archive, model, plate_data_list, objects_data, *config)) {
+        if (!_add_slice_info_config_file_to_archive(archive, model, plate_data_list, objects_data, *config, export_plate_idx)) {
             BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ":" << __LINE__ << boost::format(", _add_slice_info_config_file_to_archive failed\n");
             return false;
         }
@@ -6578,46 +6609,30 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         if (from.empty()) {
             stream << " <Relationship Target=\"/" << MODEL_FILE << "\" Id=\"rel-1\" Type=\"http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel\"/>\n";
 
-            if (export_plate_idx < 0) {
-                //use cover image if have
-                if (data._3mf_thumbnail.empty()) {
-                    stream << " <Relationship Target=\"/Metadata/plate_1.png"
-                               << "\" Id=\"rel-2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail\"/>\n";
-                } else {
-                    stream << " <Relationship Target=\"/" << xml_escape(data._3mf_thumbnail)
-                           << "\" Id=\"rel-2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail\"/>\n";
-                }
+            // miniz can search the writer's current central directory too.
+            // A skipped/invalid thumbnail must not leave a dangling package relationship.
+            auto add_thumbnail_relationship = [&](const std::string& path, const char* id, const char* type) {
+                const mz_zip_error previous_error = mz_zip_get_last_error(&archive);
+                const bool         exists = mz_zip_reader_locate_file(&archive, path.c_str(), nullptr, MZ_ZIP_FLAG_CASE_SENSITIVE) >= 0;
+                mz_zip_set_last_error(&archive, previous_error);
+                if (exists)
+                    stream << " <Relationship Target=\"/" << xml_escape(path) << "\" Id=\"" << id << "\" Type=\"" << type << "\"/>\n";
+            };
 
-                if (data._3mf_printer_thumbnail_middle.empty()) {
-                    stream << " <Relationship Target=\"/Metadata/plate_1.png"
-                           << "\" Id=\"rel-4\" Type=\"http://schemas.bambulab.com/package/2021/cover-thumbnail-middle\"/>\n";
-                } else {
-                    stream << " <Relationship Target=\"/" << xml_escape(data._3mf_printer_thumbnail_middle)
-                           << "\" Id=\"rel-4\" Type=\"http://schemas.bambulab.com/package/2021/cover-thumbnail-middle\"/>\n";
-                }
-
-                if (data._3mf_printer_thumbnail_small.empty()) {
-                    stream << "<Relationship Target=\"/Metadata/plate_1_small.png"
-                           << "\" Id=\"rel-5\" Type=\"http://schemas.bambulab.com/package/2021/cover-thumbnail-small\"/>\n";
-                } else {
-                    stream << " <Relationship Target=\"/" << xml_escape(data._3mf_printer_thumbnail_small)
-                           << "\" Id=\"rel-5\" Type=\"http://schemas.bambulab.com/package/2021/cover-thumbnail-small\"/>\n";
-                }
-            }
-            else {
-                //always use plate thumbnails
-                std::string thumbnail_file_str = (boost::format("Metadata/plate_%1%.png") % (export_plate_idx + 1)).str();
-                stream << " <Relationship Target=\"/" << xml_escape(thumbnail_file_str)
-                    << "\" Id=\"rel-2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail\"/>\n";
-
-                thumbnail_file_str = (boost::format("Metadata/plate_%1%.png") % (export_plate_idx + 1)).str();
-                stream << " <Relationship Target=\"/" << xml_escape(thumbnail_file_str)
-                   << "\" Id=\"rel-4\" Type=\"http://schemas.bambulab.com/package/2021/cover-thumbnail-middle\"/>\n";
-
-                thumbnail_file_str = (boost::format("Metadata/plate_%1%_small.png") % (export_plate_idx + 1)).str();
-                stream << " <Relationship Target=\"/" << xml_escape(thumbnail_file_str)
-                   << "\" Id=\"rel-5\" Type=\"http://schemas.bambulab.com/package/2021/cover-thumbnail-small\"/>\n";
-            }
+            const std::string plate_thumbnail =
+                (boost::format("Metadata/plate_%1%.png") % (export_plate_idx < 0 ? 1 : export_plate_idx + 1)).str();
+            const std::string small_thumbnail =
+                (boost::format("Metadata/plate_%1%_small.png") % (export_plate_idx < 0 ? 1 : export_plate_idx + 1)).str();
+            add_thumbnail_relationship(export_plate_idx < 0 && !data._3mf_thumbnail.empty() ? data._3mf_thumbnail : plate_thumbnail,
+                                       "rel-2", "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail");
+            add_thumbnail_relationship(export_plate_idx < 0 && !data._3mf_printer_thumbnail_middle.empty() ?
+                                           data._3mf_printer_thumbnail_middle :
+                                           plate_thumbnail,
+                                       "rel-4", "http://schemas.bambulab.com/package/2021/cover-thumbnail-middle");
+            add_thumbnail_relationship(export_plate_idx < 0 && !data._3mf_printer_thumbnail_small.empty() ?
+                                           data._3mf_printer_thumbnail_small :
+                                           small_thumbnail,
+                                       "rel-5", "http://schemas.bambulab.com/package/2021/cover-thumbnail-small");
         }
         else if (targets.empty()) {
             return false;
@@ -7834,6 +7849,16 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         for (unsigned int i = 0; i < (unsigned int)plate_data_list.size(); ++i)
         {
             PlateData* plate_data = plate_data_list[i];
+            if (m_skip_model && !plate_data->is_selected_for_sliced_export(export_plate_idx)) {
+                // Readers index this table by the original 1-based plate ID.
+                // Preserve an empty slot, but never stale G-code, thumbnails,
+                // instance references or slicing statistics for excluded plates.
+                stream << "  <" << PLATE_TAG << ">\n"
+                       << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << PLATERID_ATTR << "\" " << VALUE_ATTR << "=\""
+                       << plate_data->plate_index + 1 << "\"/>\n"
+                       << "  </" << PLATE_TAG << ">\n";
+                continue;
+            }
             int instance_size = plate_data->objects_and_instances.size();
 
             if (plate_data != nullptr) {
@@ -8025,7 +8050,10 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         return true;
     }
 
-    bool _BBS_3MF_Exporter::_add_slice_info_config_file_to_archive(mz_zip_archive& archive, const Model& model, PlateDataPtrs& plate_data_list, const ObjectToObjectDataMap &objects_data, const DynamicPrintConfig& config)
+    bool _BBS_3MF_Exporter::_add_slice_info_config_file_to_archive(mz_zip_archive& archive, const Model& model,
+                                                                PlateDataPtrs& plate_data_list,
+                                                                const ObjectToObjectDataMap& objects_data,
+                                                                const DynamicPrintConfig& config, int export_plate_idx)
     {
         std::stringstream stream;
         // Store mesh transformation in full precision, as the volumes are stored transformed and they need to be transformed back
@@ -8044,6 +8072,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         for (unsigned int i = 0; i < (unsigned int)plate_data_list.size(); ++i)
         {
             PlateData* plate_data = plate_data_list[i];
+            if (m_skip_model && !plate_data->is_selected_for_sliced_export(export_plate_idx))
+                continue;
             //int instance_size = plate_data->objects_and_instances.size();
 
             if (plate_data != nullptr && plate_data->is_sliced_valid) {
@@ -8135,14 +8165,14 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
         return true;
     }
-bool _BBS_3MF_Exporter::_add_gcode_file_to_archive(mz_zip_archive& archive, const Model& model, PlateDataPtrs& plate_data_list, Export3mfProgressFn proFn)
+bool _BBS_3MF_Exporter::_add_gcode_file_to_archive(mz_zip_archive& archive, const Model& model, PlateDataPtrs& plate_data_list,
+                                                int export_plate_idx, Export3mfProgressFn proFn)
 {
-    bool result = true;
-    bool cb_cancel = false;
+    std::atomic<bool> result{true};
+    bool              cb_cancel = false;
 
     PlateDataPtrs plate_data_list2;
-    for (unsigned int i = 0; i < (unsigned int)plate_data_list.size(); ++i)
-    {
+    for (unsigned int i = 0; i < (unsigned int) plate_data_list.size(); ++i) {
         if (proFn) {
             proFn(EXPORT_STAGE_ADD_GCODE, i, plate_data_list.size(), cb_cancel);
             if (cb_cancel)
@@ -8150,53 +8180,106 @@ bool _BBS_3MF_Exporter::_add_gcode_file_to_archive(mz_zip_archive& archive, cons
         }
 
         PlateData* plate_data = plate_data_list[i];
+        if (m_skip_model) {
+            if (!plate_data->is_selected_for_sliced_export(export_plate_idx))
+                continue;
+            // Recheck after progress callbacks; the source may have disappeared.
+            boost::system::error_code error;
+            if (!plate_data->is_sliced_valid || plate_data->gcode_file.empty() ||
+                !boost::filesystem::is_regular_file(plate_data->gcode_file, error) || error ||
+                boost::filesystem::file_size(plate_data->gcode_file, error) == 0 || error) {
+                add_error("G-code became unavailable during sliced export");
+                return false;
+            }
+        }
         if (!plate_data->gcode_file.empty() && plate_data->is_sliced_valid && boost::filesystem::exists(plate_data->gcode_file)) {
             plate_data_list2.push_back(plate_data);
         }
     }
 
-    boost::mutex mutex;
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, plate_data_list2.size(), 1), [this, &plate_data_list2, &root_archive = archive, &mutex, &result](const tbb::blocked_range<size_t>& range) {
-        for (int i = range.begin(); i < range.end(); ++i) {
-            PlateData* plate_data = plate_data_list2[i];
-            auto src_gcode_file = plate_data->gcode_file;
-            std::string gcode_in_3mf = (boost::format(GCODE_FILE_FORMAT) % (plate_data->plate_index + 1)).str();
+    if (m_skip_model && plate_data_list2.empty()) {
+        add_error("No G-code to write to sliced package");
+        return false;
+    }
 
-            plate_data->gcode_file = gcode_in_3mf;
-            mz_zip_archive archive;
-            mz_zip_writer_staged_context context;
-            mz_zip_zero_struct(&archive);
-            mz_zip_writer_init_heap(&archive, 0, 1024 * 1024);
-            {
-                mz_zip_writer_add_staged_open(&archive, &context, gcode_in_3mf.c_str(), m_zip64 ? (uint64_t(1) << 30) * 16 : (uint64_t(1) << 32) - 1, nullptr, nullptr, 0,
-                    MZ_DEFAULT_COMPRESSION, nullptr, 0, nullptr, 0);
-                boost::filesystem::path src_gcode_path(src_gcode_file);
-                if (!boost::filesystem::exists(src_gcode_path)) {
-                    BOOST_LOG_TRIVIAL(error) << "Gcode is missing, filename = " << src_gcode_file;
-                    result = false;
-                }
-                boost::filesystem::ifstream ifs(src_gcode_file, std::ios::binary);
-                std::string buf(64 * 1024, 0);
-                while (ifs) {
-                    ifs.read(buf.data(), buf.size());
-                    mz_zip_writer_add_staged_data(&context, buf.data(), ifs.gcount());
-                }
-                mz_zip_writer_add_staged_finish(&context);
-            }
-            void *ppBuf; size_t pSize;
-            mz_zip_writer_finalize_heap_archive(&archive, &ppBuf, &pSize);
-            mz_zip_writer_end(&archive);
-            mz_zip_zero_struct(&archive);
-            mz_zip_reader_init_mem(&archive, ppBuf, pSize, 0);
-            {
-                boost::unique_lock l(mutex);
-                mz_zip_writer_add_from_zip_reader(&root_archive, &archive, 0);
-            }
-            mz_zip_reader_end(&archive);
-            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" <<__LINE__ << boost::format(", store  %1% to 3mf %2%\n") % src_gcode_file % gcode_in_3mf;
-        }
-    });
-    return result;
+    boost::mutex mutex;
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, plate_data_list2.size(), 1),
+                      [this, &plate_data_list2, &root_archive = archive, &mutex, &result](const tbb::blocked_range<size_t>& range) {
+                          for (int i = range.begin(); i < range.end(); ++i) {
+                              PlateData*  plate_data     = plate_data_list2[i];
+                              auto        src_gcode_file = plate_data->gcode_file;
+                              std::string gcode_in_3mf   = (boost::format(GCODE_FILE_FORMAT) % (plate_data->plate_index + 1)).str();
+
+                              mz_zip_archive               archive;
+                              mz_zip_writer_staged_context context;
+                              void*                        ppBuf = nullptr;
+                              size_t                       pSize = 0;
+                              mz_zip_zero_struct(&archive);
+                              if (!mz_zip_writer_init_heap(&archive, 0, 1024 * 1024)) {
+                                  result = false;
+                                  continue;
+                              }
+                              ScopeGuard end_archive([&] {
+                                  mz_zip_end(&archive);
+                                  mz_free(ppBuf);
+                              });
+                              {
+                                  boost::filesystem::path     src_gcode_path(src_gcode_file);
+                                  boost::filesystem::ifstream ifs(src_gcode_path, std::ios::binary);
+                                  if (!ifs || ifs.peek() == std::char_traits<char>::eof()) {
+                                      BOOST_LOG_TRIVIAL(error) << "G-code is missing, empty or unreadable: " << src_gcode_file;
+                                      result = false;
+                                      continue;
+                                  }
+                                  if (!mz_zip_writer_add_staged_open(&archive, &context, gcode_in_3mf.c_str(),
+                                                                     m_zip64 ? (uint64_t(1) << 30) * 16 : (uint64_t(1) << 32) - 1, nullptr,
+                                                                     nullptr, 0, MZ_DEFAULT_COMPRESSION, nullptr, 0, nullptr, 0)) {
+                                      result = false;
+                                      continue;
+                                  }
+                                  bool        write_ok = true;
+                                  std::string buf(64 * 1024, 0);
+                                  while (ifs) {
+                                      ifs.read(buf.data(), buf.size());
+                                      if (ifs.gcount() > 0 && !mz_zip_writer_add_staged_data(&context, buf.data(), ifs.gcount())) {
+                                          write_ok = false;
+                                          break;
+                                      }
+                                  }
+                                  // A staged data failure already releases its compression context.
+                                  if (!write_ok) {
+                                      result = false;
+                                      continue;
+                                  }
+                                  const bool finished = mz_zip_writer_add_staged_finish(&context);
+                                  if (ifs.bad() || !ifs.eof() || !finished) {
+                                      result = false;
+                                      continue;
+                                  }
+                              }
+                              if (!mz_zip_writer_finalize_heap_archive(&archive, &ppBuf, &pSize)) {
+                                  result = false;
+                                  continue;
+                              }
+                              mz_zip_writer_end(&archive);
+                              mz_zip_zero_struct(&archive);
+                              if (!mz_zip_reader_init_mem(&archive, ppBuf, pSize, 0)) {
+                                  result = false;
+                                  continue;
+                              }
+                              {
+                                  boost::unique_lock l(mutex);
+                                  if (!mz_zip_writer_add_from_zip_reader(&root_archive, &archive, 0)) {
+                                      result = false;
+                                      continue;
+                                  }
+                              }
+                              plate_data->gcode_file = gcode_in_3mf;
+                              BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__
+                                                      << boost::format(", store  %1% to 3mf %2%\n") % src_gcode_file % gcode_in_3mf;
+                          }
+                      });
+    return result.load();
 }
 
 bool _BBS_3MF_Exporter::_add_custom_gcode_per_print_z_file_to_archive(mz_zip_archive& archive, Model& model, const DynamicPrintConfig* config)
@@ -8721,6 +8804,17 @@ bool load_gcode_3mf_from_stream(std::istream &data, DynamicPrintConfig *config, 
     bool res = importer.load_gcode_3mf_from_stream(data, *model, *plate_data_list, *config, *file_version);
     importer.log_errors();
     return res;
+}
+
+bool PlateData::is_selected_for_sliced_export(int export_plate_idx) const
+{
+    if (export_plate_idx >= 0)
+        return plate_index == export_plate_idx;
+    if (!objects_and_instances.empty())
+        return has_printable_instances.value_or(true);
+    // Imported sliced-only plates have no editable instances, but must retain
+    // their G-code. Truly empty, unsliced plates do not require an export.
+    return is_sliced_valid || !gcode_file.empty();
 }
 
 bool store_bbs_3mf(StoreParams& store_params)

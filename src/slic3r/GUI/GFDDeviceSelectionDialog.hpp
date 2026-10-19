@@ -8,14 +8,13 @@
 #include <string>
 #include <vector>
 
-#include <wx/dialog.h>
+#include "GFDModalDialog.hpp"
 #include <wx/timer.h>
 
 class Button;
 class wxChoice;
 class wxGauge;
 class wxListCtrl;
-class wxPanel;
 class wxStaticText;
 class wxTextCtrl;
 
@@ -35,7 +34,7 @@ struct GFDDeviceInfo
     std::string device_id;
 };
 
-class GFDDeviceSelectionDialog : public wxDialog
+class GFDDeviceSelectionDialog : public GFDDeviceSelectionDialogBase
 {
 public:
     using PrintHandler = std::function<void(GFDDeviceSelectionDialog*,
@@ -49,12 +48,15 @@ public:
                              PrintHandler             print_handler = {});
     ~GFDDeviceSelectionDialog() override;
 
+    int  ShowModal() override;
+    void EndModal(int ret_code) override;
+
     const std::vector<GFDDeviceInfo>& selected_devices() const { return m_selected_devices; }
     const std::string&                gcode_path() const { return m_gcode_path; }
     bool                              use_3mf_file() const { return m_use_3mf_file; }
     std::shared_ptr<std::atomic_bool> lifetime_token() const { return m_alive; }
     void                              update_print_progress(const wxString& message, int percent = -1);
-    void                              complete_print_submission(bool success);
+    void                              complete_print_submission(bool success, bool cancelled = false);
 
 private:
     void build();
@@ -72,9 +74,6 @@ private:
     void update_table_column_widths();
     void set_tip_message(const wxString& message, bool is_error = false);
     void set_loading_state(bool loading);
-    void build_loading_panel();
-    void update_loading_panel_style();
-    void position_loading_panel();
 
     std::string build_query_url() const;
     bool        parse_devices(const std::string& body, std::vector<GFDDeviceInfo>& devices, std::string& error_message) const;
@@ -107,6 +106,7 @@ private:
     bool                              m_loading{false};
     bool                              m_loading_determinate{false};
     bool                              m_print_submitting{false};
+    bool                              m_modal_ending{false};
     bool                              m_use_3mf_file{false};
 
     wxTextCtrl*   m_mac_input{nullptr};
@@ -115,8 +115,6 @@ private:
     wxChoice*     m_status_choice{nullptr};
     wxListCtrl*   m_device_list{nullptr};
     wxStaticText* m_tip_label{nullptr};
-    wxPanel*      m_loading_panel{nullptr};
-    wxStaticText* m_loading_text{nullptr};
     wxGauge*      m_loading_gauge{nullptr};
     Button*       m_search_button{nullptr};
     Button*       m_reset_button{nullptr};
