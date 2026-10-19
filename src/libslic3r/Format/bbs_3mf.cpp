@@ -5884,6 +5884,15 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         }
     };
 
+    static bool valid_plate_instance(const Model& model, int object_index, int instance_index)
+    {
+        if (object_index < 0 || size_t(object_index) >= model.objects.size())
+            return false;
+        const ModelObject* object = model.objects[object_index];
+        return object != nullptr && instance_index >= 0 && size_t(instance_index) < object->instances.size() &&
+               object->instances[instance_index] != nullptr;
+    }
+
     bool _BBS_3MF_Exporter::save_model_to_file(StoreParams& store_params)
     {
         clear_errors();
@@ -5900,6 +5909,27 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         m_from_backup_save = store_params.strategy & SaveStrategy::Backup;
 
         m_use_loaded_id = store_params.strategy & SaveStrategy::UseLoadedId;
+
+        if (store_params.model == nullptr) {
+            add_error("Missing model for 3MF export");
+            return false;
+        }
+        // Validate only references that will be serialized. Sliced export may
+        // intentionally omit unrelated plates; G-code-only plates have no members.
+        for (const PlateData* plate : store_params.plate_data_list) {
+            if (plate == nullptr) {
+                add_error("Missing plate data for 3MF export");
+                return false;
+            }
+            if (m_skip_model && !plate->is_selected_for_sliced_export(store_params.export_plate_idx))
+                continue;
+            if (!m_skip_model || plate->is_sliced_valid)
+                for (const auto& member : plate->objects_and_instances)
+                    if (!valid_plate_instance(*store_params.model, member.first, member.second)) {
+                        add_error("Invalid model instance reference for plate " + std::to_string(plate->plate_index + 1));
+                        return false;
+                    }
+        }
 
         // A sliced-only package has no editable model to fall back to. Every
         // selected non-empty plate must carry a usable slice, in GUI and CLI alike.
@@ -7970,26 +8000,19 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                         stream << "    <" << INSTANCE_TAG << ">\n";
                         int obj_id = plate_data->objects_and_instances[j].first;
                         int inst_id = plate_data->objects_and_instances[j].second;
-                        int identify_id = 0;
-                        ModelObject* obj = NULL;
-                        ModelInstance* inst = NULL;
-                        if (obj_id >= model.objects.size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ":" << __LINE__ << boost::format("invalid object id %1%\n")%obj_id;
+                        if (!valid_plate_instance(model, obj_id, inst_id)) {
+                            add_error("Invalid model instance reference for plate " + std::to_string(plate_data->plate_index + 1));
+                            return false;
                         }
-                        else
-                            obj =  model.objects[obj_id];
-
-                        if (obj && (inst_id >= obj->instances.size())) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ":" << __LINE__ << boost::format("invalid instance id %1%\n")%inst_id;
+                        const ModelObject* obj         = model.objects[obj_id];
+                        const auto         object_data = objects_data.find(obj);
+                        if (object_data == objects_data.end()) {
+                            add_error("Plate references an object missing from the 3MF archive");
+                            return false;
                         }
-                        else if (obj){
-                            inst =  obj->instances[inst_id];
-                            if (use_loaded_id && (inst->loaded_id > 0))
-                                identify_id = inst->loaded_id;
-                            else
-                                identify_id = inst->id().id;
-                        }
-                        obj_id = objects_data.find(obj)->second.object_id;
+                        const ModelInstance* inst        = obj->instances[inst_id];
+                        const int            identify_id = use_loaded_id && inst->loaded_id > 0 ? inst->loaded_id : inst->id().id;
+                        obj_id                           = object_data->second.object_id;
 
                         stream << "      <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << OBJECT_ID_ATTR << "\" " << VALUE_ATTR << "=\"" << obj_id << "\"/>\n";
                         stream << "      <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << INSTANCEID_ATTR << "\" " << VALUE_ATTR << "=\"" << inst_id << "\"/>\n";
@@ -8112,24 +8135,13 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 {
                         int obj_id = it->first;
                         int inst_id = it->second;
-                        int identify_id = 0;
-                        ModelObject* obj = NULL;
-                        ModelInstance* inst = NULL;
-                        if (obj_id >= model.objects.size()) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ":" << __LINE__ << boost::format("invalid object id %1%\n")%obj_id;
-                            continue;
+                        if (!valid_plate_instance(model, obj_id, inst_id)) {
+                            add_error("Invalid model instance reference for plate " + std::to_string(plate_data->plate_index + 1));
+                            return false;
                         }
-                        obj =  model.objects[obj_id];
-
-                        if (obj && (inst_id >= obj->instances.size())) {
-                            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ":" << __LINE__ << boost::format("invalid instance id %1%\n")%inst_id;
-                            continue;
-                        }
-                        inst =  obj->instances[inst_id];
-                        if (m_use_loaded_id && (inst->loaded_id > 0))
-                            identify_id = inst->loaded_id;
-                        else
-                            identify_id = inst->id().id;
+                        const ModelObject*   obj         = model.objects[obj_id];
+                        const ModelInstance* inst        = obj->instances[inst_id];
+                        const int            identify_id = m_use_loaded_id && inst->loaded_id > 0 ? inst->loaded_id : inst->id().id;
                         bool skipped = std::find(plate_data->skipped_objects.begin(), plate_data->skipped_objects.end(), identify_id) !=
                                        plate_data->skipped_objects.end();
                         stream << "    <" << OBJECT_TAG << " " << IDENTIFYID_ATTR << "=\"" << std::to_string(identify_id) << "\" " << NAME_ATTR << "=\"" << xml_escape(obj->name)

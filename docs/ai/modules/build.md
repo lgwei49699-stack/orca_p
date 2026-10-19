@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:7f670b3a3a6b3b222d0ce62e461018a1251c64f70893810ef4bdbdf17364625c",
-  "reason": "仅提交macOS构建与MeshLib本地打包：读取ON缓存自动选择至少14.0，拒绝显式旧系统及未准备的-b缓存；库副本先重定位/签名再记录SHA256，补齐PRIVATE静态依赖的构建RPATH，App/DMG检查依赖闭包及签名。普通OFF最低版本和Windows/Linux适配保持；47项脚本/配置测试通过，实际应用验证和GUI/目标系统边界见打包记录。不包含模型阶段报告或其他业务改动。"
+  "source_fingerprint": "sha256:0582495ef4a3435c2fbcd36a5e299916fe564f81a8ea78c9c84470d19f8fdbc4",
+  "reason": "master未发布版本2.3.2.3-Release保留，Linux AppImage发布前在既有真实切片回归后增加单/多盘JSON及3MF对照，复用切片脚本的独立参数，并总是保存分盘证据。当前仅Mac最小构建及本地测试通过，工作流静态核对，未触发Linux发布或部署。本次归并复核确认旧Linux未提交发布检查已完整包含，保留该分支已提交的打包差异；仅澄清当前版本和历史版本叙述，构建源码及指纹未变。"
 }
 -->
 
@@ -38,7 +38,14 @@ SDK版本校验：Unix读固定config_cmake.h，Windows读完整发行目录app/
 
 ## 配置与约束
 
-公开产品版本由 `version.inc` 的 `SoftFever_VERSION` 更新为 `2.3.2.2-Release`，用于本次 Windows GFD 模态退出修复；内部兼容版本 `SLIC3R_VERSION=01.10.01.50` 保持不变。此次更新需重新生成版本头及应用元数据，旧运行／打包副本不会自动变为新版本。Mac 用户日志已确认取消及下发成功后的模态收尾；Windows 系统验收仍待同步新源码后执行。
+本次公开版本为 `2.3.2.3-Release`，用于识别固定位置切片修复；内部兼容版本不变。
+`.github/workflows/build-linux.yml` 在上传 AppImage／创建 Release 前解压刚生成的包，清除显示服务环境变量，
+调用包内 AppRun 执行 `test_cli_fixed_position_slice.py`，再复用其自带参数执行 `test_cli_oversized_arrange.py` 验证单/多盘JSON及实际3MF一致性。没有 G-code、分盘返回错误或任何回归失败即停止发布，
+另以 always 步骤保存测试证据、AppImage 和包内可执行文件 SHA256。原有文件存在检查只代表文件生成，
+不再宣称可部署。该门槛针对此工作流；本地编译通过不代表 Linux 镜像或业务配置已验证，状态见
+[固定位置切片修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。
+
+此前 Windows GFD 模态退出修复曾将 `version.inc` 的 `SoftFever_VERSION` 更新为 `2.3.2.2-Release`；当前版本以上述 `2.3.2.3-Release` 为准，内部兼容版本 `SLIC3R_VERSION=01.10.01.50` 保持不变。版本更新需重新生成版本头及应用元数据，旧运行／打包副本不会自动变为新版本。Mac 用户日志已确认取消及下发成功后的模态收尾；Windows 系统验收仍待同步新源码后执行。
 
 架构、生成器、Release 配置和依赖前缀必须匹配。应用版本与资源包版本独立。Windows 动态库、macOS rpath/zstd 和 Linux 分发标识是不同打包责任，不能只改一个文件名推定完成。
 

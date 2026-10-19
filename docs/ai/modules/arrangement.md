@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "arrangement",
-  "source_fingerprint": "sha256:09b38921653f4c58dbde71160d5c775471e2bc240304be0e42ec89cefd098abe",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI专用repair_evidence_close_boundaries及证据帮助，只作用模型检测组合；不改变Arrange/ModelArrange、盘归属、间距、筏层预留或GUI摆盘行为。 本次共享分盘与GUI源码无变化，仅补充CLI输出投影边界：越界独立返回盘/居中/Z0，普通实例仍取实际底面。贴床后的CLI分类只读复用check_outside，未修改盘成员；本次无新增GUI验收项。"
+  "source_fingerprint": "sha256:d2999b77701608b8f27bd114344309e55bcba0ac3cf8ef028c37c5f1bd6917fb",
+  "reason": "复核PartPlate复制函数唯一调用为CLI；新增返回原/新对象ID供调用者传递变换元数据，复制位置、打印开关、数量、摆盘算法均不改变。保持原单/多盘及异形床JSON规则。"
 }
 -->
 
@@ -33,9 +33,12 @@ GUI ArrangeJob 在主线程准备实例与锁定项，在工作线程调用 arra
 
 ## 失败与取消
 
-CLI `--export-model-transforms` 为越界或无归属实例各分配一个只存在于 JSON 的返回盘号，XY 为床面包围盒中心、Z为0；普通盘内实例仍保留实际底面Z（允许正值或负值），详见[CLI模块](cli.md)及[验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)。这不创建实际盘、不改变GUI、核心排布、盘归属和保存重开；不能将该返回盘号用于推断真实盘数或可打印性。
+CLI `--export-model-transforms` 仅在多盘模式为越界或无归属实例各分配一个只存在于 JSON 的返回盘号，XY 为床面包围盒中心、Z为0；多盘归属同时用共享BuildVolume核对真实床面形状，不能只按床的外接矩形；普通盘内实例仍保留实际底面Z（允许正值或负值），详见[CLI模块](cli.md)及[验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)。显式 `--auto-plate 0` 保留实际归属（无归属历史回退盘0）及实际底面中心，不新增返回盘或重写XYZ。两种模式都不创建实际盘、不改变GUI、核心排布、盘归属和保存重开；不能将该返回盘号用于推断真实盘数或可打印性。
 
 检查候选是否越床、碰固定物体／禁放区和真正分到几盘，再提交变换。取消不应移动半批对象。GUI 成功通知和 CLI 返回成功都不能代替几何验收。
+
+
+`PartPlate::duplicate_all_instance` 返回原对象/新对象的 ObjectID 对；CLI repetitions 用此映射继承全局变换及自动定向的JSON记录。复制本身的几何、数量、位置和打印开关不变；该函数当前只有CLI调用，不改变GUI ArrangeJob。组合复制/定向/缩放的实际3MF与JSON回归见[固定位置修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。
 
 ## 修改与验证
 
