@@ -168,7 +168,7 @@ jobs:
         echo "File type:"
         file "$FILEPATH"
         echo ""
-        echo "✓ AppImage is ready for deployment to Ubuntu 24.04 x86_64 servers"
+        echo "✓ AppImage file verified; runtime slicing checks follow"
         
         # 显示编译统计
         if command -v ccache &> /dev/null; then
@@ -177,6 +177,46 @@ jobs:
           ccache -s
         fi
     
+    # Exercise the packaged executable, not just the build-tree binary. This
+    # catches missing G-code and incorrect single/multi-plate JSON before release.
+    - name: Verify packaged CLI slicing and arrangement
+      shell: bash -e {0}
+      run: |
+        set -o pipefail
+        APPIMAGE_PATH="$(realpath '${{ steps.version.outputs.filepath }}')"
+        VERIFY_DIR="${RUNNER_TEMP}/orca-cli-slice-check"
+        mkdir -p "${VERIFY_DIR}/app"
+        chmod +x "${APPIMAGE_PATH}"
+        (
+          cd "${VERIFY_DIR}/app"
+          "${APPIMAGE_PATH}" --appimage-extract > "${VERIFY_DIR}/extract.log"
+        )
+        sha256sum "${APPIMAGE_PATH}" "${VERIFY_DIR}/app/squashfs-root/bin/orca-slicer" > "${VERIFY_DIR}/identity.txt"
+        # Service containers have no display. The slicing contract must work
+        # headlessly; do not hide missing output behind a successful exit code.
+        env -u DISPLAY -u WAYLAND_DISPLAY python3 scripts/test_cli_fixed_position_slice.py \
+          "${VERIFY_DIR}/app/squashfs-root/AppRun" \
+          --outputdir "${VERIFY_DIR}/results"
+        env -u DISPLAY -u WAYLAND_DISPLAY python3 scripts/test_cli_oversized_arrange.py \
+          "${VERIFY_DIR}/app/squashfs-root/AppRun" \
+          --machine "${VERIFY_DIR}/results/machine.json" \
+          --process "${VERIFY_DIR}/results/process.json" \
+          --filament "${VERIFY_DIR}/results/filament.json" \
+          --outputdir "${VERIFY_DIR}/arrangement-results"
+
+    - name: Upload CLI slicing evidence
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: OrcaSlicer-Linux-CLI-slicing-evidence
+        path: |
+          ${{ runner.temp }}/orca-cli-slice-check/results
+          ${{ runner.temp }}/orca-cli-slice-check/arrangement-results
+          ${{ runner.temp }}/orca-cli-slice-check/identity.txt
+          ${{ runner.temp }}/orca-cli-slice-check/extract.log
+        if-no-files-found: ignore
+        retention-days: 14
+
     - name: Upload AppImage as artifact
       uses: actions/upload-artifact@v4
       with:

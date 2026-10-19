@@ -74,7 +74,8 @@
         "tests/fff_print/test_gcode.cpp",
         "scripts/test_cli_model_reconstruction.py",
         "scripts/test_cli_model_check.py",
-        "scripts/test_cli_oversized_arrange.py"
+        "scripts/test_cli_oversized_arrange.py",
+        "scripts/test_cli_fixed_position_slice.py"
       ],
       "test_note": "修改动作路由优先检查 run/export_models 和结果序列化；验证无参数启动、模型导出、分盘→切片和不合法参数。使用隔离输出目录；共享业务按 validation.md 与 GUI 的有效配置、结果及失败语义对照。"
     },
@@ -1755,7 +1756,8 @@
         "tests/slic3rutils/**",
         "tests/test_utils.hpp",
         "tests/gui/**",
-        "tests/web/**"
+        "tests/web/**",
+        "scripts/test_cli_fixed_position_slice.py"
       ],
       "watch": [],
       "entrypoints": [

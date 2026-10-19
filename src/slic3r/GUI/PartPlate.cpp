@@ -2264,8 +2264,11 @@ void PartPlate::translate_all_instance(Vec3d position)
     return;
 }
 
-void PartPlate::duplicate_all_instance(unsigned int dup_count, bool need_skip, std::map<int, bool>& skip_objects)
+std::vector<std::pair<ObjectID, ObjectID>> PartPlate::duplicate_all_instance(unsigned int         dup_count,
+                                                                             bool                 need_skip,
+                                                                             std::map<int, bool>& skip_objects)
 {
+    std::vector<std::pair<ObjectID, ObjectID>> duplicates;
     std::set<std::pair<int, int>> old_obj_list = obj_to_instance_set;
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": plate_id %1%, dup_count %2%") % m_plate_index % dup_count;
     for (std::set<std::pair<int, int>>::iterator it = old_obj_list.begin(); it != old_obj_list.end(); ++it)
@@ -2290,6 +2293,7 @@ void PartPlate::duplicate_all_instance(unsigned int dup_count, bool need_skip, s
             for (size_t index = 0; index < dup_count; index ++)
             {
                 ModelObject* newObj = m_model->add_object(*object);
+                duplicates.emplace_back(object->id(), newObj->id());
                 newObj->name = object->name +"_"+ std::to_string(index+1);
                 int new_obj_id = m_model->objects.size() - 1;
                 for ( size_t new_instance_id = 0; new_instance_id < newObj->instances.size(); new_instance_id++ )
@@ -2326,7 +2330,7 @@ void PartPlate::duplicate_all_instance(unsigned int dup_count, bool need_skip, s
         }
     }
 
-    return;
+    return duplicates;
 }
 
 

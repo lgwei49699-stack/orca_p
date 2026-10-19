@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify JSON-only overflow plates without changing actual arrangement or 3MF.
+"""Verify multi-plate JSON overflow projection and unchanged single-plate output.
 
 Requires a current CLI and resolved profiles. Creates isolated fixtures, commands,
 logs and exports; does not build, launch the GUI, or print.
@@ -8,6 +8,7 @@ logs and exports; does not build, launch the GUI, or print.
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 import struct
 import subprocess
@@ -76,7 +77,7 @@ def project_state(project):
             instances.append({"name": names[item.get("objectid")], "parts": parts,
                               "transform": item.get("transform", IDENTITY), "printable": item.get("printable"),
                               "position": [(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, low[2]],
-                              "size": [high[i] - low[i] for i in range(3)]})
+                              "size": [high[i] - low[i] for i in range(3)], "vertices": sorted(points)})
     return {"members": members, "instances": instances}
 
 
@@ -105,6 +106,25 @@ def offset_project_z(source, target, offsets):
             output.writestr(entry, data)
 
 
+def check_transform_vertices(row, actual, vertices):
+    """Reconstruct centered source geometry using the public JSON contract."""
+    rx, ry, rz = map(math.radians, row["rotation"])
+    points = []
+    for vertex in vertices:
+        x, y, z = (v * s for v, s in zip(vertex, row["scale"]))
+        y, z = y * math.cos(rx) - z * math.sin(rx), y * math.sin(rx) + z * math.cos(rx)
+        x, z = x * math.cos(ry) + z * math.sin(ry), -x * math.sin(ry) + z * math.cos(ry)
+        x, y = x * math.cos(rz) - y * math.sin(rz), x * math.sin(rz) + y * math.cos(rz)
+        points.append((x, y, z))
+    low = [min(p[i] for p in points) for i in range(3)]
+    high = [max(p[i] for p in points) for i in range(3)]
+    origin = [(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, low[2]]
+    projected = [tuple(p[i] - origin[i] + row["position"][i] for i in range(3)) for p in points]
+    physical = actual["vertices"]
+    for source, target in ((projected, physical), (physical, projected)):
+        assert all(any(max(abs(a - b) for a, b in zip(p, q)) < 1e-4 for q in target) for p in source), (row, source, target)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
@@ -115,7 +135,7 @@ def main():
     binary = args.binary.resolve(strict=True)
     work = args.outputdir.resolve()
     work.mkdir(parents=True, exist_ok=False)
-    identity = {str(binary): sha256(binary)}
+    identity = {str(binary): sha256(binary), str(Path(__file__).resolve()): sha256(Path(__file__))}
     for name in ("machine", "process", "filament"):
         source = getattr(args, name).resolve(strict=True)
         identity[str(source)] = sha256(source)
@@ -134,7 +154,7 @@ def main():
     write_box(work / "tall.stl", 20, 20, 120)
     results = []
 
-    def run(name, inputs, mode=1, arrange=True, export=True, machine="machine.json", ensure_on_bed=False):
+    def run(name, inputs, mode=1, arrange=True, export=True, machine="machine.json", ensure_on_bed=False, extra=(), error=None):
         case = work / name
         case.mkdir()
         (case / "data").mkdir()
@@ -150,6 +170,7 @@ def main():
             command += ["--ensure-on-bed"]
         if mode is not None:
             command += ["--auto-plate", str(mode)]
+        command += list(extra)
         command += [str(path) for path in inputs]
         save_json(case / "command.json", command)
         with (case / "run.log").open("wb") as log:
@@ -158,6 +179,12 @@ def main():
         result = {"case": name, "process_code": process.returncode, "report_code": report["return_code"]}
         results.append(result)
         save_json(work / "results.json", results)
+        if error is not None:
+            assert process.returncode != 0 and report["return_code"] == error, result
+            assert not (output / "arranged.3mf").exists() and not list(output.glob("*.gcode")), result
+            result["passed"] = True
+            save_json(work / "results.json", results)
+            return None
         assert process.returncode == 0 and report["return_code"] == 0, result
         assert "invalid obj_id" not in (case / "run.log").read_text(errors="replace"), name
         project = output / "arranged.3mf"
@@ -193,7 +220,18 @@ def main():
         # Exporting JSON must not add physical plates, move objects, alter mesh,
         # rotation/scale, printability, or 3MF plate membership.
         assert state == plain, name
-        check_output(rows, state, overflow_names, center)
+        if kwargs.get("mode") == 0:
+            # Single-plate mode retains real membership (or the historical
+            # plate-0 fallback) and actual XYZ, including overflow/raised models.
+            # Reopened projects may still contain multiple physical plates.
+            for row in rows:
+                actual = next(i for i in state["instances"] if i["name"] == row["object_name"])
+                owner = next((i for i, members in enumerate(state["members"])
+                              if row["object_name"] in members), 0)
+                assert row["plate_index"] == owner, row
+                assert all(abs(a - b) < 1e-5 for a, b in zip(row["position"], actual["position"])), row
+        else:
+            check_output(rows, state, overflow_names, center)
         result["passed"] = plain_result["passed"] = True
         save_json(work / "results.json", results)
         return project, rows, state
@@ -228,7 +266,25 @@ def main():
             assert {r["object_name"]: r["plate_index"] for r in rows} == {
                 r["object_name"]: r["plate_index"] for r in original_rows}
     paired("omitted-auto-plate", normal + overflow, overflow_names, mode=None)
-    paired("explicit-single", normal + overflow, overflow_names, mode=0)
+    single_project, _, _ = paired("explicit-single", normal + overflow, overflow_names, mode=0)
+    single_offset = work / "single-offset-z.3mf"
+    offset_project_z(single_project, single_offset, offsets)
+    _, rows, state = paired("single-offset-z", [single_offset], overflow_names, mode=0, arrange=False)
+    for name, z in offsets.items():
+        row = next(r for r in rows if r["object_name"] == name)
+        assert abs(row["position"][2] - z) < 1e-5, row
+    paired("single-reopen-multi-project", [mixed], overflow_names, mode=0, arrange=False)
+    paired("single-capacity-overflow", normal + [work / "normal-4.stl"], set(), mode=0)
+    # Fixed-position raw inputs must have membership even when no arrangement
+    # occurs. Compare single/multi mode without allowing JSON to move anything.
+    for mode, prefix in ((0, "single"), (1, "multi")):
+        _, rows, _ = paired(prefix + "-fixed", [normal[0]], set(), mode=mode, arrange=False,
+                            extra=("--model", normal[0].name, "--model-position", "30,40,0"))
+        assert rows[0]["plate_index"] == 0 and rows[0]["position"] == [30, 40, 0], rows
+        _, rows, _ = paired(prefix + "-fixed-outside", [normal[0]], {normal[0].name}, mode=mode, arrange=False,
+                            extra=("--model", normal[0].name, "--model-position", "125,40,0"))
+        if mode == 0:
+            assert rows[0]["plate_index"] == 0 and rows[0]["position"] == [125, 40, 0], rows
     paired("all-overflow", overflow, overflow_names)
     _, rows, state = paired("normal-control", normal + [work / "normal-4.stl"], set())
     assert [len(p) for p in state["members"]] == [4, 1] and {r["plate_index"] for r in rows} == {0, 1}
@@ -237,6 +293,105 @@ def main():
     wide["printable_area"] = ["0x0", "120x0", "120x80", "0x80"]
     save_json(work / "wide-machine.json", wide)
     paired("wide-bed", overflow, overflow_names, center=(60, 40), machine="wide-machine.json")
+    # Bounding-box containment is insufficient for a non-rectangular bed.
+    triangle = json.loads((work / "machine.json").read_text())
+    triangle["printable_area"] = ["0x0", "100x0", "0x100"]
+    save_json(work / "triangle-machine.json", triangle)
+    for name, position, outside, mode in (("triangle-inside", "25,25,0", False, 1),
+                                         ("triangle-outside", "75,75,0", True, 1),
+                                         ("triangle-partly-outside", "50,50,0", True, 1),
+                                         ("triangle-single-outside", "75,75,0", True, 0)):
+        paired(name, [normal[0]], {normal[0].name} if outside else set(), mode=mode, arrange=False,
+               machine="triangle-machine.json", extra=("--model", normal[0].name, "--model-position", position))
+    # Compare JSON's reconstructed vertices with the actual saved geometry,
+    # not merely with expected Euler values or an axis-aligned bounding box.
+    asymmetric = work / "asymmetric.stl"
+    write_box(asymmetric, 8, 6, 2)
+    # The service uses per-model transforms independently of global options.
+    # Exercise both paths without requiring a mixed-transform use case.
+    for mode in (0, 1):
+        for label, options in (("rotate", ("--model-rotate", "20,30,40")),
+                               ("scale", ("--model-scale", "2")),
+                               ("rotate-scale", ("--model-rotate", "0,0,90", "--model-scale", "2", "--slice", "0"))):
+            name = f"per-model-{mode}-{label}"
+            _, rows, state = paired(name, [asymmetric], set(), mode=mode, arrange=False, ensure_on_bed=True,
+                                    extra=("--model", asymmetric.name, "--model-position", "50,50,0", *options))
+            check_transform_vertices(rows[0], state["instances"][0],
+                                     [(x, y, z) for x in (0, 8) for y in (0, 6) for z in (0, 2)])
+            assert rows[0]["plate_index"] == 0
+            if label == "rotate-scale":
+                for case in (name, name + "-no-json"):
+                    assert (work / case / "output/plate_1.gcode").stat().st_size > 0
+    for label, options in (("scale", ("--scale", "2")),
+                           ("rotate", ("--rotate", "90")),
+                           ("xyz", ("--rotate-x", "20", "--rotate-y", "30", "--rotate", "40")),
+                           ("combined", ("--scale", "2", "--rotate", "90", "--model-scale", "1.5",
+                                          "--model-rotate", "10,20,30")),
+                           ("oriented", ("--rotate", "30", "--orient", "1")),
+                           ("sliced", ("--scale", "2", "--rotate", "90", "--slice", "0"))):
+        _, rows, state = paired("global-" + label, [asymmetric], set(), mode=0, arrange=False, ensure_on_bed=True,
+                                extra=("--model", asymmetric.name, "--model-position", "50,50,0", *options))
+        check_transform_vertices(rows[0], state["instances"][0], [(x, y, z) for x in (0, 8) for y in (0, 6) for z in (0, 2)])
+        if label == "sliced":
+            for name in ("global-sliced", "global-sliced-no-json"):
+                assert (work / name / "output/plate_1.gcode").stat().st_size > 0
+    # Repetitions clone object IDs after orientation; both original and copy
+    # must retain the same transform history, even for a nontrivial resting pose.
+    seed, _, seed_state = paired("transform-seed", [asymmetric], set(), mode=0, arrange=False,
+                                  extra=("--model", asymmetric.name, "--model-position", "50,50,0"))
+    for label, options in (("repeat-orient", ("--orient", "1", "--rotate-x", "35")),
+                           ("repeat-scale", ("--scale", "2"))):
+        _, rows, state = paired(label, [seed], set(), mode=0,
+                                extra=("--slice", "1", "--repetitions", "2", *options))
+        assert len(rows) == 2
+        for row, actual in zip(rows, state["instances"]):
+            check_transform_vertices(row, actual, seed_state["instances"][0]["vertices"])
+    # Nonuniform instance scaling followed by a volume rotation produces shear,
+    # which rotation+scale fields cannot encode. Plain 3MF export stays valid.
+    nonuniform = work / "nonuniform.3mf"
+    with zipfile.ZipFile(seed) as archive, zipfile.ZipFile(nonuniform, "w") as output:
+        model = ET.fromstring(archive.read("3D/3dmodel.model"))
+        item = model.find(CORE + "build")[0]
+        values = item.get("transform").split()
+        values[0] = "2"
+        item.set("transform", " ".join(values))
+        for entry in archive.infolist():
+            output.writestr(entry, ET.tostring(model) if entry.filename == "3D/3dmodel.model" else archive.read(entry))
+    run("unrepresentable-transform", [nonuniform], mode=0, arrange=False, extra=("--rotate", "45"), error=-2)
+    _, _, _, result = run("unrepresentable-transform-no-json", [nonuniform], mode=0, arrange=False,
+                          extra=("--rotate", "45"), export=False)
+    result["passed"] = True
+    save_json(work / "results.json", results)
+    # Separate objects may have different pre-existing volume rotations. Each
+    # needs its own transform delta, rather than a single batch-wide matrix.
+    second = work / "asymmetric-second.stl"
+    write_box(second, 8, 6, 2)
+    two, _, _ = paired("two-transform-seed", [asymmetric, second], set(), mode=0, arrange=False,
+                        extra=("--model", asymmetric.name, "--model-position", "30,30,0",
+                               "--model", second.name, "--model-position", "70,70,0"))
+    rotated = work / "rotated-volume.3mf"
+    c, s = math.cos(math.radians(30)), math.sin(math.radians(30))
+    with zipfile.ZipFile(two) as archive, zipfile.ZipFile(rotated, "w") as output:
+        model = ET.fromstring(archive.read("3D/3dmodel.model"))
+        settings = ET.fromstring(archive.read("Metadata/model_settings.config"))
+        component = model.find(CORE + "resources")[1].find(CORE + "components")[0]
+        values = component.get("transform").split()
+        values[:9] = list(map(str, (c, 0, -s, 0, 1, 0, s, 0, c)))
+        component.set("transform", " ".join(values))
+        matrix = next(m for m in settings.findall("object")[1].find("part").findall("metadata") if m.get("key") == "matrix")
+        matrix.set("value", " ".join(map(str, (c, 0, s, 4, 0, 1, 0, 3, -s, 0, c, 1, 0, 0, 0, 1))))
+        for entry in archive.infolist():
+            data = archive.read(entry)
+            if entry.filename == "3D/3dmodel.model":
+                data = ET.tostring(model)
+            elif entry.filename == "Metadata/model_settings.config":
+                data = ET.tostring(settings)
+            output.writestr(entry, data)
+    before = project_state(rotated)
+    _, rows, state = paired("different-volume-rotations", [rotated], set(), mode=0, arrange=False,
+                            extra=("--rotate-x", "35"), ensure_on_bed=True)
+    for row, actual, original in zip(rows, state["instances"], before["instances"]):
+        check_transform_vertices(row, actual, original["vertices"])
     # Output-only plate indices are not limited by the physical 36-plate cap.
     many = [work / f"overflow-{i}.stl" for i in range(37)]
     for path in many:

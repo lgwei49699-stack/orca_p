@@ -334,8 +334,11 @@ public:
     //translate instance on the plate
     void translate_all_instance(Vec3d position);
 
-    //duplicate all instance for count
-    void duplicate_all_instance(unsigned int dup_count, bool need_skip, std::map<int, bool>& skip_objects);
+    // duplicate all instance for count
+    //  Return source/new object IDs so callers can preserve per-object metadata.
+    std::vector<std::pair<ObjectID, ObjectID>> duplicate_all_instance(unsigned int         dup_count,
+                                                                      bool                 need_skip,
+                                                                      std::map<int, bool>& skip_objects);
 
     //update instance exclude state
     void update_instance_exclude_status(int obj_id, int instance_id, BoundingBoxf3* bounding_box = nullptr);

@@ -1940,6 +1940,9 @@ int CLI::run(int argc, char **argv)
     // record the rotation matrix applied by auto-orient per object (only when orient acts on ModelObject)
     // used later to compose with arrange rotation: R_total = R_arrange * R_orient
     std::map<size_t, Matrix3d> oriented_rotation_map;
+    // Only instances imported from a saved project may remain as off-plate
+    // editing objects. A later raw input must never inherit that exemption.
+    std::set<size_t>     project_input_instances;
     std::vector<Preset*> project_presets;
     std::string new_printer_name, current_printer_name, new_process_name, current_process_name, current_printer_system_name, current_process_system_name, new_process_system_name, new_printer_system_name, printer_model_id, current_printer_model, printer_model;//, printer_inherits, print_inherits;
     std::vector<std::string> upward_compatible_printers, new_print_compatible_printers, current_print_compatible_printers, current_different_settings;
@@ -2714,6 +2717,10 @@ int CLI::run(int argc, char **argv)
                     }
                 }
             }
+            if (is_bbl_3mf)
+                for (const ModelObject* object : model.objects)
+                    for (const ModelInstance* instance : object->instances)
+                        project_input_instances.insert(instance->id().id);
             m_models.push_back(std::move(model));
             loaded_model_sources.push_back(file);
             loaded_model_materials_ignored.push_back(input_materials_ignored);
@@ -4413,6 +4420,9 @@ int CLI::run(int argc, char **argv)
         for (auto& model : m_models)
             for (ModelObject* o : model.objects) {
                 ModelObject* new_object = m.add_object(*o);
+                for (size_t i = 0; i < o->instances.size(); ++i)
+                    if (project_input_instances.count(o->instances[i]->id().id) != 0)
+                        project_input_instances.insert(new_object->instances[i]->id().id);
                 // BOOST_LOG_TRIVIAL(info) << "object "<<o->name <<", id :" << o->id().id << "\n";
                 // orients_requirement.emplace(new_object->id().id, orients_requirement[o->id().id]);
                 // orients_requirement.erase(o->id().id);
@@ -4795,6 +4805,18 @@ int CLI::run(int argc, char **argv)
         }
 
         translate_models(partplate_list, m_print_config);
+    } else if (!m_models.empty()) {
+        // Mesh inputs have no saved plate membership. Register them on the
+        // initial plate even when arrangement is disabled. Do not infer this
+        // from bed intersection: enabled out-of-bounds inputs must still reach
+        // slicing validation instead of being mistaken for an empty plate.
+        // add_to_plate() centers instances; add_instance(false) preserves the
+        // caller's transforms. Arrangement may rebuild membership afterwards.
+        Slic3r::GUI::PartPlate* initial_plate = partplate_list.get_plate(0);
+        const Model&            model         = m_models.front();
+        for (size_t object_index = 0; object_index < model.objects.size(); ++object_index)
+            for (size_t instance_index = 0; instance_index < model.objects[object_index]->instances.size(); ++instance_index)
+                initial_plate->add_instance(object_index, instance_index, false);
     }
 
     /*for (ModelObject *model_object : m_models[0].objects)
@@ -4925,6 +4947,24 @@ int CLI::run(int argc, char **argv)
     Points beds = get_bed_shape(m_print_config);
     ArrangeParams arrange_cfg;
 
+    const bool export_global_transform = export_transforms &&
+                                         std::any_of(m_transforms.begin(), m_transforms.end(), [](const std::string& key) {
+                                             return key == "rotate" || key == "rotate_x" || key == "rotate_y" || key == "scale" ||
+                                                    key == "scale_to_fit";
+                                         });
+    std::map<size_t, Transform3d> volumes_before_global_transform;
+    if (export_global_transform)
+        for (const Model& model : m_models)
+            for (const ModelObject* object : model.objects)
+                for (const ModelVolume* volume : object->volumes)
+                    volumes_before_global_transform.emplace(volume->id().id, volume->get_matrix());
+    std::map<size_t, Matrix3d> global_object_linear;
+    const auto                 invalid_transform_export = [&]() {
+        const std::string reason = "Global volume transforms cannot be represented by one rotation and scale in model_transforms. "
+                                                   "Use per-model transforms or export the transformed 3MF without --export-model-transforms.";
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, reason, sliced_info);
+    };
+
     BOOST_LOG_TRIVIAL(info) << "will start transforms, commands count " << m_transforms.size() << "\n";
 #if defined(__linux__) || defined(__LINUX__) || defined(__APPLE__)
     if (g_cli_callback_mgr.is_started()) {
@@ -4950,6 +4990,9 @@ int CLI::run(int argc, char **argv)
                 for (ModelObject* o : model.objects) {
                     for (auto volume : o->volumes) {
                         ModelVolume* new_volume = new_object->add_volume(*volume);
+                        if (export_global_transform)
+                            volumes_before_global_transform.emplace(new_volume->id().id,
+                                                                    volumes_before_global_transform.at(volume->id().id));
                         // set extruder id
                         new_volume->config.set_key_value("extruder", new ConfigOptionInt(o->config.extruder()));
                     }
@@ -5245,6 +5288,32 @@ int CLI::run(int argc, char **argv)
 
     BOOST_LOG_TRIVIAL(info) << "finished model pre-process commands\n";
 
+    if (export_global_transform) {
+        for (const Model& model : m_models)
+            for (const ModelObject* object : model.objects) {
+                std::optional<Transform3d> object_delta;
+                for (const ModelVolume* volume : object->volumes) {
+                    if (!volume->is_model_part())
+                        continue;
+                    const auto original = volumes_before_global_transform.find(volume->id().id);
+                    if (original == volumes_before_global_transform.end() || !original->second.matrix().allFinite() ||
+                        std::abs(original->second.linear().determinant()) < 1e-12) {
+                        invalid_transform_export();
+                        flush_and_exit(CLI_INVALID_PARAMS);
+                    }
+                    const Transform3d delta = volume->get_matrix() * original->second.inverse();
+                    // Multiple parts must undergo one common affine transform.
+                    // Scaling each part around its own origin need not satisfy this.
+                    if (!delta.matrix().allFinite() || (object_delta && !delta.matrix().isApprox(object_delta->matrix(), 1e-6))) {
+                        invalid_transform_export();
+                        flush_and_exit(CLI_INVALID_PARAMS);
+                    }
+                    object_delta = delta;
+                }
+                global_object_linear.emplace(object->id().id, object_delta ? Matrix3d(object_delta->linear()) : Matrix3d::Identity());
+            }
+    }
+
     // --split-by-color: split multi-extruder objects into single-extruder objects, assign each to a separate plate
     if (split_by_color) {
         BOOST_LOG_TRIVIAL(info) << "split_by_color: begin splitting multi-extruder objects";
@@ -5268,6 +5337,8 @@ int CLI::run(int argc, char **argv)
                     % obj->name % vols_by_ext.size();
                 for (auto& [ext_id, vols] : vols_by_ext) {
                     ModelObject* new_obj = model.add_object();
+                    if (export_global_transform)
+                        global_object_linear.emplace(new_obj->id().id, global_object_linear.at(obj->id().id));
                     new_obj->name = obj->name + "_ext" + std::to_string(ext_id);
                     new_obj->arrange_group = obj->arrange_group;
                     new_obj->config.set_key_value("extruder", new ConfigOptionInt(ext_id));
@@ -5730,7 +5801,13 @@ int CLI::run(int argc, char **argv)
                     }
 
                     cur_plate = (Slic3r::GUI::PartPlate *)partplate_list.get_plate(plate_to_slice-1);
-                    cur_plate->duplicate_all_instance(duplicate_count, need_skip, skip_maps);
+                    const auto duplicates = cur_plate->duplicate_all_instance(duplicate_count, need_skip, skip_maps);
+                    for (const auto& ids : duplicates) {
+                        if (export_global_transform)
+                            global_object_linear.emplace(ids.second.id, global_object_linear.at(ids.first.id));
+                        if (const auto orient = oriented_rotation_map.find(ids.first.id); orient != oriented_rotation_map.end())
+                            oriented_rotation_map.emplace(ids.second.id, orient->second);
+                    }
                 }
                 else if (plate_to_slice > 0)
                 {
@@ -6492,7 +6569,27 @@ int CLI::run(int argc, char **argv)
             for (auto &o : model.objects)
                 o->ensure_on_bed();
     }
-    
+
+    // Reconcile membership with final geometry without moving or sorting it.
+    // Raw inputs and assembly also need this for export-only actions: assembly
+    // replaces objects and otherwise leaves stale indices in the saved 3MF.
+    // Unassembled, non-slicing saved projects retain their existing metadata.
+    const bool slicing_requested   = std::find(m_actions.begin(), m_actions.end(), "slice") != m_actions.end();
+    const bool model_was_assembled = std::find(m_transforms.begin(), m_transforms.end(), "assemble") != m_transforms.end();
+    if (!m_models.empty() && (plate_data_src.empty() || slicing_requested || model_was_assembled)) {
+        partplate_list.reload_all_objects();
+        if (plate_data_src.empty() && !need_arrange && partplate_list.get_plate_count() == 1) {
+            // Fixed raw inputs all belong to the requested initial plate,
+            // including invalid ones which must reach the slicing checks.
+            auto*        plate = partplate_list.get_plate(0);
+            const Model& model = m_models.front();
+            for (size_t object_index = 0; object_index < model.objects.size(); ++object_index)
+                for (size_t instance_index = 0; instance_index < model.objects[object_index]->instances.size(); ++instance_index)
+                    if (!plate->contain_instance(object_index, instance_index))
+                        plate->add_instance(object_index, instance_index, false);
+        }
+    }
+
     // Collect model transforms after orient and arrange
     if (export_transforms) {
         BOOST_LOG_TRIVIAL(info) << "Collecting model transform information...";
@@ -6510,7 +6607,8 @@ int CLI::run(int argc, char **argv)
             return rounded;
         };
 
-        // Only fully contained instances retain their actual plate in the JSON.
+        // Multi-plate output retains actual plates only for contained instances.
+        // Single-plate output keeps membership even for outside geometry.
         // Check current geometry: ensure_on_bed may have changed Z since the
         // plate's outside-instance cache was populated. Do not mutate membership.
         std::map<size_t, int> instance_to_plate;
@@ -6525,12 +6623,15 @@ int CLI::run(int argc, char **argv)
             for (int plate_idx = 0; plate_idx < plate_count; plate_idx++) {
                 Slic3r::GUI::PartPlate* plate = partplate_list.get_plate(plate_idx);
                 if (plate) {
+                    const BuildVolume build_volume(plate->get_shape(), print_height);
                     // Check all instances using object/instance indices
                     for (size_t obj_idx = 0; obj_idx < model.objects.size(); obj_idx++) {
                         ModelObject* obj = model.objects[obj_idx];
                         for (size_t inst_idx = 0; inst_idx < obj->instances.size(); inst_idx++) {
                             ModelInstance* instance = obj->instances[inst_idx];
-                            if (plate->contain_instance(obj_idx, inst_idx) && !plate->check_outside(obj_idx, inst_idx)) {
+                            if (plate->contain_instance(obj_idx, inst_idx) &&
+                                (force_single_plate || (!plate->check_outside(obj_idx, inst_idx) &&
+                                                        instance->calc_print_volume_state(build_volume) == ModelInstancePVS_Inside))) {
                                 instance_to_plate[instance->id().id] = plate_idx;
                             }
                         }
@@ -6571,6 +6672,31 @@ int CLI::run(int argc, char **argv)
                     // extract_euler_angles returns XYZ intrinsic angles (radians)
                     // Convention: M = R_z(rz)*R_y(ry)*R_x(rx), apply as extrinsic X→Y→Z
                     Vec3d euler = Geometry::extract_euler_angles(R_total);
+                    Vec3d scale = instance->get_scaling_factor();
+                    if (export_global_transform) {
+                        Matrix3d linear = instance->get_matrix().linear();
+                        if (orient_it != oriented_rotation_map.end())
+                            linear = linear * orient_it->second;
+                        linear = linear * global_object_linear.at(obj->id().id);
+                        for (int axis = 0; axis < 3; ++axis)
+                            scale[axis] = linear.col(axis).norm();
+                        if (!linear.allFinite() || scale.minCoeff() < 1e-12) {
+                            invalid_transform_export();
+                            flush_and_exit(CLI_INVALID_PARAMS);
+                        }
+                        Matrix3d rotation = linear * scale.cwiseInverse().asDiagonal();
+                        if (rotation.determinant() < 0.0) {
+                            scale.x() = -scale.x();
+                            rotation.col(0) *= -1.0;
+                        }
+                        // A rotation after non-uniform instance scaling can shear.
+                        // The existing JSON schema cannot faithfully encode shear.
+                        if (!(rotation.transpose() * rotation).isApprox(Matrix3d::Identity(), 1e-6)) {
+                            invalid_transform_export();
+                            flush_and_exit(CLI_INVALID_PARAMS);
+                        }
+                        euler = Geometry::extract_euler_angles(rotation);
+                    }
                     transform["rotation"] = {
                         clean_value(euler.x() * 180.0 / M_PI),
                         clean_value(euler.y() * 180.0 / M_PI),
@@ -6578,19 +6704,19 @@ int CLI::run(int argc, char **argv)
                     };
                     
                     // Get scale
-                    Vec3d scale = instance->get_scaling_factor();
                     transform["scale"] = {
                         clean_value(scale.x()), 
                         clean_value(scale.y()), 
                         clean_value(scale.z())
                     };
 
-                    // Each outside/unassigned instance gets a separate, centered output plate with its bottom at Z=0.
-                    // These indices exist only in model_transforms: do not create plates or
-                    // change model positions, 3MF membership, or slicing behavior here.
+                    // Only multi-plate mode projects overflow onto independent,
+                    // centered JSON plates. Single-plate mode preserves actual
+                    // XYZ and the historical plate-0 fallback for unassigned items.
+                    // Neither mode changes geometry, 3MF membership, or slicing.
                     const auto it                = instance_to_plate.find(instance->id().id);
-                    const bool export_separately = it == instance_to_plate.end();
-                    const int  plate_idx         = export_separately ? next_export_plate++ : it->second;
+                    const bool export_separately = !force_single_plate && it == instance_to_plate.end();
+                    const int  plate_idx = export_separately ? next_export_plate++ : (it != instance_to_plate.end() ? it->second : 0);
 
                     transform["plate_index"] = plate_idx;
 
@@ -7047,9 +7173,16 @@ int CLI::run(int argc, char **argv)
         } else if (opt_key == "slice") {
             //BBS: slice 0 means all plates, i means plate i;
             plate_to_slice = m_config.option<ConfigOptionInt>("slice")->value;
+            // Raw inputs may have acquired new plates during arrangement. Check
+            // the requested index against the final layout, not the import state.
+            if (plate_to_slice < 0 || plate_to_slice > partplate_list.get_plate_count()) {
+                record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, plate_to_slice, cli_errors[CLI_INVALID_PARAMS], sliced_info);
+                flush_and_exit(CLI_INVALID_PARAMS);
+            }
             sliced_plate = plate_to_slice;
             bool pre_check = (plate_to_slice == 0)?true:false;
             bool finished = false;
+            size_t exported_gcode_count = 0;
 
             /*if (opt_key == "export_gcode" && printer_technology == ptSLA) {
                 boost::nowide::cerr << "error: cannot export G-code for an FFF configuration" << std::endl;
@@ -7076,6 +7209,36 @@ int CLI::run(int argc, char **argv)
                 if (make_copy)
                     model_copy = model_in;
                 Model &model = make_copy ? model_copy : model_in;
+                // Validate every enabled input requested by this slice before
+                // producing any output. One valid object must not hide another
+                // left outside the plates by fixed positioning or arrangement.
+                // Saved projects, like the GUI, may keep unassigned objects
+                // outside their plates. Raw batch inputs have no such editing
+                // area: all enabled inputs must fit when slicing all plates.
+                for (size_t object_index = 0; object_index < model.objects.size(); ++object_index) {
+                    const ModelObject* object = model.objects[object_index];
+                    for (size_t instance_index = 0; instance_index < object->instances.size(); ++instance_index) {
+                        const ModelInstance* instance = object->instances[instance_index];
+                        if (!object->printable || !instance->printable || skip_maps.count(instance->loaded_id) != 0)
+                            continue;
+                        const int owner = partplate_list.find_instance(object_index, instance_index);
+                        if (owner < 0 && project_input_instances.count(instance->id().id) != 0)
+                            continue;
+                        if (plate_to_slice != 0 && owner >= 0 && owner != plate_to_slice - 1)
+                            continue;
+                        const auto state = owner < 0 ? ModelInstancePVS_Fully_Outside :
+                                                       instance->calc_print_volume_state(
+                                                           BuildVolume(partplate_list.get_plate(owner)->get_shape(), print_height));
+                        if (state != ModelInstancePVS_Inside) {
+                            const int         error  = state == ModelInstancePVS_Partly_Outside ? CLI_OBJECTS_PARTLY_INSIDE :
+                                                                                                  CLI_NO_SUITABLE_OBJECTS;
+                            const std::string reason = "Enabled object '" + object->name + "' is not fully inside a printable plate.";
+                            BOOST_LOG_TRIVIAL(error) << reason;
+                            record_exit_reson(outfile_dir, error, owner + 1, reason, sliced_info);
+                            flush_and_exit(error);
+                        }
+                    }
+                }
                 // If all objects have defined instances, their relative positions will be
                 // honored when printing (they will be only centered, unless --dont-arrange
                 // is supplied); if any object has no instances, it will get a default one
@@ -7237,6 +7400,11 @@ int CLI::run(int argc, char **argv)
                                         continue;
                                     }
 
+                                    // Match Print::apply: explicitly disabled
+                                    // objects do not block or count toward a print.
+                                    if (!model_object->printable || !i->printable)
+                                        continue;
+
                                     if (i->print_volume_state == ModelInstancePVS_Partly_Outside)
                                     {
                                         BOOST_LOG_TRIVIAL(error) << "plate "<< index+1<< ": Found Object " << model_object->name <<" partly inside, can not be sliced." << std::endl;
@@ -7267,8 +7435,9 @@ int CLI::run(int argc, char **argv)
 
                             if (printable_instances == 0) {
                                 BOOST_LOG_TRIVIAL(error) << "plate "<< index+1<< ": Nothing to be sliced, after skipping "<<skipped_count<<" objects."<< std::endl;
-                                record_exit_reson(outfile_dir, CLI_NO_SUITABLE_OBJECTS_AFTER_SKIP, index+1, cli_errors[CLI_NO_SUITABLE_OBJECTS_AFTER_SKIP], sliced_info);
-                                flush_and_exit(CLI_NO_SUITABLE_OBJECTS_AFTER_SKIP);
+                                const int error = skipped_count > 0 ? CLI_NO_SUITABLE_OBJECTS_AFTER_SKIP : CLI_NO_SUITABLE_OBJECTS;
+                                record_exit_reson(outfile_dir, error, index + 1, cli_errors[error], sliced_info);
+                                flush_and_exit(error);
                             }
 
                             plate_triangle_counts[index] = triangle_count;
@@ -7583,6 +7752,12 @@ int CLI::run(int argc, char **argv)
                                     BOOST_LOG_TRIVIAL(info) << "process finished, will export gcode temporily to " << outfile << std::endl;
                                     temp_time = (long long)Slic3r::Utils::get_current_time_utc();
                                     outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true, true);
+                                    if (!fs::is_regular_file(outfile) || fs::file_size(outfile) == 0) {
+                                        BOOST_LOG_TRIVIAL(error) << "plate " << index + 1 << ": no G-code was exported";
+                                        record_exit_reson(outfile_dir, CLI_SLICING_ERROR, index + 1, cli_errors[CLI_SLICING_ERROR],
+                                                          sliced_info);
+                                        flush_and_exit(CLI_SLICING_ERROR);
+                                    }
                                     if (cgal_repair_requested) {
                                         // Some diagnostics (notably empty extrusion layers) are
                                         // emitted during G-code generation, after the earlier check.
@@ -7620,6 +7795,7 @@ int CLI::run(int argc, char **argv)
                                     }
                                     const PrintStatistics& print_statistics = print_fff->print_statistics();
                                     sliced_plate_info.total_filament_g = print_statistics.total_weight;
+                                    ++exported_gcode_count;
 
                                     //outfile_final = (dynamic_cast<Print*>(print))->print_statistics().finalize_output_path(outfile);
                                     //m_fff_print->export_gcode(m_temp_output_path, m_gcode_result, [this](const ThumbnailsParams& params) { return this->render_thumbnails(params); });
@@ -7736,6 +7912,13 @@ int CLI::run(int argc, char **argv)
                     << "Filament required: " << print.total_used_filament() << "mm"
                     << " (" << print.total_extruded_volume()/1000 << "cm3)" << std::endl;
 */
+            }
+            // A slice action that skipped every plate must not report success
+            // to callers waiting for G-code. Non-slicing exports are unaffected.
+            if (exported_gcode_count == 0) {
+                BOOST_LOG_TRIVIAL(error) << "No G-code exported: no printable plate was sliced";
+                record_exit_reson(outfile_dir, CLI_NO_SUITABLE_OBJECTS, plate_to_slice, cli_errors[CLI_NO_SUITABLE_OBJECTS], sliced_info);
+                flush_and_exit(CLI_NO_SUITABLE_OBJECTS);
             }
         } else {
             boost::nowide::cerr << "error: option not supported yet: " << opt_key << std::endl;
