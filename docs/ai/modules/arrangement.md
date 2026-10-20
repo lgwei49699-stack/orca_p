@@ -4,7 +4,7 @@
 {
   "id": "arrangement",
   "source_fingerprint": "sha256:f42f64734416948821cf27e89bacbb892cc3b045cc4c75cea8a7911c926fce6c",
-  "reason": "合并master的CLI复制对象ID映射及单/多盘JSON边界，PartPlate几何、数量和GUI ArrangeJob算法未改；保留feature默认关闭的报告参数，其不参与摆盘配置。核对最终盘成员刷新和真实床面状态与报告按盘输出的衔接；实际回归及GUI待验见本轮记录。"
+  "reason": "合并master盘外JSON姿态修复；保留本分支默认关闭的分析报告及既有盘成员刷新。共享Arrange/PartPlate/GUI排布未变，CLI只读快照仅用于盘外JSON；按本分支源码核对指纹与合并验证边界。"
 }
 -->
 
@@ -37,6 +37,8 @@ CLI `--export-model-transforms` 仅在多盘模式为越界或无归属实例各
 
 检查候选是否越床、碰固定物体／禁放区和真正分到几盘，再提交变换。取消不应移动半批对象。GUI 成功通知和 CLI 返回成功都不能代替几何验收。
 
+失败搜索可能仍写回旋转。CLI 多盘 JSON 的盘外投影使用本次排布前保存的有效实例姿态，并组合已完成的自动定向和全局变换；正常盘内、单盘及不排布时继续用实际姿态。该例外只修正返回协议，不回滚实际实例、不修改 GUI ArrangeJob 或共享搜索规则。见[姿态验证](../validation/2026-10-20-cli-overflow-pose.md)。
+
 
 `PartPlate::duplicate_all_instance` 返回原对象/新对象的 ObjectID 对；CLI repetitions 用此映射继承全局变换及自动定向的JSON记录。复制本身的几何、数量、位置和打印开关不变；该函数当前只有CLI调用，不改变GUI ArrangeJob。组合复制/定向/缩放的实际3MF与JSON回归见[固定位置修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。
 
@@ -53,3 +55,5 @@ CLI `--export-model-transforms` 仅在多盘模式为越界或无归属实例各
 ## 关联模块
 
 [筏层计划、合并与分块](raft.md)、[Brim、Skirt 与平台附着](adhesion.md)、[多材料、颜色分配与擦料塔](multimaterial.md)、[应用入口与 CLI](cli.md)。
+
+本次 Linux 分支合入盘外 JSON 姿态修复的冲突处理与验证见[合并记录](../validation/2026-10-20-linux-overflow-merge.md)。

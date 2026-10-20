@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:b6dfcffa94aba2dd5c67727e86ea8c043b2a72f55e97033b2b2c9096db0b40a5",
-  "reason": "合并master固定位置成员登记、完整输入预检、非空G-code与变换JSON修复，同时保留显式阶段报告和slice_analysis_requested统计门控；报告失败仍返回错误并保留G-code。新增固定位置/多盘/禁用盘与报告开关组合回归，普通GUI不接入报告。合并后构建与真实回归、GUI待验边界见本轮实施记录，不沿用旧包通过结论。"
+  "source_fingerprint": "sha256:05c8fe2242b2a9020491b7c81a783734bcd577ff3f7764c58b66a3ecf0de655b",
+  "reason": "合并master的排布前实例快照及盘外JSON选取，复制重试补记且不覆盖；保留阶段报告、slice_analysis_requested门控及既有固定位置/镜像定向导出。正常盘内、单盘、实际模型和GUI规则保持；验证以当前Linux分支合并记录为准。"
 }
 -->
 
@@ -82,7 +82,7 @@ CLI 预检查与 Print::apply 一致，关闭打印的对象／实例不参与�
 本改动补 CLI 生命周期及界面禁用实例的检查入口，未修改共享排布／切层算法；回归及部署交接见
 [固定位置切片修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。
 
-`--export-model-transforms` 仅在已解析的多盘模式（auto_plate_value != 0，含历史省略默认）中重映射越界/无归属实例：先核对 `contain_instance` 归属，再用只读 `check_outside` 及共享 `calc_print_volume_state(BuildVolume)` 复核当前几何与真实床面轮廓，避免异形床只按外接矩形误判，区分真正盘内与仅有编辑归属；不依赖可能在 `--ensure-on-bed` 后过期的盘外状态缓存，每个越界实例按输出遍历顺序分配一个独立 `plate_index`，从实际盘数量开始递增，XY 为有效 `printable_area` 包围盒中心（盘内坐标），Z固定为0，表示独立返回盘上以底面贴床呈现；旋转和缩放保持实际输出。普通盘内实例保持原盘号与坐标规则，包括原有正/负底面Z；字段结构不变，不增加 `outside`/`position_space`。多盘不重排导出也沿用此规则，正常原始模型先登记归属而不误当盘外。显式 `--auto-plate 0` 不创建虚拟返回盘、不居中、不归零：保留实际归属，未登记实例沿历史回退到盘0，XYZ为实际包围盒底面中心；重开多盘工程但不重排时也保留实际归属和世界坐标。只读投影不修改模型或盘列表，不受真实36盘容量限制，也不改变实际排布、切片退出码、GUI或3MF。返回虚拟盘号不能当作真实切片盘号；复现与对照见[验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)。
+`--export-model-transforms` 仅在已解析的多盘模式（auto_plate_value != 0，含历史省略默认）中重映射越界/无归属实例：先核对 `contain_instance` 归属，再用只读 `check_outside` 及共享 `calc_print_volume_state(BuildVolume)` 复核当前几何与真实床面轮廓，避免异形床只按外接矩形误判，区分真正盘内与仅有编辑归属；不依赖可能在 `--ensure-on-bed` 后过期的盘外状态缓存，每个越界实例按输出遍历顺序分配一个独立 `plate_index`，从实际盘数量开始递增，XY 为有效 `printable_area` 包围盒中心（盘内坐标），Z固定为0，表示独立返回盘上以底面贴床呈现。若本次执行排布，其旋转／缩放从排布前的实例快照组合导出，保留合法输入变换和已完成的自动定向，不带入失败搜索附带的旋转；复制新实例补记快照，重试不覆盖原记录。不排布时仍使用实际姿态。普通盘内实例保持实际姿态、原盘号与坐标规则，包括原有正/负底面Z；字段结构不变，不增加 `outside`/`position_space`。多盘不重排导出也沿用位置投影规则，正常原始模型先登记归属而不误当盘外。显式 `--auto-plate 0` 不创建虚拟返回盘、不居中、不归零：保留实际姿态和归属，未登记实例沿历史回退到盘0，XYZ为实际包围盒底面中心；重开多盘工程但不重排时也保留实际归属和世界坐标。只读投影不修改模型或盘列表，不受真实36盘容量限制，也不改变实际排布、切片退出码、GUI或3MF。返回虚拟盘号不能当作真实切片盘号；位置规则见[原验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)，姿态对照见[盘外姿态记录](../validation/2026-10-20-cli-overflow-pose.md)。
 
 命令行加载的机器／耗材／工艺配置与输入工程的配置合成为有效配置，再应用动作及对象覆盖。输入顺序、单位变换、多盘及颜色分组都会影响输出，不能只比较命令末尾几个参数。日志、进程退出码与结果 JSON 分别核对。
 
@@ -126,3 +126,5 @@ master 包含独立 `--check-model` 工作流、受约束的高级修复与对�
 ## 关联模块
 
 [模型／工程格式、颜色与缩略图](formats.md)、[配置定义、预设继承与资源更新](presets.md)、[自动分盘与打印板](arrangement.md)、[FFF 切片步骤与层状态](slicing.md)、[模型检测、修复与保色](model-repair.md)。
+
+本次 Linux 分支合入盘外 JSON 姿态修复的冲突处理与验证见[合并记录](../validation/2026-10-20-linux-overflow-merge.md)。

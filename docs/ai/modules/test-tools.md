@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:e4c96befcfc31c7ef7e32af099bd38e7e811257f0224c55702ec7d2e6068fd95",
-  "reason": "合并master固定位置/镜像定向/3MF成员回归，保留阶段报告百万面读取、Linux配置/打包及已有分析测试。补6个固定位置/多盘/禁用盘与报告组合用例，逐条比较G-code及完整有效配置，失败无报告；不放宽旧断言。合并后运行数、程序身份与平台限制见实施记录。"
+  "source_fingerprint": "sha256:ade427abde2d511e6b3a98f405ddd04ec88782c0e3cfb8d9340650f81f639658",
+  "reason": "保留本分支阶段报告、切片分析及Linux配置/打包回归，合入薄片盘外姿态30次CLI调用；以实际3MF核对JSON姿态及导出开关不改变几何，合并后按当前源码记录验证，不借用master构建结论。"
 }
 -->
 
@@ -88,6 +88,8 @@
 中间模型路径投影继续复用38个CLI场景，不改模型或配置；逐匹配行验证新增nested完整性、非负面积及不超过该行分配面积，同支撑/目标Z为未知、不适用，Cura筏首模型层明确为0。原生用人工足迹验证条带8/互补16/重复仍8、孔与无路径、严格Z端点、同对象前层路径越出截面、每实例平移及共享层、局部未知与完整覆盖后仍检查非法层。新项未知不污染旧支撑面积，旧数据和报告消费者独立对照；运行身份及结果见实施记录。
 
 源面分层参考偏移新增45度闭合楔形Classic/Arachne两例，共40次真实CLI计划，原38有效配置不改；核对非水平面法向偏移约0.07071mm、水平底面对齐及已知逐层截面，不称实际表面误差。原生精确真值覆盖共面细分、不同层高、源float变换、水平/竖直/近水平、范围外水平面、筏层printZ独立、非法输入/无适用/共享与只读。新统计独立未知，不污染旧报告；Python及Web合同、旧指标对照、实际构建/执行结果统一记入实施记录。
+
+分盘 JSON 回归另覆盖 101 mm 床面上的 100 mm 薄片：排布前实际 3MF 作为独立几何参照，逐点核对盘外返回姿态，包含非零输入旋转、缩放、全局操作、混合盘内模型、镜像、非等比缩放及已完成的自动定向。显式单盘继续与排布后的真实几何对照，省略 auto-plate 仍走多盘投影；所有配对案例检查 JSON 开关不改变 3MF。运行结果与平台身份见[盘外姿态记录](../validation/2026-10-20-cli-overflow-pose.md)。
 
 `scripts/test_cli_meshlib_reconstruction.py` 针对已编入SDK的应用做同进程小夹具回归，不构建/下载SDK、不打印。核对报告PID与真实应用PID，POSIX采样子进程列表（采样非完整系统追踪），校验候选独立检测/哈希、参数互斥、旧worker选项拒绝、超细体素准入拒绝及原件/旧输出保护。`--expect-unavailable` 验证SDK关闭构建；可传实际超时模型，协作超时与提前内存拒绝分别断言。隐藏 `[MeshLibInProcessIntegration]` 检查同进程成功、取消、超时、标准/未知回调异常及随后恢复；`[InProcessReconstruction]` 覆盖时钟/RSS故障、粘滞停止和准入数值边界。旧Alpha Wrap Process监督回归不变，原sidecar协议工具/嵌套选项已删除。通过不代表结构保留或实机打印验收。
 
@@ -225,3 +227,5 @@ Advancer3 专项扩展为四喷嘴、12 工艺和六耗材的有效配置与兼�
 Advancer3 下发协议专项目标 `gfd_print_options_tests` 位于 `tests/slic3rutils`，只链接 test_common 与 nlohmann_json，不发起网络或打印。覆盖实际 PMC 槽位结构、非法数据、ms／调平和旧机型载荷保持；验证身份和 GUI 交接见[Advancer3 记录](../validation/2026-10-09-adv3-custom-feasibility.md)。
 
 `test_macos_runtime_bundle.py` 用实际 Mach-O 和签名工具覆盖传递依赖、同名 zstd 隔离、源 SDK 字节不变、移走 SDK/准备目录后的迁移运行、二次封装哈希不变，以及缺库、架构/最低系统不匹配、旧链接和哈希篡改拒绝。小型夹具通过不代替真实应用/目标系统验收。
+
+本次 Linux 分支合入盘外 JSON 姿态修复的冲突处理与验证见[合并记录](../validation/2026-10-20-linux-overflow-merge.md)。
