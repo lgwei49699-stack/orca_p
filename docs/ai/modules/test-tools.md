@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:d1d2289db0ecc525882433a03011e1bcbe1f8e7b0b6de377bc5d7f4f5c8ce44a",
-  "reason": "扩充分盘JSON脚本：使用不对称四面体逐点核对全部镜像轴组合、已有旋转/缩放、定向、摆盘和全局操作，覆盖单/多盘及JSON开关，补非等比缩放与定向的可表示及剪切拒绝；切片对照另核对实际挤出和G0/G1路径。原有普通输入与越界规则回归保留。"
+  "source_fingerprint": "sha256:f6aedb670a12bd1b29e9729794914bfdcb2603346bfce4ab7f89349c8fd99d25",
+  "reason": "新增薄片及盘外有效姿态回归，以排布前实际3MF作几何参照，逐点核对原旋转、缩放、镜像、自动定向和全局变换。混合正常对象、显式单盘及省略模式均有对照，JSON开关始终核对实际3MF一致；保留原154次回归，新增30次调用。"
 }
 -->
 
@@ -28,6 +28,8 @@
 - [test_meshlib_platform_config.py](../../../scripts/tests/test_meshlib_platform_config.py)：隔离SDK夹具与CMake项目执行实际平台、版本、文件布局、CRT及依赖属性检查，覆盖OFF、Mac arm64、Windows MSVC x64、Linux x64/arm64。模拟目标注册与编译器变量，不执行目标系统编译/加载；不能据此宣称跨平台运行通过。
 
 ## 核心流程
+
+分盘 JSON 回归另覆盖 101 mm 床面上的 100 mm 薄片：排布前实际 3MF 作为独立几何参照，逐点核对盘外返回姿态，包含非零输入旋转、缩放、全局操作、混合盘内模型、镜像、非等比缩放及已完成的自动定向。显式单盘继续与排布后的真实几何对照，省略 auto-plate 仍走多盘投影；所有配对案例检查 JSON 开关不改变 3MF。运行结果与平台身份见[盘外姿态记录](../validation/2026-10-20-cli-overflow-pose.md)。
 
 `scripts/test_cli_meshlib_reconstruction.py` 针对已编入SDK的应用做同进程小夹具回归，不构建/下载SDK、不打印。核对报告PID与真实应用PID，POSIX采样子进程列表（采样非完整系统追踪），校验候选独立检测/哈希、参数互斥、旧worker选项拒绝、超细体素准入拒绝及原件/旧输出保护。`--expect-unavailable` 验证SDK关闭构建；可传实际超时模型，协作超时与提前内存拒绝分别断言。隐藏 `[MeshLibInProcessIntegration]` 检查同进程成功、取消、超时、标准/未知回调异常及随后恢复；`[InProcessReconstruction]` 覆盖时钟/RSS故障、粘滞停止和准入数值边界。旧Alpha Wrap Process监督回归不变，原sidecar协议工具/嵌套选项已删除。通过不代表结构保留或实机打印验收。
 

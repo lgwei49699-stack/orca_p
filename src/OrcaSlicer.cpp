@@ -5507,6 +5507,21 @@ int CLI::run(int argc, char **argv)
 
     oriented_or_arranged |= need_arrange;
 
+    // Failed packing may still change an instance's rotation. Preserve the
+    // effective pose after input transforms/orientation for JSON-only overflow
+    // plates, without changing the actual arrangement or exported geometry.
+    std::map<size_t, Geometry::Transformation> instance_transforms_before_arrange;
+    const auto                                 remember_instance_transforms = [&](const Model& model) {
+        if (!export_transforms || force_single_plate)
+            return;
+        for (const ModelObject* object : model.objects)
+            for (const ModelInstance* instance : object->instances)
+                instance_transforms_before_arrange.emplace(instance->id().id, instance->get_transformation());
+    };
+    if (need_arrange || !assemble_plate_info_list.empty())
+        for (const Model& model : m_models)
+            remember_instance_transforms(model);
+
     BOOST_LOG_TRIVIAL(info) << boost::format("before arrange, need_arrange=%1%, duplicate_count %2%, filament_color_changed %3%")%need_arrange %duplicate_count %filament_color_changed;
     if (need_arrange || filament_color_changed)
     {
@@ -5808,6 +5823,9 @@ int CLI::run(int argc, char **argv)
                         if (const auto orient = oriented_rotation_map.find(ids.first.id); orient != oriented_rotation_map.end())
                             oriented_rotation_map.emplace(ids.second.id, orient->second);
                     }
+                    // Include new instance IDs; never replace original snapshots
+                    // with a failed candidate when the arrangement is retried.
+                    remember_instance_transforms(model);
                 }
                 else if (plate_to_slice > 0)
                 {
@@ -6653,15 +6671,27 @@ int CLI::run(int argc, char **argv)
                     double center_x = 0.5 * (bbox.min.x() + bbox.max.x());
                     double center_y = 0.5 * (bbox.min.y() + bbox.max.y());
 
+                    // Only multi-plate mode projects overflow onto independent,
+                    // centered JSON plates. Single-plate mode preserves actual
+                    // XYZ and the historical plate-0 fallback for unassigned items.
+                    // Neither mode changes geometry, 3MF membership, or slicing.
+                    const auto  it                = instance_to_plate.find(instance->id().id);
+                    const bool  export_separately = !force_single_plate && it == instance_to_plate.end();
+                    const int   plate_idx      = export_separately ? next_export_plate++ : (it != instance_to_plate.end() ? it->second : 0);
+                    const auto  before_arrange = instance_transforms_before_arrange.find(instance->id().id);
+                    const bool  use_before_arrange = export_separately && before_arrange != instance_transforms_before_arrange.end();
+                    const auto& export_transform   = use_before_arrange ? before_arrange->second : instance->get_transformation();
+
                     // Compute total rotation = R_arrange * R_orient
-                    // R_arrange: from instance->get_rotation() (XYZ intrinsic, radians)
+                    // R_arrange: selected instance pose (XYZ intrinsic, radians),
+                    //            pre-arrangement only for JSON overflow plates.
                     //            OrcaSlicer applies as R_z * R_y * R_x (see assemble_transform)
                     // R_orient:  from oriented_rotation_map (rotation_from_two_vectors result)
                     // Combining via matrix multiplication avoids Euler angle addition errors.
-                    Vec3d inst_rot = instance->get_rotation();
-                    Matrix3d R_arrange = (Eigen::AngleAxisd(inst_rot.z(), Vec3d::UnitZ())
-                                        * Eigen::AngleAxisd(inst_rot.y(), Vec3d::UnitY())
-                                        * Eigen::AngleAxisd(inst_rot.x(), Vec3d::UnitX())).toRotationMatrix();
+                    Vec3d    inst_rot  = export_transform.get_rotation();
+                    Matrix3d R_arrange = (Eigen::AngleAxisd(inst_rot.z(), Vec3d::UnitZ()) *
+                                          Eigen::AngleAxisd(inst_rot.y(), Vec3d::UnitY()) * Eigen::AngleAxisd(inst_rot.x(), Vec3d::UnitX()))
+                                             .toRotationMatrix();
 
                     Matrix3d R_total = R_arrange;
                     auto orient_it = oriented_rotation_map.find(obj->id().id);
@@ -6672,12 +6702,12 @@ int CLI::run(int argc, char **argv)
                     // extract_euler_angles returns XYZ intrinsic angles (radians)
                     // Convention: M = R_z(rz)*R_y(ry)*R_x(rx), apply as extrinsic X→Y→Z
                     Vec3d euler = Geometry::extract_euler_angles(R_total);
-                    Vec3d scale = instance->get_scaling_factor();
-                    // Compose the actual linear transform: reflection needs signed
+                    Vec3d scale = export_transform.get_scaling_factor();
+                    // Compose the selected linear transform: reflection needs signed
                     // scale, and non-uniform instance scale does not commute with
                     // orientation. Decompose only after applying both in order.
-                    if (export_global_transform || instance->is_left_handed() || orient_it != oriented_rotation_map.end()) {
-                        Matrix3d linear = instance->get_matrix().linear();
+                    if (export_global_transform || export_transform.is_left_handed() || orient_it != oriented_rotation_map.end()) {
+                        Matrix3d linear = export_transform.get_matrix().linear();
                         if (orient_it != oriented_rotation_map.end())
                             linear = linear * orient_it->second;
                         if (export_global_transform)
@@ -6713,14 +6743,6 @@ int CLI::run(int argc, char **argv)
                         clean_value(scale.y()), 
                         clean_value(scale.z())
                     };
-
-                    // Only multi-plate mode projects overflow onto independent,
-                    // centered JSON plates. Single-plate mode preserves actual
-                    // XYZ and the historical plate-0 fallback for unassigned items.
-                    // Neither mode changes geometry, 3MF membership, or slicing.
-                    const auto it                = instance_to_plate.find(instance->id().id);
-                    const bool export_separately = !force_single_plate && it == instance_to_plate.end();
-                    const int  plate_idx = export_separately ? next_export_plate++ : (it != instance_to_plate.end() ? it->second : 0);
 
                     transform["plate_index"] = plate_idx;
 

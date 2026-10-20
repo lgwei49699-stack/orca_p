@@ -4,7 +4,7 @@
 {
   "id": "arrangement",
   "source_fingerprint": "sha256:d2999b77701608b8f27bd114344309e55bcba0ac3cf8ef028c37c5f1bd6917fb",
-  "reason": "复核PartPlate复制函数唯一调用为CLI；新增返回原/新对象ID供调用者传递变换元数据，复制位置、打印开关、数量、摆盘算法均不改变。保持原单/多盘及异形床JSON规则。"
+  "reason": "复核本次修改仅在CLI输出多盘JSON时保存及选择排布前姿态；PartPlate/ArrangeJob/共享排布源码未变，失败候选实际应用及3MF行为保持。正文补充盘外姿态协议例外及对应验证入口。"
 }
 -->
 
@@ -36,6 +36,8 @@ GUI ArrangeJob 在主线程准备实例与锁定项，在工作线程调用 arra
 CLI `--export-model-transforms` 仅在多盘模式为越界或无归属实例各分配一个只存在于 JSON 的返回盘号，XY 为床面包围盒中心、Z为0；多盘归属同时用共享BuildVolume核对真实床面形状，不能只按床的外接矩形；普通盘内实例仍保留实际底面Z（允许正值或负值），详见[CLI模块](cli.md)及[验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)。显式 `--auto-plate 0` 保留实际归属（无归属历史回退盘0）及实际底面中心，不新增返回盘或重写XYZ。两种模式都不创建实际盘、不改变GUI、核心排布、盘归属和保存重开；不能将该返回盘号用于推断真实盘数或可打印性。
 
 检查候选是否越床、碰固定物体／禁放区和真正分到几盘，再提交变换。取消不应移动半批对象。GUI 成功通知和 CLI 返回成功都不能代替几何验收。
+
+失败搜索可能仍写回旋转。CLI 多盘 JSON 的盘外投影使用本次排布前保存的有效实例姿态，并组合已完成的自动定向和全局变换；正常盘内、单盘及不排布时继续用实际姿态。该例外只修正返回协议，不回滚实际实例、不修改 GUI ArrangeJob 或共享搜索规则。见[姿态验证](../validation/2026-10-20-cli-overflow-pose.md)。
 
 
 `PartPlate::duplicate_all_instance` 返回原对象/新对象的 ObjectID 对；CLI repetitions 用此映射继承全局变换及自动定向的JSON记录。复制本身的几何、数量、位置和打印开关不变；该函数当前只有CLI调用，不改变GUI ArrangeJob。组合复制/定向/缩放的实际3MF与JSON回归见[固定位置修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。

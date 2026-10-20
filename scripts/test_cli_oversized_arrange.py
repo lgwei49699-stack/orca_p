@@ -183,7 +183,8 @@ def main():
     write_box(work / "tall.stl", 20, 20, 120)
     results = []
 
-    def run(name, inputs, mode=1, arrange=True, export=True, machine="machine.json", ensure_on_bed=False, extra=(), error=None):
+    def run(name, inputs, mode=1, arrange=True, export=True, machine="machine.json", ensure_on_bed=False,
+            extra=(), error=None, spacing=2):
         case = work / name
         case.mkdir()
         (case / "data").mkdir()
@@ -192,7 +193,7 @@ def main():
         command = [str(binary), "--debug", "4", "--datadir", str(case / "data"), "--outputdir", str(output),
                    "--load-settings", f"{work / machine};{work / 'process.json'}",
                    "--load-filaments", str(work / "filament.json"), "--arrange", "1" if arrange else "0",
-                   "--arrange-spacing", "2", "--ignore-wipe-tower", "--export-3mf", "arranged.3mf"]
+                   "--arrange-spacing", str(spacing), "--ignore-wipe-tower", "--export-3mf", "arranged.3mf"]
         if export:
             command += ["--export-model-transforms"]
         if ensure_on_bed:
@@ -264,6 +265,57 @@ def main():
         result["passed"] = plain_result["passed"] = True
         save_json(work / "results.json", results)
         return project, rows, state
+
+    def check_overflow_pose(name, inputs, sources, overflow_name, options=(), mode=1,
+                            machine="machine.json", center=(50, 50), spacing=2):
+        # The reference is actual geometry after the same input transforms and
+        # orientation, but before packing. It is independent of JSON pose math.
+        _, reference_rows, reference, reference_result = run(name + "-before", inputs, mode=0, arrange=False,
+                                                             machine=machine, ensure_on_bed=True, extra=options)
+        for row, actual in zip(reference_rows, reference["instances"]):
+            check_transform_vertices(row, actual, sources[row["object_name"]])
+        _, rows, state, result = run(name, inputs, mode=mode, machine=machine,
+                                     ensure_on_bed=True, extra=options, spacing=spacing)
+        _, _, plain, plain_result = run(name + "-no-json", inputs, mode=mode, machine=machine,
+                                        ensure_on_bed=True, extra=options, export=False, spacing=spacing)
+        assert state == plain, name
+        for row in rows:
+            actual = next(i for i in state["instances"] if i["name"] == row["object_name"])
+            if row["object_name"] == overflow_name and mode != 0:
+                assert row["plate_index"] == len(state["members"]), row
+                assert row["position"] == [*center, 0], row
+                before = next(i for i in reference["instances"] if i["name"] == overflow_name)
+                expected = {"vertices": [tuple(p[i] - before["position"][i] + row["position"][i] for i in range(3))
+                                         for p in before["vertices"]]}
+                check_transform_vertices(row, expected, sources[overflow_name])
+            else:
+                if mode != 0:
+                    assert row["plate_index"] == 0 and row["object_name"] in state["members"][0], row
+                check_transform_vertices(row, actual, sources[row["object_name"]])
+        reference_result["passed"] = result["passed"] = plain_result["passed"] = True
+        save_json(work / "results.json", results)
+
+    # The production report: 100 mm thin square on a 101 mm bed cannot fit
+    # after arrangement margins. Linux used to return a failed ~135 degree
+    # candidate. Explicit input poses also expose lost rotations on macOS.
+    thin = work / "thin-square.stl"
+    write_box(thin, 100, 100, 0.24, centered=True)
+    thin_vertices = [(x, y, z) for x in (-50, 50) for y in (-50, 50) for z in (0, 0.24)]
+    narrow = json.loads((work / "machine.json").read_text())
+    narrow["printable_area"] = ["0x0", "101x0", "101x101", "0x101"]
+    save_json(work / "narrow-machine.json", narrow)
+    for label, mode, options in (("original", 1, ()), ("omitted-mode", None, ()),
+                                  ("rotated", 1, ("--model-rotate", "0,0,37")),
+                                  ("rotated-scaled", 1, ("--model-rotate", "20,30,37", "--model-scale", "2")),
+                                  ("global", 1, ("--rotate", "17", "--scale", "1.5", "--model-rotate", "0,0,37")),
+                                  ("single", 0, ("--model-rotate", "0,0,37"))):
+        check_overflow_pose("overflow-pose-" + label, [thin], {thin.name: thin_vertices}, thin.name,
+                            options=("--model", thin.name, *options), mode=mode,
+                            machine="narrow-machine.json", center=(50.5, 50.5), spacing=0)
+    check_overflow_pose("overflow-pose-mixed", [thin, work / "normal-0.stl"],
+                        {thin.name: thin_vertices, "normal-0.stl": [(x, y, z) for x in (0, 45)
+                                                                 for y in (0, 45) for z in (0, 20)]}, thin.name,
+                        options=("--model", thin.name, "--model-rotate", "0,0,37", "--model", "normal-0.stl"))
 
     normal = [work / f"normal-{i}.stl" for i in range(4)]
     overflow = [work / name for name in ("oversized-corner.stl", "oversized-center.stl", "tall.stl")]
@@ -428,6 +480,15 @@ def main():
     vertices = write_tetrahedron(tetrahedron)
     mirror_seed, _, _ = paired("mirror-seed", [tetrahedron], set(), mode=0, arrange=False,
                                extra=("--model", tetrahedron.name, "--model-position", "50,50,0"))
+    # Oversized mirrors/nonuniform scales must retain their effective pose,
+    # including any successfully completed orientation before failed packing.
+    for label, diagonal, options in (("mirror", (-30, 30, 30), ()),
+                                     ("nonuniform", (-30, 20, 40), ()),
+                                     ("oriented", (-30, 30, 30), ("--orient", "1"))):
+        fixture = work / f"overflow-pose-{label}.3mf"
+        set_instance_linear(mirror_seed, fixture, diagonal, 37)
+        check_overflow_pose("overflow-pose-" + label, [fixture], {tetrahedron.name: vertices},
+                            tetrahedron.name, options=options)
     mirror_cases = [(f"axes-{mask}", tuple(-1 if mask & (1 << axis) else 1 for axis in range(3)),
                      0, False, ()) for mask in range(8)]
     mirror_cases += [("rotated-scaled", (-1.5, 1.5, 1.5), 37, False, ()),
