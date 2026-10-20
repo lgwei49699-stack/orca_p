@@ -1,14 +1,16 @@
 """Exercise real MeshLib CMake selection with explicitly fake SDK fixtures.
 
-These are configure-only probes, not SDK compilation, linking, loading, target
-OS execution, ABI validation, or package validation. Only target-registration
-commands are captured: the production platform checks, file discovery, version
-checks, file hashes, and generated identity header execute unchanged. No SDK is
-downloaded and the main Orca build directory is never accessed.
+Selection probes configure/generate only; the Linux symbol probe additionally
+builds tiny synthetic ELF fixtures, not the SDK or Orca. The link-interface
+probe exercises a private static dependency. These tests do not validate the
+SDK ABI or final package. No SDK is downloaded and the main Orca build
+directory is never accessed.
 """
 
 import hashlib
 from pathlib import Path
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -300,10 +302,204 @@ class MeshLibPlatformConfigTests(unittest.TestCase):
         for kind, filename, configuration in (("STATIC", "libtbb.a", ""), ("UNKNOWN", "libtbb.a", "RELEASE")):
             with self.subTest(kind=kind, configuration=configuration):
                 calls, _, _ = self.accepted(self.configure("Linux", root, dependency=(kind, filename, configuration)))
-                self.assertIn("LINKER:--exclude-libs,$<TARGET_FILE_NAME:TBB::tbb>", calls)
+                self.assertIn("capture.target_link_libraries=orca_meshlib_adapter;INTERFACE;-Wl,--exclude-libs,$<TARGET_FILE_NAME:TBB::tbb>", calls)
         for kind, filename, configuration in (("SHARED", "libtbb.so", ""), ("UNKNOWN", "libtbb.so", "RELEASE")):
             with self.subTest(kind=kind, configuration=configuration):
                 self.rejected(self.configure("Linux", root, dependency=(kind, filename, configuration)), "static Orca dependency", before_adapter=False)
+
+    def test_linux_workflow_explicitly_selects_static_zlib_for_meshlib(self):
+        workflow = (ROOT / ".github/workflows/build-linux.yml").read_text(encoding="utf-8")
+        assignments = re.findall(r'echo "ORCA_EXTRA_BUILD_ARGS=([^"\n]+)"', workflow)
+        self.assertEqual(len(assignments), 1)
+        args = shlex.split(assignments[0])
+        self.assertIn("-DORCA_MESHLIB_LOCAL_EVALUATION=ON", args)
+        self.assertIn("-DZLIB_USE_STATIC_LIBS=ON", args)
+        self.assertNotIn("-DZLIB_USE_STATIC_LIBS=OFF", args)
+
+    @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("c++"),
+                         "real Linux FindZLIB selection requires a compiler and zlib development files")
+    def test_linux_real_zlib_lookup_obeys_meshlib_static_requirement(self):
+        sdk, _, _ = self.sdk("Linux")
+        project = self.root / "real-zlib"
+        project.mkdir()
+        (project / "libcrypto.a").write_bytes(b"Fake Crypto archive; configuration only.\n")
+        (project / "CMakeLists.txt").write_text(
+            'cmake_minimum_required(VERSION 3.13)\n'
+            'project(MeshLibZlibProbe LANGUAGES CXX)\n'
+            'find_package(ZLIB REQUIRED)\n'
+            'get_target_property(zlib_location ZLIB::ZLIB IMPORTED_LOCATION_RELEASE)\n'
+            'message(STATUS "probe.zlib=${zlib_location}")\n'
+            'set(SLIC3R_STATIC ON)\n'
+            'add_library(OpenSSL::Crypto STATIC IMPORTED)\n'
+            'set_property(TARGET OpenSSL::Crypto PROPERTY IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/libcrypto.a")\n'
+            f'add_subdirectory("{cmake_quote(MODULE)}" adapter)\n', encoding="utf-8")
+        # Only the real FindZLIB result varies; no ZLIB target or location is mocked.
+        for name, enabled, static in (("default-on", True, False), ("static-on", True, True),
+                                      ("default-off", False, False)):
+            with self.subTest(name=name):
+                args = ["cmake", "-S", str(project), "-B", str(project / name),
+                        f"-DORCA_MESHLIB_LOCAL_EVALUATION={'ON' if enabled else 'OFF'}",
+                        f"-DORCA_MESHLIB_SDK_ROOT={sdk}"]
+                if static:
+                    args.append("-DZLIB_USE_STATIC_LIBS=ON")
+                result = subprocess.run(args, text=True, encoding="utf-8", errors="replace",
+                                        capture_output=True, timeout=60)
+                output = result.stdout + result.stderr
+                self.assertRegex(output, r"probe\.zlib=\S+\." + (r"a\b" if static else r"so\b"))
+                if enabled and not static:
+                    self.assertNotEqual(result.returncode, 0, output)
+                    self.assertIn("static Orca dependency ZLIB::ZLIB", output)
+                else:
+                    self.assertEqual(result.returncode, 0, output)
+
+    @unittest.skipUnless(sys.platform != "win32" and shutil.which("c++") and shutil.which("make"),
+                         "link-command generation requires a Unix C++ compiler and make")
+    def test_linux_link_flags_reach_executable_through_private_static_dependency(self):
+        sdk, prefix, runtime = self.sdk("Linux")
+        (runtime / "lib").mkdir()
+        project = self.root / "link-interface"
+        project.mkdir()
+        (project / "probe.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+        for name in ("crypto", "tbb"):
+            (project / f"lib{name}.a").write_bytes(b"Fake archive; link command generation only.\n")
+        (project / "CMakeLists.txt").write_text(
+            'cmake_minimum_required(VERSION 3.13)\n'
+            'project(MeshLibLinkInterfaceProbe LANGUAGES CXX)\n'
+            # Generate with the host toolchain, selecting only the production
+            # module's Linux branch. Neither the fake SDK nor Linux is executed.
+            'set(CMAKE_SYSTEM_NAME Linux)\nset(CMAKE_SYSTEM_PROCESSOR x86_64)\n'
+            'set(APPLE FALSE)\nset(WIN32 FALSE)\nset(MSVC FALSE)\n'
+            'set(CMAKE_CXX_COMPILER_ID GNU)\n'
+            'set(ORCA_MESHLIB_LOCAL_EVALUATION ON)\nset(SLIC3R_STATIC ON)\n'
+            f'set(ORCA_MESHLIB_SDK_ROOT "{cmake_quote(sdk)}" CACHE PATH "")\n'
+            'add_library(OpenSSL::Crypto STATIC IMPORTED)\n'
+            'set_property(TARGET OpenSSL::Crypto PROPERTY IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/libcrypto.a")\n'
+            'add_library(TBB::tbb STATIC IMPORTED)\n'
+            'set_property(TARGET TBB::tbb PROPERTY IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/libtbb.a")\n'
+            f'add_subdirectory("{cmake_quote(MODULE)}" adapter)\n'
+            'file(WRITE "${CMAKE_BINARY_DIR}/package-paths.txt" "${ORCA_MESHLIB_LINUX_SDK_PREFIX}\\n${ORCA_MESHLIB_LINUX_RUNTIME_DIR}\\n")\n'
+            'add_library(host STATIC probe.cpp)\n'
+            'target_link_libraries(host PRIVATE orca_meshlib_adapter)\n'
+            'add_executable(probe probe.cpp)\n'
+            'target_link_libraries(probe PRIVATE host)\n', encoding="utf-8")
+        build = project / "build"
+        result = subprocess.run(["cmake", "-S", str(project), "-B", str(build), "-G", "Unix Makefiles"],
+                                text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((build / "package-paths.txt").read_text(encoding="utf-8").splitlines(), [str(prefix), str(runtime)])
+        command = (build / "CMakeFiles/probe.dir/link.txt").read_text(encoding="utf-8")
+        self.assertIn("-Wl,--disable-new-dtags", command)
+        for directory in (runtime, runtime / "lib", prefix / "lib"):
+            self.assertIn('-Wl,-rpath,"' + str(directory) + '"', command)
+        for archive in ("libtbb.a", "libcrypto.a"):
+            self.assertIn("-Wl,--exclude-libs," + archive, command)
+        symbols_script = build / "adapter/meshlib-linux-symbols.ld"
+        self.assertTrue(symbols_script.is_file())
+        self.assertIn("adapter/meshlib-linux-symbols.ld", command)
+        self.assertIn("adapter/meshlib-linux-symbols.ld", (build / "CMakeFiles/probe.dir/build.make").read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(sys.platform.startswith("linux") and all(shutil.which(tool) for tool in ("c++", "make", "nm")),
+                         "symbol isolation requires real Linux ELF compilation and linking")
+    def test_linux_tbb_header_symbols_are_local_without_hiding_business_signatures(self):
+        sdk, _, runtime = self.sdk("Linux")
+        project = self.root / "real ELF symbols"
+        project.mkdir()
+
+        def run(*args):
+            result = subprocess.run(args, text=True, encoding="utf-8", errors="replace",
+                                    capture_output=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result.stdout
+
+        # Deliberately different header bodies in host/SDK fixtures reproduce
+        # ELF preemption. No third-party headers or real SDK are compiled here.
+        (project / "fixture.hpp").write_text('''#include <typeinfo>
+namespace tbb {
+struct Left { virtual ~Left() = default; virtual int value() { return PROBE_VALUE; } };
+struct Right { virtual ~Right() = default; virtual int value() { return PROBE_VALUE; } virtual Right* clone() { return this; } };
+struct Probe : Left, Right { int value() override { return PROBE_VALUE; } int read() const { return PROBE_VALUE; } Probe* clone() override { return this; } };
+struct Virtual : virtual Right { int value() override { return PROBE_VALUE; } };
+__attribute__((noinline)) inline int header_value() { return PROBE_VALUE; }
+template<class T> __attribute__((noinline)) int template_value(T) { return PROBE_VALUE; }
+}
+''', encoding="utf-8")
+        (project / "sdk.cpp").write_text('''#define PROBE_VALUE 2
+#include "fixture.hpp"
+extern "C" int sdk_call() { return tbb::header_value(); }
+extern "C" const std::type_info* sdk_type() { return &typeid(tbb::Probe); }
+''', encoding="utf-8")
+        (project / "host.cpp").write_text('''#define PROBE_VALUE 1
+#include "fixture.hpp"
+namespace Slic3r {
+int accepts_tbb(int, tbb::Probe* probe) { return probe->read(); }
+template<class T> int uses(T probe) { return probe->read(); }
+template int uses<tbb::Probe*>(tbb::Probe*);
+}
+extern "C" int host_call() {
+    tbb::Probe probe;
+    tbb::Virtual virtual_probe;
+    tbb::Right* right = &probe;
+    return tbb::header_value() + right->value() + tbb::template_value(1) + Slic3r::accepts_tbb(0, &probe);
+}
+extern "C" const std::type_info* host_type() { return &typeid(tbb::Probe); }
+''', encoding="utf-8")
+        (project / "empty.cpp").write_text("// Synthetic adapter and archive fixture.\n", encoding="utf-8")
+        (project / "main.cpp").write_text('''#include <typeinfo>
+extern "C" int host_call();
+extern "C" int sdk_call();
+extern "C" const std::type_info* host_type();
+extern "C" const std::type_info* sdk_type();
+int main() {
+    if (host_call() != 4 || sdk_call() != (ISOLATED ? 2 : 1)) return 1;
+    return (host_type() == sdk_type()) == !ISOLATED ? 0 : 2;
+}
+''', encoding="utf-8")
+        run("c++", "-shared", "-fPIC", str(project / "sdk.cpp"), "-o", str(runtime / "libMRMesh.so"))
+        run("c++", "-shared", "-fPIC", str(project / "empty.cpp"), "-o", str(runtime / "libMRVoxels.so"))
+        (project / "CMakeLists.txt").write_text(
+            'cmake_minimum_required(VERSION 3.13)\nproject(MeshLibSymbolProbe LANGUAGES CXX)\n'
+            'set(SLIC3R_STATIC ON)\nadd_library(crypto STATIC empty.cpp)\n'
+            'add_library(OpenSSL::Crypto ALIAS crypto)\n'
+            f'add_subdirectory("{cmake_quote(MODULE)}" adapter)\n'
+            # Retain production link interfaces, replacing only the adapter body.
+            'set_property(TARGET orca_meshlib_adapter PROPERTY SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/empty.cpp")\n'
+            'add_library(host STATIC host.cpp)\ntarget_link_libraries(host PRIVATE orca_meshlib_adapter)\n'
+            'add_executable(probe main.cpp)\nset_target_properties(probe PROPERTIES ENABLE_EXPORTS ON)\n'
+            'target_compile_definitions(probe PRIVATE ISOLATED=$<BOOL:${ORCA_MESHLIB_LOCAL_EVALUATION}>)\n'
+            f'target_link_libraries(probe PRIVATE host "{cmake_quote(runtime / "libMRMesh.so")}")\n',
+            encoding="utf-8")
+        exports = {}
+        for enabled in (False, True):
+            build = project / ("on" if enabled else "off")
+            args = ("cmake", "-S", str(project), "-B", str(build), "-G", "Unix Makefiles",
+                    f"-DORCA_MESHLIB_LOCAL_EVALUATION={'ON' if enabled else 'OFF'}",
+                    f"-DORCA_MESHLIB_SDK_ROOT={sdk}")
+            run(*args)
+            run("cmake", "--build", str(build), "--parallel", "2")
+            run(str(build / "probe"))
+            exports[enabled] = run("nm", "-D", "--defined-only", "--demangle", str(build / "probe"))
+            self.assertIn("Slic3r::accepts_tbb(int, tbb::Probe*)", exports[enabled])
+            self.assertIn("Slic3r::uses<tbb::Probe*>(tbb::Probe*)", exports[enabled])
+            symbols_script = build / "adapter/meshlib-linux-symbols.ld"
+            self.assertEqual(symbols_script.is_file(), enabled)
+            if enabled:
+                timestamp = symbols_script.stat().st_mtime_ns
+                run(*args)
+                self.assertEqual(symbols_script.stat().st_mtime_ns, timestamp, "Unchanged configure must not rewrite the map")
+                symbols_script.write_text(symbols_script.read_text(encoding="utf-8").replace(
+                    "local:\n", "local:\n            _ZN6Slic3r11accepts_tbb*;\n"), encoding="utf-8")
+                run("cmake", "--build", str(build), "--parallel", "2")
+                relinked = run("nm", "-D", "--defined-only", "--demangle", str(build / "probe"))
+                self.assertNotIn("Slic3r::accepts_tbb", relinked, "Changing the map must relink the final executable")
+                self.assertIn("Slic3r::uses<tbb::Probe*>", relinked)
+        tbb_symbols = [line.split(" ", 2)[-1] for line in exports[False].splitlines()
+                       if re.search(r" [A-Za-z] (?:tbb::|int tbb::|(?:typeinfo(?: name)?|vtable|VTT) for tbb::|(?:non-virtual|virtual|covariant return) thunk to tbb::)", line)]
+        for kind in ("non-virtual", "virtual", "covariant return"):
+            self.assertTrue(any(symbol.startswith(kind + " thunk") for symbol in tbb_symbols), exports[False])
+        self.assertTrue(any("typeinfo" in symbol for symbol in tbb_symbols), exports[False])
+        self.assertTrue(any("template_value" in symbol for symbol in tbb_symbols), exports[False])
+        for symbol in tbb_symbols:
+            self.assertNotIn(symbol + "\n", exports[True])
 
     def test_shared_orca_dependencies_rejected(self):
         for system in ("Darwin", "Windows", "Linux"):
@@ -319,5 +515,5 @@ class MeshLibPlatformConfigTests(unittest.TestCase):
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="backslashreplace")
-    print("MeshLib configuration probes only: fake SDK files; no target compilation, SDK loading, or packaging.", flush=True)
+    print("MeshLib configuration probes and synthetic Linux ELF symbols; no real SDK compilation or package validation.", flush=True)
     unittest.main()

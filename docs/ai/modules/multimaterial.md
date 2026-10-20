@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "multimaterial",
-  "source_fingerprint": "sha256:ae610b0591e8a85237ec49201de955a6086ed1354a88f383ce2b96ac425a09e7",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入分色、工具排序或擦料塔生成；多材料映射、冲刷参数及GUI颜色配置保持，不因建议策略丢弃绘制。"
+  "source_fingerprint": "sha256:8ef53810b28f976f03697e7dd550b0cac67007238df5494aed0a224bcf6824c0",
+  "reason": "继承功能分支默认关闭的CLI修复依据、阶段与切片报告配置，不修改本模块有效打印参数或消费者；此次发布分支合并另外保留ColorUtils/TextureToColor的boost/next_prior.hpp显式依赖，二者相对功能分支仅include变化。分色、冲刷、工具顺序及GUI颜色逻辑不变，未以工具检查宣称多材料运行通过。"
 }
 -->
 
@@ -34,6 +34,8 @@
 缺材质／映射越界应在导入或配置校验阶段暴露；预览可打开不等于所有换刀指令可执行。取消不得保留部分换刀计划，塔冲突需按实际包络验证。
 
 ## 修改与验证
+
+Linux 发布分支在 `ColorUtils.cpp` 与 `TextureToColor.cpp` 显式包含 `boost/next_prior.hpp`，补齐无预编译头构建所需的头依赖，不改纹理转颜色算法。此次合并保留该编译修正；实际构建和多材料 GUI 验收分别记录，见[Linux记录](../validation/2026-10-19-linux-github-packaging-review.md)。
 
 改换色策略要核对 ToolOrdering、塔生成、G-code T 指令及分盘预留。验证单色、多色、多盘、冲刷量和颜色保留；本轮不做设备下发或实机。
 

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "sla",
-  "source_fingerprint": "sha256:39a3090a386f44dbaaca3ad82adc0bdc2c4c95a6a85b2f2ec042a1547978c794",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助仅供独立模型建议；SLAPrint中空/排孔/支撑/光栅化和曝光参数不消费此键，GUI SLA工艺行为未改。"
+  "source_fingerprint": "sha256:a2f08398b7cc0e685183af4b284a3d0664ad6a4725bb6fb6ec9128712184bfe4",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助仅供独立模型建议；SLAPrint中空/排孔/支撑/光栅化和曝光参数不消费此键，GUI SLA工艺行为未改。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。"
 }
 -->
 

@@ -4,6 +4,7 @@
 #include "Model.hpp"
 #include "ModelInspection.hpp"
 #include "ModelRepairEvidence.hpp"
+#include "ModelStageReport.hpp"
 #include "InProcessReconstructionControl.hpp"
 #include "meshlib/MeshLibAdapter.hpp"
 #include "TriangleMesh.hpp"
@@ -25,6 +26,7 @@
 #include <future>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
@@ -287,7 +289,7 @@ json base_report()
             {"requires_manual_confirmation", true}};
 }
 
-TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot_sha256 = nullptr)
+TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot_sha256 = nullptr, bool share_exact_vertices = false)
 {
     if (!fs::is_regular_file(path))
         throw std::invalid_argument(L("STL input is missing or is not a regular file."));
@@ -422,6 +424,11 @@ TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot
         if (inside_solid || its.indices.empty())
             throw std::invalid_argument(L("ASCII STL is incomplete or contains no triangles."));
     }
+    // Stage reports preserve the serialized triangles but must not spend the
+    // section vertex budget on STL's repeated corner records. Exact sharing
+    // does not move vertices, delete faces, or change their winding/order.
+    if (share_exact_vertices)
+        its_merge_vertices(its);
     // All indices are created above, after bounded vertex insertion; no file
     // indices can reach TriangleMesh's statistics/volume constructor unchecked.
     return TriangleMesh(std::move(its));
@@ -764,6 +771,13 @@ bool run_meshlib_in_process(const TriangleMesh&                 source,
 }
 } // namespace
 
+TriangleMesh read_bounded_model_stl(const std::string& path, std::string& sha256)
+{
+    return read_reconstruction_stl(fs::path(path), &sha256, true);
+}
+
+std::string model_mesh_file_sha256(const std::string& path) { return sha256_file(fs::path(path)); }
+
 ReconstructionProcessOptions model_reconstruction_process_options(size_t                              input_faces,
                                                                   const ReconstructionProcessOptions& requested,
                                                                   size_t                              physical_memory_bytes)
@@ -1105,7 +1119,8 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
 {
     ModelReconstructionOptions options;
     options.executable = executable;
-    std::string input, output;
+    std::string input, output, reference;
+    bool        stage_report        = false;
     bool        confirmed           = false;
     bool        repair_evidence     = false;
     bool        alpha_options_given = false;
@@ -1117,6 +1132,23 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
             const auto& arg = args[i];
             if (arg == "--reconstruct-model")
                 continue;
+            if (arg == "--model-stage-report" || arg.compare(0, 21, "--model-stage-report=") == 0) {
+                std::string value;
+                if (arg != "--model-stage-report")
+                    value = arg.substr(21);
+                else if (i + 1 < args.size() && (args[i + 1] == "0" || args[i + 1] == "1"))
+                    value = args[++i];
+                if (!value.empty() && value != "0" && value != "1")
+                    throw std::invalid_argument(L("--model-stage-report expects 0 or 1."));
+                stage_report = value != "0";
+                continue;
+            }
+            if (arg == "--model-reference") {
+                if (++i >= args.size() || args[i].empty())
+                    throw std::invalid_argument(L("Missing --model-reference STL."));
+                reference = args[i];
+                continue;
+            }
             if (arg == "--repair-evidence" || arg.compare(0, 18, "--repair-evidence=") == 0) {
                 std::string value;
                 if (arg != "--repair-evidence")
@@ -1172,6 +1204,8 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
                     "Optional memory budget: --reconstruction-memory-mb INTEGER (128 to 4096 MiB). Overrides the automatic budget.\n"
                     "For MeshLib this is the whole Orca process RSS, not additional SDK memory or a hard allocation limit.\n"
                     "Container limits are not detected automatically; leave headroom for other processes and runtime overhead.\n");
+                boost::nowide::cout << L("Optional business report: --model-stage-report [0|1] --model-reference ORIGINAL.stl\n"
+                                         "Writes model-stage.json in the output directory. Reference defaults to the input; no automatic adoption.\n");
                 return 0;
             }
             if (arg == "--outputdir" || arg == "--reconstruction-alpha" || arg == "--reconstruction-offset" ||
@@ -1219,6 +1253,8 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
         parse_parameters(parameters(options.mesh));
         if (!confirmed || input.empty() || output.empty())
             throw std::invalid_argument(L("Reconstruction requires one STL, a new --outputdir, and --accept-reconstruction-risk."));
+        if (!stage_report && !reference.empty())
+            throw std::invalid_argument(L("--model-reference requires --model-stage-report."));
         if (options.engine == "meshlib" && alpha_options_given)
             throw std::invalid_argument(L("Alpha, offset and no-close-open-boundaries cannot be used with MeshLib."));
         reconstruction_backend(options);
@@ -1227,6 +1263,9 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return char(std::tolower(c)); });
         if (extension != ".stl")
             throw std::invalid_argument(L("Standalone reconstruction currently accepts only an uncolored STL."));
+        std::optional<ModelStageReportContext> stage_context;
+        if (stage_report)
+            stage_context = prepare_model_stage_report(input_path.string(), reference, output);
         TriangleMesh mesh = read_reconstruction_stl(input_path, options.engine == "meshlib" ? &input_sha256 : nullptr);
         output_path       = fs::absolute(output);
         if (fs::exists(output_path) || !fs::is_directory(output_path.parent_path()))
@@ -1275,6 +1314,11 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
             result.report["export_round_trip"] = "passed";
             if (options.engine == "meshlib")
                 result.report["artifacts"]["candidate_sha256"] = sha256_file(candidate_path);
+            if (stage_context) {
+                const auto& inspection = result.report.at("coordinate_validation").at("local").at("inspection");
+                write_model_stage_report(*stage_context, output_path.string(), candidate_path.string(), candidate, inspection,
+                                         "reconstruction", "repaired", model_check_boundary(inspection, {}, {}).at("reconstruction"));
+            }
         }
         if (repair_evidence)
             result.report["boundary"] = model_reconstruction_boundary(result.report);

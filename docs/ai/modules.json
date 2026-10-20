@@ -75,6 +75,8 @@
         "scripts/test_cli_model_reconstruction.py",
         "scripts/test_cli_model_check.py",
         "scripts/test_cli_oversized_arrange.py",
+        "scripts/test_cli_slice_analysis.py",
+        "scripts/test_cli_slice_features.py",
         "scripts/test_cli_fixed_position_slice.py"
       ],
       "test_note": "修改动作路由优先检查 run/export_models 和结果序列化；验证无参数启动、模型导出、分盘→切片和不合法参数。使用隔离输出目录；共享业务按 validation.md 与 GUI 的有效配置、结果及失败语义对照。"
@@ -360,6 +362,8 @@
         "src/libslic3r/InProcessReconstructionControl.hpp",
         "src/libslic3r/ModelCheckWorkflow.cpp",
         "src/libslic3r/ModelCheckWorkflow.hpp",
+        "src/libslic3r/ModelStageReport.cpp",
+        "src/libslic3r/ModelStageReport.hpp",
         "src/libslic3r/ModelInspection.cpp",
         "src/libslic3r/ModelInspection.hpp",
         "src/libslic3r/ModelPreparation.cpp",
@@ -405,7 +409,8 @@
         "tests/libslic3r/test_mesh_slice_diagnostics.cpp",
         "scripts/test_cli_model_reconstruction.py",
         "scripts/test_cli_meshlib_reconstruction.py",
-        "scripts/test_cli_model_check.py"
+        "scripts/test_cli_model_check.py",
+        "scripts/test_cli_model_stage_report.py"
       ],
       "test_note": "旧修复按 `[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]` 回归；独立重建按 `[MeshReconstruction],[ModelReconstruction],[ReconstructionProcess]` 及 CLI 专项检查健康/不支持输入、变换后最终网格、候选不污染源、取消/超时/内存/异常输出。新增只读证据投影及 `[MeshSliceDiagnostics]` 回归，既有check-model脚本核对v4旧字段/退出码和boundary扩展；不新增自动编排，参考 Z 截面不等于实际试切片。GUI 确认、Undo、备份和同参试切片按交接记录另验，无匹配不能计为通过。"
     },
@@ -890,6 +895,10 @@
         "src/libslic3r/GCode/GCodeProcessor.hpp",
         "src/libslic3r/GCodeReader.cpp",
         "src/libslic3r/GCodeReader.hpp",
+        "src/libslic3r/SliceAnalysis.cpp",
+        "src/libslic3r/SliceAnalysis.hpp",
+        "src/libslic3r/SliceAnalysisGeometry.cpp",
+        "src/libslic3r/SliceAnalysisGeometry.hpp",
         "src/slic3r/GUI/GCodeViewer.cpp",
         "src/slic3r/GUI/GCodeViewer.hpp",
         "src/slic3r/GUI/GUI_Preview.cpp",
@@ -909,7 +918,9 @@
         "src/slic3r/GUI/GUI_Preview.cpp"
       ],
       "tests": [
-        "tests/fff_print/test_gcode.cpp"
+        "tests/fff_print/test_gcode.cpp",
+        "tests/fff_print/test_slice_analysis.cpp",
+        "scripts/test_cli_slice_features.py"
       ],
       "test_note": "改解析应覆盖分块导出、非本产品来源、普通 G-code、已切片 3MF、空配置和缩略图。检查统计与模型路径，界面能显示不能替代配置成功加载。"
     },
@@ -1667,6 +1678,7 @@
         "scripts/build_macos_zstd.sh",
         "scripts/bundle_macos_zstd.sh",
         "scripts/macos_runtime_bundle.py",
+        "scripts/package_meshlib_linux.py",
         "scripts/disable_validation.entitlements",
         "scripts/flatpak/.gitignore",
         "scripts/flatpak/README.md",
@@ -1709,7 +1721,9 @@
         "scripts/tests/test_macos_build_compatibility.py",
         "scripts/tests/test_macos_runtime_bundle.py",
         "scripts/tests/test_gmp_platform_selection.py",
-        "scripts/tests/test_meshlib_platform_config.py"
+        "scripts/tests/test_meshlib_platform_config.py",
+        "scripts/tests/test_package_meshlib_linux.py",
+        "scripts/test_linux_meshlib_package.sh"
       ],
       "test_note": "修改 CMake／打包脚本先静态检查，再按 validation.md 的长期分工构建受影响目标；缺少所需构建时由 AI 补齐。打包改动验证实际打包流程，跨平台 Python 测试不等于 Windows 安装包验收。"
     },
@@ -1727,11 +1741,15 @@
         "scripts/orca_extra_profile_check.py",
         "scripts/orca_filament_lib.py",
         "scripts/test_cli_model_check.py",
+        "scripts/test_cli_model_stage_report.py",
         "scripts/test_cli_model_color.py",
+        "scripts/test_cli_slice_analysis.py",
+        "scripts/test_cli_slice_features.py",
         "scripts/test_cli_meshlib_reconstruction.py",
+        "scripts/test_linux_meshlib_package.sh",
         "scripts/test_cli_model_reconstruction.py",
-        "scripts/test_cli_oversized_arrange.py",
         "scripts/test_cli_plate_names.py",
+        "scripts/test_cli_oversized_arrange.py",
         "scripts/test_cli_repair_acceptance.py",
         "scripts/test_cli_repair_materials.py",
         "scripts/test_raft_stability_helpers.py",
@@ -1740,8 +1758,10 @@
         "scripts/tests/test_macos_build_compatibility.py",
         "scripts/tests/test_macos_runtime_bundle.py",
         "scripts/tests/test_check_ai_module_docs.py",
+        "scripts/tests/test_cli_slice_features.py",
         "scripts/tests/test_gmp_platform_selection.py",
         "scripts/tests/test_meshlib_platform_config.py",
+        "scripts/tests/test_package_meshlib_linux.py",
         "scripts/validate_raft_stability.py",
         "tests/CLAUDE.md",
         "tests/CMakeLists.txt",

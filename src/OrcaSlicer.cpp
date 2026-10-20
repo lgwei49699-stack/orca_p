@@ -66,6 +66,7 @@
 #include "libslic3r/Exception.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Slicing.hpp"
+#include "libslic3r/SliceAnalysis.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/GCode/Thumbnails.hpp"
 #include "libslic3r/SLAPrint.hpp"
@@ -146,6 +147,41 @@ static std::vector<coordf_t> cli_generate_variable_layer_height_profile(
         profile = smooth_height_profile(profile, print_object.slicing_parameters(), smoothing_params);
     }
     return profile;
+}
+
+static boost::filesystem::path cli_slice_analysis_path(const std::string& output_directory, int plate_index)
+{
+    return boost::filesystem::path(output_directory) / ("plate_" + std::to_string(plate_index) + ".analysis.json");
+}
+
+static void cli_write_slice_analysis(const Print&                print,
+                                     const GCodeProcessorResult& gcode,
+                                     const std::string&          output_directory,
+                                     int                         plate_index,
+                                     const std::string&          gcode_file)
+{
+    namespace fs               = boost::filesystem;
+    json report                = make_slice_analysis_report(print, gcode);
+    report["plate_index"]      = plate_index;
+    report["gcode_file"]       = fs::path(gcode_file).filename().string();
+    const fs::path destination = cli_slice_analysis_path(output_directory, plate_index);
+    const fs::path temporary   = fs::path(output_directory) / fs::unique_path("slice-analysis-%%%%-%%%%.tmp");
+    try {
+        boost::nowide::ofstream out(temporary.string(), std::ios::binary | std::ios::trunc);
+        out << report.dump(2) << '\n';
+        out.close();
+        if (!out)
+            throw std::runtime_error(L("Could not write the slice analysis report."));
+        // Publish only a complete new file. Unlike rename on POSIX, this does
+        // not replace an old report or another invocation's result.
+        fs::create_hard_link(temporary, destination);
+        boost::system::error_code ignored;
+        fs::remove(temporary, ignored);
+    } catch (...) {
+        boost::system::error_code ignored;
+        fs::remove(temporary, ignored);
+        throw;
+    }
 }
 
 std::map<int, std::string> cli_errors =
@@ -1559,6 +1595,14 @@ int CLI::run(int argc, char **argv)
     sliced_info_t sliced_info;
     std::map<std::string, std::string> record_key_values;
 
+    const bool slice_analysis_requested = m_config.opt_bool("slice_analysis_report");
+    if (slice_analysis_requested && (std::count(m_actions.begin(), m_actions.end(), "slice") != 1 || outfile_dir.empty())) {
+        const std::string message = L("--slice-analysis-report requires one --slice action and an explicit --outputdir.");
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        return CLI_INVALID_PARAMS;
+    }
+
     enum class CLIVariableLayerHeightMode { Preserve, Adaptive, Reset };
     std::string variable_layer_height_mode_name = m_config.opt_string("variable_layer_height_mode");
     boost::algorithm::to_lower(variable_layer_height_mode_name);
@@ -1609,6 +1653,9 @@ int CLI::run(int argc, char **argv)
     const bool repair_evidence_requested = m_config.opt_bool("repair_evidence");
     const bool boundary_policy_requested = std::find(m_requested_options.begin(), m_requested_options.end(),
                                                      "repair_evidence_close_boundaries") != m_requested_options.end();
+    const bool stage_options_requested   = std::any_of(m_requested_options.begin(), m_requested_options.end(), [](const auto& key) {
+        return key == "model_stage_report" || key == "model_reference";
+    });
     if (std::find(m_actions.begin(), m_actions.end(), "check_model") != m_actions.end()) {
         ModelCheckWorkflowReport check_report;
         int                      code = CLI_SUCCESS;
@@ -1616,11 +1663,18 @@ int CLI::run(int argc, char **argv)
         try {
             // This is a model-only entry point, before printer/material catalog
             // loading, arrangement, bed transforms and the normal slice path.
-            const std::set<std::string> allowed_options{"check_model",     "repair_model",
-                                                        "export_obj",      "export_stl",
-                                                        "outputdir",       "debug",
-                                                        "datadir",         "repair_ignore_materials",
-                                                        "repair_evidence", "repair_evidence_close_boundaries"};
+            const std::set<std::string> allowed_options{"check_model",
+                                                        "repair_model",
+                                                        "export_obj",
+                                                        "export_stl",
+                                                        "outputdir",
+                                                        "debug",
+                                                        "datadir",
+                                                        "repair_ignore_materials",
+                                                        "repair_evidence",
+                                                        "repair_evidence_close_boundaries",
+                                                        "model_stage_report",
+                                                        "model_reference"};
             for (const auto& key : m_requested_options)
                 if (allowed_options.count(key) == 0)
                     throw std::invalid_argument("--check-model does not accept this slicing/transform option: " + key);
@@ -1645,6 +1699,8 @@ int CLI::run(int argc, char **argv)
             options.allow_boundary_closure = m_config.opt_bool("repair_evidence_close_boundaries");
             options.ignore_materials       = m_config.opt_bool("repair_ignore_materials");
             options.export_format          = m_config.opt_bool("export_obj") ? "obj" : (m_config.opt_bool("export_stl") ? "stl" : "");
+            options.stage_report           = m_config.opt_bool("model_stage_report");
+            options.reference_file         = m_config.opt_string("model_reference");
             run_model_check_workflow(options, check_report);
         } catch (const std::invalid_argument& error) {
             code    = CLI_INVALID_PARAMS;
@@ -1699,6 +1755,12 @@ int CLI::run(int argc, char **argv)
     }
     sliced_info.cgal_repair_requested     = cgal_repair_requested;
     sliced_info.repair_evidence_requested = repair_evidence_requested;
+    if (stage_options_requested) {
+        const std::string message = L("--model-stage-report and --model-reference require --check-model or --reconstruct-model.");
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        return CLI_INVALID_PARAMS;
+    }
     if (boundary_policy_requested) {
         boost::nowide::cerr << boundary_policy_usage_error << std::endl;
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, boundary_policy_usage_error, sliced_info);
@@ -4960,8 +5022,8 @@ int CLI::run(int argc, char **argv)
                     volumes_before_global_transform.emplace(volume->id().id, volume->get_matrix());
     std::map<size_t, Matrix3d> global_object_linear;
     const auto                 invalid_transform_export = [&]() {
-        const std::string reason = "Global volume transforms cannot be represented by one rotation and scale in model_transforms. "
-                                                   "Use per-model transforms or export the transformed 3MF without --export-model-transforms.";
+        const std::string reason = "Model transforms cannot be represented by one rotation and scale in model_transforms. "
+                                                   "Export the transformed 3MF without --export-model-transforms.";
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, reason, sliced_info);
     };
 
@@ -6673,11 +6735,15 @@ int CLI::run(int argc, char **argv)
                     // Convention: M = R_z(rz)*R_y(ry)*R_x(rx), apply as extrinsic X→Y→Z
                     Vec3d euler = Geometry::extract_euler_angles(R_total);
                     Vec3d scale = instance->get_scaling_factor();
-                    if (export_global_transform) {
+                    // Compose the actual linear transform: reflection needs signed
+                    // scale, and non-uniform instance scale does not commute with
+                    // orientation. Decompose only after applying both in order.
+                    if (export_global_transform || instance->is_left_handed() || orient_it != oriented_rotation_map.end()) {
                         Matrix3d linear = instance->get_matrix().linear();
                         if (orient_it != oriented_rotation_map.end())
                             linear = linear * orient_it->second;
-                        linear = linear * global_object_linear.at(obj->id().id);
+                        if (export_global_transform)
+                            linear = linear * global_object_linear.at(obj->id().id);
                         for (int axis = 0; axis < 3; ++axis)
                             scale[axis] = linear.col(axis).norm();
                         if (!linear.allFinite() || scale.minCoeff() < 1e-12) {
@@ -7183,6 +7249,27 @@ int CLI::run(int argc, char **argv)
             bool pre_check = (plate_to_slice == 0)?true:false;
             bool finished = false;
             size_t exported_gcode_count = 0;
+
+            if (slice_analysis_requested) {
+                try {
+                    boost::filesystem::create_directories(outfile_dir);
+                    // Check all selected plates before generating any G-code.
+                    for (int index = 0; index < partplate_list.get_plate_count(); ++index) {
+                        if (plate_to_slice != 0 && plate_to_slice != index + 1)
+                            continue;
+                        auto* plate = partplate_list.get_plate(index);
+                        if (plate_to_slice == 0 && (plate->empty() || plate->is_all_instances_unprintable()))
+                            continue;
+                        const auto path = cli_slice_analysis_path(outfile_dir, index + 1);
+                        if (boost::filesystem::exists(path) || boost::filesystem::is_symlink(path))
+                            throw std::runtime_error(L("Slice analysis report already exists; use a fresh output directory."));
+                    }
+                } catch (const std::exception& error) {
+                    boost::nowide::cerr << error.what() << std::endl;
+                    record_exit_reson(outfile_dir, CLI_RESULT_WRITE_ERROR, 0, error.what(), sliced_info);
+                    flush_and_exit(CLI_RESULT_WRITE_ERROR);
+                }
+            }
 
             /*if (opt_key == "export_gcode" && printer_technology == ptSLA) {
                 boost::nowide::cerr << "error: cannot export G-code for an FFF configuration" << std::endl;
@@ -7751,7 +7838,7 @@ int CLI::run(int argc, char **argv)
                                     }
                                     BOOST_LOG_TRIVIAL(info) << "process finished, will export gcode temporily to " << outfile << std::endl;
                                     temp_time = (long long)Slic3r::Utils::get_current_time_utc();
-                                    outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true, true);
+                                    outfile = print_fff->export_gcode(outfile, gcode_result, nullptr, true, true, slice_analysis_requested);
                                     if (!fs::is_regular_file(outfile) || fs::file_size(outfile) == 0) {
                                         BOOST_LOG_TRIVIAL(error) << "plate " << index + 1 << ": no G-code was exported";
                                         record_exit_reson(outfile_dir, CLI_SLICING_ERROR, index + 1, cli_errors[CLI_SLICING_ERROR],
@@ -7796,6 +7883,22 @@ int CLI::run(int argc, char **argv)
                                     const PrintStatistics& print_statistics = print_fff->print_statistics();
                                     sliced_plate_info.total_filament_g = print_statistics.total_weight;
                                     ++exported_gcode_count;
+
+                                    if (slice_analysis_requested) {
+                                        try {
+                                            if (gcode_result == nullptr)
+                                                throw std::runtime_error(L("Slice analysis requires the generated G-code statistics."));
+                                            cli_write_slice_analysis(*print_fff, *gcode_result, outfile_dir, index + 1, outfile);
+                                        } catch (const std::exception& error) {
+                                            const std::string message =
+                                                L("Slice analysis failed; the generated G-code has been retained.") + std::string(" ") +
+                                                error.what();
+                                            boost::nowide::cerr << message << std::endl;
+                                            sliced_info.sliced_plates.push_back(sliced_plate_info);
+                                            record_exit_reson(outfile_dir, CLI_RESULT_WRITE_ERROR, index + 1, message, sliced_info);
+                                            flush_and_exit(CLI_RESULT_WRITE_ERROR);
+                                        }
+                                    }
 
                                     //outfile_final = (dynamic_cast<Print*>(print))->print_statistics().finalize_output_path(outfile);
                                     //m_fff_print->export_gcode(m_temp_output_path, m_gcode_result, [this](const ThumbnailsParams& params) { return this->render_thumbnails(params); });

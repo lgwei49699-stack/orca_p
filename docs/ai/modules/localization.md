@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:b7981f3469b83cae11f5cc6ab7254b6bbfc2b2a52fdff540d6b61116a3a694f1",
-  "reason": "保留MeshLib同进程CLI、协作预算及内存帮助的中英文说明；合并云预设跨机型替换保护和未绑定机型两条提示，不删除任一侧翻译，不新增修复GUI菜单。占位符/msgfmt与真实界面排版分开验证，见主记录。"
+  "source_fingerprint": "sha256:6c96dd504fd8624d71b6da9b88e7b91a4eea254cf36fd5a0d091c9178db97cd3",
+  "reason": "保留MeshLib同进程CLI、协作预算及内存帮助的中英文说明；合并云预设跨机型替换保护和未绑定机型两条提示，不删除任一侧翻译，不新增修复GUI菜单。占位符/msgfmt与真实界面排版分开验证，见主记录。 10-17 新报告参数、错误及帮助新增英文与简中，msgfmt格式检查通过；原GUI翻译保持，无新GUI控件。 10-18 新增切片指标报告CLI标签/帮助/错误的英文与简中，未新增GUI控件；msgfmt格式检查通过，未更新其他语言。"
 }
 -->
 
@@ -19,6 +19,8 @@
 - [I18N.cpp](../../../src/slic3r/GUI/I18N.cpp)：`L_str` 把 UTF-8 字符串交给 `wxGetTranslation`，不承担语言包生成。
 
 ## 核心流程
+
+切片指标报告新增 CLI 标签、帮助及五条固定失败提示，英文原文与简中同步，复用现有 OrcaSlicer.cpp/PrintConfig.cpp gettext 提取；机器报告字段保持固定英文，不随语言改变。不新增 GUI 控件，不批量更新其他语言。
 
 MeshLib 本机评估 CLI 帮助移除worker路径，说明同进程SDK、协作预算而非硬超时/崩溃隔离；核心准入、未包含SDK和未知异常等英文原文同步简中。强调仅显式调用、无SDK捆绑、未额外筛除碎片但体素重建仍可能丢失/合并微小结构。没有新增GUI菜单，SDK技术诊断和稳定JSON状态仍为英文，固定核心提示沿用gettext。
 

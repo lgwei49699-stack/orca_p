@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "walls",
-  "source_fingerprint": "sha256:1a0b9b9a20f325d5a71e53d2acd04664051598121211bdf0e7f87eb3ca390f10",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入PerimeterGenerator/Arachne参数工厂；墙生成器、线宽、最小特征、短墙过滤及GUI墙参数均未改变。"
+  "source_fingerprint": "sha256:dbcf366b17bb4967a2535edb2186a923bfec7ee9dcc3966f8384bb5abef8b4a3",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入PerimeterGenerator/Arachne参数工厂；墙生成器、线宽、最小特征、短墙过滤及GUI墙参数均未改变。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。"
 }
 -->
 

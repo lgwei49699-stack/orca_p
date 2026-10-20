@@ -4,7 +4,7 @@
 
 MeshLib 3.1.3.429 作为 Orca 的内部库接入，不再构建 `OrcaMeshLibWorker`，没有第二套程序版本、跨进程参数或中间报告文件。当前只开放显式 CLI 后端；默认 Alpha Wrap、原生 GUI、高级修复及只读证据流程不自动改用 MeshLib。
 
-本目录仅包含第一方适配代码，不包含 SDK，也不自动下载或安装 SDK。macOS 发布脚本可为用户已配置的本地 SDK 制作 arm64 / macOS 14.0+ 测试包；本机打包验证不代表商业再分发授权或公证通过。
+本目录仅包含第一方适配代码，CMake 不包含、下载或安装 SDK。macOS 发布脚本可为用户已配置的本地 SDK 制作 arm64 / macOS 14.0+ 测试包；Linux GitHub 工作流会下载并校验固定版本 SDK，私有解压后构建 Ubuntu 24.04 x86_64 测试包。构建验证不代表商业再分发授权或公证通过。
 
 ## 调用与构建
 
@@ -46,7 +46,29 @@ cmake --build build/arm64 --config Release --target OrcaSlicer libslic3r_tests
 
 macOS 本地打包使用 `./build_release_macos.sh -sxa arm64 -c Release`：读取既有 MeshLib ON 缓存，将默认目标设为至少 14.0（保留缓存中更高的版本），在构建目录准备完整动态库闭包，独立放入 `Contents/Frameworks/MeshLib`。库副本先重定位和 ad-hoc 签名，再通过 `ORCA_MESHLIB_RUNTIME_DIR` 供 CMake 链接并记录最终 SHA256；原 SDK 及其头文件不变。App / DMG 封装保留这些库的字节，并验证所有非系统依赖可在包内解析、架构及最低系统兼容。清单位于 `Contents/Resources/meshlib-runtime.json`。
 
-已有使用原 SDK 的旧包须重新配置和编译，不能只复制 DLL/dylib 或仅重新生成 DMG；`-b` 遇到未准备的缓存会拒绝。当前 MeshLib 包仅支持 ad-hoc 本地签名，`--sign` Developer ID 流程会明确拒绝，须另行实现匹配签名身份的编译流程。普通 SDK OFF 包保留现有签名参数。Windows/Linux、镜像和外部发布不在此任务范围；验证及 GUI 交接见[打包记录](../../docs/ai/validation/2026-10-17-macos-meshlib-packaging.md)。
+已有使用原 SDK 的旧 Mac 包须重新配置和编译，不能只复制 dylib 或仅重新生成 DMG；`-b` 遇到未准备的缓存会拒绝。当前 MeshLib Mac 包仅支持 ad-hoc 本地签名，`--sign` Developer ID 流程会明确拒绝，须另行实现匹配签名身份的编译流程。普通 SDK OFF 包保留现有签名参数；Mac 验证及 GUI 交接见[打包记录](../../docs/ai/validation/2026-10-17-macos-meshlib-packaging.md)。
+
+### Linux 测试包
+
+[Linux 工作流](../../.github/workflows/build-linux.yml) 固定 Ubuntu 24.04 x86_64 和 SDK `3.1.3.429`，校验发行包 SHA256 后解压到私有目录，使用既有 `ORCA_EXTRA_BUILD_ARGS` 启用后端。手动运行仅上传构建/验证产物；既有 `manual-build-linux-*` 标签推送仍走发布路径，不能用推送标签代替本地检查。没有自动触发远程 CI 或修改服务器的步骤。
+
+本地 Linux 已准备好 SDK 和所需依赖时，沿用原构建命令：
+
+```sh
+ORCA_EXTRA_BUILD_ARGS="-DORCA_MESHLIB_LOCAL_EVALUATION=ON -DORCA_MESHLIB_SDK_ROOT=/absolute/path/to/sdk -DZLIB_USE_STATIC_LIBS=ON" ./build_linux.sh -si
+```
+
+普通 CMake 配置仍默认 OFF；不启用时不需要 SDK。Linux ON 显式选择静态 ZLIB，避免 Ubuntu 默认找到 `libz.so` 后被静态依赖要求拒绝；该参数只随上述 ON 构建传入，不改变 OFF 默认值。Linux ON 的库路径和静态依赖符号隐藏以链接条目穿过 PRIVATE 静态库依赖，构建树使用可传递的 RPATH。适配层以外的代码仍为 C++17，不替换 Orca 自身的静态依赖。
+
+仅隐藏依赖归档还不够：TBB 的头文件内联定义和类型信息也会被编入 Orca 自身对象文件。Linux ON 另生成局部链接脚本，隐藏归属 TBB 的这些符号，避免 SDK 的 OpenVDB 绑定到 Orca 自带的旧版本；不会因普通 Orca 函数的参数包含 TBB 类型就隐藏该函数。脚本作为链接输入经 PRIVATE 静态库链传递，内容不变不更新时间，变化时须重新链接。验收同时检查实际动态绑定与功能回归，不能只用小模型成功证明依赖隔离。
+
+若复用的构建目录已缓存 `libz.so`，首次重配时在上述 `ORCA_EXTRA_BUILD_ARGS` 追加 `-UZLIB_LIBRARY_RELEASE -UZLIB_LIBRARY_DEBUG`，仅清除两项 ZLIB 查找缓存；不需要删除已编译的第三方依赖。全新构建无需追加。
+
+打包脚本收集 MRMesh/MRVoxels 所需的非系统动态库，放在 `lib/meshlib`；glibc、加载器和编译器基础运行库仍由目标系统提供。主程序的包内相对 RPATH 支持直接执行 `bin/orca-slicer`，不要求通过 AppRun。两份 MR 库保持与配置时相同的字节；必要的第三方库路径只在副本中调整，不改原 SDK。`resources/meshlib-runtime.json` 记录依赖和哈希；缺库、加载到包外 SDK 或内容变化均使打包验证失败。
+
+工作流对最终 AppImage 解包搬迁，并暂时隐藏构建 SDK：直接调用真实二进制跑 MeshLib/阶段报告测试，再独立检查 AppRun 启动及重建。`scripts/test_linux_meshlib_package.sh` 可手动复用，参数为 AppImage 与尚不存在的证据目录；调用者须确保原 SDK 不可访问。不把仅文件存在、脚本单测或最小适配探针当作完整安装包通过。
+
+部署必须保留完整解包目录，不能只复制二进制。当前构建面向 Ubuntu 24.04 用户态（含 24.04 容器），不保证可直接在 Ubuntu 22.04 宿主运行；服务器只读核对、实际测试范围和 GUI 待验清单见 [Linux 打包记录](../../docs/ai/validation/2026-10-19-linux-github-packaging-review.md)。
 
 ### 服务端调用
 
@@ -64,11 +86,11 @@ macOS 本地打包使用 `./build_release_macos.sh -sxa arm64 -c Release`：读�
 
 ## 依赖审查与实际探针
 
-当前 Orca 本地依赖为静态 TBB 2021.5（接口 12050）、OpenVDB 8.2、Boost 1.84、OpenSSL 1.1.1w；SDK 使用自己的 TBB 12.18、OpenVDB 13 等动态库。macOS Mach-O 两级符号命名空间和私有适配边界是当前共存条件，不能直接推广到 Linux ELF 符号抢占或 Windows CRT/DLL 环境。
+此前 macOS 探针的 Orca 本地依赖为静态 TBB 2021.5（接口 12050）、OpenVDB 8.2、Boost 1.84、OpenSSL 1.1.1w；该平台 SDK 使用自己的 TBB 12.18、OpenVDB 13 等动态库。本轮 Ubuntu 24.04 SDK 实际使用 OpenVDB 10.1，依赖版本不能跨平台套用。macOS Mach-O 两级符号命名空间和私有适配边界不能直接推广到 Linux ELF 符号抢占或 Windows CRT/DLL 环境。
 
 Linux 配置针对已知的 Orca 静态依赖 archive 使用 `--exclude-libs`，减少旧运行库符号从最终程序导出；不对全部应用符号做隐藏，不把该选项视为完整 ABI 证明。目标平台仍需核对实际 `.dynsym` / `DT_NEEDED` / 运行期符号绑定，回归普通切片和 MeshLib。Windows 配置拒绝已知 `/MT` / Debug STL 混用，但不能自动证明任意预编译依赖都使用正确 CRT；必须与选定 SDK 配套验证。
 
-本轮独立链接探针实际验证：
+此前 macOS 独立链接探针实际验证：
 
 | 探针 | 结果 |
 | --- | --- |
@@ -79,3 +101,5 @@ Linux 配置针对已知的 Orca 静态依赖 archive 使用 `--exclude-libs`，
 | 默认 OFF CMake 目标 + C++17 host，最低系统 11.3 | 构建与调用通过；仅依赖系统 libc++/libSystem，无 SDK 动态库 |
 
 这些是局部真实链接/接口探针，不是完整应用、全平台、性能分位数或打印验收。完整 Orca 测试和 Computer Use 结果由任务主记录另行登记。
+
+2026-10-19 本机 Ubuntu 24.04 amd64 Docker（macOS/Rosetta）实际编译当前适配目标，7 项 SDK 探针通过；将真实依赖闭包打包、搬迁并隐藏原 SDK 后，直接执行包内 ELF 的同样 7 项通过，MR 库身份校验通过。它证明适配编译及包内依赖加载，不代表完整 Orca 的旧 TBB/OpenVDB 共存、最终 AppImage、普通切片/分盘或 GUI 已验收。详见 [Linux 实测记录](../../docs/ai/validation/2026-10-19-linux-github-packaging-review.md)。

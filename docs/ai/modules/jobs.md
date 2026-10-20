@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "jobs",
-  "source_fingerprint": "sha256:54dca4908f1d0b43d89906efbcd73505e6e991856f1c7019a1fa6ee65edde01f",
-  "reason": "复核依赖的PrintApplyCache回归：修正共享Print区域变换缓存后，后台导出前无改动apply应保留已完成G-code；真实变更仍失效。未更改任务线程/取消实现，GUI交互与核心测试分开验收。"
+  "source_fingerprint": "sha256:75f4f790a6258c9bad107dce6132c1f7ea405a9a01b9b41cfe087b0a7b1d7ed9",
+  "reason": "复核PrintApplyCache既有语义不变；此次发布分支合并保留BoostThreadWorker.cpp显式wx/app.h，供无PCH构建获取wxTheApp声明，相对功能分支仅头依赖变化，任务线程、取消和通知业务未改。GUI交互及最终发布构建仍需对应验收。"
 }
 -->
 
@@ -33,6 +33,8 @@ Print 步骤状态与 GUI 工作线程状态不同。模型／配置差异决定
 Job::finalize 接收 canceled 和 exception_ptr；未消化异常会再抛出。取消必须在耗时循环内合作检查并避免提交部分结果；不能假设 stop 总能打断不可中断的第三方单次调用。
 
 ## 修改与验证
+
+Linux 发布分支保留 `BoostThreadWorker.cpp` 对 `wx/app.h` 的显式包含，不依赖预编译头提供 `wxTheApp`；此次合并未调整任务派发/取消逻辑。工作流检查不等于 GUI 运行通过，当前状态见[Linux记录](../validation/2026-10-19-linux-github-packaging-review.md)。
 
 检查开始、连续参数修改、取消后重切和关窗口；算法修改还要验证 Print 状态及缓存恢复，不能只看进度达到 100%。
 

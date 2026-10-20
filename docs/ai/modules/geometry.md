@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "geometry",
-  "source_fingerprint": "sha256:1d2d06962a81abd7b0f4b9778a64b00b52dd45bf0c080bfb8fe8724bed83874a",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。"
+  "source_fingerprint": "sha256:710fd11268d06553d3b50acf98d4f245e6af0d4c86fc5c563dba97ef422be4d7",
+  "reason": "本批Voronoi.cpp仅补原生LinesIt迭代器模板显式实例化，供同岛平行边只读观察使用；不改变生成/修复几何算法或原Arachne入口。复核空洞、非平行边与非法图未知边界，调用方真值及真实CLI结果归切片报告记录，不将此项称为任意曲颈/三维宽度或实物公差。"
 }
 -->
 
@@ -22,6 +22,8 @@
 ## 核心流程
 
 Point/Polygon/ExPolygon 及 ClipperUtils 为偏移、布尔裁剪和路径几何提供公共基元；AABB／KDTree／Voronoi 等为空间检索和墙／填充提供输入。此层不决定打印参数，但数值误差会向切片、分盘和预览扩散。
+
+只读切片报告的平行边观察复用原始Voronoi构造及 `detect_known_issues`；`Voronoi.cpp` 仅补 `LinesIt` 的检查函数显式模板实例化以便调用方链接，没有改变构图/修复/路径生成算法。调用方传 `try_to_repair=false` 后直接验证，不运行可能旋转输入的修复；异常图只使新增报告项未知。具体适用范围见[G-code统计模块](gcode-preview.md)。
 
 ## 配置与约束
 

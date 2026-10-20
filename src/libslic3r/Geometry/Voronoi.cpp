@@ -19,6 +19,7 @@ using ColoredLinesConstIt         = ColoredLines::const_iterator;
 template void VoronoiDiagram::construct_voronoi(LinesIt, LinesIt, bool);
 template void VoronoiDiagram::construct_voronoi(ColoredLinesConstIt, ColoredLinesConstIt, bool);
 template void VoronoiDiagram::construct_voronoi(PolygonsSegmentIndexConstIt, PolygonsSegmentIndexConstIt, bool);
+template VoronoiDiagram::IssueType VoronoiDiagram::detect_known_issues(const VoronoiDiagram &, LinesIt, LinesIt);
 
 template<typename SegmentIterator>
 typename boost::polygon::enable_if<

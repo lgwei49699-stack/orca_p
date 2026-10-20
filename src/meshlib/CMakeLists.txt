@@ -204,12 +204,22 @@ if(NOT WIN32)
     endif()
     foreach(_directory IN LISTS _runtime_dirs)
         if(IS_DIRECTORY "${_directory}")
-            target_link_options(orca_meshlib_adapter INTERFACE "$<BUILD_INTERFACE:LINKER:-rpath,${_directory}>")
+            if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+                # Like the prepared macOS path above, keep this in the link
+                # interface so it crosses PRIVATE static dependencies under
+                # the project's legacy CMP0099 behavior.
+                target_link_libraries(orca_meshlib_adapter INTERFACE "$<BUILD_INTERFACE:-Wl,-rpath,\"${_directory}\">")
+            else()
+                target_link_options(orca_meshlib_adapter INTERFACE "$<BUILD_INTERFACE:LINKER:-rpath,${_directory}>")
+            endif()
         endif()
     endforeach()
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # SDK libraries also need these build-tree paths for their dependencies.
+    # DT_RUNPATH only resolves direct dependencies of the executable.
+    target_link_libraries(orca_meshlib_adapter INTERFACE "-Wl,--disable-new-dtags")
     # Keep Orca's old static runtime symbols out of the executable's dynamic
     # table, where they could interpose on the SDK's newer shared dependencies.
     # This is intentionally scoped to known dependency archives, not ALL Orca
@@ -240,8 +250,35 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 message(FATAL_ERROR "MeshLib Linux evaluation requires static Orca dependency ${_dependency}, found ${_location}.")
             endif()
         endforeach()
-        target_link_options(orca_meshlib_adapter INTERFACE "LINKER:--exclude-libs,$<TARGET_FILE_NAME:${_dependency}>")
+        target_link_libraries(orca_meshlib_adapter INTERFACE "-Wl,--exclude-libs,$<TARGET_FILE_NAME:${_dependency}>")
     endforeach()
+    # TBB inline/template definitions also originate in Orca object files,
+    # outside the excluded archives. Hide only their owning namespace, not
+    # Slic3r functions whose arguments happen to contain TBB types. Passing a
+    # linker script as a file preserves its relink dependency through PRIVATE
+    # static libraries even under the project's old CMP0099 behavior.
+    set(_symbols_script "${CMAKE_CURRENT_BINARY_DIR}/meshlib-linux-symbols.ld")
+    file(GENERATE OUTPUT "${_symbols_script}" CONTENT [=[
+VERSION {
+    {
+        local:
+            _ZN3tbb*;
+            _ZNK3tbb*;
+            _ZT[ISTV]N3tbb*;
+            _ZTCN3tbb*;
+            _ZGVN3tbb*;
+            _ZGVZN3tbb*;
+            _ZZN3tbb*;
+            _ZT[hvc]*_N3tbb*;
+            _ZT[hvc]*_NK3tbb*;
+    };
+}
+]=])
+    target_link_libraries(orca_meshlib_adapter INTERFACE "${_symbols_script}")
+    # The Linux package copies these exact SDK bytes; it must not strip or
+    # rewrite the libraries after their identities were recorded above.
+    set(ORCA_MESHLIB_LINUX_SDK_PREFIX "${_sdk_prefix}" PARENT_SCOPE)
+    set(ORCA_MESHLIB_LINUX_RUNTIME_DIR "${_runtime_dir}" PARENT_SCOPE)
 endif()
 
 # No SDK download/install target. The macOS shell entry prepares local copies

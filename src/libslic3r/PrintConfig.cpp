@@ -8310,6 +8310,13 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli_params = "\"filament1.json;filament2.json;...\"";
     def->set_default_value(new ConfigOptionStrings());
 
+    def          = this->add("slice_analysis_report", coBool);
+    def->label   = L("Slice Analysis Report");
+    def->tooltip = L("Write read-only per-plate slice metrics to plate_N.analysis.json. Requires --slice and --outputdir; does not change "
+                     "printing parameters.");
+    def->cli     = "slice-analysis-report";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("variable_layer_height_mode", coString);
     def->label = L("Variable Layer Height Mode");
     def->tooltip = L("Control variable layer height profiles in CLI slicing: preserve keeps an existing profile, adaptive replaces it with an automatically generated profile, and reset removes it.");
@@ -8470,6 +8477,19 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli        = "repair-evidence-close-boundaries";
     def->cli_params = "0|1";
     def->set_default_value(new ConfigOptionBool(false));
+
+    def          = this->add("model_stage_report", coBool);
+    def->label   = L("Export model stage report");
+    def->tooltip = L("With --check-model or --reconstruct-model, write model-stage.json with artifact identity and sampled changes. "
+                     "STL only; does not select a model. Disabled by default.");
+    def->cli     = "model-stage-report";
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def          = this->add("model_reference", coString);
+    def->label   = L("Model comparison reference");
+    def->tooltip = L("Original uncolored STL used as the comparison reference. Requires --model-stage-report; defaults to the input.");
+    def->cli     = "model-reference";
+    def->set_default_value(new ConfigOptionString());
 
     def             = this->add("auto_repair_model", coBool);
     def->label      = L("Automatically repair imported model");

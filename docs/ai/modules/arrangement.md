@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "arrangement",
-  "source_fingerprint": "sha256:d2999b77701608b8f27bd114344309e55bcba0ac3cf8ef028c37c5f1bd6917fb",
-  "reason": "复核PartPlate复制函数唯一调用为CLI；新增返回原/新对象ID供调用者传递变换元数据，复制位置、打印开关、数量、摆盘算法均不改变。保持原单/多盘及异形床JSON规则。"
+  "source_fingerprint": "sha256:f42f64734416948821cf27e89bacbb892cc3b045cc4c75cea8a7911c926fce6c",
+  "reason": "合并master的CLI复制对象ID映射及单/多盘JSON边界，PartPlate几何、数量和GUI ArrangeJob算法未改；保留feature默认关闭的报告参数，其不参与摆盘配置。核对最终盘成员刷新和真实床面状态与报告按盘输出的衔接；实际回归及GUI待验见本轮记录。"
 }
 -->
 

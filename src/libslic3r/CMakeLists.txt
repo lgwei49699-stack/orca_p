@@ -310,6 +310,8 @@ set(lisbslic3r_sources
     ModelPreparation.cpp
     ModelCheckWorkflow.cpp
     ModelCheckWorkflow.hpp
+    ModelStageReport.cpp
+    ModelStageReport.hpp
     MTUtils.hpp
     MultiMaterialSegmentation.cpp
     MultiMaterialSegmentation.hpp
@@ -419,6 +421,8 @@ set(lisbslic3r_sources
     SLA/SupportTreeMesher.hpp
     SlicesToTriangleMesh.cpp
     SlicesToTriangleMesh.hpp
+    SliceAnalysis.cpp
+    SliceAnalysis.hpp
     SlicingAdaptive.cpp
     SlicingAdaptive.hpp
     Slicing.cpp
@@ -525,6 +529,7 @@ add_library(libslic3r_cgal STATIC
     MeshBoolean.hpp MeshBoolean.cpp
     MeshReconstruction.cpp
     ModelInspection.cpp
+    SliceAnalysisGeometry.hpp SliceAnalysisGeometry.cpp
     TryCatchSignal.hpp TryCatchSignal.cpp
     Triangulation.hpp Triangulation.cpp
 )

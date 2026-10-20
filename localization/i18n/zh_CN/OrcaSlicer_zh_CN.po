@@ -19826,3 +19826,103 @@ msgstr "更换  ›"
 #: src/slic3r/GUI/GFDDeviceSelectionDialog.cpp
 msgid "Print submission cancelled."
 msgstr "已取消打印下发。"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Export model stage report"
+msgstr "导出模型阶段报告"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "With --check-model or --reconstruct-model, write model-stage.json with artifact identity and sampled changes. STL only; does not select a model. Disabled by default."
+msgstr "配合 --check-model 或 --reconstruct-model，将文件身份及采样变化写入 model-stage.json。仅支持 STL，不负责选用模型，默认关闭。"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Model comparison reference"
+msgstr "模型比较基准"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Original uncolored STL used as the comparison reference. Requires --model-stage-report; defaults to the input."
+msgstr "用于比较的无色原始 STL。需要 --model-stage-report；默认使用输入文件。"
+
+#: src/libslic3r/ModelStageReport.cpp
+msgid "Stage report requires a bounded nonempty STL mesh."
+msgstr "阶段报告需要未超过大小限制的非空 STL 网格。"
+
+#: src/libslic3r/ModelStageReport.cpp
+msgid "Stage report contains invalid mesh coordinates or indices."
+msgstr "阶段报告中的网格坐标或索引无效。"
+
+#: src/libslic3r/ModelStageReport.cpp
+msgid "Stage reports support only uncolored STL files in millimeters."
+msgstr "阶段报告仅支持以毫米为单位的无色 STL 文件。"
+
+#: src/libslic3r/ModelStageReport.cpp
+msgid "Stage report already exists; use a fresh output directory."
+msgstr "阶段报告已存在，请使用新的输出目录。"
+
+#: src/libslic3r/ModelStageReport.cpp
+msgid "Stage artifact must be a new file inside its output directory."
+msgstr "阶段产物必须是输出目录内的新文件。"
+
+#: src/libslic3r/ModelStageReport.cpp
+msgid "Stage artifact does not match the inspected triangles."
+msgstr "阶段产物与已检查的三角面不一致。"
+
+#: src/libslic3r/ModelStageReport.cpp
+msgid "Stage input, reference or artifact changed during execution."
+msgstr "阶段输入、比较基准或产物在执行期间发生了变化。"
+
+#: src/libslic3r/ModelStageReport.cpp
+msgid "Could not publish the stage report without overwriting an existing file."
+msgstr "无法发布阶段报告：写入失败或目标文件已存在。"
+
+#: src/libslic3r/ModelCheckWorkflow.cpp src/libslic3r/ModelReconstruction.cpp
+msgid "--model-reference requires --model-stage-report."
+msgstr "--model-reference 必须与 --model-stage-report 一起使用。"
+
+#: src/libslic3r/ModelCheckWorkflow.cpp
+msgid "Stage reports support only STL output."
+msgstr "阶段报告仅支持 STL 输出。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "--model-stage-report expects 0 or 1."
+msgstr "--model-stage-report 仅接受 0 或 1。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Missing --model-reference STL."
+msgstr "缺少 --model-reference 指定的 STL。"
+
+#: src/OrcaSlicer.cpp
+msgid "--model-stage-report and --model-reference require --check-model or --reconstruct-model."
+msgstr "--model-stage-report 和 --model-reference 需要配合 --check-model 或 --reconstruct-model 使用。"
+
+#: src/libslic3r/ModelReconstruction.cpp
+msgid "Optional business report: --model-stage-report [0|1] --model-reference ORIGINAL.stl\nWrites model-stage.json in the output directory. Reference defaults to the input; no automatic adoption.\n"
+msgstr "可选业务报告：--model-stage-report [0|1] --model-reference ORIGINAL.stl\n在输出目录中生成 model-stage.json。默认以输入为比较基准，不自动采用模型。\n"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Slice Analysis Report"
+msgstr "切片指标报告"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Write read-only per-plate slice metrics to plate_N.analysis.json. Requires --slice and --outputdir; does not change printing parameters."
+msgstr "将每盘的只读切片指标写入 plate_N.analysis.json。需要配合 --slice 和 --outputdir 使用，不修改打印参数。"
+
+#: src/OrcaSlicer.cpp
+msgid "--slice-analysis-report requires one --slice action and an explicit --outputdir."
+msgstr "--slice-analysis-report 需要配合一个 --slice 动作和明确的 --outputdir 使用。"
+
+#: src/OrcaSlicer.cpp
+msgid "Slice analysis report already exists; use a fresh output directory."
+msgstr "切片指标报告已存在，请使用新的输出目录。"
+
+#: src/OrcaSlicer.cpp
+msgid "Could not write the slice analysis report."
+msgstr "无法写入切片指标报告。"
+
+#: src/OrcaSlicer.cpp
+msgid "Slice analysis requires the generated G-code statistics."
+msgstr "切片指标报告需要本次生成的 G-code 统计。"
+
+#: src/OrcaSlicer.cpp
+msgid "Slice analysis failed; the generated G-code has been retained."
+msgstr "切片指标报告生成失败，已生成的 G-code 已保留。"

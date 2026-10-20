@@ -15,6 +15,8 @@ import subprocess
 import xml.etree.ElementTree as ET
 import zipfile
 
+from test_cli_slice_analysis import gcode_facts, read_json
+
 
 CORE = "{http://schemas.microsoft.com/3dmanufacturing/core/2015/02}"
 
@@ -171,11 +173,14 @@ def main():
         write_box(work / name, 65, 65, 0.6)
     results = []
     identity = {"binary": str(binary), "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
-                "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "cases": results}
+                "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "analysis_helper_sha256": hashlib.sha256(
+                    Path(__file__).with_name("test_cli_slice_analysis.py").read_bytes()).hexdigest(), "cases": results}
     save_json(work / "validation.json", identity)
 
     def run(name, inputs, *, arrange=0, auto_plate=0, plate=0, positions=(), expected=(1,),
-            error=None, export=False, slicing=True, transforms=True, extra=(), toolpaths=None, absent=()):
+            error=None, export=False, slicing=True, transforms=True, extra=(), toolpaths=None, absent=(),
+            analysis=False, compare_to=None):
         case = work / name
         case.mkdir()
         output = case / "output"
@@ -185,6 +190,8 @@ def main():
                    "--load-filaments", str(work / "filament.json"), "--auto-plate", str(auto_plate),
                    "--arrange", str(arrange), "--ensure-on-bed", "--allow-multicolor-oneplate"]
         command += list(extra)
+        if analysis:
+            command += ["--slice-analysis-report"]
         if slicing:
             command += ["--slice", str(plate)]
         if export:
@@ -206,10 +213,13 @@ def main():
             result["report_code"] = report["return_code"]
             files = sorted(p.name for p in output.glob("*.gcode"))
             result["gcode_files"] = files
+            analysis_files = sorted(p.name for p in output.glob("*.analysis.json"))
+            result["analysis_files"] = analysis_files
             log_text = (case / "run.log").read_text(errors="replace")
             if error is not None:
                 assert process.returncode != 0 and report["return_code"] in error, result
                 assert not files and "All done, Success" not in log_text, result
+                assert not analysis_files, "Failed slice published a successful analysis report"
             else:
                 assert process.returncode == 0 and report["return_code"] == 0, result
                 assert files == [f"plate_{i}.gcode" for i in expected], result
@@ -240,6 +250,23 @@ def main():
                             assert packaged == ["Metadata/" + filename for filename in files], packaged
                             for filename in files:
                                 assert archive.read("Metadata/" + filename) == (output / filename).read_bytes(), filename
+                if analysis:
+                    assert analysis_files == sorted(f"plate_{i}.analysis.json" for i in expected), result
+                    assert compare_to and any(case["case"] == compare_to and case["passed"] for case in results), \
+                        "Analysis comparison requires a successful opt-out baseline"
+                    result["analysis_compared_to"] = compare_to
+                    result["commands_sha256"] = {}
+                    for index in expected:
+                        value = read_json(output / f"plate_{index}.analysis.json")
+                        assert value["schema_version"] == 1 and value["scope"] == "sliced_print_metrics", value
+                        assert value["plate_index"] == index and value["gcode_file"] == f"plate_{index}.gcode", value
+                        facts = gcode_facts(output / value["gcode_file"])
+                        original = gcode_facts(work / compare_to / "output" / value["gcode_file"])
+                        for field in ("commands", "configuration", "layers"):
+                            assert facts[field] == original[field], f"Analysis changed {field} for plate {index}"
+                        result["commands_sha256"][str(index)] = facts["commands_sha256"]
+            if not analysis:
+                assert not analysis_files, "Opt-out invocation published an analysis report"
             result["passed"] = True
         except (AssertionError, OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.TimeoutExpired) as exc:
             result["error"] = str(exc)
@@ -252,11 +279,14 @@ def main():
     run("arrange-control", [box], arrange=1)
     run("fixed-stl", [box], positions=[(20, 30, 0)])
     run("fixed-obj", [obj], positions=[(20, 30, 0)])
+    run("fixed-stl-analysis", [box], positions=[(20, 30, 0)], analysis=True, compare_to="fixed-stl")
+    run("fixed-obj-analysis", [obj], positions=[(20, 30, 0)], analysis=True, compare_to="fixed-obj")
     run("fixed-stl-no-json", [box], positions=[(20, 30, 0)], transforms=False)
     run("fixed-obj-no-json", [obj], positions=[(20, 30, 0)], transforms=False)
     run("fixed-two-models", [box, work / "second.stl"], positions=[(20, 30, 0), (70, 60, 0)])
     run("explicit-first-plate", [box], plate=1, positions=[(20, 30, 0)])
     run("outside", [box], positions=[(200, 200, 0)], expected=(), error={-50})
+    run("outside-analysis", [box], positions=[(200, 200, 0)], expected=(), error={-50}, analysis=True)
     run("partly-outside", [box], positions=[(99, 30, 0)], expected=(), error={-50, -52})
     # A valid first object must not hide a second enabled object that is lost
     # outside the real plates (including single-plate arrangement overflow).
@@ -331,6 +361,7 @@ def main():
                auto_plate=1, export=True, expected=(), slicing=False)
     if seed:
         run("two-plates", [seed], expected=(1, 2))
+        run("two-plates-analysis", [seed], expected=(1, 2), analysis=True, compare_to="two-plates")
         run("two-plates-sliced-project", [seed], expected=(1, 2), export=True, extra=("--min-save",))
         for name, disabled, empty in (("first-disabled", (0,), ()), ("all-disabled", (0, 1), ()),
                                       ("first-empty", (), (0,)), ("all-empty", (), (0, 1))):
@@ -341,6 +372,9 @@ def main():
             # slicing starts; disabled-but-present geometry must reach -50.
             errors = ({-6, -50} if name == "all-empty" else {-50}) if all_skipped else None
             run(name, [target], expected=() if all_skipped else (2,), error=errors)
+        run("first-disabled-analysis", [work / "first-disabled.3mf"], expected=(2,),
+            analysis=True, compare_to="first-disabled")
+        run("all-disabled-analysis", [work / "all-disabled.3mf"], expected=(), error={-50}, analysis=True)
         run("explicit-disabled", [work / "first-disabled.3mf"], plate=1, expected=(), error={-50})
         run("explicit-empty", [work / "first-empty.3mf"], plate=1, expected=(), error={-6, -50})
         run("explicit-second", [work / "first-disabled.3mf"], plate=2, expected=(2,))

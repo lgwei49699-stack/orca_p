@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "slicing",
-  "source_fingerprint": "sha256:f27cc0c94d62499111e6949647412eda50100b129c67b9c197f51b004156a36b",
-  "reason": "共享原有Polygons到ExPolygons转换，一次切层同时得到诊断和有效区域；保留正常slice_mesh_ex参数语义，补模式/变换/孔洞/空层及实际PrintObject对照。将现有全空层异常检查移到brim首层访问前，避免空列表访问；预检不生成墙填充支撑或G-code。本次共享PrintConfig变化仅增加CLI repair_evidence_close_boundaries及证据帮助；已有直接重建依据时由模型检测工作流跳过预检，不更改本模块层高、区域构造、切片参数和GUI/CLI正常切片行为。"
+  "source_fingerprint": "sha256:3c4a464f4a60ab06623e3fbfac034ab5a061c258b46ffa456f1b78b3384987c6",
+  "reason": "共享原有Polygons到ExPolygons转换，一次切层同时得到诊断和有效区域；保留正常slice_mesh_ex参数语义，补模式/变换/孔洞/空层及实际PrintObject对照。将现有全空层异常检查移到brim首层访问前，避免空列表访问；预检不生成墙填充支撑或G-code。本次共享PrintConfig变化仅增加CLI repair_evidence_close_boundaries及证据帮助；已有直接重建依据时由模型检测工作流跳过预检，不更改本模块层高、区域构造、切片参数和GUI/CLI正常切片行为。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 10-19新增两个const Brim访问器仅暴露已有整板路径，未修改Print步骤、配置覆盖、缓存失效、筏层/模型首层规则；报告几何计算仍独立。普通入口与新报告入口的实际对照见本轮记录。 2026-10-19 复核Print.hpp/.cpp只给export_gcode增加末尾默认false的内部统计采集参数并构造GCode实例；Print::process/apply、层状态/路径和配置不变，正文补导出边界。LayerCount/PrintApplyCache和40CLI实际验证见本轮记录。"
 }
 -->
 
@@ -27,6 +27,10 @@
 `PrintObject::slice` 的既有“没有层”检查移至 slice_volumes 后，早于 polyhole/brim 的首层访问，避免反向重叠壳导致全空层后访问 layers.front()。沿用原 SlicingError 和文案，正常非空切片行为不变；这不是自动修补丢失区域。
 
 Print::apply 将 Model 和完整配置拆成 PrintObject／PrintRegion，检测差异使相应步骤失效；Print::process 组织切层、轮廓、填充、支撑、工具排序和输出准备。层对象保存 surfaces 与 extrusion collections，缓存序列化还保存路径顺序属性。
+
+`Print.hpp` 增加 const `get_brimMap()` / `get_supportBrimMap()` 访问器，仅让显式切片报告读取已有整板 Brim 路径；不生成/移动路径、不复制到对象实例、不修改缓存或失效状态。报告足迹与名义实体填充深度在 gcode-preview 模块实现，普通 GUI/CLI 的 Print::process 顺序和输出保持。
+
+导出入口末尾的内部 `collect_analysis=false` 只传入新建GCode实例，CLI显式报告才开启解析器额外统计；不进入PrintConfig、Print::apply、切层/路径生成或缓存失效判断。GUI旧调用保持默认false，原估时与导出继续执行。
 
 网格替换时可保留未改体积的边界缓存，但 `PartiallyValid` 也必须检验 `trafo_bboxes` 与当前实例变换的兼容性。Z 平移、Z 缩放或倾斜不兼容时，在当前 apply 中清除旧体积边界/层区并用新变换生成；不能先用旧坐标切片、下一次无改动刷新才失效。原有允许绕 Z 旋转等兼容变换的缓存复用规则保留。
 

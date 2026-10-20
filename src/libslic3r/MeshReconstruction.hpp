@@ -37,6 +37,11 @@ nlohmann::json compare_reconstruction_meshes(const TriangleMesh&              so
                                              const TriangleMesh&              candidate_mm,
                                              const MeshReconstructionOptions& options);
 
+// Opt-in business-stage comparison also permits partially repaired candidates.
+// Degenerate/duplicate faces are excluded only from distance queries; neither
+// input is modified and this is not reconstruction validation.
+nlohmann::json compare_model_stage_meshes(const TriangleMesh& source_mm, const TriangleMesh& candidate_mm);
+
 // Explicit, approximate reconstruction in physical millimetres. A true result
 // is a validated candidate requiring human review, not restored design intent
 // or a printability certificate. The caller must isolate this operation in a
