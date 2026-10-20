@@ -63,6 +63,7 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
 
 // Reuse the standalone parser for explicit stage reports: one bounded,
 // uncolored STL snapshot, no import repair, hash of the bytes actually parsed.
+// Shares only exactly equal vertices; all triangle coordinates/order remain.
 TriangleMesh read_bounded_model_stl(const std::string& path, std::string& sha256);
 std::string  model_mesh_file_sha256(const std::string& path);
 } // namespace Slic3r

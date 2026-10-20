@@ -289,7 +289,7 @@ json base_report()
             {"requires_manual_confirmation", true}};
 }
 
-TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot_sha256 = nullptr)
+TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot_sha256 = nullptr, bool share_exact_vertices = false)
 {
     if (!fs::is_regular_file(path))
         throw std::invalid_argument(L("STL input is missing or is not a regular file."));
@@ -424,6 +424,11 @@ TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot
         if (inside_solid || its.indices.empty())
             throw std::invalid_argument(L("ASCII STL is incomplete or contains no triangles."));
     }
+    // Stage reports preserve the serialized triangles but must not spend the
+    // section vertex budget on STL's repeated corner records. Exact sharing
+    // does not move vertices, delete faces, or change their winding/order.
+    if (share_exact_vertices)
+        its_merge_vertices(its);
     // All indices are created above, after bounded vertex insertion; no file
     // indices can reach TriangleMesh's statistics/volume constructor unchecked.
     return TriangleMesh(std::move(its));
@@ -768,7 +773,7 @@ bool run_meshlib_in_process(const TriangleMesh&                 source,
 
 TriangleMesh read_bounded_model_stl(const std::string& path, std::string& sha256)
 {
-    return read_reconstruction_stl(fs::path(path), &sha256);
+    return read_reconstruction_stl(fs::path(path), &sha256, true);
 }
 
 std::string model_mesh_file_sha256(const std::string& path) { return sha256_file(fs::path(path)); }

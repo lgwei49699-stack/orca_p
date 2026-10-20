@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:6511a52b8248e02a76ccbaf9d42bae4e870f698b3d180bf6d7f8ce22deb0a638",
-  "reason": "复核统一精确集合helper仍编入既有libslic3r_cgal，复用CGAL/GMP/MPFR及其编译选项，无新依赖下载、平台分支或程序；CGAL对象隐藏于constShape实现。整数构造不依赖Windows long宽度，有理数转换用CGAL Fraction_traits而非特定后端。Mac arm64 Release应用及fff_print_tests最小构建通过，统一NonZero和平衡并集均为当前构建；不以此声称Windows/Linux原生通过。原MeshLib OFF/ON、SDK约束、runtime打包/签名与发布脚本未变，其证据与本次分析分开记录。"
+  "source_fingerprint": "sha256:8e018bbfa18096fd3f3b618c6f513ec7cf8c424f6128715de162876e6c0be747",
+  "reason": "整合master版本2.3.2.3与真实固定位置/分盘CI回归，保留Linux MeshLib ON静态ZLIB、TBB符号隔离和包内运行库闭包；同时保留隐藏SDK的搬迁验收。默认OFF与Mac/Windows构建逻辑未扩大，源码构建和最终包运行分开验收；本轮身份与结果见合并审查记录。"
 }
 -->
 
@@ -34,6 +34,14 @@ ON要求64位和Orca静态依赖：macOS arm64显式最低14.0；Windows MSVC x6
 
 SDK版本校验：Unix读固定config_cmake.h，Windows读完整发行目录app/Release/mr.version；MRMesh/MRVoxels运行库内容哈希进入私有模板，不再固化构建机绝对路径。Windows运行期使用宽字符WinAPI按函数地址定位DLL；Unix使用dladdr，适配层启用PIC。哈希不覆盖所有传递依赖，也不是加载沙箱。直接 CMake 的 Unix 评估构建使用构建树 SDK RPATH，Windows运行需要在受控DLL搜索路径提供配套依赖；缺库仍可能早于CLI解析失败。macOS 发布脚本现在支持用户已配置 SDK 的本地测试包：先处理库副本，再链接及记录最终哈希，不修改原始 SDK、不下载/安装 SDK、不创建服务端镜像。打包成功不代表商业授权或公证完成。具体构建/迁移边界见[适配层说明](../../../src/meshlib/README.md)。仍由同一Orca调用SDK，无额外修复程序；默认Alpha Wrap不变。
 
+Linux ON 的 RPATH/静态 archive 符号隐藏通过 INTERFACE 链接条目穿过 PRIVATE STATIC 依赖，兼容既有 CMP0099 行为；`--disable-new-dtags` 使构建树间接 SDK 库也能解析。仅将 SDK 前缀和库目录传给 Linux 打包模板，OFF 提前返回。`package_meshlib_linux.py` 从两份 MR 库递归收集真实依赖至 `lib/meshlib`，保留 SONAME 与许可；glibc/加载器/编译器基础库仍由目标系统提供。仅主程序及带路径的非 MR 副本重定位，两份 MR 内容不变；清单校验哈希及实际加载路径。支持服务器直接执行 `bin/orca-slicer`，不只依赖 AppRun；ON 不再对 ELF 做全局 `/usr` 字节替换，OFF 保留旧处理。封装失败直接退出，不继续发布残缺包。
+
+完整 Linux 包的真实绑定核查发现，TBB 头文件在 Orca 自身对象中生成的弱定义不属于上述 archive，SDK OpenVDB 会把同名函数/RTTI 绑定到主程序。因此 Linux ON 另生成局部 VERSION 链接脚本，按 Itanium 名字的所属 TBB namespace 隐藏函数、类型信息、vtable 和相应 thunk，不按签名中任意位置出现 `tbb` 来隐藏业务导出。脚本作为实际链接文件经 INTERFACE 传递，既保留 CMP0099 OLD 的 PRIVATE STATIC 链路，也让内容变化触发重链；file(GENERATE) 避免无变化的 configure 重写文件。只对 Linux 的手工 RPATH 条目引用目录，支持 SDK 路径空格；OFF/Mac/Windows 不增加脚本或改变链接语义。真实合成 ELF 回归覆盖跨库函数/RTTI 抢占的前后对照、普通/虚继承/协变返回 thunk 隐藏、Slic3r 含 TBB 参数/模板的导出保留、OFF 无脚本及改脚本重链；Linux 配置 27 项及打包 26 项通过，不能代替最终完整 Orca 的动态绑定和运行验证。
+
+Linux GitHub 工作流固定 Ubuntu24 x64 SDK 3.1.3.429，下载验 SHA 后私有提取，通过原 `ORCA_EXTRA_BUILD_ARGS` 显式 ON，并传入 `-DZLIB_USE_STATIC_LIBS=ON`，避免完整应用的 `find_package(ZLIB)` 默认选择共享库后被静态依赖校验拒绝；OFF 构建默认值不变。手动运行只上传产物，既有标签发布须先通过隐藏 SDK、搬迁最终 AppImage 后的 CLI 测试。本轮未触发远程工作流；本机 Docker 已完成完整应用及 AppImage 构建，并验证隐藏 SDK 后搬迁 AppDir 的 42 项 MeshLib、34 项阶段报告、10 项切片报告以及 AppRun 实际重建。局部 TBB 链接修正前后普通 cube 自动摆盘切片的全部打印指令、有效配置、层数、耗材及排除执行耗时后的原结果一致；立即绑定与真实重建均无已确认的 SDK→主程序 TBB 符号抢占。上述范围不覆盖原生 x86_64 的 AppImage 包装头启动（本机仿真使用原字节手工解包）、GUI、全部模型/多盘及用户暂缓的固定位置切片问题；具体身份与证据见[Linux记录](../validation/2026-10-19-linux-github-packaging-review.md)。部署须保留整个解包目录，不能只替换主程序，也不承诺在 Ubuntu22 用户态直接运行。
+
+ZLIB 配置回归单独覆盖 Linux 系统 `FindZLIB` 的真实导入目标：ON 默认选共享库须拒绝，ON 显式选静态库可配置，OFF 仍允许默认共享库；同时检查工作流实际传入的开关。2026-10-19 补丁后配置专项在 Ubuntu24 amd64 上 26/26 通过；macOS 同专项 25 项通过、1 项 Linux 原生测试跳过。此前只创建 OpenSSL/TBB 目标的配置夹具与最小适配运行探针未覆盖完整应用的 ZLIB 选择，不能将这些通过结果视为完整 Orca 构建通过。
+
 只读 `ModelRepairEvidence.cpp/.hpp` 编入现有 libslic3r；`test_model_repair_evidence.cpp` 和 `test_mesh_slice_diagnostics.cpp` 注册到现有 libslic3r_tests。证据由默认关闭的非动作选项 `--repair-evidence` 接入：仅检测组合高级修复的残缺结果可能追加单 Z 切层和同轮有效区域观察；普通修复／重建只投影已有报告。默认协议与扫描路径保留，不新增自动编排、GUI 菜单、依赖或 worker。现有高级修复、重建和构建目标保持，应用与测试必须使用同一源码身份；macOS 构建通过不代表 Windows/Linux 已运行验证。
 
 根 CMake 配置依赖与目标，src 子目标链接 libslic3r、GUI 和开发工具；平台脚本组织依赖、应用与打包，dev-utils/platform 提供图标、manifest、plist 和桌面集成。deps/deps_src 是供应链边界。
@@ -44,7 +52,14 @@ SDK版本校验：Unix读固定config_cmake.h，Windows读完整发行目录app/
 
 ## 配置与约束
 
-公开产品版本由 `version.inc` 的 `SoftFever_VERSION` 更新为 `2.3.2.2-Release`，用于本次 Windows GFD 模态退出修复；内部兼容版本 `SLIC3R_VERSION=01.10.01.50` 保持不变。此次更新需重新生成版本头及应用元数据，旧运行／打包副本不会自动变为新版本。Mac 用户日志已确认取消及下发成功后的模态收尾；Windows 系统验收仍待同步新源码后执行。
+本次公开版本为 `2.3.2.3-Release`，用于识别固定位置切片修复；内部兼容版本不变。
+`.github/workflows/build-linux.yml` 在上传 AppImage／创建 Release 前解压刚生成的包，清除显示服务环境变量，
+调用包内 AppRun 执行 `test_cli_fixed_position_slice.py`，再复用其自带参数执行 `test_cli_oversized_arrange.py` 验证单/多盘JSON及实际3MF一致性。没有 G-code、分盘返回错误或任何回归失败即停止发布，
+另以 always 步骤保存测试证据、AppImage 和包内可执行文件 SHA256。原有文件存在检查只代表文件生成，
+不再宣称可部署。该门槛针对此工作流；本地编译通过不代表 Linux 镜像或业务配置已验证，状态见
+[固定位置切片修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。
+
+此前 Windows GFD 模态退出修复曾将 `version.inc` 的 `SoftFever_VERSION` 更新为 `2.3.2.2-Release`；当前版本以上述 `2.3.2.3-Release` 为准，内部兼容版本 `SLIC3R_VERSION=01.10.01.50` 保持不变。版本更新需重新生成版本头及应用元数据，旧运行／打包副本不会自动变为新版本。Mac 用户日志已确认取消及下发成功后的模态收尾；Windows 系统验收仍待同步新源码后执行。
 
 架构、生成器、Release 配置和依赖前缀必须匹配。应用版本与资源包版本独立。Windows 动态库、macOS rpath/zstd 和 Linux 分发标识是不同打包责任，不能只改一个文件名推定完成。
 
@@ -100,8 +115,9 @@ Clang 支持/不支持及非 Clang 拒绝分支；模拟选项不用于编译，
 
 ## 分支现状
 
-本分支保留 OrcaSlicer 品牌；Windows 动态库/CGAL 处理与用户版并不全同。本次仅调整
-Mac zstd 选择/打包和可选诊断选项，不修改 Windows/Linux 的运行库版本及平台打包脚本。
+2026-10-19 核对既有 GitHub Linux 打包入口：指南指向另一工作目录的 `linux/release2_3_2`，远端最新 Linux Tag 为 `manual-build-linux-20260923-01` / `e5640e1a5`，构建与发布成功，但尚无本轮越界 JSON 修正和 MeshLib 接入。该历史工作流不启用 SDK、只检查 AppImage 文件；当前开发分支已补齐上述 ON 构建/打包验证入口，尚未远程执行。不能将旧成功记录当作当前 master 或 MeshLib ON 的 Linux 运行验收。源码、Tag、Run 和后续范围见[核对记录](../validation/2026-10-19-linux-github-packaging-review.md)。
+
+本分支保留 OrcaSlicer 品牌；Windows 动态库/CGAL 处理与用户版并不全同。此前 Mac zstd 调整未修改其他平台；本轮 Linux MeshLib 打包独立记录，不改变 Windows 运行库及打包脚本。
 
 `gfd_cloud_config_tests` 注册在 tests/slic3rutils，只包含纯JSON协议及Catch入口、链接 test_common/nlohmann_json，无需链接GUI库或启动桌面。应用增加头文件GFDCloudConfig.hpp，域名、版本号、打包配置不变。构建和界面待验见[云方案记录](../validation/2026-10-09-cloud-config-quality-analysis.md)。
 

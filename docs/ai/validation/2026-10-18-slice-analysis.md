@@ -2,6 +2,238 @@
 
 ## 当前基准与下一步
 
+### 2026-10-20 合并提交交付（本节随合并提交生效）
+
+用户授权提交已审查的整合结果。本次在 `codex/model-feature-analysis-20261018` 完成合并提交，父提交为本分支 `40d8be288d` 与本地 master `3239eab859`；不移动 master、不推送、不部署。纳入已审查的 master 切片/分盘修复、Linux MeshLib 打包、阶段报告精确顶点共享及对应回归/文档，保留工作区无关改动和定向 stash，不使用全量暂存。
+
+业务源码、测试及打包配置与下方已验证候选保持一致；本轮更新交付状态，并从暂存版 test-tools 文档排除遗漏的 Thingi10K 多行测试记录，工作区原文完整保留。复核暂存范围、未解决冲突和文档/空白检查，不重复此前已通过的构建与回归。GUI 手测、原生 Linux 验收和已知历史限制仍按下方清单保留，不将提交等同于完整产品验收。
+
+Linux 构建状态更新：只读核对 `integration-20261020-j6rPoD/build-exit-code.txt` 为 `0`，原构建日志末尾显示 AppImage 封装成功；因此此前“后台构建中”的记录已结束。新包的隐藏 SDK 搬迁、固定位置/分盘、报告及修复专项仍未验收，不能据此直接部署。下一步是按需推送本分支并在 GitHub 使用该分支的工作流打包，或继续对本机 Docker 新包执行既定验证；本次提交不触发这些外部操作。
+
+### 2026-10-20 Orca 合并与提交前审查（代码可提交，Linux新包仍待验证）
+
+**本轮结论：Orca 合并工作区已完成、冲突全部解决，独立代码审查及新Mac构建回归未发现新增阻断，可提交此整合候选供测试分支使用；尚未执行commit/push，也未部署。** 只把master修复合入当前feature，不移动master。Linux完整新包仍在本机Docker后台构建，不可将代码准入等同于新包可部署；GUI及原生Linux验收仍待执行。已知历史repetitions限制继续保留，不额外扩展本次修复范围。
+
+用户授权先整合 Orca 并检查是否可提交合并。本轮仅将本地 master `3239eab859` 的两笔修复合入当前 `codex/model-feature-analysis-20261018 @ 40d8be288d` 工作区，使用 `--no-commit`，不推送、不部署、不修改其他服务仓库。现有 Linux/MeshLib 与阶段报告 WIP 保留；result.json、下载工具及其他任务文档不纳入本次提交范围。重叠的未提交文件先建立可恢复的定向 stash，解完合并冲突后恢复并逐项核对。
+
+验证计划：审查 CLI 导出冲突同时保留报告开关和非空 G-code 检查；核对分盘/镜像变换与修复阶段报告；复用当前工具链最小增量构建，重跑固定位置、分盘、只读报告和修复专项；最后检查模块正文/指纹及差异。旧包和旧测试不作为合并结果通过的依据。GUI 手工验证与原生 Linux 部署状态另列，不以静态审查替代。
+
+合并处理：定向 stash `7175617a2f1a7f0503e2e3b9716a0fdf035f51c9` 保存7个重叠文件，应用恢复后保留该备份，不删除用户其他stash。已清除两轮冲突，MERGE_HEAD 为 `3239eab859`，HEAD 尚未移动。CLI 唯一业务冲突合并为带 `slice_analysis_requested` 的导出调用加非空文件校验；报告失败仍报错并保留 G-code。工作流同时保留无 SDK 的 MeshLib 搬迁验证和 master 的固定位置/分盘回归；文档合并不沿用旧指纹作为新代码通过。独立审查指出旧测试缺少“固定位置/禁用盘与报告开关组合”，正在补入既有脚本，不改业务实现或旧断言。
+
+构建/测试进行中：Mac 复用本目录 arm64 Release/MeshLib ON 缓存，运行 `cmake --build build/arm64 --config Release --target OrcaSlicer libslic3r_tests fff_print_tests --parallel 6`，日志 `planning/orca-merge-review-20261020/build-macos.log`。本机 Docker Ubuntu24 amd64 私有 `/work/orca` 同步本轮源码后复用依赖，使用原 `build_linux.sh -s -i -j6` 及 `ORCA_MESHLIB_LOCAL_EVALUATION=ON`、SDK `/probe/sdk`、`ZLIB_USE_STATIC_LIBS=ON`；日志 `/tmp/orca-meshlib-linux-leXC1x/full-build/integration-20261020-j6rPoD/orca-appimage-build.log`，不覆盖旧版本包，不触及远端服务器。Linux 配置/打包工具53/53通过；Mac同53项50通过3专属跳过，尚不代表完整应用通过。
+
+提交范围：已建立只包含本轮整合的暂存候选；未纳入 result.json、Thingi10K下载脚本/测试/模块说明、GUI启动分析及其他文档任务。共享模块清单和test-tools/arrangement文档采用部分暂存，工作区原有文字完整保留；因此test-tools工作区与暂存指纹不同是范围差异，不是漏测。首次暂存检查指出下载工具指纹和无关GUI链接，已按范围剥离，不通过补收无关文件来规避检查。当前 `--all` 与 `--staged` 均35模块0问题、差异空白检查通过；尚未提交，后续结果落盘后重查。
+
+Mac三目标构建已完成，退出0；应用 SHA256 `88aa9af3e6b4ed0bf692a0b063e1244579c77ae394cf33f39d3b1f4daacfd46b`，libslic3r_tests `a47fd318656a999250b2995da5f33fe22c46efcfc66fbef7992c84ef2b258ee7`，fff_print_tests `2f3f38eef87caabe2a6bf46e9d8e72f856c43b34f740aa4746540bb8c0b9ef77`。身份保存于 `planning/orca-merge-review-20261020/binary-identities.sha256`。已启动真实 fixed-position（含报告新增6例）、arrangement、原生3MF/Arrange、修复与分析专项，使用新目录及独立进程cwd，结果随后回填。编译成功不先写测试通过；Linux仍在本机隔离容器构建。
+
+最终新Mac构建结果（证据根目录 `planning/orca-merge-review-20261020/`，各进程退出0）：
+
+| 验证 | 结果 | 证据 |
+| --- | --- | --- |
+| 固定位置/报告交叉 | 64/64；成功场景开启/关闭报告的全部执行指令、完整有效配置及层数相同；禁用盘不出报告，越界/全禁用失败无报告 | fixed-position/validation.json |
+| 单/多盘、镜像/定向JSON与3MF | 154/154，含JSON开关的实际路径一致性 | arrangement.log、arrangement/ |
+| 3MF与分盘原生 | 58用例/3826断言 | tests.log |
+| 修复/证据/重建/阶段报告原生 | 229用例/9842断言，含百万面与MeshLib取消/异常join | repair-native.log |
+| 分析/G-code原生 | 242用例/54665断言 | analysis-native.log |
+| 阶段报告、Alpha Wrap、MeshLib、旧check | 分别34/34、36/36、42/42、114/114 | repair-{stage,alpha-wrap,meshlib}/summary.json；repair-check/orca-model-check-ob19ftwa/summary.json |
+| 分析报告/特征指标CLI | 分别10/10、40/40，输入完整性通过 | analysis-{cli,features}/summary.json |
+| Python分析验证器 | 170/170 | python-slice-features.log |
+| Linux配置/打包工具 | Ubuntu24容器53/53；Mac50通过3平台跳过 | 容器integration目录python-linux.log；/tmp/orca-meshlib-integration-review-qVJHg0/python-meshlib.log |
+
+不同过滤器不合并累计；百万面只验证读取至截面预算，不代表百万面完整修复吞吐。Alpha Wrap实际观察到限时退出；MeshLib CLI未运行可选慢模型限时项，`cooperative_timeout_observed=false`，不冒称CLI真实耗时超限已通过。原生3DBenchy存在与历史一致的只读备份目录告警，不算GUI备份验收。测试前后源码/程序/输入身份一致，根result.json Git blob保持`7a157845db6c198b1e6b7e8db249ba1e995f2919`。
+
+Linux续接：容器 `orca-meshlib-linux-40d8-probe` 的现有构建session `51057` 保持运行；10:08核对为234/515、无编译错误。日志目录 `/tmp/orca-meshlib-linux-leXC1x/full-build/integration-20261020-j6rPoD/`，完成退出码写 `build-exit-code.txt`。先核进程/退出码，不重复启动构建；成功后再验证新 `2.3.2.3-Release` AppImage/完整AppDir的真实运行，执行新版64例fixed、154例arrange及报告/阶段/MeshLib专项，隐藏SDK并核依赖身份。此批最终包运行尚未执行，旧包未覆盖，不访问远端服务器。
+
+GUI 交接（待手测，不宣称通过）：使用本轮完成构建后的 `build/arm64/src/Release/OrcaSlicer.app`，不要打开旧打包副本。CLI夹具位于 `planning/orca-merge-review-20261020/fixed-position/`；尚未生成时先等待下方CLI结果。使用该目录的machine/process/filament参数作对照，或明确记录GUI选用的有效参数。
+
+| 场景 | 操作与预期 | 状态 |
+| --- | --- | --- |
+| 禁用实例部分越界 | 打开 `disabled-partly-outside.3mf`，确认第二对象关闭打印，切第一盘；应正常生成第一对象路径，禁用对象可显示越界但不阻止切片。再启用第二对象，应拒绝部分越界；关闭后重新切片恢复 | 待GUI |
+| 多盘与切片包 | 打开 `two-plate-seed/output/model.3mf`，逐盘切片；保存工程后重开，应保留两盘成员/坐标。另开 `first-disabled.3mf`，只第二盘有可打印模型，导出的切片包应只包含实际成功盘G-code | 待GUI |
+| 原有修复入口 | 导入本轮stage夹具缺面模型，执行既有高级修复并导出重开；手动Alpha Wrap生成候选后取消，原件保持。GUI不应出现新报告开关或自动MeshLib选项 | 待GUI |
+
+保留操作日志、导出的3MF及截图回传；GUI通过也不等于实机打印验收。当前已知旧 `--repetitions` 多实例复制数量问题未纳入本次修复；此前偶发备份异常未在master加测中复现，不写成根因已消除，详见下方既有记录。
+
+### 2026-10-20 测试分支合并与服务联调准入审查（完成，先整合再部署）
+
+用户要求评估 Orca 及前后端当前能否合入 devlope 并部署测试服务；本轮仅分析，不合并、切分支、提交、推送、迁移数据库、部署或启动真实业务。Orca 当前仍为 `codex/model-feature-analysis-20261018 @ 40d8be288d` 加前轮 WIP，master 为 `3239eab859`；必须区分已提交功能、未提交 Linux/阶段报告修正、目标分支与已有包身份。并行核对 PDS/Main、Blender/PAM、Compare/Web 的真实分支、接口、依赖和既有验证；原生主代理核 Orca/master 整合边界及 Linux 包。先核各仓实际存在的 develop/devlope 引用，不猜测 Orca 同名分支。只使用匹配源码的图谱；历史图谱不足时降级源码，不新建索引。
+
+**结论：可以进入合并收尾，不可直接拿当前分支/旧包部署整体测试。** 六个服务/Web仓库真实目标名均为 `develop`，不是 devlope；均在功能分支且干净。通过 `git ls-remote` 实读最新目标 SHA，发现 PDS/Main/Compare 比本地缓存新；仅用 `git fetch --no-write-fetch-head --no-tags --no-recurse-submodules origin <SHA>` 取缺少的提交对象，不更新分支、工作区或 FETCH_HEAD。以下 merge-tree 对明确 SHA 预演，不是实际合并。
+
+| 仓库 | 功能提交（待合增量） | 本轮核实目标 | 预演结果与条件 |
+| --- | --- | --- | --- |
+| Orca | `f653f0a47f`、`40d8be288d`，另有已验未提交 Linux/百万面修正 | 本地 master `3239eab859`；codeup/master 仍 `4df6d516be`，没有同名 develop/devlope | 6个冲突文件：5文档+CLI。必须保留 master 固定位置/无G-code失败/镜像定向JSON修复，并保留 feature 的按需报告采集；不能任选一边。只合HEAD会漏WIP |
+| PDS | `b4a0380`、`b1e8c40` | `3119dd219df2dc1286453348fce24b0b93068fdd` | 无内容冲突；最新目标 Dockerfile 已升级基础镜像v2.0.22，未验该镜像内Orca身份；需先加报告URL列 |
+| Main | `26dd94c51`、`d1476c15a` | `e99140d24645ff1294cfff2df5aaa0673f5a5b62` | 5文件冲突，3业务+2测试；须保留目标多模型advanceModels、PLATE排除与设备场景策略，再叠加墙宽/建议及最终模型消费 |
+| Blender | `4d550a7` | `70b5c53d9a918e367e8b71b3241e1a425eb71fe8` | 无冲突；合并树保留目标OBJ朝向/超时更新，完整部署共享Python脚本，合成树尚未重测 |
+| PAM | `b64fc3c` | `90c70c9ec923fcaffc00a2046f6a59f3e7e91c87` | 无冲突；只增加有限Arachne墙建议，无新SQL |
+| Compare | `94fcb58` | `d0ebd6b647298882e0325c9893606b00b194507f` | 无冲突但非快进；合并树等于功能HEAD。旧Jasypt/初始化SQL已在远端，不是本次增量 |
+| Web | `87c891f` | `02e30f17db0da0c8b7b59a94a352f4a99440332d` | 可快进；完整报告按需读取，真实存储CORS/复杂报告性能仍待联调 |
+
+Orca预演树 `50c57072c3549430094492b481f19c60ce5a7456` 的唯一业务冲突在 G-code 导出：master要求有效非空文件，功能分支增加 `slice_analysis_requested` 参数；两者都必须保留。Main冲突为 `AdvancedSliceParamMatchServiceImpl`、`DevicesServiceImpl`、`PrintJobServiceImpl`、`ImportModelPrintabilityProcessStepHandlerTest`、`DevicesServiceImplAdvancedSliceParamConfigTest`。PDS预演树 `e6da7b2c5a0b13299ceb70d8cdfe4dd557a411e2`、Main冲突树 `3d9687c016b5ba1f531c9cb05f592c4e1b959af1`；这些树仅供审核，不是可部署提交。不能用功能分支已有单测证明解冲突后的代码通过。
+
+**部署前必须完成：**
+
+1. 整理 Orca 当前已验 WIP 并与 master 两笔修复整合；不得夹入 result.json、下载工具和无关文档。重新构建最终 Linux 包并验证普通固定位置切片/分盘、报告开关、阶段修复和缺库隔离。现存 v2 AppImage SHA本轮复核仍为 `0e855633231e941573bb4cb117add84ad699acfdf1031744a8d176ebd8131127`，对应 feature+WIP而非master修复，不能直接用来验收整条业务。保持完整AppDir依赖，不只复制ELF；目标须是匹配Ubuntu24用户态，v2.0.22实际内容本轮未读取。
+2. 主服务手工解冲突后跑对应回归；PDS/Blender/PAM interface 都是 `1.0.0-SNAPSHOT`，先发布/刷新匹配新代码的接口产物，再构建消费者，不能复用旧同名缓存。
+3. PDS先核表结构并执行一次 `print3d-slice/src/main/resources/db/migration/V20261018__add_slice_analysis_to_slice_job.sql`。代码直接映射 `slice_analysis_url`，缺列会影响普通任务查询，不只是Compare报告；项目未配置自动迁移，不能仅部署Java或重复跑初始化SQL。保持原任务升级前排空策略，检查模型修复和普通切片各自的Orca命令路径。
+4. 先单任务测试健康/高级/重建/失败兜底，以及原APP固定位置/分盘；再验特征→模板→Arachne建议（人工值优先）→Compare报告加载与A/B。确认文件存储跨域GET；报告任务预算1800秒、普通任务180秒隔离保留。复杂模型在目标容器测实际内存/耗时/完整报告上传读取，不以延时替代内存限制。当前PDS正常Java命令不使用 repetitions，前述上游多实例重复问题不作为该正常入口阻断；手动自定义命令另行约束。
+
+本轮只读接口/源码、Git整合及已有证据：PDS105、Main126、Compare47、Web384及构建、Blender/PAM等历史结果见各仓交接/上文；未重新运行它们，不将未绑定完整源码hash的旧日志视为合并树验收。Orca当前包已有MeshLib42/阶段34/切片报告10、master另有切片58/分盘154及间歇100次证据，仍不替代合入后的同包回归。CodeGraph MCP未暴露、CLI可用；本目录status提示1文件变化，但系统sqlite只读打开失败，未把status当覆盖证明；Understand图仍旧，使用模块和当前源码，不写历史图覆盖。业务代码/分支未修改，没有部署、访问数据库或发起打印。
+
+### 2026-10-20 第二项间歇异常补核（来源与最新复测状态）
+
+用户追问第二项。只读复核 master `3239eab859` 的历史日志、当前源码及已有加测证据；未重新运行应用、构建、修改业务或操作服务器。该项包含两个独立现象，不把 OBJ 超时与备份删除异常合并为同一根因。
+
+- **备份清理崩溃：相关代码及生命周期链均为上游继承，尚无证据证明本次定制引入。** 失败日志 `../orca-slicer-master/planning/cli-fixed-position-20261019/mirror-json-fix/slicing-serial/project-new-stl-0-outside/run.log` 显示同一 Model ID、同秒、同目录先排队 RemoveBackup，随后合并阶段 `get_backup_path()` 删除旧目录抛出 Directory not empty。`get_backup_path`、析构与后台 `process_task` 同官方 v2.4.2；官方同样存在 vector<Model> 扩容时可复制保留 ID、不复制 backup_path，以及多输入合并调用。已在线核对 [Model.cpp](https://github.com/OrcaSlicer/OrcaSlicer/blob/v2.4.2/src/libslic3r/Model.cpp) 和 [bbs_3mf.cpp](https://github.com/OrcaSlicer/OrcaSlicer/blob/v2.4.2/src/libslic3r/Format/bbs_3mf.cpp)。删除语句可追溯到 `1555904beff`；本次新增盘成员刷新尚未执行，合并后的实例映射也尚未执行。目录生命周期与后台删除/重建交叉是有日志支持的原因方向，但缺少官方成品运行、现场线程栈/系统调用证据，不能写成完整并发根因已经证明。
+- **OBJ 120 秒超时：仍无法归因。** 原日志停在 Print::process 调用前准备阶段；无现场栈，未请求 JSON，不能认定由镜像 JSON 修正引入，也不能因另一例备份异常就归为同一原因。
+- **更新复测状态：已有 100 次加测未再出现两个异常。** 本轮读取 master 另一轮已完成的 `planning/cli-fixed-position-20261020-repeats/results/{identity,results,summary}.json`：两个场景各 50 次（各 25 串行、25 两路并发），总计 100/100 符合预期，身份为当前 `3239eab859` / 应用 SHA `cf0678709d362c2991e9e2be5e2a2a9e8b61c78e9e5f756c299625416694475d`。OBJ 输出有效 G-code；越界混合输入正常返回 -50，无崩溃/缺结果。维持 120 秒超时，未达到 10 秒采样阈值。这里复核已有证据，不算本轮新增测试；仅说明 macOS 未再复现，不声称根因已修复或 Linux 通过。
+
+### 2026-10-20 多实例 repetitions 来源核对（完成，仅溯源）
+
+用户本轮仅要求判断第一个问题是定制引入还是官方已有；第二个历史间歇问题不再展开，不将本轮未调查写成根因已修复。本轮未修改业务代码、构建、重跑应用、提交或操作服务器；开发目录仍为 `40d8be288d` 加已有 WIP，独立 master 仍为 `3239eab859`。
+
+**结论：官方继承的 CLI 存量缺陷，不是本次定制引入。** 最早来自 BambuStudio 的 [`99bbce0f0f20ae8f55e76483f26e972ce4af6e4c`](https://github.com/bambulab/BambuStudio/commit/99bbce0f0f20ae8f55e76483f26e972ce4af6e4c)（2023 年 7 月，加入 repetitions）。`f6ac8b60b71` 后续修正 skip/loaded_id，但保留按实例遍历、每次克隆整个对象的逻辑。官方 [OrcaSlicer v2.4.2 PartPlate.cpp](https://github.com/OrcaSlicer/OrcaSlicer/blob/v2.4.2/src/slic3r/GUI/PartPlate.cpp) 仍包含该实现；本地同名引用的完整函数与 `4df6d516be^` 逐字一致。另通过网页工具核对官方公开源码的同一循环、整对象复制和 CLI 调用；终端直取 raw 文件超时，因此没有宣称远端文件哈希一致。
+
+官方可达链也一致：`OrcaSlicer.cpp:4287–4307` 将 repetitions 转为 count−1，`:4399–4410` 允许 arrange，`:4948` 调用复制函数；原生 3MF 导入 `bbs_3mf.cpp:4198–4208` 本就支持同一对象的多个实例，`Model.cpp:503–505,1151–1155` 克隆全部实例。这些行号对应本地 `upstream-v2.4.2`。因此同对象两实例要求重复两份时，原有 2 份加两次整对象克隆各 2 份，得到 6 而非 4；不需要定制导入才能触发。近期 `4df6d516be` 在该函数仅增加原/新 ObjectID 的收集和返回，`3239eab859` 不改复制数量。
+
+验证边界：当前 master 的 2→6 已由上轮真实工程和 G-code 复现；本轮对官方只做源码与调用链核对，未运行官方成品。仅确认同盘同对象多实例、CLI `--repetitions > 1` 的这类问题，不扩大为普通单实例重复、GUI 复制或跨盘变体已复现。后续如修复，应单独补这组数量回归；本轮只记录来源。
+
+### 2026-10-20 master固定位置修复核对（完成，另确认重复份数旧缺陷）
+
+用户要求确认master是否已经修复固定位置空盘，并检查有无其他问题。本轮只读审核实现与隔离验证，不合并、修改业务、提交、推送或部署。独立master工作目录已干净，HEAD为 `3239eab859`，包含 `4df6d516be` 固定位置切片／分盘一致性及 `3239eab859` 镜像／定向JSON修正；本工作目录仍为 `codex/model-feature-analysis-20261018 @ 40d8be288d` 加前轮WIP，两笔提交均不是本分支祖先，昨日Linux v2包也未包含。不能继续把旧缺陷称为master当前未修，也不能把master修正视为开发分支已获得。
+
+分别核对最终源码、程序身份与测试证据；并行审核盘成员／切片／导出边界和与阶段报告／切片分析的交叉。master没有CodeGraph/Understand索引，不初始化或复制其他目录索引；旧开发目录Understand图仅为历史导航，不作为master事实。审核期间master仅验证文档被外部工作追加，本轮未改该目录文件；业务源码、脚本、应用及HEAD保持身份一致。
+
+**空盘结论：master已修复、开发分支尚未同步。** master原始网格导入逐实例登记，最终几何变换后刷新归属；空盘跳过前有真实成员，最终没有G-code时明确失败。还包含启用实例越界防漏切、禁用实例不阻塞、实际盘号重验、assemble后3MF成员与导出引用保护。`3239eab859`另修镜像／定向JSON，不改变实际模型几何。两笔修复的审核范围内未再发现新增确定回归；不能将下述历史重复入口问题归因于本轮修复。
+
+本轮在master的Mac arm64 Release／MeshLib OFF最终程序上串行各跑一轮：58/58切片检查、154/154分盘／变换检查通过，保留默认120秒超时和既有断言，没有反复刷绿。证据 `/tmp/orca-master-cli-20261020-BTEueU/`；应用SHA256 `cf0678709d362c2991e9e2be5e2a2a9e8b61c78e9e5f756c299625416694475d`，CLI源码 `ccd31ccb9e29680a3c912ee749b61be37746f653a7e95673adb1a1f6bb5a1ac8`，PartPlate源码 `5f26ae6a34320a0c991dc242ccaba5714070dcc07cbe1f169203dc23ded9e5b1`。本轮复用匹配构建，没有重新编译、修改服务器或生产数据。
+
+**另确认P2旧缺陷：多实例工程的repetitions会多复制。** `master/src/slic3r/GUI/PartPlate.cpp:2274–2301`逐盘内实例遍历，却在2295行每次复制整个对象及其全部实例。同一对象有两个启用实例、同盘，`--auto-plate 0 --arrange 1 --slice 1 --repetitions 2`应为4份，实际为6份，命令仍返回0；repetitions1对照为2份。新增定向两次运行分别核对真实3MF build/盘成员、JSON及G-code：重复2时有6个互不重叠的模型区域，每区284条正E/XY挤出命令，不只是JSON多行。证据 `repetitions/physical-path-summary.json`、`seed.json`和两组command/run/output；没有改正式回归脚本。G-code对象注释标签重复，不能按注释键数统计实例，已由物理边界与实际挤出匹配确认。Git追溯循环/整对象复制来自`99bbce0f0f2`等历史代码，`4df6d516be`只增加返回ObjectID；现有154项只覆盖单实例重复，未覆盖此组合。未验证跨盘变体，不扩大复现结论；本轮仅报告，不修复。
+
+**历史稳定性风险尚未关闭：** 前一轮`fixed-obj-no-json`曾120秒超时，`project-new-stl-0-outside`曾因`Model::get_backup_path()`中的remove_all抛出Directory not empty而SIGABRT。本轮两例均通过，但没有定位并修复根因，不能用复测通过消除风险。已核对失败日志及当前`Model.cpp:1318`和`bbs_3mf.cpp:8692`相关清理路径仍在；线程交叉访问只是调查方向。异形床旧问题按已有业务范围未扩展修复，本轮不重新验证。
+
+**后续同步边界：** 开发分支的报告预检查`:7124`也依赖盘成员，master提前登记后前提可一并补齐；合入时必须保留`export_gcode(..., slice_analysis_requested)`及报告失败返回，接上非空G-code与零产物失败检查。ModelStageReport仍在check/reconstruct入口提前返回，SliceAnalysis读取真实Print/G-code，不消费model_transforms，未发现JSON投影污染分析指标。两边各自测试不替代合入后的固定位置＋报告开/关/已有报告、禁用/空/多盘报告数量、镜像定向与实际G-code组合测试。GUI、原生Linux/Windows、服务器及合入后最终包仍待验；本轮没有合并或提交。
+
+### 2026-10-19 复审修正完成（当前交接状态）
+
+基准仍为 `codex/model-feature-analysis-20261018 @ 40d8be288d`，保留工作区原有改动，不提交／推送／部署。按用户要求暂缓固定位置空盘／分盘问题；本轮只修正阶段报告百万面预算口径，以及 Linux MeshLib ON 的构建依赖与运行库隔离，不改切片算法、分盘逻辑、业务阈值或 GUI 入口。
+
+- 阶段报告读取 STL 时只共享精确相同顶点，保留每个三角面的坐标、顺序、朝向及原文件 SHA；新增真实 1,000,012 面回归，旧重复角点表示触发预算，新表示能完成指定截面。不是扩大预算，也不宣称百万面完整修复性能通过。
+- Linux ON 补齐静态 ZLIB 参数；首次完整包审计另外发现 TBB 头定义未被 archive 隐藏覆盖，已增加精确命名空间局部链接脚本与空格路径引用。OFF、Mac、Windows链接路径不变。真实合成 ELF 测试及独立审核通过。
+- Mac 最终构建后：213 原生用例／9,272 断言、34 阶段报告、36 默认 Alpha Wrap、10 切片报告 CLI 均通过；跨补丁默认 G-code／配置一致。最后合并 Python 回归为 223 项，220 通过、3 项 Linux 专属跳过（`python-tests-final.log`）。
+- Linux 修正版 **v2** 已增量重链并重新封装。SDK 隐藏、清空额外库环境、原字节解包并搬迁后，依赖／哈希、42 MeshLib、34 阶段报告、10 切片分析及 AppRun help／实际重建通过。`LD_BIND_NOW=1` 和实际重建中 SDK→主程序 TBB 绑定均为0，原14个冲突符号均使用 SDK OpenVDB 自身定义，不以首次包通过代替本次验收。
+- Linux 新旧包普通切片对照：G-code指令、有效配置、90层、2.79g耗材及排除墙钟字段的旧result一致。Linux工具回归53/53；本轮未放宽任何旧断言。新包证据在 `/tmp/orca-meshlib-linux-leXC1x/full-build/final-appdir-v2-xyAnjI/`，重点文件为 `tbb-binding-isolation-summary.json` 和 `pre-post-symbol-isolation-slice-comparison.json`。Mac证据为 `/tmp/orca-20261019-fixes-fNQ04T/`。
+- 独立只读复核两份实际绑定日志各50,403条，SDK的3,939条TBB相关绑定全部落在SDK库，没有绑定到Orca主程序；检查覆盖全部TBB名字而非仅原14项。主程序797行动态定义符号中TBB定义为0。代码审核及最终包证据复核未发现新增阻断。
+
+修正版包：`/tmp/orca-meshlib-linux-leXC1x/full-build/OrcaSlicer_Linux_V2.3.2.2-Release-meshlib-40d8be288d-v2.AppImage`，SHA256 `0e855633231e941573bb4cb117add84ad699acfdf1031744a8d176ebd8131127`；包内ELF为 `edc52d0defc6ccfd74d9cef2836f32937fd43414135a1172e348d90f39b367c5`。SDK已恢复，容器无活动构建／测试，原包和失败证据保留。当前源码与容器私有副本一致，根result SHA仍为 `aa3a68f10277867d33654ab94e7eb25a99e56899b481a35c6e7ea8e3d368acd6`。
+
+**仍未覆盖：** 本机 ARM/Rosetta 无法直接启动原 AppImage 外壳，原生 Linux x86_64 入口、服务器、Windows和GUI手测仍待验证；已验证的是原字节包内程序。本分支暂缓的固定位置空盘缺陷仍是发布阻断，不据本轮回归允许直接替换线上镜像。Orca自身第三方TBB的既有ODR编译警告保留，详见[Linux打包记录](2026-10-19-linux-github-packaging-review.md)。最终模块文档检查35模块／0问题，`git diff --check`通过；没有自动提交。
+
+### 2026-10-19 复审问题修正过程（历史：首次包与隔离缺口）
+
+**最新阻断（首次完整包验收后发现）：** 下表功能测试虽然通过，但进一步 `LD_BIND_NOW=1` 证实包内OpenVDB10.1会把10个TBB内联函数及4个RTTI绑定到Orca自身旧TBB定义，现有 `--exclude-libs` 未覆盖主程序/Orca静态库中实例化的头定义。部分同名函数实现长度不同，不能因小模型未崩溃判定兼容。正在Linux MeshLib ON链接边界补局部符号隐藏及真实ELF回归，不改OFF、Mac、Windows、算法或业务阈值。首次AppImage与绑定日志保留作为修前证据；新包重链后须另做完整包内验证，不能直接交付首次包为已验收版本。
+
+用户授权修正上述问题，并明确暂缓问题1（固定位置切片／盘成员）。本轮只处理阶段报告原始STL顶点表示造成的预算不一致，以及Linux MeshLib ON缺少静态zlib选择和相应漏测；不改分盘/切片逻辑、业务阈值或后端接口，不提交/推送/操作服务器。基准仍为 `40d8be288d`，保留已有工作区改动。
+
+已在保持三角面实际坐标、顺序、朝向和文件SHA不变的前提下，让显式阶段报告读取共享精确重合顶点，新增真实百万面截面预算回归；普通重建解析默认仍不共享，GUI和普通切片不走该阶段报告入口。Linux只对ON构建参数补 `ZLIB_USE_STATIC_LIBS=ON`，测试真实依赖查找而不再只模拟Crypto/TBB。独立源码复核未发现新增阻断。
+
+本机Mac应用与libslic3r_tests已按最终代码重新构建通过；容器 `/work/orca` 独立副本复用已完成的第三方依赖，完整根CMake默认配置已真实复现共享zlib拒绝，显式静态配置成功，CGAL目标25步及完整应用／AppImage构建均通过。新证据目录 `/tmp/orca-20261019-fixes-fNQ04T`；Linux完整构建日志继续存 `/tmp/orca-meshlib-linux-leXC1x/full-build/`。实际结果按构建、包内程序和原始AppImage启动分开如下。
+
+| 本轮验证 | 结果与边界 |
+| --- | --- |
+| Mac应用与libslic3r_tests最小目标重建 | exit 0；arm64 Release、MeshLib ON；日志macos-build.log |
+| 原生模型修复、检查、重建、截面依据及同进程MeshLib回归 | 213用例／9,272断言通过；含新增百万面和精确顶点两例，native-repair-complete.log；此前单独2例／29断言及54例均为子集，不累计 |
+| 阶段报告真实CLI | 34/34通过，含真实MeshLib候选、完整复检与导出回读；model-stage/summary.json |
+| 默认Alpha Wrap独立重建CLI | 36/36通过、无跳过，沿用原断言／超时；含300万面输入、256MiB边界、证据开关候选一致及实际1秒预算超时受控返回；alpha-wrap/summary.json。大面数夹具为重复几何，不代表复杂大模型修复性能 |
+| 普通切片报告开关真实CLI | 10/10通过，默认／显式关闭／开启的指令和有效配置相同；slice-report/summary.json；使用摆盘场景，不覆盖暂缓的固定位置空盘缺陷 |
+| 跨本轮补丁的默认G-code对照 | 与前轮默认关闭产物相比，7,218条指令、565行有效配置、90层、耗材元数据及剔除墙钟后的旧result一致；default-gcode-before-after.json |
+| Mac Python | 222项中220通过、2项Linux专属跳过；python-tests.log |
+| Ubuntu24 amd64配置／打包工具回归 | 52/52通过；config-package-regression.log，不代替完整应用运行 |
+| 最终Linux包内程序（本机amd64仿真） | 原字节解包并搬迁AppDir，隐藏SDK且清空额外库路径后，依赖／哈希校验、42/42 MeshLib、34/34阶段报告、10/10切片分析及AppRun help／实际重建均通过；final-appdir-ZVzZoh/ |
+| 原始AppImage入口 | 本机Rosetta/binfmt返回Exec format error，未通过原脚本；失败证据保留于final-package-15L6F2/，原生Linux x86_64启动仍待验，不能以手工解包测试覆盖此状态 |
+
+新应用SHA256为 `ddcaaa45ce0e5bde659655474ee175a3b91a0844b2a137f0e5056bd9713beed1`，测试程序为 `fdee7266c2be68739b72e297393bc043e0ff6704764f536cd4ecb1d5e1ea9dc3`。实现／头文件／新增测试源码哈希及CLI脚本身份见 native-identities.txt、cli-source-and-binary.sha256。验证前后源码、程序、输入资源及根result哈希不变。首次宽选过滤中的 `[ModelInspection]` 无匹配，已改为实际 `[ModelRepair]` 重新完整运行213项；没有把空过滤计为通过。新百万面用例约0.81秒，只测读取到指定截面预算，不作为百万面完整修复吞吐结论。
+
+GUI无新入口／文案，本轮回归包含共享修复核心与导入保色；GUI点击操作、Windows、原始AppImage在原生Linux的启动和目标服务器运行仍未验，继续按既有GUI清单交接。模块文档和复核指纹已更新，`check_ai_module_docs.py --all` 为35模块／问题0，`git diff --check`通过。问题1保持未修复，不以本轮通过覆盖该已知发布阻断；本轮不提交或部署。
+
+最终AppImage保留在 `/tmp/orca-meshlib-linux-leXC1x/full-build/OrcaSlicer_Linux_V2.3.2.2-Release-meshlib-40d8be288d.AppImage`，SHA256 `38ef077b5e3834c033ee5452082e66c866960867825b9d785997b9c3d25b0bbe`。未改其AppImage magic或其他字节；仅在本机隔离容器安装squashfs-tools，验证原文件offset 944632的SquashFS4.0后手工解包。最终运行使用搬迁后的包内ELF而非构建树，SDK由trap恢复；详细库／符号证据与TBB依赖自身ODR警告见[Linux打包记录](2026-10-19-linux-github-packaging-review.md)。这不是向GitHub或服务器发布的包，也不能直接替换含已知切片问题的线上镜像。
+
+Mac构建结束后只读资源检查确认容器8核中4核使用、可用内存15.54GiB且无swap；按用户此前提速授权，将Linux构建从4并发增量调为6。旧Ninja在346/545收到定向SIGINT，原脚本exit2属于主动中断，不是编译错误；确认无活动编译进程后启动同配置续编，日志另存orca-appimage-build-j6.log，不覆盖原日志、不清依赖或缓存，也不改源码／验收标准。
+
+### 2026-10-19 模型修复／特征检测交付复审（完成，有待修问题）
+
+用户要求继续检查当天功能，不授权本轮修改业务实现或提交。基准为 `codex/model-feature-analysis-20261018` / `40d8be288d`，覆盖阶段报告 `f653f0a47f`、切片指标及按需统计 `40d8be288d`、现有 Linux MeshLib 打包 WIP，并按实际分支核对关联服务。保留已有文档、下载脚本和根 result 改动，不合并发布分支修复、不操作服务器/数据库/打印机。
+
+本轮并行审阅修复交付、特征/几何统计、Linux 链接打包和 PDS 兜底编排；已核对本机应用 SHA256 `87a61cd565e1e4e35db2f4c39db7478d7616b2d39caa289588c41fca9cca4e60` 与冻结记录一致，fff 测试程序 SHA256 `565e5bd3d0be23b66f3841a893af4830e921fd0ffe5822b61ae674162b0cdd36` 及 Processor/测试源码也匹配。历史 Understand 图未覆盖新模块，不写覆盖图；源码和分仓身份为准。现有 libslic3r_tests 为更早构建，未用于证明本轮修复实现通过。
+
+**发现与下一步（本轮不修复、不提交）：**
+
+1. 新增 P2：阶段报告使用 `read_bounded_model_stl` 保留实际导出坐标（`ModelCheckWorkflow.cpp:317,376`），但该解析器每面存三个独立顶点（`ModelReconstruction.cpp:319–328`）；截面预检在 `ModelRepairEvidence.cpp:325` 按存储顶点数限制 300 万。因此 1,000,001 面即有 3,000,003 个存储顶点，即使唯一顶点数在预算内也会拒绝。触发前提是高级修复后仍有缺陷、无直接重建依据且需要截面观察；随后 `require_completed_evidence` 失败，阶段报告不发布，业务保留前一份模型。普通切片不走此路径。该问题由 `f653f0a47f` 的原始 STL 回读接入引出，已按源码确认预算口径不一致，**未运行百万面完整业务复现**。应保持三角面坐标不变，精确合并重合顶点或统一预算口径，并补报告开关的稠密网格边界对照；不直接放大内存上限。
+2. Linux MeshLib 构建 P1：`.github/workflows/build-linux.yml:104` 和 `src/meshlib/README.md:58` 的 ON 配置未传 `-DZLIB_USE_STATIC_LIBS=ON`。Ubuntu 24 的 CMake 探针默认找到 `libz.so`，与 `src/meshlib/CMakeLists.txt:249–250` 的静态依赖要求冲突；显式参数后找到 `libz.a`。证据为 `/tmp/orca-meshlib-linux-leXC1x/full-build/zlib-probe-{default,static}.log`。仅需在 ON 构建选项补齐，不能宣称全应用打包已经成功。ON 包的普通进程启动也加载 MR 动态库，最终包还必须验证普通切片／分盘与运行库共存，不能只测重建。
+3. 继承的发布阻断仍在：当前分支的 `OrcaSlicer.cpp:7196` 在 STL/OBJ 固定位置、全盘切片中把未登记盘误判为空盘。本轮用独立目录重新跑默认关闭报告的 STL，仍退出 0、跳过盘、只写 result.json，无 G-code。前述盘内变换 JSON 错位已知问题也未合入修复；另一个 master/release 工作目录的通过不能替代本分支。需要先按最终目标提交整合已验证修正，再复跑完整切片／分盘回归。
+
+**本轮实际验证：**所有产物使用 `/tmp/orca-20261019-audit-4HEcRh/`，没有覆盖根 result 或旧证据。
+
+| 验证 | 本轮结果 |
+| --- | --- |
+| 当前 fff_print_tests `[SliceAnalysis],[LayerCount],[PrintApplyCache],[GCode]` | 242 用例、54,665 断言通过，见 native-tests.log |
+| `scripts/test_cli_model_stage_report.py --meshlib enabled` | 34/34 通过，输入完整性检查通过；小模型，不覆盖上述百万面边界 |
+| `scripts/test_cli_slice_analysis.py` | 10/10 通过，含默认／显式关闭、开启、输出保护与指令一致性；自动摆盘场景 |
+| `scripts.tests.test_cli_slice_features`、`test_meshlib_platform_config`、`test_package_meshlib_linux` | 共 220 项，219 通过、1 跳过（Mac 不运行 Linux 原生 ELF 项）；不是 Linux 全应用验收 |
+| STL 固定位置 `--slice 0 --auto-plate 0 --arrange 0` | 重现旧缺陷，exit 0 无 G-code，见 fixed-position/run.log 和 output/result.json，不计入通过 |
+
+**跨仓范围：**只读抽查 Blender `4d550a7`、PAM `b64fc3c`、主服务 `d1476c15a`、Compare `94fcb58` 对应特征提交中的分析、线宽匹配及参数传递；Web 只核对 `87c891f` 的分支／提交范围，未重新逐项审核前端。这些目录仍在特征分支。PDS 实际 checkout 已为 `feature/f_分盘优化_20261019 @ bf2c184`，本轮用 `git show codex/model-feature-analysis-20261018` 审阅 `b1e8c40` 及其修复基础，不切换用户工作区。部署必须先对齐这些功能提交，不能把当前 PDS checkout 当作上述功能版本。没有重跑服务侧测试或启动服务／数据库／OBS调用。
+
+PDS 入队前原件兜底、上传成功后 checkpoint、仅 processing 可更新、异常重读已持久化结果、子进程退出后释放执行资源，以及 CHECK 与普通切片不进入分阶段修复均已按源码复核，未确认新增阻断。旧修复任务恢复只安装截止监控、不续跑，仍遵循文档发布前排空旧任务的边界。主服务和 Compare 的 Arachne 推荐仍限制在匹配的模型／线宽上下文并保留显式用户选择，没有扩大为任意自动改参或自动择优。
+
+特征／G-code 侧未发现新的确定缺陷：新增统计仍由显式报告开启；普通 GUI/CLI 保留原指令、估时与耗材路径，Cura 首／第二模型层间隙未改；三维指标是计划几何而非真实打印质量保证。复杂报告已有的约 388 秒、3.2 GB 峰值、228 MiB 文件成本仍成立，未新增低配 Linux 性能结论。本轮不包含完整 Linux AppImage、Windows、GUI 手工操作及真实后端联调；沿用集中 GUI 交接清单，不能以本机自动化替代。全量模块文档检查为 35 模块／问题 0，`git diff --check` 通过；复核后源码／应用／fff 测试哈希及根 result 哈希保持不变。
+
+### 2026-10-19 master 切片／分盘扩展审查（完成，只读审核及隔离验证）
+
+用户追问 master 除既有空盘/JSON问题外是否还有其他问题。本轮仍在功能分支记录，不切换或修改 master 工作目录。
+master 已提交基准为 `ba979559b0`；实际工作目录 `../orca-slicer-master` 已有未提交的固定位置盘登记、切片全空失败、单/多盘JSON区分及禁用实例过滤补丁，另含Linux工作流和版本修改，均属于其他工作，不修改或提交。
+审查分别覆盖已提交源码和这些待提交补丁，重点补查多盘导出、修复后共享缓存及CLI边界；不得重复把已被补丁改正的问题称为当前工作区缺陷。
+主干没有最近两笔阶段报告/切片分析提交；现有功能分支程序不能作为 master 实测证据。主干文档记录的40项切片/36次JSON仅作既有证据，尚未复跑或确认本轮新增边界。
+CodeGraph MCP未暴露，CLI可用；master工作目录无独立索引，旧Understand图与分支不符，按本分支模块和源码审阅，不初始化/复制索引或覆盖图谱。
+
+独立复跑期间检测到 master 的外部并行工作扩展测试并更新实现/程序，需按每轮身份分开：最初 `4531efe8...` 对应CLI源码 `ac6382fa...`；切片脚本已扩到43项，41过、2个 `--assemble` 只导出工程用例失败（3MF盘成员引用不存在的object_id=0），记录 `planning/master-audit-extra-20261019/independent-slicing/`。这是旧补丁缺口，不把它当最新外部补丁仍未修复。新源码已扩大重建盘归属范围到原始输入/assemble，不再只切片时刷新；多盘JSON还补查实际构建体积。新程序已变为 `3c2db788...`，分盘复跑44次通过，见同目录 `independent-arrangement/`。
+准备再次核对新源码/程序身份并单独复跑切片，不用前一轮起始SHA覆盖并行变化；本轮没有修改master实现、测试或构建。两个额外疑点已撤销：copy/split参数不可达（解析拒绝）；无切片直接导出min-save的正常/越界对照都因没有加载有效G-code失败，不证明静默漏盘。
+
+最终复跑完成：`independent-slicing-final/validation.json` 为44/44通过（含合并原始输入/已有3MF、重开再切片、实际G-code与工程盘引用检查），`independent-arrangement/validation.json` 为44次CLI通过。两者程序SHA均为 `3c2db788536353c6789613a6055ef8069ea71d498f5550ba7ef5973f958a5c5e`；复跑前后源码 `OrcaSlicer.cpp` SHA保持 `5c5a181cdd9dd6f79bb785ad954b0adc5f201f3125462c8aa5a09ae2be4ff28e`，程序SHA亦保持；切片脚本SHA `2689fbea96ae4a4d51ae9213699e564629a1864c625a7d6c58b38855298e3045`。先前41/43红灯保留，不混计或覆盖。
+
+master HEAD除已知空盘/JSON外的已确认问题：原始混合输入完全越界/摆放溢出会静默漏切；禁用实例的部分越界和面数统计仍阻塞正常打印；最终选盘索引缺少准确检查；已有工程 `--assemble` 后只导出没有更新盘引用。后者从旧对象索引进入 `bbs_3mf.cpp:7976–7992`，无效对象只告警却继续解引用find结果，本次实际写出object_id=0，不能断言所有读取器必定打不开。原始网格assemble场景由本次初始成员登记暴露，已有3MF场景属于原有缺陷，不能混同来源。当前master未提交补丁已针对这些业务路径修正；本轮未再确认新阻断问题，不等于整个master无缺陷。所有结论不包括推送/发布状态，master提交仍为ba979559b0。
+
+独立源码审阅覆盖修复/重建采用的新volumeID、凸包与二维投影失效、PrintApply变换缓存、GUI切片/盘刷新、TreeSupport告警筛选，以及GCode层数统计、3MF单/全盘选择、ZIP失败回滚、当前盘发送解析；未发现额外可确认的正常业务回归。共享导出快照不能区分全部禁用与全部越界的防御层测试缺口已留意，但现有GUI门控及CLI缓存加载阻断所尝试的触发路径，不作为已复现线上故障。
+GUI重建/修复后首切、二切、撤销、保存重开仍需按已有清单手测；Windows/Linux原生及线上均未验证。参考master工作区的固定位置切片交接记录，禁止用本机通过替代其发布包验证。本轮仅更新此审查记录及忽略目录内的诊断产物，没有修改master代码、提交或部署。
+
+### 2026-10-19 普通切片与分盘兼容性复核（完成，发现发布阻断，未修复）
+
+本轮仅分析、运行隔离本地验证，不修改实现、不提交。基准为 `codex/model-feature-analysis-20261018` / `40d8be288d`，分别审核模型阶段报告 `f653f0a47f` 和切片指标 `40d8be288d` 的增量，同时检查继承的空盘判断；工作区已有文档、下载工具和根result改动不纳入。用户提供的事故场景为 STL/OBJ 配合 `--slice 0 --auto-plate 0 --arrange 0`，需同时核对退出码、G-code实际产物及盘成员注册，不能以自动摆盘场景代替。
+
+结论：当前分支不能按原后端固定位置命令直接发布。使用与下文冻结SHA一致的Mac arm64 Release应用，已实测复现两项继承问题；不是 `f653f0a47f` / `40d8be288d` 新增的普通入口回归，但当前版本仍会携带，不能以新增功能默认关闭为由忽略。
+
+| 检查 | 本轮实际结果 | 来源与影响 |
+| --- | --- | --- |
+| STL、OBJ，`--slice 0 --auto-plate 0 --arrange 0` | 两者进程退出0、result.return_code=0，但无G-code且无sliced_plates | `OrcaSlicer.cpp:7196` 提前按成员列表empty跳过；`b05085f7c` 引入的旧问题仍在 |
+| 同一STL，报告显式0／1 | 都退出0且无G-code；开报告也无analysis.json | 新预检`:7124`复用相同判断；末尾`:8632`成功出口不核对实际产物 |
+| STL、OBJ，`--arrange 1 --slice 0` | 均生成1份G-code | 该路径重建了盘成员，仅证明本组小模型正常 |
+| 同一STL，不摆盘但显式`--slice 1`，报告关／开 | 两者正常生成G-code；开启时也有报告 | 显式盘号绕过空盘跳过条件，仅作诊断对照，不是多盘通用修复 |
+| 20mm盘内STL指定底面中心(30,40)，不摆盘，导出变换JSON | 日志确认位置已应用，JSON却返回plate_index=1、position=[90,90,0] | `:6595`依赖尚未建立的成员归属，`:6653–6675`误走无归属虚拟盘；返回投影来自`4e50224aca`，未实际移动模型 |
+| 同一模型摆盘，以及盘外/超尺寸JSON对照 | 摆盘返回真实盘0；真正盘外与超尺寸返回虚拟盘1 | 后两者符合既有虚拟返回盘约定，不把虚拟盘当真实切片盘 |
+
+共完成12条有效业务对照（8条切片、4条JSON），不是“12项全部通过”。首轮4条JSON测试命令错误导致参数拒绝-2，原失败保留，修正测试命令后在新目录复跑，未将参数拒绝当产品缺陷。证据位于 `planning/bmr-commercial-design-20261018/verification/slicing-plate-audit-20261019/summary.json` 和 `slicing-plate-audit-20261019-json/summary.json`，每个case保存完整command.json、run.log、独立data/cwd/output。盘内JSON日志第17行确认(30,40,0)，第86行返回(90,90,0)；固定切片日志明确`Skip non-printing plate 1`后仍完成成功。根result SHA保持`aa3a68f10277867d33654ab94e7eb25a99e56899b481a35c6e7ea8e3d368acd6`。
+
+两笔增量的独立源码审阅：阶段报告只由显式check/reconstruct入口执行，未改普通导入、修复核心、模型变换或盘归属；报告关闭时保留旧检查路径。切片指标关闭时跳过新增采集和几何分析，开启时只读Print/模型/路径；Arrange、ModelArrange、PartPlate、ArrangeJob、墙/填充/支撑生成没有这两笔变更。GUI普通导出沿默认false，GUI高级修复/重建入口保持，不自动采用候选。未发现这两笔新增的默认打印指令或排布算法变化，不等于整包无风险。
+
+显式开启分析的任务边界仍存在：G-code导出后才算报告，报告异常或硬链接发布失败会返回`CLI_RESULT_WRITE_ERROR`并停止后续盘/最终3MF导出；已生成G-code保留。分析耗时计入原每盘超时（`:7763`），复杂模型可能因此超时；不把“只读”解释成不影响耗时和任务结果。模型阶段报告也会增加读取/比较和报告失败出口，仅影响显式请求。
+
+本次定位出的回归缺口：`scripts/test_cli_slice_analysis.py:630` 和 `scripts/test_cli_slice_features.py:880` 统一使用`--arrange 1`，此前40场景/10保护不能证明关闭摆盘正常。修复应只补盘归属初始化（保留用户坐标、不强制重新摆盘）、共享的目标盘判定与无实际产物的失败检查，并覆盖STL/OBJ固定位置、报告开/关、盘内JSON、正常多盘/空盘/禁用盘/越界模型；不能简单删除所有空盘保护或把后端统一改成切第1盘。
+
+本轮未改生产代码、未提交、未重新编译；已有程序身份一致故直接复用。GUI手测、Windows/Linux与线上环境未执行。修复后的GUI交接需在匹配新构建中验证：导入两件模型→自动分盘→逐盘切片/导出；再加入空盘、关闭其中一件打印→切所有盘；核对盘数、位置、实际文件和提示，保存重开后重做。CLI应同时断言退出码与产物，不用GUI结果替代后端固定位置命令。
+
+工具边界：按understand-diff检查增量及调用关系；Understand图谱为2026-08-28旧快照，未作为当前事实或写覆盖图。CodeGraph MCP未暴露，CLI/索引可用，抽查CLI/PartPlate/ModelCheckWorkflow内容匹配；Processor过期后一次增量sync完成6文件并复核哈希。部分报告符号未检索到，使用当前源码；不宣称图谱完整。
+
 ### 2026-10-19 报告统计按需采集（完成，与切片指标功能合并交付）
 
 用户要求未开启报告时不做新增统计。本轮基于 `codex/model-feature-analysis-20261018` / `dbcd9a9e2a`，只调整 Orca：沿现有 CLI 报告开关传到导出器/解析器，默认 GUI、普通 CLI 和独立预览不采集分析元数据；原估时、耗材、预览和指令生成保留，不新增用户参数。实例内固定采集开关，reset 清理统计并保留实例用途，避免复用时串数据。

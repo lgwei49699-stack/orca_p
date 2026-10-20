@@ -1464,6 +1464,95 @@ TEST_CASE("Failed sliced export preserves an existing file and ordinary project 
     REQUIRE_FALSE(read_zip_entry_text(archive.path(), "3D/3dmodel.model").empty());
 }
 
+TEST_CASE("3MF rejects invalid plate members without replacing the existing file", "[3mf][bbs][PlateReferences]")
+{
+    Temporary3mfPath  archive("orca-invalid-plate-member");
+    TemporaryFilePath gcode("orca-invalid-plate-member", ".gcode");
+    const bool        sliced_only = GENERATE(false, true);
+    const int         invalid     = GENERATE(0, 1, 2, 3, 4);
+    CAPTURE(sliced_only, invalid);
+    const std::string previous = "previous user file";
+    {
+        std::ofstream output(archive.path());
+        output << previous;
+    }
+    {
+        std::ofstream output(gcode.path());
+        output << "G1 X10 Y10 E1\n";
+    }
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    REQUIRE_FALSE(store_bbs_gcode_project(archive.path(), config, gcode.path(), false, 0, [&](StoreParams& params) {
+        if (sliced_only)
+            params.strategy = params.strategy | SaveStrategy::SkipModel;
+        auto& member = params.plate_data_list.front()->objects_and_instances.front();
+        if (invalid < 2)
+            member.first = invalid == 0 ? -1 : 9;
+        else if (invalid < 4)
+            member.second = invalid == 2 ? -1 : 9;
+        else
+            params.plate_data_list.push_back(nullptr);
+    }));
+    std::ifstream input(archive.path());
+    CHECK(std::string(std::istreambuf_iterator<char>(input), {}) == previous);
+    CHECK_FALSE(boost::filesystem::exists(archive.path() + ".tmp"));
+}
+
+TEST_CASE("3MF rejects references lost during serialization and cleans the temporary archive", "[3mf][bbs][PlateReferences]")
+{
+    Temporary3mfPath  archive("orca-lost-plate-member");
+    TemporaryFilePath gcode("orca-lost-plate-member", ".gcode");
+    const int         mode = GENERATE(0, 1, 2); // Missing exported object, late invalid member, sliced-only invalid member.
+    CAPTURE(mode);
+    {
+        std::ofstream output(gcode.path());
+        output << "G1 X10 Y10 E1\n";
+    }
+    DynamicPrintConfig config       = DynamicPrintConfig::full_print_config();
+    bool               callback_ran = false;
+    REQUIRE_FALSE(store_bbs_gcode_project(archive.path(), config, gcode.path(), false, 0, [&](StoreParams& params) {
+        if (mode == 2)
+            params.strategy = params.strategy | SaveStrategy::SkipModel;
+        Model*     model = params.model;
+        PlateData* plate = params.plate_data_list.front();
+        params.proFn     = [&, model, plate](int stage, int, int, bool&) {
+            if (stage != (mode == 0 ? EXPORT_STAGE_ADD_GCODE : EXPORT_STAGE_ADD_SLICE_INFO) || callback_ran)
+                return;
+            callback_ran = true;
+            if (mode == 0) {
+                // The model map has already been written. This valid live object
+                // is deliberately absent from the archive's object-ID map.
+                ModelObject* added = model->add_object();
+                added->add_volume(make_cube(1., 1., 1.));
+                added->add_instance();
+                plate->objects_and_instances.emplace_back(int(model->objects.size()) - 1, 0);
+            } else {
+                plate->objects_and_instances.front().second = -1;
+            }
+        };
+    }));
+    CHECK(callback_ran);
+    CHECK_FALSE(boost::filesystem::exists(archive.path()));
+    CHECK_FALSE(boost::filesystem::exists(archive.path() + ".tmp"));
+}
+
+TEST_CASE("Sliced-only export still supports G-code without editable geometry", "[3mf][bbs][PlateReferences]")
+{
+    Temporary3mfPath  archive("orca-no-editable-model");
+    TemporaryFilePath gcode("orca-no-editable-model", ".gcode");
+    const std::string text = "G1 X10 Y10 E1\n";
+    {
+        std::ofstream output(gcode.path());
+        output << text;
+    }
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    REQUIRE(store_bbs_gcode_project(archive.path(), config, gcode.path(), false, 0, [](StoreParams& params) {
+        params.strategy = params.strategy | SaveStrategy::SkipModel;
+        params.model->clear_objects();
+        params.plate_data_list.front()->objects_and_instances.clear();
+    }));
+    CHECK(read_zip_entry_text(archive.path(), "Metadata/plate_1.gcode") == text);
+}
+
 TEST_CASE("G-code 3MF only references thumbnails present in the archive", "[3mf][bbs][PNG][Thumbnails]")
 {
     const bool        with_thumbnail   = GENERATE(false, true);

@@ -1,6 +1,7 @@
 name: Build Linux AppImage for x86_64
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'manual-build-linux-*'
@@ -72,12 +73,35 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --fix-broken
-        sudo apt-get install -y libunwind-dev ccache
+        sudo apt-get install -y libunwind-dev ccache binutils curl jq patchelf python3
     
     - name: Install system dependencies
       shell: bash -e {0}
       run: |
         sudo ./build_linux.sh -u
+
+    - name: Install MeshLib dependencies
+      shell: bash -e {0}
+      run: |
+        # Actual SDK ELF dependencies and the adapter's expected<T> header.
+        # The full SDK package also pulls unrelated OCCT/viewer/Boost development stacks.
+        sudo apt-get install -y \
+          libjsoncpp25 libspdlog1.12 libfmt9 libtbb12 libtiff6 \
+          libzip4t64 libgdcm3.0t64 libblosc1 libboost-iostreams1.83.0 libexpected-dev
+
+    - name: Prepare pinned MeshLib SDK
+      shell: bash -e {0}
+      run: |
+        SDK_ARCHIVE="${RUNNER_TEMP}/meshlib_v3.1.3.429_ubuntu24-dev.deb"
+        SDK_ROOT="${RUNNER_TEMP}/meshlib-sdk"
+        curl --fail --location --retry 3 \
+          https://github.com/MeshInspector/MeshLib/releases/download/v3.1.3.429/meshlib_v3.1.3.429_ubuntu24-dev.deb \
+          --output "$SDK_ARCHIVE"
+        echo "e592cf7d9a670d2f5b1fc01ddabb2574044749180f492864c62f37805686d727  $SDK_ARCHIVE" | sha256sum --check --strict
+        # Extract privately; do not install the SDK or replace Orca dependencies.
+        dpkg-deb --extract "$SDK_ARCHIVE" "$SDK_ROOT"
+        echo "ORCA_MESHLIB_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+        echo "ORCA_EXTRA_BUILD_ARGS=-DORCA_MESHLIB_LOCAL_EVALUATION=ON -DORCA_MESHLIB_SDK_ROOT=$SDK_ROOT -DZLIB_USE_STATIC_LIBS=ON" >> "$GITHUB_ENV"
     
     - name: Configure ccache
       shell: bash -e {0}
@@ -148,35 +172,67 @@ jobs:
         echo "Filename: ${FILENAME}"
         echo "Filepath: ${FILEPATH}"
     
-    - name: Verify AppImage
+    - name: Verify relocated MeshLib AppImage without the SDK
       shell: bash -e {0}
       run: |
-        FILEPATH="${{ steps.version.outputs.filepath }}"
-        
-        if [ ! -f "$FILEPATH" ]; then
-          echo "Error: AppImage file not found at: $FILEPATH"
-          echo "Build directory contents:"
-          ls -la build/ || true
-          exit 1
-        fi
-        
-        echo "✓ AppImage found: $FILEPATH"
-        echo ""
-        echo "File details:"
-        ls -lh "$FILEPATH"
-        echo ""
-        echo "File type:"
-        file "$FILEPATH"
-        echo ""
-        echo "✓ AppImage is ready for deployment to Ubuntu 24.04 x86_64 servers"
-        
-        # 显示编译统计
-        if command -v ccache &> /dev/null; then
-          echo ""
-          echo "=== CCache Statistics ==="
-          ccache -s
-        fi
+        # The final package must not fall back to the build machine's SDK.
+        mv "$ORCA_MESHLIB_SDK_ROOT" "${ORCA_MESHLIB_SDK_ROOT}.unavailable"
+        trap 'mv "${ORCA_MESHLIB_SDK_ROOT}.unavailable" "$ORCA_MESHLIB_SDK_ROOT"' EXIT
+        bash scripts/test_linux_meshlib_package.sh \
+          "${{ steps.version.outputs.filepath }}" "$RUNNER_TEMP/meshlib-package-check"
+        ccache -s
+
+    - name: Upload MeshLib package verification evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: MeshLib-Linux-package-verification-${{ github.run_id }}
+        path: |
+          ${{ runner.temp }}/meshlib-package-check/**/*.json
+          ${{ runner.temp }}/meshlib-package-check/**/*.txt
+        if-no-files-found: warn
+        retention-days: 30
     
+    # Exercise the packaged executable, not just the build-tree binary. This
+    # catches missing G-code and incorrect single/multi-plate JSON before release.
+    - name: Verify packaged CLI slicing and arrangement
+      shell: bash -e {0}
+      run: |
+        set -o pipefail
+        APPIMAGE_PATH="$(realpath '${{ steps.version.outputs.filepath }}')"
+        VERIFY_DIR="${RUNNER_TEMP}/orca-cli-slice-check"
+        mkdir -p "${VERIFY_DIR}/app"
+        chmod +x "${APPIMAGE_PATH}"
+        (
+          cd "${VERIFY_DIR}/app"
+          "${APPIMAGE_PATH}" --appimage-extract > "${VERIFY_DIR}/extract.log"
+        )
+        sha256sum "${APPIMAGE_PATH}" "${VERIFY_DIR}/app/squashfs-root/bin/orca-slicer" > "${VERIFY_DIR}/identity.txt"
+        # Service containers have no display. The slicing contract must work
+        # headlessly; do not hide missing output behind a successful exit code.
+        env -u DISPLAY -u WAYLAND_DISPLAY python3 scripts/test_cli_fixed_position_slice.py \
+          "${VERIFY_DIR}/app/squashfs-root/AppRun" \
+          --outputdir "${VERIFY_DIR}/results"
+        env -u DISPLAY -u WAYLAND_DISPLAY python3 scripts/test_cli_oversized_arrange.py \
+          "${VERIFY_DIR}/app/squashfs-root/AppRun" \
+          --machine "${VERIFY_DIR}/results/machine.json" \
+          --process "${VERIFY_DIR}/results/process.json" \
+          --filament "${VERIFY_DIR}/results/filament.json" \
+          --outputdir "${VERIFY_DIR}/arrangement-results"
+
+    - name: Upload CLI slicing evidence
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: OrcaSlicer-Linux-CLI-slicing-evidence
+        path: |
+          ${{ runner.temp }}/orca-cli-slice-check/results
+          ${{ runner.temp }}/orca-cli-slice-check/arrangement-results
+          ${{ runner.temp }}/orca-cli-slice-check/identity.txt
+          ${{ runner.temp }}/orca-cli-slice-check/extract.log
+        if-no-files-found: ignore
+        retention-days: 14
+
     - name: Upload AppImage as artifact
       uses: actions/upload-artifact@v4
       with:
@@ -188,7 +244,7 @@ jobs:
     
     - name: Create Release
       uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/')
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/manual-build-linux-')
       with:
         files: ${{ steps.version.outputs.filepath }}
         draft: false

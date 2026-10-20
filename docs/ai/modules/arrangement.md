@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "arrangement",
-  "source_fingerprint": "sha256:a6cd4c843be87f0919e5180890ed3965da4615efef4f82676810b3836e255015",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI专用repair_evidence_close_boundaries及证据帮助，只作用模型检测组合；不改变Arrange/ModelArrange、盘归属、间距、筏层预留或GUI摆盘行为。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-17 按用户最终限定撤回实际分盘和GUI修改；Arrange/ModelArrange/PartPlate/ArrangeJob与本轮起点一致，只说明CLI返回JSON的虚拟盘号边界。 最新明确约定：CLI独立返回盘的XY居中、Z归零，普通盘内实例保留实际正/负底面；同步日志，真实模型/GUI/3MF不变。第10组成对回归覆盖两类模型的正/负Z；历史归零/撤销过程保留在验证记录，本文按最终规则说明。 提交前复现并修正贴床后盘外缓存过期：CLI只读查询当前几何，不改缓存或盘归属；补第11组成对回归，验证贴床后正常模型的原盘号/XY与3MF保持。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。"
+  "source_fingerprint": "sha256:f42f64734416948821cf27e89bacbb892cc3b045cc4c75cea8a7911c926fce6c",
+  "reason": "合并master的CLI复制对象ID映射及单/多盘JSON边界，PartPlate几何、数量和GUI ArrangeJob算法未改；保留feature默认关闭的报告参数，其不参与摆盘配置。核对最终盘成员刷新和真实床面状态与报告按盘输出的衔接；实际回归及GUI待验见本轮记录。"
 }
 -->
 
@@ -33,9 +33,12 @@ GUI ArrangeJob 在主线程准备实例与锁定项，在工作线程调用 arra
 
 ## 失败与取消
 
-CLI `--export-model-transforms` 为越界或无归属实例各分配一个只存在于 JSON 的返回盘号，XY 为床面包围盒中心、Z为0；普通盘内实例仍保留实际底面Z（允许正值或负值），详见[CLI模块](cli.md)及[验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)。这不创建实际盘、不改变GUI、核心排布、盘归属和保存重开；不能将该返回盘号用于推断真实盘数或可打印性。
+CLI `--export-model-transforms` 仅在多盘模式为越界或无归属实例各分配一个只存在于 JSON 的返回盘号，XY 为床面包围盒中心、Z为0；多盘归属同时用共享BuildVolume核对真实床面形状，不能只按床的外接矩形；普通盘内实例仍保留实际底面Z（允许正值或负值），详见[CLI模块](cli.md)及[验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)。显式 `--auto-plate 0` 保留实际归属（无归属历史回退盘0）及实际底面中心，不新增返回盘或重写XYZ。两种模式都不创建实际盘、不改变GUI、核心排布、盘归属和保存重开；不能将该返回盘号用于推断真实盘数或可打印性。
 
 检查候选是否越床、碰固定物体／禁放区和真正分到几盘，再提交变换。取消不应移动半批对象。GUI 成功通知和 CLI 返回成功都不能代替几何验收。
+
+
+`PartPlate::duplicate_all_instance` 返回原对象/新对象的 ObjectID 对；CLI repetitions 用此映射继承全局变换及自动定向的JSON记录。复制本身的几何、数量、位置和打印开关不变；该函数当前只有CLI调用，不改变GUI ArrangeJob。组合复制/定向/缩放的实际3MF与JSON回归见[固定位置修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。
 
 ## 修改与验证
 

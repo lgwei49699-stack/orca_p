@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 APPIMAGETOOLURL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$(uname -m).AppImage"
 
 
@@ -11,7 +12,11 @@ if [ -f /.dockerenv ] ; then # Only run if inside of a Docker Container
 sed '0,/AI\x02/{s|AI\x02|\x00\x00\x00|}' -i  ../appimagetool.AppImage
 fi
 
-sed -i -e 's#/usr#././#g' bin/@SLIC3R_APP_CMD@
+# MeshLib packages use the existing executable-relative resources lookup.
+# Do not rewrite arbitrary ELF bytes (including dynamic-loader paths).
+if [ -z "@ORCA_MESHLIB_LINUX_RUNTIME_DIR@" ]; then
+    sed -i -e 's#/usr#././#g' bin/@SLIC3R_APP_CMD@
+fi
 mv @SLIC3R_APP_CMD@ AppRun
 chmod +x AppRun
 

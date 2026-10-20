@@ -3,12 +3,16 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:ff596cbfa34f893f9d1be072d523e70915ece43017b3c3026fa033ceedfb79c1",
-  "reason": "新增2CASE：同T不同M、同M不同T和双父根相同但C不交的跨Z矩阵，以及有效M混合bbox-only/edge-only/point-only候选的整个JSON严格不变；不改旧断言或容差。最小测试重建后233项/27613断言通过；170Python、40CLI/10保护及新块完整顺序等价通过，本轮旧字段和20A/B/CSV严格相同，上批尾差失败仍保留。真实复杂性能、后端大报告承载和GUI/跨平台未验范围见实施记录。 2026-10-19 新增2CASE覆盖报告统计default/false/true、线段圆弧/长队列/文件回读/reset和原统计逐项等价，旧50个分析fixture显式启用；235项45687断言及另7项8978断言通过，40CLI/10保护通过，完整报告两处既有几何末位差异单独保留；不冒称GUI或跨平台通过。"
+  "source_fingerprint": "sha256:e4c96befcfc31c7ef7e32af099bd38e7e811257f0224c55702ec7d2e6068fd95",
+  "reason": "合并master固定位置/镜像定向/3MF成员回归，保留阶段报告百万面读取、Linux配置/打包及已有分析测试。补6个固定位置/多盘/禁用盘与报告组合用例，逐条比较G-code及完整有效配置，失败无报告；不放宽旧断言。合并后运行数、程序身份与平台限制见实施记录。"
 }
 -->
 
 ## 职责与边界
+
+`test_cli_fixed_position_slice.py` 在 master 的固定位置/单多盘/禁用盘/3MF验证上补6个报告交叉场景，复用 `test_cli_slice_analysis.py` 的严格JSON和G-code解析；成功场景逐条比较报告开启/关闭的执行指令、有效配置和层数，仅实际成功盘生成对应报告；越界及全禁用失败不生成报告。两脚本身份均写入证据，运行结论以当前合并源码为准。
+
+阶段报告新增两个 `[ModelStageReport]` 原生用例：二进制／ASCII STL 精确共享顶点，同时保持文件哈希、面数、逐面坐标与顺序，且相邻浮点坐标不合并；百万面用例实际写出并回读 1,000,012 面，旧表示因 3,000,036 个顶点触发截面预算，新表示 501,509 个顶点可完成指定截面。该用例不是百万面完整高级修复压测。Linux 配置回归另使用真实系统 `FindZLIB` 验证 ON 默认共享库被拒、ON 显式静态通过、OFF 默认不受影响，并核对工作流实际参数；不能再以未创建 ZLIB target 的适配器探针代表完整 Orca 配置。当前构建与运行结果见[实施记录](../validation/2026-10-18-slice-analysis.md)。
 
 `[AnalysisCollection]` 以默认/显式false/true的解析器实例对照线段、圆弧、长规划队列和文件导入：关闭时报告元数据为空且未知；开启时有数据；原耗材/估时/预览字段逐项一致。reset 清除旧角色、材料与阈值数据但保持实例采集开关，已有报告测试显式启用。G1空移距离是新增分析字段，不纳入旧预览一致性比较；Extrude距离仍严格一致。运行与GUI状态见本轮实施记录，不用测试存在代替执行。
 
@@ -41,7 +45,9 @@
 - [test_cli_model_reconstruction.py](../../../scripts/test_cli_model_reconstruction.py)：针对已有应用创建隔离 STL 夹具、逐例目录和独立重建协议审计；保存二进制／输入 hash、stdout/stderr、报告及汇总，不构建、不切片、不打印。
 - [test_cli_model_check.py](../../../scripts/test_cli_model_check.py)：沿用既有检测／显式组合高级修复回归，核对默认 v4 精确六字段及显式 `--repair-evidence` 的可选 `boundary`；分别验证开关、非法组合、原字段／退出码和产物一致性，不新增自动修复命令或实际打印任务。
 - [test_gmp_platform_selection.py](../../../scripts/tests/test_gmp_platform_selection.py)：在临时 CMake 脚本中执行 GMP 配方、捕获 ExternalProject/复制参数，验证目标架构对应的版本、校验值及旧补丁/预编译路径；不修改真实构建目录，不等于目标系统编译运行。
-- [test_meshlib_platform_config.py](../../../scripts/tests/test_meshlib_platform_config.py)：隔离SDK夹具与CMake项目执行实际平台、版本、文件布局、CRT及依赖属性检查，覆盖OFF、Mac arm64、Windows MSVC x64、Linux x64/arm64。模拟目标注册与编译器变量，不执行目标系统编译/加载；不能据此宣称跨平台运行通过。
+- [test_meshlib_platform_config.py](../../../scripts/tests/test_meshlib_platform_config.py)：隔离SDK夹具与CMake项目执行实际平台、版本、文件布局、CRT及依赖属性检查，覆盖OFF、Mac arm64、Windows MSVC x64、Linux x64/arm64。Linux另用合成ELF验证参数穿过PRIVATE静态链、TBB函数／RTTI／三类thunk的运行时隔离、含TBB参数的普通业务符号仍导出、OFF行为、带空格路径，以及链接脚本修改触发重链／内容不变不改时间戳。合成库不使用真实SDK代码，不能据此宣称完整应用或跨平台运行通过；最终包还要检查所有SDK到主程序的TBB绑定，而非只核对首次发现的符号名单。
+- [test_package_meshlib_linux.py](../../../scripts/tests/test_package_meshlib_linux.py)：依赖闭包、架构、SONAME冲突、哈希/路径/加载缺失回归；Linux真实ELF用例包含子库RUNPATH，隐藏SDK后搬迁直接运行，其他系统显式跳过。
+- [test_linux_meshlib_package.sh](../../../scripts/test_linux_meshlib_package.sh)：对最终AppImage解包搬迁，清LD环境后验证依赖和哈希，直接ELF运行既有MeshLib/阶段报告测试，再独立验证AppRun重建；调用者须先使构建SDK不可访问。不是普通切片/分盘或GUI验收。
 
 ## 核心流程
 
@@ -137,9 +143,27 @@ Windows GUI 采集脚本使用 PowerShell 5.1 与内嵌 C# P/Invoke，默认延�
 
 云配置按用户要求撤回新增来源环境／账号绑定及相应策略测试，恢复旧请求完成校验；JSON协议回归保留。新增标准档名称优先级与成功导入才装饰旧名称的测试，来源按钮、保存、真实下拉选择及认证恢复仍需GUI联调，见[云配置记录](../validation/2026-10-09-cloud-config-quality-analysis.md)。
 
+
+用户业务独立使用per-model或全局变换；另有单独per-model三轴旋转、缩放及旋转+统一缩放在单盘/多盘下的成对验证，含同时切片。
+
+固定位置脚本追加已有3MF与新增STL/OBJ混合、单盘/多盘、盘内/完全越界/部分越界及显式盘号，成功时三个对象必须均有实际挤出路径。分盘脚本追加全局旋转/缩放/三轴组合、per-model叠加、自动定向、切片及repetitions复制；用JSON重建源顶点并与3MF实际顶点逐点比对，不仅检查包围盒或退出码。不同对象已有不同volume旋转时各自验证；无法用rotation+scale表达的剪切应明确拒绝，而不导出JSON时仍可保存3MF。格式层新增 `[PlateReferences]`，范围与失败语义见[格式模块](formats.md)。
+
 ## 修改与验证
 
-`scripts/test_cli_oversized_arrange.py` 使用当前CLI和解析完成的机器/工艺/耗材JSON，在全新目录生成方块。11组成对运行比较开启/关闭变换JSON导出后的实际3MF盘成员、网格、变换及打印开关完全相同，同时核查正常盘号/坐标与每个越界实例的独立返回盘号和床面中心；覆盖超床、超高、重开、重排、省略auto-plate、显式单盘、正常多盘、矩形床及37个越界实例。额外3MF夹具分别给正常及越界模型设置-2.5/+7mm底面，验证越界JSON底面均归零、正常实例仍返回实际正/负底面，实际3MF保持不变。另用底面85mm、高20mm的盘内XY模型验证显式贴床后恢复真实盘号及XY，避免旧盘外缓存造成误判。3MF用object_id引用解析名称，不混用运行时ObjectID与持久identify_id。脚本不构建、不启动GUI、不打印；结果及撤销方案边界见[JSON分盘记录](../validation/2026-10-17-cli-oversized-arrangement.md)。
+`scripts/test_cli_fixed_position_slice.py` 自带机器／工艺／耗材和小型 STL/OBJ，使用独立目录执行真实 CLI，
+不下载输入、不使用用户配置、不构建或打印。核对退出码、结果 JSON、实际 G-code 挤出指令，
+固定位置同时核对 JSON 坐标和每个对象的实际路径范围。覆盖自动摆盘对照、STL/OBJ、多模型、显式盘号、
+越界拒绝、多盘、首盘空／禁用、全部禁用及非切片导出。追加混合正常／完全越界输入、单盘摆放溢出、
+无效盘号、禁用实例部分越界／面数限额、贴床后重新归盘、显式跳过和保存工程盘外备用模型的选择边界。
+合并原始网格／保存工程的仅导出、合并切片、保存重开均覆盖；所有导出工程检查盘成员引用的对象及实例确实存在。切片包用 ZIP CRC、实际 G-code 列表和逐字节内容验证全盘／首盘禁用／明确第二盘导出，不能只凭文件存在通过。
+全空或显式空盘可在 3MF 导入阶段返回 -6，
+禁用但仍有几何的全跳过场景必须返回 -50。命令、日志、输出、二进制和脚本哈希保留在证据目录；
+Linux 工作流在上传发布包前对解压后的 AppRun 执行同一回归，失败保留证据并阻止后续发布步骤。
+红／绿结果和平台边界见[固定位置切片修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。
+
+`scripts/test_cli_oversized_arrange.py` 使用当前CLI和解析完成的机器/工艺/耗材JSON，在全新目录生成方块。成对运行比较开启/关闭变换JSON导出后的实际3MF盘成员、网格、变换及打印开关完全相同。多盘核查正常盘号/坐标及每个越界实例的独立返回盘号和床面中心；单盘核查实际盘号（无归属回退0）与实际XYZ，覆盖超大/超高、容量溢出、正负底面、单盘不重排重开多盘工程。单/多盘固定位置原始输入均验证正常归属与原坐标，真正盘外时分别返回实际位置和虚拟盘中心；覆盖超床、超高、重开、重排、省略auto-plate、显式单盘、正常多盘、矩形床及37个越界实例。追加三角形打印床的正常／完全越界／部分越界与显式单盘对照，防止把外接矩形当成实际床面。额外3MF夹具分别给正常及越界模型设置-2.5/+7mm底面，验证多盘越界JSON底面归零、正常实例仍返回实际正/负底面；单盘全部保留实际底面，实际3MF保持不变。另用底面85mm、高20mm的盘内XY模型验证显式贴床后恢复真实盘号及XY，避免旧盘外缓存造成误判。3MF用object_id引用解析名称，不混用运行时ObjectID与持久identify_id。脚本不构建、不启动GUI、不打印；结果及撤销方案边界见[JSON分盘记录](../validation/2026-10-17-cli-oversized-arrangement.md)。
+
+分盘脚本另用不对称四面体覆盖无镜像及全部七种镜像轴组合，避免对称方块掩盖反射丢失。含已有旋转/统一及非统一缩放、orient、主动摆盘、全局操作和实际切片，均覆盖单/多盘及JSON开关；按原始顶点与JSON逐点还原实际3MF，不固定某种等价欧拉角或镜像轴表示。切片案例检查有效挤出以及开关JSON时的G0/G1路径相同。镜像相关新增58次CLI调用，另加16次非等比缩放与定向的组合检查，专项总计154次；无法表达的剪切以实际3MF变换基向量不正交作独立核对，JSON明确拒绝而关闭JSON仍可导出工程；结果见[镜像修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。该定制JSON仅CLI提供，GUI无同名协议入口；不以脚本通过替代Linux/Windows和GUI的其他功能验收。
 
 `test_epone_presets.cpp` 的 `[Preset][GFDCloud]` 用临时用户目录保存两机型的云工艺和耗材，再执行 `save_user_presets` 与重新加载，核对机器子目录、兼容机型和各自层高/温度保持独立；不依赖云账号、不写真实用户预设。此共享存储测试不覆盖 Plater 的替换/另存弹窗、真实三档下拉和网络导入，合并后的构建/回归与 GUI 待验见[主记录](../validation/2026-10-04-smart-print-engine.md)。
 

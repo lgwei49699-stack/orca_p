@@ -1147,7 +1147,9 @@ bool GLVolumeCollection::check_outside_state(const BuildVolume &build_volume, Mo
                 model_state[comp_id] = volume_state;
             }
 
-            if (model_state[comp_id] == ModelInstancePVS_Partly_Outside) {
+            // Keep per-volume outside state for display, but a disabled
+            // instance must not prevent the enabled objects from being sliced.
+            if (volume->printable && model_state[comp_id] == ModelInstancePVS_Partly_Outside) {
                 overall_state = ModelInstancePVS_Partly_Outside;
                 BOOST_LOG_TRIVIAL(debug) << "instance includes " << volume->name << " is partially outside of bed";
             }
