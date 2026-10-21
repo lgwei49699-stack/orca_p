@@ -4,7 +4,7 @@
 {
   "id": "test-tools",
   "source_fingerprint": "sha256:2c04b60eaad5352b1fb82601c89305b08aead55bf463643c4420b1e0f83069a1",
-  "reason": "删除已停止诊断专属用例，保留混合核心断言、unknown及开关全部move距离一致性；峰值/cap使用独立速度真值。40组夹具桥接/支撑从最终G-code核验，不依赖已删角色报告；稀疏顶面用合并实体目标验证，当前产物禁止退休字段。83项Python通过，新原生/CLI构建身份与实际结果见实施记录。"
+  "reason": "按用户非必要不改Orca要求，撤回1f6c8c3cb7新增的舍入/外部文件专项及配套生产修复，test_slice_analysis.cpp恢复父提交原样；原开关/非法/残块及估时预览一致性回归保留。下载工具和其他WIP未动，当前最小构建、回归和旧报告兼容验证见实施记录。"
 }
 -->
 
@@ -45,6 +45,8 @@ Web全局对比保留材料唯一身份、乱序/重复、不同cap/冷却阈值
 - [test_linux_meshlib_package.sh](../../../scripts/test_linux_meshlib_package.sh)：对最终AppImage解包搬迁，清LD环境后验证依赖和哈希，直接ELF运行既有MeshLib/阶段报告测试，再独立验证AppRun重建；调用者须先使构建SDK不可访问。不是普通切片/分盘或GUI验收。
 
 ## 核心流程
+
+本轮撤回可选的流量观察舍入修复及该补丁新增的两个专项测试，恢复父提交原样，不放宽原有断言。既有分析开关/无采集、合法零/非法/残块、材料隔离及原估时/预览回归继续执行；Web补旧引擎流量不完整时其余指标与全部参数方案保持可用的兼容验证。旧float统计限制仍存在，不能以部署验证通过声称该问题已修复；当前身份与结果见[实施记录](../validation/2026-10-18-slice-analysis.md)。
 
 `test_slice_analysis.cpp` 的 `[SliceAnalysis]` 定向校验只读切片指标；`scripts/test_cli_slice_analysis.py` 对已构建应用在新隔离目录比较默认/显式关闭/开启，核对可执行 G-code、有效配置、旧结果不变，以及报告存在性、非法组合和已有文件保护。资源可显式指定，不下载、不构建、不打印。真实结果见[实施记录](../validation/2026-10-18-slice-analysis.md)。
 

@@ -2,6 +2,143 @@
 
 ## 当前基准与下一步
 
+### 2026-10-22 调整范围：非必要不改 Orca（合并本地提交，未推送/部署）
+
+用户要求非必要不改Orca，并明确授权把本次调整并入上一笔提交，不新增独立撤回提交。原本地 `1f6c8c3cb7` 的流量观察浮点容差及配套新增测试已取消，源码/测试恢复到 `2dd0b6b21f`；Orca最终提交只含模块说明和部署交接，不改历史切片/报告接口、自适应层高、修复、分盘或其他WIP。PAM选参读取Blender特征和有效模板，不依赖切后峰值/超cap统计，因此保留已完成检测和参数优化；Web已按指标隔离不完整报告，不能补零、据此抬高流量限制或掩盖未知。
+
+已验证：`git diff --exit-code HEAD^ -- src tests` 为0，整个src/tests与 `2dd0b6b21f` 无净差异。当前Mac arm64 Release最小重建应用及fff_print_tests成功；`[SliceAnalysis],[GCode]` 85项/26987断言通过，原报告CLI脚本10个场景通过（默认关闭/显式关闭/开启的执行指令、有效配置、原结果一致，并核对非法组合/输出保护）。Web新增3项旧报告兼容回归后全量257项通过：只将不完整流量观察保留未知，覆盖/冷却/成本不变、16类参数/实际改动及请求匹配不丢失；未修改Web生产逻辑或新增解析/存储。模块检查35/0问题、两仓diff --check通过。未重跑无代码变化的PAM/Compare/Blender测试，也未冒用旧40次切片为本轮结果。
+
+日志 `/tmp/orca-stable-engine-{build,native,cli,web}-20261022.log`，CLI证据 `/tmp/orca-stable-engine-20261022.8lUfzK/cli/`。当前应用SHA256 `7ce64d08fbcd7ffb2e97326e0c20c39894d0b916853d7a13dc14eab893639834`，测试SHA256 `389d7bc510860649f7565bd9502c5791e66dca0ce596435262be0ab9d2b4efac`。build/arm64/src/Release下应用已同步；旧打包副本未更新，不用于本轮证明。Linux实际镜像/GUI/线上联调及实印仍待验；本轮没有远程部署、业务库或打印操作。
+
+发布清单已同步：本批仅Blender/PAM/Compare/Web，Orca/PDS不因本批重打；前提是现有引擎已具备此前的报告/自适应CLI接口。旧引擎浮点问题保留为报告已知限制，不宣称修复；下方Orca必发与86项测试为撤回前历史记录，不能作为本轮当前身份。
+
+本次提交整理：通过ls-remote确认Orca远端仍是2dd0b6b21f、Web远端仍是c8ad968，两个待改写提交未推送。Web改动和3项兼容回归已并入上一笔，最终提交 `5eb39b7c328229d130f9209fc21b12943e4e81e2`（替代c023310）；提交前重跑257项全部通过，日志 `/tmp/model-amend-web-20261022.log`。Orca同样amend上一笔为纯文档提交，最终身份以Git为准，分支不保留单独的流量补丁/撤回提交。Blender/PAM/Compare原提交不变，不推送、不合并其他分支；原无关文档/result.json/下载工具WIP继续保留。test-tools仅选择本任务段落，以暂存内容计算指纹，不纳入下载工具内容。
+
+后续实现边界：模型测量放Blender、模板及参数选择放PAM/Compare、有效值/收益解释放Web；优先使用已支持的Orca参数和CLI。只有确认现有引擎无法完成必要功能或影响正常切片正确性，且服务层不能合理处理时，才单独说明必要性与影响后修改Orca。不得为了报告全绿增加重复扫描或伪造缺失测量。GUI/QA交接：沿用Web清单的新实验与原流程回归；可在本地新应用打开本轮CLI默认/开启G-code，对照路径、估时和耗材，实际操作尚未执行。
+
+### 2026-10-22 审核提交完成（未推送/部署）
+
+用户授权审核并提交当前模型检测/参数优化改动，交付部署和测试方案；未授权推送/部署。按understand-diff及当前源码核对测量、参数优先级/单位/原生默认值、B覆盖及最终请求、报告归因和未改参数显示，未发现本批QA入库阻断项；旧图谱不作为依赖证明，本次不新增业务规则。PDS c606337工作区干净。Orca只提交流量观察修正、对应测试及模块/本记录；test-tools按暂存内容计算指纹并部分暂存，未纳入独立下载工具及其文档段落，工作树保留。其他无关文档/result.json/下载工具/Blender缓存均未提交。
+
+| 仓库 | 分支 | 本批本地提交 |
+| --- | --- | --- |
+| Blender | codex/model-feature-analysis-20261018 | 12bd816d7534cfd5a5ac25e21282f76880209600 |
+| PAM | codex/model-feature-analysis-20261018 | 727e4e65f053386b19fbed43d092002ee4538f0e |
+| Compare | codex/model-feature-analysis-20261018 | 78502feeaaf45622bb83b31bd20720a61480b40e |
+| Web | develop | c023310c271814678659cb7f85605d55acb75deb |
+| Orca | codex/model-feature-analysis-20261018 | 流量观察补丁及本记录随本次提交，确切身份以Git为准 |
+
+当前业务源码PAM155、Compare228、Web254项通过（上一轮重新执行，日志 `/tmp/deploy-readiness-{pam,compare,web}-20261022.log`）；Compare另96既有禁用集成不计通过。本次追加当前Blender几何20/墙几何14/模板35/独立墙4及Orca原生86项、27380断言通过，Web生产构建通过（既有大chunk提示），日志 `/tmp/commit-model-20261022-*.log`。上述程序退出0，Orca测试SHA256 `282d5f353d9b5e2d95134c6a903d24412e2b0bf227984ec8248c9d5316ea9779`、应用 `5d7a652b269e668a0cb06a26661d10170e32ead057cd6a24876402e033a13dce`；构建依赖dry-run无C++重编需要。已有40次实际切片为同业务代码前轮证据，见下节，不冒充本轮重跑。未访问线上服务/业务库/设备。
+
+各仓选择性暂存文件清单、暂存差异/空白及新增敏感字段模式检查通过；Orca工作树35模块/0问题、暂存受影响2模块/0问题通过。提交前后的未纳入工作树保留，不安装hooks、不改第三方依赖。当前只本地提交，需要后续授权push或用户自行push后CI才能取得这些提交。
+
+部署：Orca Linux引擎（或PDS内置引擎镜像）+Blender脚本+PAM，随后Compare、Web；PDS Java无新增、无新SQL。先等旧测试任务结束，新建实验确认检测/选定模型/参数/请求/G-code同源，核对普通无调整、薄壁/小孔/悬垂/薄片/坡面/高瘦/小层，再抽验修复/固定位置/分盘/筏层流程，最后小批A/B实印记录质量和时间耗材。GUI/目标Linux/真实服务联调与实印仍待验，不把16类关联记录当16类独立精确检测或成品质量已验收。完整步骤、通过条件与回滚/反馈资料已汇总到Web `docs/CORE_REPORT_HANDOFF_20261020.md` 顶部。
+
+### 2026-10-22 部署准备复核（仅审查，未提交/部署）
+
+用户询问继续优化还是部署测试。本次核对六仓当前差异、检测→PAM覆盖→Compare冻结请求→Orca消费者及Web逐参数展示，未发现本批进入QA前必须继续编码的阻断项；建议固定当前版本配套部署QA，按新实验联调和实印证据再调规则。不是生产放行或16类独立检测全部验收。源码/分支基准与下节一致，PDS Java干净，其他原WIP保留；本轮未改业务代码，仅补此验证记录。understand-diff按当前源码审查，旧图谱不作为覆盖证明。
+
+本次重新执行PAM155项、Compare228项、Web254项通过，Compare另96项既有集成跳过，三个进程退出0；日志 `/tmp/deploy-readiness-{pam,compare,web}-20261022.log`。六仓diff --check通过。Orca应用hash仍为 `5d7a652b269e668a0cb06a26661d10170e32ead057cd6a24876402e033a13dce`；下节40次切片与Web构建属于同业务源码的前轮证据，本次不冒充重跑。未连接业务库/线上服务、不下发打印，不运行禁用集成。
+
+发布前先审核提交本批相关文件并推送，勿混入无关文档/result.json/下载工具/缓存；当前检查授权不包括提交推送。累计配套Orca引擎、Blender脚本、PAM、Compare、Web，PAM先于新Compare；PDS Java无需因本批单独修改，内置引擎的镜像需更新，无新增SQL。部署后新建同模型姿态实验，验参数记录与实际G-code一致、普通无调整及修复/分盘回归，再测细壁/悬垂/小层/高瘦的成品与成本。16类包含实测选参、原生路径执行和沿用机料配置，不能称每类都独立推算新参数；尺寸补偿/回抽/强度等缺实机标定或明确目标时不造值。GUI/Linux/真实服务联调与实印仍未验，完整步骤见Web交接文档。
+
+### 2026-10-22 继续：小层冷却独立生效（本地完成，未提交）
+
+沿用下节六仓基准与全部WIP，不提交/推送/部署。差异审查发现PAM把小层冷却降速绑定到普通风扇范围完整，合法的slow_down_min_speed=0也被拒；当前Orca CoolingBuffer独立依据层时间、速度下限和开关降速，风扇另行调度。已修正PAM消费条件：仅使用B已有合法时间/最低速度，显式关闭时开启；缺省开关沿用Orca默认开启、已有开启值不重复覆盖。最低速度0表示不额外限制降速，不是停止运动；不猜风扇/时间/速度新数值，不新增模型扫描、请求字段或数据库存储。非法/缺失时间或速度、多耗材配置不造值。Web同步逐参数原因，0时间明确不触发，默认开启和风扇独立保留不再误标无效；所有16类和未改参数仍可见。
+
+验证完成：PAM155、Web254项通过，Web生产构建通过（既有大chunk提示）；先红PAM4/Web2，再修正至全绿。日志 `/tmp/layer-cooling-{pam-final,web-final,web-build-final}.log`。当前Blender真实模型测量→Compare/PAM实际类（仅网络依赖替身）→PDS命令追加→同一Orca六组前后12次切片通过，证据 `/tmp/layer-cooling-e2e-KOOdMC/run1/`，日志 `/tmp/layer-cooling-cli.log`。8×8×5 mm模型、原外墙60、耗材时间8秒/最低10、缺风扇字段时，冷却开关0→1，Z>0.8 mm外墙速度中位数60→10.83 mm/s；显式最低0/风扇0组为60→7.9。长层保持60，已有开启/缺省继承/零时间对照执行指令完全相同。六组几何/挤出指令及风扇配置值前后不变；实际风扇指令仍可能因原生层时间调度变化，不声称它们一律相同。缺风扇组预计总时长414.4→565.7秒，是换取冷却时间，不是提速收益；实物改善尚未验证。
+
+前10组20次原流程与自动层高8次回归也通过，合计40次真实切片；覆盖普通指令不变、细颈/细壁、贴床薄片、小轮廓、自动支撑、自适应及legacy/Cura筏。证据 `/tmp/effective-feature-e2e-yi5fDv/cooling-regression/`、`/tmp/auto-layer-e2e-xBNNnz/cooling-regression/`；日志 `/tmp/layer-cooling-{existing-cli,auto-cli}.log`。上述测试、构建和CLI进程退出0；不连接业务库/线上服务，不下发打印。Compare228项/96既有集成跳过为上轮未变业务验证，本轮不冒充重新执行。
+
+本轮业务增量仅PAM/Web；Orca共享GUI/CLI冷却核心、PDS、Blender与Compare业务无新修改。复用当前Mac arm64应用SHA256 `5d7a652b269e668a0cb06a26661d10170e32ead057cd6a24876402e033a13dce`，不重复构建未改C++。CodeGraph MCP未暴露、CLI存在但旧图谱不覆盖服务增量，按源码审查，不重建索引。Orca模块检查35/0问题，相关仓差异检查通过，未暂存/提交；无关文档/result.json/下载脚本及缓存WIP保留。
+
+下一步：累计待发布仍为Orca引擎+Blender+PAM+Compare+Web，无新增SQL，PDS Java无新改动。Web `docs/CORE_REPORT_HANDOFF_20261020.md` 顶部补新实验和原生GUI速度预览清单。GUI/Linux/目标机型/实印待验证，不用软件降速证明成品质量，也不把16类记录等同16类算法全部验收。
+
+### 2026-10-22 继续：解析自动层高边界（本地完成，未提交）
+
+沿用下节六仓HEAD与全部WIP，当前Orca仍为2dd0b6b，不提交/推送/部署。差异审查发现Compare将min/max_layer_height的0作为缺失值，阻断已有几何命中后的参数调整；已在Compare有效配置解析处对齐Orca共享Slicing.cpp：min=0为0.07 mm、正min至少0.01 mm，max=0为喷嘴直径的75%且不得低于有效min。不新增扫描/存储，不改A或模板，不改原生切片算法。保留缺失/无效/混合向量的未知语义，材料只覆盖第一槽的规则不变。最大值也要求确认最小值，避免原生钳制后反而高于服务判断。
+
+验证完成：旧实现5个红例复现，新增6个回归后Compare全量228项通过、96既有集成跳过；PAM151通过。日志 `/tmp/auto-layer-{compare-red,compare-green,pam}.log`，绿测进程退出0。当前Blender实际测量→Compare/PAM真实类（仅网络边界替身）→PDS实际命令追加→当前Orca共8次切片通过，`/tmp/auto-layer-e2e-xBNNnz/run1/`与`/tmp/auto-layer-cli.log`，退出0。0.24 mm贴床薄片从1层0.2变为2层0.12；0.2 mm带坡细壁自适应质量0.5保持，输入过滤75%→31.154%，Z1.5–4.8 mm中段长挤出0→11，最小/首层挤出85%/100%不变。普通模型及自动0/等效显式0.07与0.3对照的执行指令相同，16项完整、A/源不变。old-boundary是当前PAM重放旧Compare传null的行为，不是旧服务镜像；无线上服务/业务库/打印操作。
+
+本轮业务仅Compare工具方法；PAM/Web仅同步交接文档，其他服务和Orca业务源码未新增。复用当前应用SHA256 `5d7a652b269e668a0cb06a26661d10170e32ead057cd6a24876402e033a13dce`，GUI/CLI共享原层高核心，没有新原生入口。Orca模块检查35/0问题，未暂存，不声称staged已验；无关WIP保留。
+
+下一步：配套累计改动发布测试环境，用Web `docs/CORE_REPORT_HANDOFF_20261020.md` 顶部新清单核对新实验16项和实际请求；原生GUI对照run1下薄片2层及细壁路径。GUI/目标Linux/实印待验证，不能用路径输出代替打印收益或宣称16类全量算法已验收。旧图谱未覆盖服务增量，按源码审查；不自动提交/推送/部署。
+
+### 2026-10-22 续查：薄壁测量到Arachne过滤阈值（本地完成，未提交）
+
+沿用下节六仓基准与全部WIP，不提交/部署。差异审查技能使用源码降级，旧图谱不覆盖当前服务增量。补上“已选Arachne但原min_feature_size仍过滤掉细壁”的实际缺口。本轮业务增量Blender/PAM/Compare/Web，Orca/PDS核心未改。
+
+- Blender复用原宽度栅格中已识别持续窄笔画的样本，只新增 `narrowStrokeWidthMedianMm / narrowStrokeResolutionMm` 两标量；不加截面/预算/坐标。是已识别笔画的代表宽度，不是全模型最薄处；短分支阳性、失败或未测不能伪造宽度。多模型保留最小可用代表值和配套采样间距，原覆盖语义不变。
+- Compare按相同有效配置优先级传 `nozzleDiameterMm / maximumLayerHeightMm` 标量，不复制整份机器快照。PAM按当前宽度身份、喷嘴和层高检查 `min_feature_size`（喷嘴百分比），仅降低过大的过滤值；扣除两像素量化余量及Orca原生轮廓收缩 `height*(1-PI/4)`，精确外墙Inner/Outer取双倍。固定层使用原普通/首层较大值，自适应须有确认的最大层高；缺失/auto未解析时不猜。正宽度不足时不强制钳零。保留最小及首层挤出线宽，窄壁可能被加宽，不宣称尺寸准确或可承载。
+- Web特征/逐参数/CSV补代表宽度与采样间距，保留未改参数并显示服务端实际理由；有阈值降低才显示原值→最终值，不把调整记录等同实际路径验证。
+- 两次反例推动修正：初版P10被旋转后端部骨架拉低，改用已通过持续性条件的中位数，0.2/0.36 mm、0/17/45°六个夹具在两像素内；这不是通用误差保证。第一次CLI只扣采样余量后虽写入47.25%，细壁仍无路径；源码定位原生轮廓收缩后修正到36.519%（0.4喷嘴、0.2层高），精确外墙为25.789%。不把失败样例隐藏或作为通过证据。
+- 当前Blender真实夹具→PAM/PDS类→Orca六组12次切片通过：普通/45°/Classic切换/精确外墙四组中，细壁中段长挤出段0→16；已有25%阈值与0.5 mm宽墙对照前后执行指令相同。证据 `/tmp/thin-feature-e2e-pkWg2M/final/`，日志 `/tmp/thin-feature-cli-six.log`。原悬垂五组10次及原流程十组20次回归通过，日志 `/tmp/thin-feature-overhang-cli.log`、`/tmp/thin-feature-existing-cli-final.log`。支持原自适应/支撑/legacy及Cura筏场景；不是线上服务/打印验证。
+- 本地全量PAM151、Compare222通过（96既有集成跳过）、Web252及生产构建通过（既有大chunk提示）；Blender几何20、墙几何14、模板35、独立墙入口4通过。日志 `/tmp/thin-feature-{pam-final,compare-final,web,web-build,geometry-median,wall,template,wall-entry}.log`。用户原STL复测除两个新null字段外与上一版全部逐值相同：这份模型当前检测命中短分支/局部细颈，没有可靠持续笔画宽度，不能据此虚构新的过滤阈值。
+
+GUI待验：导入final/filtered的before/after G-code在Z1.6–4.6 mm看薄肋路径有无；precise对照同验，permissive前后无新变化。Web部署后新建实验核对16类完整、薄壁代表宽度→阈值/原因→冻结请求/G-code，并实印核验加宽后的细壁和相邻间隙。具体交接见Web `docs/CORE_REPORT_HANDOFF_20261020.md` 顶部。复用同一Orca应用SHA256 `5d7a652b269e668a0cb06a26661d10170e32ead057cd6a24876402e033a13dce`；无原生GUI业务新分叉。累计部署仍是前批Orca引擎+Blender+PAM+Compare+Web（先PAM再Compare），PDS Java无新增、无SQL。Linux/目标机型/实印仍未验证，不能称全部16类算法或成品质量已验收。
+
+收尾核对：Blender改为同一次分位数计算获取中位数，最新fixtures-final/features.json与原夹具报告逐字一致；纯几何20/墙几何14/模板35/独立墙4重新通过（`/tmp/thin-feature-{geometry-final,wall-final,template-final,wall-entry-final}.log`）。PAM追加直接API保护不误报已改、原生最大层高不得低于有效最小层高的边界测试，151项通过。最新12+20+10次CLI使用新输出目录final、thin-final2、thin-final，三进程退出码均0；真实Compare/PAM本地串接已核对36.519%进入B、16项完整，证据 `/tmp/thin-feature-e2e-pkWg2M/compare-*.json`。五服务差异空白检查及Orca模块检查35/0问题通过，PDS工作区干净；未暂存/提交，未运行staged检查。无关Orca文档/result.json/下载脚本及原Blender缓存WIP保留。
+
+### 2026-10-22 续查完成：悬垂分档是否真正形成慢速（未提交）
+
+基准/六仓HEAD与下一节一致，全部既有WIP保留；本轮不提交、推送或部署。按understand-diff审查影响，图谱仍为旧HEAD，依当前源码继续。发现PAM以任意正数判定悬垂档有效，但Orca忽略小于0.5 mm/s的档位，100%或不低于参考速度的档位也不能形成降速；Web同样可能把仅开关和正数标为有效。已用回归复现并修正：仅在整套明确无有效慢速时复用B已有慢速；分别检查内/外墙，保留已有有效分档/未知输入，兼容原生插值取整和变化不超过1 mm/s忽略语义，不改变原生相对速度解释或高瘦规则。本轮只改PAM/Web业务及文档，不新增几何、请求或存储，不改A/源模板及原修复/分盘路由。
+
+最终本地：PAM146、Web251项全量通过，Web生产构建成功（既有大chunk提示）；日志 `/tmp/effective-overhang-{pam-final,web-final,web-build}.log`。新闭合阶梯模型经当前Blender真实测量→PAM/PDS实际类→同一Orca二进制五组十次切片通过，证据 `/tmp/effective-overhang-e2e-rD5lvc/run2/`。原100%、80绝对值、0.49档没有有效减速；补B已有25后悬垂外墙60→25、承托外墙60不变，内墙局部80→68为原生插值。已有50%有效档及无悬垂方块两组指令严格相同，未制造差异。前10组20次真实切片回归通过，证据 `/tmp/effective-feature-e2e-yi5fDv/overhang-regression/`，覆盖薄壁/细颈、小柱、贴床薄片、自适应、自动支撑及legacy/Cura筏；日志 `/tmp/effective-overhang-{cli-final,existing-cli}.log`。
+
+GUI/CLI共用引擎本轮未改，复用当前应用SHA256 `5d7a652b269e668a0cb06a26661d10170e32ead057cd6a24876402e033a13dce`。原生GUI待验：载入run2/percent/after/output/plate_1.gcode按速度着色核对局部25/外墙60，对照before为60；已有50%保持。Web部署态新建实验核对16类完整、最终请求与G-code；步骤已写Web交接文档顶部。累计发布仍需前轮Orca+Blender+PAM+Compare+Web，无新SQL；本轮无需再改Orca/PDS Java。Linux/目标机型/实印仍未验，不以减速证明成品改善。
+
+失败记录：先红PAM3/Web2，改后全绿；第一次真实切片验证在第三组比较`.49`与原生序列化`0.49`时失败（前两组路径已有效），修正临时验证器为数值+百分比单位比较，使用全新run2完成全部10次，不改生产配置绕过。既有20次回归也使用新输出目录，未覆盖原证据。
+
+收尾：上述Maven/Web构建/两批CLI进程退出码均为0；三仓差异空白检查通过，Orca模块检查35/0问题。未暂存/提交，不声称staged检查已执行；无关文档、result.json与下载脚本WIP保留。
+
+### 2026-10-21 再续：小孔轮廓有效检测与改参（本地完成，未提交）
+
+继续核心目标：补有效检测到实际参数执行。本轮仅增量修改Blender/PAM/Web及本记录，Orca保留上轮流量补丁，Compare/PDS业务源码无本轮新改动。基准仍为Orca `2dd0b6b`、PAM `c3e9239`、Blender `e197e83`、Compare `4b24977`、PDS `c606337`、Web `c8ad968`，保留全部既有WIP。无提交、推送、部署、业务库或打印操作。
+
+已完成：小孔内轮廓原未参与小轮廓决策，现复用已有截面环新增 `minimumHolePerimeterMm` 一个标量；不增加截面数、坐标或模型扫描。PAM共用小轮廓规则，孔边按外墙半线宽预留名义中心线偏移，仍用原2倍线宽阈值及B慢速；这是选参范围，不是精确工具路径或实物孔径。另已确认小轮廓速度0：GCode导出器语义为50%外墙速度，但CLI配置下限1会拒绝；几何命中时转成有效绝对速度，不原样传0。不为等于/快于原外墙的档位新启用阈值。高瘦使用同一解释并防二次减速，保留与小孔规则叠加；悬垂缺省策略不扩展。Web测量表/16类逐参数关系/CSV展示新依据，保留未改值，不把孔周长当孔径或尺寸补偿。知识图谱为8月旧HEAD；CodeGraph MCP未暴露、CLI可用但本仓有2文件过期且不覆盖服务增量，按源码继续，不写伪图谱覆盖结果。
+
+本地最终：纯几何18、Blender模板35/独立墙4、PAM142、Web249及生产构建通过，0失败；Web仍有既有大chunk提示。新孔模型4组前后8次切片通过：Classic/Arachne下0.8 mm方孔外墙60→30 mm/s，外围大轮廓60不变；4 mm孔保持60；原0自动档改成30后CLI通过。0档对照为其原生50%含义，不能说原0已成功切片。原10组20次真实CLI回归通过，含普通无调整指令相同、固定细层/贴床薄片、legacy/Cura筏、悬空支撑、自适应及小轮廓。日志 `/tmp/small-contour-{geometry-green,template,wall-regression,pam-final,web-final,web-final-build,cli-final,existing-cli}.log`，新证据 `/tmp/small-contour-e2e-WDf9pz/final2/`；回归证据 `/tmp/effective-feature-e2e-yi5fDv/small-contour-regression/`。复用当前未变Mac arm64引擎SHA256 `5d7a652b269e668a0cb06a26661d10170e32ead057cd6a24876402e033a13dce`，不重复构建未改引擎。
+
+真实用户STL重新检测：17个原选定截面，除新增最短孔内轮廓0.061754 mm外所有原指标逐字段相同；这是极小网格轮廓，不作为实物孔径或缺陷。原最短外轮廓已经触发该策略，新增孔证据未再制造改参差异；当前PAM新旧证据的process/filament覆盖及自适应选项一致，日志 `/tmp/small-contour-user-pam.log`。没有以丰富报告为由重复修改模板。
+
+GUI/部署交接见Web `docs/CORE_REPORT_HANDOFF_20261020.md` 顶部。累计仍需Orca引擎+Blender+PAM+Compare+Web，无SQL；当前新增不要求再改Orca/PDS Java。GUI/浏览器部署态、目标Linux和实印未验，不宣称孔径精度或打印收益已验证。原生GUI可载入上述classic-hole/after/output/plate_1.gcode按速度着色核对小孔30/外圈60，before同为60；大孔对照维持60。新实验的模型识别、参数冻结和实际请求必须同一模型/姿态，不回写旧实验。
+
+失败保留：新增红例确认几何2项缺字段、PAM5项失败、Web2项失败，修正后全部通过；最初系统Python版本不匹配隔离numpy，换当前Blender Python3.13后才形成有效红绿结果；临时布尔并集孔夹具非流形失败，改独立闭合立方体减孔并验证流形后执行。验证原0的临时脚本因/private/tmp路径替换未命中而触发已有报告保护，未覆盖原产物；修正路径以新输出目录复测，不把该失败算作0参数验证。
+
+最终收尾：当前CLI原0确实被参数范围校验拒绝（退出238），有效转换后的30已在上述新切片成功；日志 `/tmp/small-contour-zero-rejection2.log`。Orca模块检查35/0问题，Orca及Blender/PAM/Web差异空白检查通过；未暂存，未运行或声称staged检查。现有无关文档/result.json/下载脚本及Blender旧__pycache__保留。
+
+### 2026-10-21 继续有效检测与参数生效（本轮两项完成，未提交）
+
+当前结论：已修复真实模型流量报告失效，并补高瘦百分比慢速到实际G-code的消费，Web完整列出关联参数/来源；未把其他未知项改成通过、未加扫描或重复存储。累计整体目标仍不能宣称16类都是独立精确检测或已证明实印更好：温度/孔补偿/回抽等没有新增测量或标定依据时仍保留具体模板值及用途。用户授权可以修改这些字段，不等于可以推算未测物理量。本轮实际新增改动仅Orca/PAM/Web；前轮Blender/Compare增量全部保留，PDS Java不变。
+
+最终验证：Orca Mac arm64 Release应用/fff测试重建成功；`[SliceAnalysis],[GCode]` 86用例/27380断言通过，真实原G-code的默认/采集对照1项通过（10338045逐字段断言，末次无资源错误）；Python验证器83项、CLI开关/保护10场景通过。PAM136、Web246及生产构建、Compare220通过/96既有集成跳过；Compare→当前PAM本地真实类桥接确认有/无人工记录均可优化，未访问服务/业务库。日志 `/tmp/effective-flow-release-{build,native,file}.log`、`/tmp/effective-flow-validator.log`、`/tmp/effective-flow-cli-regression.log`、`/tmp/effective-tall-{final,web,web-build,compare,compare-pam2}.log`。测试先红后绿，未将0项发现或跳过计为通过。
+
+当前应用SHA256为 `5d7a652b269e668a0cb06a26661d10170e32ead057cd6a24876402e033a13dce`；fff测试为 `282d5f353d9b5e2d95134c6a903d24412e2b0bf227984ec8248c9d5316ea9779`。未打Linux/Windows新包，未提交/推送/部署/打印。
+
+真实用户模型原工艺/优化工艺和细颈3次新切片报告均通过完整校验，峰值/cap恢复有效；配置与旧产物一致。用户模型优化工艺峰值约10.026 mm³/s，上限12，超限路径0；原工艺约12.0034，超限约0.65/129441 mm，不能把极小舍入超限直接当物理缺陷。两次当前同一二进制重切也存在支撑起点/顺序差异，所以没有把独立重切声称指令/估时严格相等；采用同一已导出G-code双解析逐项等价证明观察器不改变原统计。普通CLI夹具开/关指令和细颈旧/新指令严格一致。证据 `/tmp/effective-feature-e2e-yi5fDv/flow-fixed3/`、`flow-cli-regression/`。
+
+高瘦真实链路：Blender生成4×4×40 mm带0.8 mm顶柱的闭合夹具，测得slendernessScore=1及3.2 mm小轮廓；当前PAM/PDS类生成覆盖，Orca两次前后切片验证主体外墙60→30 mm/s，顶柱30→30不二次减半，实际Klipper加速度指令2000→1000 mm/s²。证据 `tall-fixture/`、`tall-run1/`，日志 `/tmp/effective-tall-{blender,cli,acceleration}.log`。这是参数执行证据，不是实印减晃/强度认证。
+
+部署/GUI交接：累计需Orca引擎（PDS实际调用位置或包含它的镜像）、Blender脚本、PAM、Compare、Web，无SQL；PDS Java无新增改动。新建实验核对报告及实际B请求，不回写旧历史。Web具体步骤见相邻仓 `docs/CORE_REPORT_HANDOFF_20261020.md` 顶部。原生GUI无新报告/选参入口，人工待验：打开本仓 `build/arm64/src/Release/OrcaSlicer.app`，导入 `tall-run1/after/output/plate_1.gcode` 查看速度/加速度预览，确认主体30、顶柱30和外墙1000；再导入用户模型 `flow-fixed3/user-after/output/plate_1.gcode` 核对层/时间/耗材预览及文件可正常打开。回传截图/日志，不把自动化代替GUI、目标Linux/EP3Plus或实印。普通修复/分盘路由源码未改，不据此声称全部场景新跑过。
+
+中途失败与处理：临时CLI验证器先因 `/tmp` 与真实 `/private/tmp` 路径身份失败，改resolve后通过；独立重切指令不一致按上文分离验证口径，没有放宽同一路径断言。Compare桥接探针曾与Maven重编译同时读target导致Class缺失，等待构建成功后重跑通过；没有修改生产代码规避。首次Python选择不存在的文件模式发现0项，随后定位正确验证器执行83项。最初加速度探针仅识别M204 P，EP7实际为Klipper SET_VELOCITY_LIMIT，修正验证器后核对真实指令。全部原失败日志保留，不纳入通过计数。
+
+#### 过程记录（保留当时状态，当前结论以上文为准）
+
+启动目标：补实际检测缺口和有依据的参数消费者，不以隐藏未知项或增加报告条目替代实现。先定位用户真实模型峰值流量/超配置流量路径统计全空的原因，再验证修正和参数链路。当时这两项在真实模型前后报告为 incomplete，而合成细颈模型可得到完整结果；不将未知直接改为通过。B 不再因人工/来源不明键而禁止优化；用户允许调整机料参数，但仍须有有效测量或配置依据，不凭空假定标定值。
+
+基准：Orca feature `2dd0b6b21ff038c50db4b3170e96d45e8bceeafd`，本轮开始仅既有文档、下载工具和 result.json WIP，源码无差异；Blender/PAM/Compare/Web 保留前轮未提交增量，PDS 无本轮变更。已有 Mac arm64 Release 程序 hash `7ce64d08fbcd7ffb2e97326e0c20c39894d0b916853d7a13dc14eab893639834`。真实证据 `/tmp/effective-feature-e2e-yi5fDv/user-model3/`，合成证据 `run2/neck/`；最近 PAM 134、Web 245 项通过不证明下一步源码。图谱未覆盖当前变更，按源码核对，不初始化索引。
+
+计划验证：最小回归捕获流量失效原因，必要时只修报告观察，不改变 G-code 指令、运动估时或切片/分盘/修复路径；重建当前目标后比较同参报告和执行指令。保留默认不采集、真正无效/未完成块仍未知。相关 GUI/CLI 边界与本地结果持续记录于本节。尚未改业务源码或开始新构建，不提交、推送、部署、访问业务库或打印。
+
+诊断步骤进行中：已核对 build/arm64 为本仓 Ninja Multi-Config/arm64/MeshLib ON，未发现其他构建进程。临时增加首个无效块诊断及隐藏文件探针，用旧真实 G-code 重放，不重新请求服务或打印。`cmake --build build/arm64 --config Release --target fff_print_tests --parallel 2` 日志 `/tmp/effective-flow-probe-build.log`；诊断代码在定位后移除，不能随生产交付。
+
+根因已确认：真实 support 段 g1_line_id=966，distance=5.00601053238 mm，阶段终点=5.00601100922 mm，float 求差再相加产生一个 ULP 的越界，严格比较使整材料永久 incomplete。已用三个短运动段建立确定性红例（`/tmp/effective-flow-red.log`）。修正只允许与该段长度成比例的两次 float 舍入范围，积分在校验后钳制观察副本端点，不改原梯形/估时/运动；stderr 诊断已删除。新构建/报告全量及真实 G-code 重放进行中：`/tmp/effective-flow-green{,-build}.log`、`/tmp/effective-flow-probe4.log`。首个预览探针因标签模式未匹配无观察，第二次探针因静态配置未知键失败，均不是根因结论；按实际导出静态配置与非BBL标签重放后复现。
+
+流量补丁完成最小原生回归：临时文件探针已移除；正式用例覆盖低于/高于峰值及接近0上限、合法float边界、报告有效性和关闭采集的旧观察逐项一致。Release应用及fff测试重新构建成功，79用例/18402断言通过，日志 `/tmp/effective-flow-final-{build,native}.log`。同参数重切用户原/优化工艺与细颈3例进行中（`/tmp/effective-flow-cli.log`），逐一断言指令、有效配置、估时、耗材和覆盖未变，不复用旧二进制。
+
+第二项实际规则补齐：PAM高瘦/偏心触发独立于小轮廓阈值；相对慢速按原外墙值解析后作为上限，并写回小轮廓绝对有效速度防止二次降低。使用已有B慢速，不猜机料值，A/模板不动。Web显示这两个关联参数及实际触发来源，不把未触发小轮廓记成额外优化。新红例验证原跳过，首次绿测1项失败为测试把A缺值与模板0的合法比较记录也要求清空，改为仅断言不错误归因小轮廓速度；重新全量执行。高瘦真实几何→PAM→Orca验证准备中。所有增量仍未提交或部署。
+
 ### 2026-10-21 提交交付（五个业务仓库已推送）
 
 用户已授权将上轮审核通过的改动提交并推送。Blender/PAM/Compare/PDS当前feature分支及Web当前develop分支各一笔业务提交，均已普通push到origin；Orca仅提交本专题交付记录，不含其他文档、下载工具、result.json或引擎源码。操作前六仓已fetch对应分支并与远端HEAD一致，无需合并或改写历史。业务代码与上一轮753项测试、18次真实切片通过时一致，本轮只同步交付状态并做暂存检查，不重复运行未变代码测试；不部署、不操作业务库或设备。
