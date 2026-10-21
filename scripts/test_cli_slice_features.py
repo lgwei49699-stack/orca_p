@@ -3,11 +3,11 @@
 
 Requires an already built Orca and local profiles. Does not build, download,
 change input presets, connect to a service or send commands to a printer.
-Runs 40 slices, including Classic/Arachne, normal/tree support, raft, source-volume sampling,
+Runs 40 slices, including Classic/Arachne, normal/tree support, raft, multi-volume geometry,
 wide/narrow U slots, a C-shaped opening, an island inside a hole and a closed 45-degree wedge.
-Validates support projection, intervening model print-plane overlaps, source-facet layer
-alignment and fixed-XY nominal model-path slab depth, not physical obstruction, printed
-surface error, fused-material thickness, automatic print-quality decisions or a preferred wall generator.
+Validates retained two-dimensional planned-path evidence and native G-code estimates,
+not physical defects, fused-material thickness, automatic print-quality decisions
+or a preferred wall generator. Retired three-dimensional diagnostics must not be emitted.
 """
 
 import argparse
@@ -20,19 +20,13 @@ import zipfile
 
 from test_cli_slice_analysis import (
     ASSETS, ROOT, Suite, count, digest, gcode_facts, nonnegative, read_json, require, save_json,
-    validate_plate_bed_footprint, validate_report,
+    validate_core_report_group, validate_plate_bed_footprint, validate_report,
 )
 
 SUPPORT_FIXTURES = {"bridge", "cantilever", "new-island"}
-BRIDGE_ROLES = {"bridge_infill", "internal_bridge_infill", "overhang_perimeter"}
+SUPPORT_GCODE_ROLES = {"Support", "Support interface", "Support transition"}
 MODEL_NS = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 OPEN_SLOT_AREAS = {"u-slot-wide": 86., "u-slot-narrow": 94.2, "c-slot": 106.5}
-TOPOLOGY_DERIVED_COUNTS = (
-    "section_islands_with_multiple_planned_regions_count",
-    "planned_regions_overlapping_multiple_section_islands_count",
-    "closed_void_fully_covered_count",
-    "closed_voids_with_multiple_remaining_regions_count",
-)
 
 
 def cell_mesh(xs, ys, zs, cells):
@@ -206,397 +200,68 @@ def verify_fixture_bed_footprint(name, report, settings):
     # from brim_width, or infer a sum when the three categories may overlap.
 
 
-def verify_cross_layer_metrics(group):
-    geometry = group["cross_layer_geometry"]
-    require(geometry["scope"] == "per_instance_adjacent_model_sections", "Unexpected cross-layer scope")
-    layers = geometry["layers"]
-    require(len(layers) == group["model_layer_count"] and bool(layers), "Missing cross-layer observations")
-    derived = ("previous_layer_index", "previous_slice_z_mm", "previous_print_z_mm", "previous_model_gap_mm",
-               "previous_model_overlap_area_mm2", "outside_previous_model_area_mm2",
-               "no_previous_overlap_island_count", "no_previous_overlap_island_area_mm2")
-    for index, layer in enumerate(layers):
-        require(layer["layer_index"] == index, "Nonsequential cross-layer index")
-        for key in ("slice_z_mm", "print_z_mm", "bottom_z_mm", "height_mm", "section_area_mm2"):
-            nonnegative(layer[key], key)
-        if index == 0:
-            require(layer["complete"] is False and all(layer[key] is None for key in derived),
-                    "First layer has no previous model section; derived values must remain unknown")
-            continue
-        previous = layers[index - 1]
-        require(layer["complete"] is True and layer["previous_layer_index"] == index - 1,
-                "Fixture's adjacent model sections must be completely measured")
-        require(layer["previous_slice_z_mm"] == previous["slice_z_mm"]
-                and layer["previous_print_z_mm"] == previous["print_z_mm"], "Previous section identity differs")
-        require(math.isclose(layer["previous_model_gap_mm"], layer["bottom_z_mm"] - previous["print_z_mm"], abs_tol=1e-6),
-                "Model layer Z gap is inconsistent")
-        overlap = nonnegative(layer["previous_model_overlap_area_mm2"], "previous_model_overlap_area_mm2")
-        outside = nonnegative(layer["outside_previous_model_area_mm2"], "outside_previous_model_area_mm2")
-        require(math.isclose(overlap + outside, layer["section_area_mm2"], abs_tol=0.001),
-                "Cross-layer section area accounting mismatch")
-        count(layer["no_previous_overlap_island_count"], "no_previous_overlap_island_count")
-        island_area = nonnegative(layer["no_previous_overlap_island_area_mm2"], "no_previous_overlap_island_area_mm2")
-        require(island_area <= outside + 0.001, "No-previous-overlap island area exceeds all area outside previous model")
-    planned = group["planned_bridge_paths"]
-    require(planned["scope"] == "per_instance_model_paths_before_gcode" and planned["complete"] is True,
-            "Fixture planned bridge statistics are incomplete")
-    require(len(planned["roles"]) == 3 and {role["role"] for role in planned["roles"]} == BRIDGE_ROLES,
-            "Expected all three bridge/overhang roles, including zero-path roles")
-    for role in planned["roles"]:
-        require(role["invalid_path_count"] == 0, "Fixture bridge role has invalid path data")
-        count(role["path_count"], "path_count")
-        count(role["excluded_path_count"], "excluded_path_count")
-        nonnegative(role["path_length_mm"], "path_length_mm")
-        nonnegative(role["layer_footprint_area_sum_mm2"], "layer_footprint_area_sum_mm2")
-    return layers
-
-
-def gcode_role_length(report, roles):
-    # Read the existing G-code processor's complete role list, not a new parser.
-    return sum(nonnegative(item["extrusion_ranges"]["path_length_mm"], "G-code role path_length_mm")
-               for item in report["gcode"]["extrusion_by_role"] if item["role"] in roles)
-
-
-def verify_external_bridge_projection(group):
-    """External bridge centerlines versus previous model paths, not physical anchoring or internal bridges."""
-    projection = group["external_bridge_projection"]
-    require(projection["scope"] == "external_bridge_centerlines_over_previous_model_footprint_before_gcode",
-            "Unexpected external bridge projection scope")
-    layers = projection["layers"]
-    geometry = group["cross_layer_geometry"]["layers"]
-    require(isinstance(layers, list) and len(layers) == group["model_layer_count"] == len(geometry),
-            "Missing external bridge model-layer observations")
-    derived = ("uncovered_run_count", "max_uncovered_run_mm", "two_sided_run_count", "max_two_sided_run_mm")
-    for index, (layer, model_layer) in enumerate(zip(layers, geometry)):
-        require(count(layer["layer_index"], "layer_index") == index, "Nonsequential external bridge layer")
-        require(type(layer["complete"]) is bool, "External bridge completeness must be a boolean")
-        previous_index = layer["previous_layer_index"]
-        require(previous_index is None if index == 0 else count(previous_index, "previous_layer_index") == index - 1,
-                "External bridge previous-model identity differs")
-        for key, expected in (("print_z_mm", model_layer["print_z_mm"]),
-                              ("previous_print_z_mm", None if index == 0 else geometry[index - 1]["print_z_mm"])):
-            value = layer[key]
-            require(value is None or (type(value) in (int, float) and math.isfinite(value)), f"Invalid {key}: {value}")
-            require(value == expected or (value is not None and expected is not None
-                    and math.isclose(value, expected, abs_tol=1e-6)), "External bridge model Z differs")
-        if index == 0:
-            require(layer["complete"] is False, "The first model layer has no previous-model footprint, including above a raft")
-        if not layer["complete"]:
-            require(all(layer[key] is None for key in derived), "Unavailable external bridge observations must remain unknown")
-            continue
-        require(layer["print_z_mm"] is not None and layer["previous_print_z_mm"] is not None
-                and layer["print_z_mm"] > layer["previous_print_z_mm"], "Complete bridge observations require increasing model Z")
-        uncovered = count(layer["uncovered_run_count"], "uncovered_run_count")
-        two_sided = count(layer["two_sided_run_count"], "two_sided_run_count")
-        require(two_sided <= uncovered, "Two-sided runs must be a subset of uncovered runs")
-        for number, key in ((uncovered, "max_uncovered_run_mm"), (two_sided, "max_two_sided_run_mm")):
-            if number == 0:
-                require(layer[key] is None, "No measured runs have no applicable maximum length; do not substitute zero")
-            else:
-                require(nonnegative(layer[key], key) > 0, "A measured uncovered run must have positive arc length")
-        if two_sided:
-            require(layer["max_two_sided_run_mm"] <= layer["max_uncovered_run_mm"] + 1e-6,
-                    "The longest two-sided run exceeds the longest uncovered run")
-    return layers
-
-
-def verify_support_projection(group):
-    """Validate XY allocation, nominal Z gaps and intermediate print planes, not physical support adequacy."""
-    projection = group["planned_support_projection"]
-    require(projection["scope"] == "per_instance_plate_support_projection_before_gcode", "Unexpected support projection scope")
-    instances = projection["instances"]
-    require(isinstance(instances, list) and len(instances) == count(group["instance_count"], "instance_count"),
-            "Missing support projection instances")
-    geometry = group["cross_layer_geometry"]["layers"]
-    for instance_index, instance in enumerate(instances):
-        require(count(instance["instance_index"], "instance_index") == instance_index, "Wrong support projection instance identity")
-        layers = instance["layers"]
-        require(isinstance(layers, list) and len(layers) == group["model_layer_count"] == len(geometry),
-                "Missing support projection model layers")
-        for index, (layer, model_layer) in enumerate(zip(layers, geometry)):
-            require(count(layer["layer_index"], "layer_index") == index, "Nonsequential support projection layer")
-            require(type(layer["complete"]) is bool, "Support projection completeness must be a boolean")
-            for key, source in (("model_bottom_z_mm", "bottom_z_mm"), ("model_print_z_mm", "print_z_mm")):
-                value = layer[key]
-                require(value is None or (type(value) in (int, float) and math.isfinite(value)), f"Invalid {key}: {value}")
-                expected = model_layer[source]
-                require(value == expected or (value is not None and expected is not None
-                        and math.isclose(value, expected, abs_tol=1e-6)), "Support projection uses different model Z")
-            if not layer["complete"]:
-                require(all(layer[key] is None for key in ("target_area_mm2", "unmatched_target_area_mm2", "support_levels")),
-                        "Incomplete support projection must preserve unknown areas and levels")
-                continue
-            require(layer["model_bottom_z_mm"] is not None and layer["model_print_z_mm"] is not None,
-                    "Complete support projection requires model Z")
-            target = nonnegative(layer["target_area_mm2"], "target_area_mm2")
-            unmatched = nonnegative(layer["unmatched_target_area_mm2"], "unmatched_target_area_mm2")
-            source_target = model_layer["section_area_mm2"] if index == 0 else model_layer["outside_previous_model_area_mm2"]
-            require(source_target is not None and target <= source_target + 0.001,
-                    "Planned target exceeds the corresponding model-only projection")
-            levels = layer["support_levels"]
-            require(isinstance(levels, list), "Complete support projection requires a level list")
-            previous_z, matched = None, 0.
-            for level in levels:
-                support_z = nonnegative(level["support_print_z_mm"], "support_print_z_mm")
-                require(support_z <= layer["model_print_z_mm"] + 1e-6, "Support above the model print plane is not a candidate")
-                require(previous_z is None or support_z < previous_z, "Support Z must be unique and descending")
-                gap = level["model_layer_bottom_gap_mm"]
-                require(type(gap) in (int, float) and math.isfinite(gap)
-                        and math.isclose(gap, layer["model_bottom_z_mm"] - support_z, abs_tol=1e-6),
-                        "Support gap must use the model bottom; negative nominal gaps are valid")
-                area = nonnegative(level["nearest_projection_area_mm2"], "nearest_projection_area_mm2")
-                require(area > 0, "Support levels must contain only positive projected intersections")
-                intervening = level["intervening_model_projection"]
-                require(isinstance(intervening, dict) and type(intervening["complete"]) is bool,
-                        "Intervening model projection requires a boolean completeness flag")
-                if support_z >= layer["model_print_z_mm"]:
-                    require(not intervening["complete"], "Equal print planes have no intervening-plane observation")
-                if intervening["complete"]:
-                    intervening_area = nonnegative(intervening["area_mm2"], "intervening model projection area_mm2")
-                    require(intervening_area <= area + 0.001,
-                            "Intervening model overlap exceeds this support level's allocated target")
-                else:
-                    require(intervening["area_mm2"] is None,
-                            "Incomplete intervening model projection must preserve unknown area")
-                matched += area
-                previous_z = support_z
-            require(math.isclose(matched + unmatched, target, abs_tol=0.001), "Support allocation areas do not sum to target")
-            require(target > 0 or (unmatched == 0 and not levels), "An empty target must have no allocated support levels")
-    return instances
-
-
-def verify_joint_lower_path_slab_coverage(group):
-    """Nominal lower-source path slabs, not execution order or physical support adequacy."""
-    observation = group["joint_lower_path_slab_coverage"]
-    require(observation["scope"] == "per_instance_lower_source_print_z_nominal_path_slabs_before_gcode",
-            "Unexpected joint lower-path slab scope")
-    resolution = nonnegative(observation["z_resolution_mm"], "z_resolution_mm")
-    require(resolution == 0.000001, "Joint path slabs must use the declared native coordinate resolution")
-    instances = observation["instances"]
-    require(isinstance(instances, list) and len(instances) == count(group["instance_count"], "instance_count"),
-            "Missing joint lower-path slab instances")
-    geometry = group["cross_layer_geometry"]["layers"]
-    require(isinstance(geometry, list) and len(geometry) == count(group["model_layer_count"], "model_layer_count"),
-            "Missing reference model-layer geometry")
-    derived = ("uncovered_run_count", "max_uncovered_run_mm", "two_sided_run_count", "max_two_sided_run_mm")
-    for instance_index, instance in enumerate(instances):
-        require(count(instance["instance_index"], "instance_index") == instance_index, "Wrong joint slab instance identity")
-        layers = instance["layers"]
-        require(isinstance(layers, list) and len(layers) == len(geometry), "Missing joint slab model layers")
-        for index, (layer, model_layer) in enumerate(zip(layers, geometry)):
-            require(count(layer["layer_index"], "layer_index") == index == count(model_layer["layer_index"], "reference layer_index"),
-                    "Joint slab model-layer identity differs")
-            require(type(layer["complete"]) is bool, "Joint slab layer completeness must be boolean")
-            print_z = layer["print_z_mm"]
-            require(print_z is None or (type(print_z) in (int, float) and math.isfinite(print_z)), "Invalid joint slab print Z")
-            require(print_z == model_layer["print_z_mm"], "Joint slab print Z differs from its model layer")
-            planes = layer["bottom_planes"]
-            if planes is None:
-                require(layer["complete"] is False, "Unknown target path heights cannot produce a complete layer")
-                continue
-            require(isinstance(planes, list) and print_z is not None, "Known bottom planes require valid model Z")
-            previous_z = None
-            for plane in planes:
-                bottom = plane["bottom_z_mm"]
-                require(type(bottom) in (int, float) and math.isfinite(bottom) and bottom <= print_z,
-                        "Nominal path bottom must be finite and no higher than its print plane")
-                scaled_bottom = bottom / resolution
-                require(math.isfinite(scaled_bottom), "Nominal path bottom cannot be represented at native resolution")
-                quantized_bottom = round(scaled_bottom)
-                require(previous_z is None or quantized_bottom > previous_z,
-                        "Nominal bottom planes must be ascending and unique at native resolution")
-                previous_z = quantized_bottom
-                require(type(plane["complete"]) is bool, "Joint slab plane completeness must be boolean")
-                bridge = plane["external_bridge"]
-                require(isinstance(bridge, dict) and type(bridge["complete"]) is bool,
-                        "Joint external bridge completeness must be boolean")
-                if plane["complete"]:
-                    target = nonnegative(plane["target_area_mm2"], "joint slab target_area_mm2")
-                    uncovered = nonnegative(plane["uncovered_area_mm2"], "joint slab uncovered_area_mm2")
-                    require(uncovered <= target, "Joint slab uncovered area exceeds its target")
-                else:
-                    require(plane["target_area_mm2"] is None and plane["uncovered_area_mm2"] is None
-                            and bridge["complete"] is False, "Unknown joint plane cannot expose partial areas or complete bridges")
-                if not bridge["complete"]:
-                    require(all(bridge[key] is None for key in derived), "Unknown joint bridge values must remain null")
-                    continue
-                runs = count(bridge["uncovered_run_count"], "joint bridge uncovered_run_count")
-                two_sided = count(bridge["two_sided_run_count"], "joint bridge two_sided_run_count")
-                require(two_sided <= runs, "Joint two-sided runs must be a subset of uncovered runs")
-                for number, key in ((runs, "max_uncovered_run_mm"), (two_sided, "max_two_sided_run_mm")):
-                    if number:
-                        require(nonnegative(bridge[key], key) > 0, "A joint uncovered run must have positive length")
-                    else:
-                        require(bridge[key] is None, "No joint bridge runs have no applicable maximum")
-                if two_sided:
-                    require(bridge["max_two_sided_run_mm"] <= bridge["max_uncovered_run_mm"],
-                            "Joint two-sided maximum exceeds the maximum uncovered run")
-            require(layer["complete"] == all(plane["complete"] for plane in planes),
-                    "Joint layer completeness must summarize plane areas, not bridge observations")
-    return instances
-
-
-def verify_support_fixture(name, reports, support_enabled):
-    overlap, outside, island_count, island_area = {
-        "bridge": (48, 48, 0, 0), "cantilever": (24, 48, 0, 0), "new-island": (24, 24, 1, 24),
-        "new-island-tree": (24, 24, 1, 24),
-    }[name]
-    for report in reports.values():
+def verify_support_fixture(name, reports, support_enabled, gcode_roles):
+    """Check known section geometry and actual generated support, not three-dimensional anchoring."""
+    section_area = {"bridge": 96, "cantilever": 72, "new-island": 48, "new-island-tree": 48}[name]
+    for generator, report in reports.items():
         group = report["objects"]["groups"][0]
-        layers = group["cross_layer_geometry"]["layers"]
+        layers = group["planned_layer_coverage"]["layers"]
         transitions = [layer for layer in layers if math.isclose(layer["slice_z_mm"], 4.1, abs_tol=1e-6)]
         require(len(transitions) == 1, "Expected a model section at source Z=4.1 mm")
-        transition = transitions[0]
-        for key, expected in (("previous_model_overlap_area_mm2", overlap),
-                              ("outside_previous_model_area_mm2", outside),
-                              ("no_previous_overlap_island_area_mm2", island_area)):
-            require(math.isclose(transition[key], expected, abs_tol=0.001), f"{name}: unexpected {key}")
-        require(transition["no_previous_overlap_island_count"] == island_count,
-                f"{name}: partially overlapping overhangs must not count as whole new islands")
-        projected_layers = verify_support_projection(group)[0]["layers"]
-        projected = projected_layers[transition["layer_index"]]
-        require(projected["complete"] is True and projected["target_area_mm2"] > 0,
-                f"{name}: the transition must retain a positive planned target with or without support")
-        bridge_projection = verify_external_bridge_projection(group)[transition["layer_index"]]
-        require(bridge_projection["complete"] is True and bridge_projection["uncovered_run_count"] > 0,
-                f"{name}: external bridge centerlines must retain positive runs outside previous model paths")
-        if name in ("new-island", "new-island-tree"):
-            require(bridge_projection["two_sided_run_count"] == 0,
-                    "A separate new island has no prior model paths at either side, even with generated supports")
-        support_length = gcode_role_length(report, {"support_material", "support_material_interface"})
+        require(math.isclose(transitions[0]["section_area_mm2"], section_area, abs_tol=0.001),
+                f"{name}: unexpected transition section area")
+        has_support = bool(gcode_roles[generator] & SUPPORT_GCODE_ROLES)
         support_volumes = [item["estimated_volume_mm3"]["support"] for item in report["gcode"]["extruders"]]
         if support_enabled:
-            require(group["support_layer_count"] > 0 and support_length > 0,
+            require(group["support_layer_count"] > 0 and has_support,
                     f"{name}: enabling support must generate actual G-code support paths")
             require(any(value is not None and nonnegative(value, "support volume") > 0 for value in support_volumes),
                     f"{name}: expected positive G-code support volume")
-            require(bool(projected["support_levels"]), f"{name}: expected a support projection under the new model area")
-            if name != "new-island-tree":
-                require(any(math.isclose(level["model_layer_bottom_gap_mm"], 0.2, abs_tol=1e-6)
-                            for level in projected["support_levels"]), f"{name}: expected the ordinary 0.2 mm top gap")
         else:
-            require(group["support_layer_count"] == 0 and support_length == 0,
+            require(group["support_layer_count"] == 0 and not has_support,
                     f"{name}: disabled support unexpectedly generated support")
             require(all(value is None or value == 0 for value in support_volumes),
                     f"{name}: disabled support unexpectedly reports positive volume")
-            require(all(layer["complete"] is True and layer["support_levels"] == []
-                        and math.isclose(layer["unmatched_target_area_mm2"], layer["target_area_mm2"], abs_tol=0.001)
-                        for layer in projected_layers), f"{name}: no-support/no-raft targets must remain unmatched")
         if name == "bridge" and not support_enabled:
-            require(bridge_projection["two_sided_run_count"] > 0,
-                    "The two-pier fixture must contain a run with previous model paths on both sides")
-            bridge = next(item for item in group["planned_bridge_paths"]["roles"] if item["role"] == "bridge_infill")
-            require(bridge["path_count"] > 0 and bridge["path_length_mm"] > 0
-                    and bridge["layer_footprint_area_sum_mm2"] > 0,
-                    "The unsupported two-pier bridge must generate planned bridge infill")
-            require(gcode_role_length(report, {"bridge_infill"}) > 0,
-                    "The two-pier bridge must also reach final G-code bridge infill")
+            require("Bridge" in gcode_roles[generator],
+                    "The two-pier bridge must reach final G-code bridge infill")
 
 
 def verify_support_geometry_unchanged(off, on):
+    keys = ("layer_index", "slice_z_mm", "print_z_mm", "bottom_z_mm", "height_mm",
+            "section_area_mm2", "section_island_count", "hole_area_mm2", "closed_void_region_count")
     for generator in ("classic", "arachne"):
-        before = off[generator]["objects"]["groups"][0]["cross_layer_geometry"]
-        after = on[generator]["objects"]["groups"][0]["cross_layer_geometry"]
-        require(before == after, "Support must not erase the model-only projection evidence")
+        before = off[generator]["objects"]["groups"][0]["planned_layer_coverage"]["layers"]
+        after = on[generator]["objects"]["groups"][0]["planned_layer_coverage"]["layers"]
+        require([{key: layer[key] for key in keys} for layer in before]
+                == [{key: layer[key] for key in keys} for layer in after],
+                "Support must not change the retained model section geometry")
 
 
-def verify_cura_raft(report):
+def verify_cura_raft(report, gcode_roles):
     group = report["objects"]["groups"][0]
-    layers = verify_cross_layer_metrics(group)
-    require(len(layers) == 20, "Raft must not change the cube's twenty model sampling planes")
+    layers = group["planned_layer_coverage"]["layers"]
+    require(group["model_layer_count"] == len(layers) == 20, "Raft must not change the twenty model sampling planes")
     require(all(math.isclose(layer["slice_z_mm"], 0.1 + index * 0.2, abs_tol=1e-6)
                 and math.isclose(layer["height_mm"], 0.2, abs_tol=1e-6) for index, layer in enumerate(layers)),
             "Unexpected model sampling planes or source-band heights above raft")
-    surfaces = verify_source_surface_layer_alignment(group)
-    require(len(surfaces) == 1 and surfaces[0]["volume_index"] == 0 and surfaces[0]["complete"] is True,
-            "Cura raft fixture must retain one complete source-surface target")
-    # The source fixture is a 0..4 mm box (two triangles on each horizontal
-    # end). Its twenty 0.2 mm source bands start at 0 and end at 4, although
-    # actual model print planes are raised and later shifted by Cura overlap.
-    require(surfaces[0]["horizontal_facet_count"] == 4
-            and math.isclose(surfaces[0]["max_horizontal_boundary_offset_mm"], 0, abs_tol=1e-6),
-            "Cura raft must not turn aligned source-box ends into print-Z boundary offsets")
-    require(layers[0]["bottom_z_mm"] > 0 and layers[1]["complete"] is True,
-            "Raft must lift the model without invalidating the second section measurement")
-    require(math.isclose(layers[1]["previous_model_gap_mm"], -0.1, abs_tol=1e-6),
-            "Cura V1's intentional 0.1 mm Z overlap must remain a measured negative gap")
-    require(all(math.isclose(layer["previous_model_gap_mm"], 0, abs_tol=1e-6) for layer in layers[2:]),
+    require(layers[0]["bottom_z_mm"] > 0 and all(layer["complete"] is True for layer in layers),
+            "Raft must lift the model without invalidating core section measurements")
+    require(math.isclose(layers[1]["bottom_z_mm"] - layers[0]["print_z_mm"], -0.1, abs_tol=1e-6),
+            "Cura V1's intentional 0.1 mm Z overlap must retain its existing layer coordinates")
+    require(all(math.isclose(layer["bottom_z_mm"] - previous["print_z_mm"], 0, abs_tol=1e-6)
+                for previous, layer in zip(layers[1:-1], layers[2:])),
             "Only the first-to-second model layer transition should contain the raft overlap")
     require(group["support_layer_count"] > 0
-            and gcode_role_length(report, {"support_material", "support_material_interface"}) > 0,
+            and bool(gcode_roles & SUPPORT_GCODE_ROLES),
             "Cura raft must generate actual support layers and G-code paths")
     require(any(item["estimated_volume_mm3"]["support"] is not None
                 and nonnegative(item["estimated_volume_mm3"]["support"], "raft support volume") > 0
                 for item in report["gcode"]["extruders"]), "Cura raft must use positive support material volume")
-    first = verify_support_projection(group)[0]["layers"][0]
-    require(first["complete"] is True and first["target_area_mm2"] > 0
-            and any(math.isclose(level["model_layer_bottom_gap_mm"], 0.2, abs_tol=1e-6) for level in first["support_levels"]),
-            "Cura raft must project under the first model layer with its 0.2 mm gap even when enable_support is false")
-    require(all(level["intervening_model_projection"] == {"complete": True, "area_mm2": 0}
-                for level in first["support_levels"]),
-            "The single-object raft fixture has no model print plane between raft and first model layer")
-
-
-def verify_source_volume_sampling(report):
-    group = report["objects"]["groups"][0]
-    require(group["model_layer_count"] == 20, "Body must retain twenty model layers for both thin-sheet targets")
-    sampling = group["source_volume_sampling"]
-    require(sampling["scope"] == "per_instance_source_model_part_on_retained_layers", "Unexpected source-volume scope")
-    volumes = sampling["volumes"]
-    require(len(volumes) == 3 and [volume["volume_index"] for volume in volumes] == [0, 1, 2],
-            "Expected three model-part source volumes in one object, not three objects or one merged volume")
-    for volume, (low, high, expected_count) in zip(volumes, ((0, 4, 20), (1.21, 1.26, 0), (1.28, 1.32, 1))):
-        require(volume["complete"] is True, "Fresh source-volume fixture must have complete cached measurements")
-        require(math.isclose(volume["z_min_mm"], low, abs_tol=1e-6)
-                and math.isclose(volume["z_max_mm"], high, abs_tol=1e-6), "Source-volume Z bounds changed")
-        for key in ("interior_plane_count", "source_section_layer_count", "final_section_overlap_layer_count",
-                    "planned_path_overlap_layer_count"):
-            require(count(volume[key], key) == expected_count, f"Volume {volume['volume_index']}: unexpected {key}")
-        require(count(volume["boundary_plane_count"], "boundary_plane_count") == 0,
-                "Fixture avoids all source-volume Z boundary planes")
-
-
-def verify_source_surface_layer_alignment(group):
-    """Source facet reference offsets only, not the final Boolean surface or print error."""
-    alignment = group["source_surface_layer_alignment"]
-    require(alignment["scope"] == "source_model_part_facets_and_retained_source_layer_bands",
-            "Unexpected source-surface layer-alignment scope")
-    volumes = alignment["volumes"]
-    require(isinstance(volumes, list), "Source-surface volumes must be a list")
-    indexes = [count(volume["volume_index"], "volume_index") for volume in volumes]
-    require(indexes == sorted(set(indexes)), "Source-surface volume identities must be unique and ordered")
-    pairs = (("non_horizontal_facet_band_count", "max_vertical_projection_normal_offset_mm"),
-             ("horizontal_facet_count", "max_horizontal_boundary_offset_mm"))
-    for volume in volumes:
-        require(type(volume["complete"]) is bool, "Source-surface completeness must be a boolean")
-        if group["model_layer_count"] == 0:
-            require(volume["complete"] is False, "No retained source layers cannot provide surface alignment")
-        if not volume["complete"]:
-            require(all(volume[key] is None for pair in pairs for key in pair),
-                    "Incomplete source-surface observations must remain unknown")
-            continue
-        for count_key, maximum_key in pairs:
-            measured = count(volume[count_key], count_key)
-            if measured == 0:
-                require(volume[maximum_key] is None, "No applicable source facets have no maximum offset")
-            else:
-                # Vertical facets and aligned horizontal facets legitimately measure zero.
-                nonnegative(volume[maximum_key], maximum_key)
-    return volumes
 
 
 def verify_wedge_alignment(group):
-    volumes = verify_source_surface_layer_alignment(group)
-    require(len(volumes) == 1 and volumes[0]["volume_index"] == 0 and volumes[0]["complete"] is True,
-            "The wedge must retain one complete source model-part observation")
-    volume = volumes[0]
-    require(volume["non_horizontal_facet_band_count"] > 0 and volume["horizontal_facet_count"] == 2,
-            "The wedge has non-horizontal facets and two horizontal bottom triangles")
-    # The actual slicing plane is float(slice_z), while band endpoints remain
-    # double. Permit float-rounding tails, not a print-quality acceptance band.
-    require(math.isclose(volume["max_vertical_projection_normal_offset_mm"], 0.2 / (2 * math.sqrt(2)), abs_tol=1e-6),
-            "45-degree wedge reference normal offset differs from the known 0.2 mm source bands")
-    require(math.isclose(volume["max_horizontal_boundary_offset_mm"], 0, abs_tol=1e-6),
-            "The wedge bottom must align with the first source-band boundary")
+    """Known two-dimensional source sections, not source-facet or printed-surface error."""
     layers = group["planned_layer_coverage"]["layers"]
     require(group["model_layer_count"] == len(layers) == 20, "The wedge must retain twenty 0.2 mm model layers")
     for index, layer in enumerate(layers):
@@ -609,31 +274,16 @@ def verify_wedge_alignment(group):
 
 
 def verify_topology_counts(layer):
-    """Check geometric accounting only; fragmented planned regions are not a quality verdict."""
+    """Retain whole-island omission and full closed-hole coverage, not fragment diagnostics."""
+    keys = ("section_island_count", "closed_void_region_count", "closed_void_fully_covered_count")
     require(type(layer["complete"]) is bool, "Coverage completeness must be a boolean")
     if not layer["complete"]:
-        require(all(layer[key] is None for key in ("section_island_count", "closed_void_region_count", *TOPOLOGY_DERIVED_COUNTS)),
-                "Incomplete planned coverage must preserve unknown topology counts")
+        require(all(layer[key] is None for key in keys), "Incomplete coverage must preserve unknown core counts")
         return
-    islands = count(layer["section_island_count"], "section_island_count")
+    count(layer["section_island_count"], "section_island_count")
     voids = count(layer["closed_void_region_count"], "closed_void_region_count")
-    fragmented, spanning, filled, divided = (count(layer[key], key) for key in TOPOLOGY_DERIVED_COUNTS)
-    require(fragmented <= islands, "Fragmented source-island count exceeds source islands")
-    require(islands >= 2 or spanning == 0, "A planned region cannot span multiple source islands when fewer than two exist")
-    require(filled + divided <= voids, "Fully covered and divided closed voids must be distinct subsets of source voids")
-
-
-def verify_enclosed_exterior(layer):
-    """A zero residual enclosed blank is not proof that an opening remains usable."""
-    regions = layer["planned_enclosed_exterior_region_count"]
-    area = layer["planned_enclosed_exterior_area_mm2"]
-    require(type(layer["complete"]) is bool, "Coverage completeness must be a boolean")
-    if not layer["complete"]:
-        require(regions is None and area is None, "Incomplete coverage must preserve unknown enclosed exterior observations")
-        return
-    count(regions, "planned_enclosed_exterior_region_count")
-    nonnegative(area, "planned_enclosed_exterior_area_mm2")
-    require((regions == 0) == (area == 0), "Enclosed exterior region count and positive-area observation disagree")
+    require(count(layer["closed_void_fully_covered_count"], "closed_void_fully_covered_count") <= voids,
+            "Fully covered holes must remain a subset of closed section holes")
 
 
 def verify_island_gap(layer):
@@ -694,43 +344,25 @@ def verify_open_slot_layers(name, layers):
                 f"{name}: source section differs from the known uncompensated geometry")
         require(layer["section_island_count"] == 1 and layer["closed_void_region_count"] == 0 and layer["hole_area_mm2"] == 0,
                 f"{name}: the source opening must not be reported as a closed polygon hole")
-        # The measured planned enclosure may be zero or positive for either
-        # generator. Neither result alone is a pass/fail judgment about a slot.
+        # Source opening geometry alone is not a pass/fail judgment about a printed slot.
 
 
-def verify_feature_metrics(name, reports):
+def verify_feature_metrics(name, reports, gcode_roles):
     by_generator = {}
     for generator, report in reports.items():
         groups = report["objects"]["groups"]
         require(len(groups) == 1 and groups[0]["instance_count"] == 1, "Expected one fixture instance")
-        verify_joint_lower_path_slab_coverage(groups[0])
-        verify_cross_layer_metrics(groups[0])
-        verify_external_bridge_projection(groups[0])
-        surfaces = verify_source_surface_layer_alignment(groups[0])
-        require([volume["volume_index"] for volume in surfaces]
-                == [volume["volume_index"] for volume in groups[0]["source_volume_sampling"]["volumes"]],
-                "Source-surface and source-volume observations must identify the same model-part targets")
-        require(surfaces and all(volume["complete"] is True for volume in surfaces),
-                "Fresh fixtures must have complete source-surface observations")
-        if name != "slope-wedge":
-            require(all(volume["non_horizontal_facet_band_count"] > 0
-                        and volume["max_vertical_projection_normal_offset_mm"] == 0 for volume in surfaces),
-                    "Axis-aligned fixture sides have zero Z-projection normal offset, also above a raft")
-        instances = verify_support_projection(groups[0])
-        require(all(layer["complete"] is True for instance in instances for layer in instance["layers"]),
-                "Fresh fixtures must have complete support projection observations, including the first model layer")
+        validate_core_report_group(groups[0])
         coverage = groups[0]["planned_layer_coverage"]
         require(coverage["scope"] == "per_instance_model_paths_before_gcode", "Unexpected footprint scope")
         layers = coverage["layers"]
         require(len(layers) == groups[0]["model_layer_count"], "Missing layer observations")
         for layer in layers:
             verify_topology_counts(layer)
-            verify_enclosed_exterior(layer)
             verify_island_gap(layer)
             require(layer["complete"] and layer["invalid_path_count"] == 0, "Fixture coverage is incomplete")
             require(layer["excluded_path_count"] == 0, "Fixture unexpectedly has excluded paths")
-            require(abs(layer["section_area_mm2"] - layer["section_covered_area_mm2"]
-                        - layer["section_uncovered_area_mm2"]) < 0.001, "Section area accounting mismatch")
+            nonnegative(layer["planned_path_area_mm2"], "planned path area")
             require(0 <= layer["hole_intrusion_area_mm2"] <= layer["hole_area_mm2"] + 0.001,
                     "Hole intersection must stay inside the target hole area")
         by_generator[generator] = layers
@@ -740,27 +372,28 @@ def verify_feature_metrics(name, reports):
         require(len(classic) == len(arachne) == 6, "Raised stroke must span six 0.2 mm layers")
         require(all(layer["completely_unprinted_island_count"] == 1 for layer in classic),
                 "Classic fixture should lose the isolated narrow upper sections")
-        require(all(layer["completely_unprinted_island_count"] == 0 and layer["section_covered_area_mm2"] > 0
+        require(all(layer["completely_unprinted_island_count"] == 0 and layer["planned_path_area_mm2"] > 0
                     for layer in arachne), "Arachne fixture should produce paths in each upper section")
     elif name == "through-hole":
         for layers in by_generator.values():
             require(all(abs(layer["hole_area_mm2"] - 16) < 0.01 for layer in layers),
                     "The 4 x 4 mm hole must remain excluded from material sections")
             require(all(layer["closed_void_region_count"] == 1 and layer["closed_void_fully_covered_count"] == 0
-                        and layer["closed_voids_with_multiple_remaining_regions_count"] == 0 for layer in layers),
-                    "The fixture's closed hole must remain one partially or wholly open region")
+                        for layer in layers), "The fixture's closed hole must not be fully covered by planned paths")
     elif name == "sparse-block":
-        # Multiple planned regions are allowed in ordinary sparse infill. Do not
-        # infer missing necks or print defects from that count or uncovered area.
+        # Sparse infill is not a solid-fill target or a completely unprinted island.
         for layers in by_generator.values():
-            require(any(layer["section_uncovered_area_mm2"] > 20 and layer["solid_fill_target_area_mm2"] == 0
+            require(any(layer["section_area_mm2"] > 0 and layer["solid_fill_target_area_mm2"] == 0
                         for layer in layers), "Sparse interior must not be classified as a solid-fill target")
             require(all(layer["completely_unprinted_island_count"] == 0 for layer in layers),
                     "Ordinary sparse infill is not a completely unprinted island")
     elif name == "sparse-top":
         for layers in by_generator.values():
-            require(any(layer["top_fill_target_area_mm2"] > 0 and layer["top_fill_uncovered_area_mm2"] > 10
-                        for layer in layers), "Deliberately sparse top surfaces must retain their uncovered area")
+            # The last model layer is this fixture's top surface. The retained
+            # solid target covers it without a separate top-surface difference.
+            require(layers[-1]["solid_fill_target_area_mm2"] > 0
+                    and layers[-1]["solid_fill_uncovered_area_mm2"] > 10,
+                    "Deliberately sparse final top surface must retain its uncovered solid area")
             require(all(layer["completely_unprinted_island_count"] == 0 for layer in layers),
                     "Deliberately sparse top surfaces are not completely unprinted islands")
     elif name == "separated-blocks":
@@ -771,9 +404,6 @@ def verify_feature_metrics(name, reports):
             verify_island_fixture_layers(name, layers)
             require(all(layer["hole_area_mm2"] == 0 and layer["completely_unprinted_island_count"] == 0
                         for layer in layers), "Both separated blocks should have paths without enclosed holes")
-            require(all(layer["section_island_count"] == 2
-                        and layer["planned_regions_overlapping_multiple_section_islands_count"] == 0 for layer in layers),
-                    "Separated blocks must not share a planned material region across their gap")
     elif name == "nested-island":
         for layers in by_generator.values():
             verify_island_fixture_layers(name, layers)
@@ -788,21 +418,26 @@ def verify_feature_metrics(name, reports):
         for layers in by_generator.values():
             verify_open_slot_layers(name, layers)
     elif name == "cura-raft":
-        for report in reports.values():
-            verify_cura_raft(report)
+        for generator, report in reports.items():
+            verify_cura_raft(report, gcode_roles[generator])
     elif name == "source-volume-sampling":
-        for report in reports.values():
-            verify_source_volume_sampling(report)
+        for layers in by_generator.values():
+            require(len(layers) == 20 and any(layer["planned_path_area_mm2"] > 0 for layer in layers),
+                    "The multi-volume fixture must retain its main body layers and planned paths")
     elif name == "slope-wedge":
         for report in reports.values():
             verify_wedge_alignment(report["objects"]["groups"][0])
 
 
-def raised_stroke_gcode_layers(path):
-    """Fixture-only check of exported upper-stroke extrusion, not a general coverage parser."""
+def fixture_gcode_extrusions(path):
+    """Yield actual positive-E spatial moves from local single-tool fixtures.
+
+    TYPE comments alone, travel, retracts and pure-E recovery are not extrusion
+    evidence. Arc presence is supported, but no chord length or area is inferred.
+    This is a fixture check, not another production G-code statistics engine.
+    """
     position = dict.fromkeys("XYZE", 0.0)
     xyz_relative, e_relative, role = False, False, ""
-    layers = set()
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith(";TYPE:"):
             role = line[6:].strip()
@@ -811,24 +446,40 @@ def raised_stroke_gcode_layers(path):
             continue
         command = words[0]
         values = {axis: float(value) for axis, value in
-                  re.findall(r"([XYZE])(-?(?:\d+(?:\.\d*)?|\.\d+))", " ".join(words[1:]))}
+                  re.findall(r"([XYZEIJR])([-+]?(?:\d+(?:\.\d*)?|\.\d+))", " ".join(words[1:]))}
         require(command != "G20", "Fixture parser only supports millimetres")
         if command in ("G90", "G91"):
             xyz_relative = command == "G91"
         elif command in ("M82", "M83"):
             e_relative = command == "M83"
         elif command == "G92":
-            position.update(values)
+            position.update({axis: value for axis, value in values.items() if axis in position})
         elif command in ("G0", "G1", "G2", "G3"):
             target = dict(position)
             for axis, value in values.items():
+                if axis not in position:
+                    continue
                 relative = e_relative if axis == "E" else xyz_relative
                 target[axis] = position[axis] + value if relative else value
-            if role == "Outer wall" and target["E"] > position["E"] and 1.2 + 1e-6 < target["Z"] <= 2.4 + 1e-6:
-                require(command not in ("G2", "G3"), "Unexpected extruding arc in straight-stroke fixture")
-                if math.hypot(target["X"] - position["X"], target["Y"] - position["Y"]) > 1e-6:
-                    layers.add(round(target["Z"], 6))
+            spatial = math.dist([position[axis] for axis in "XYZ"], [target[axis] for axis in "XYZ"]) > 1e-6
+            arc = command in ("G2", "G3") and any(abs(values.get(axis, 0)) > 1e-6 for axis in "IJR")
+            if target["E"] > position["E"] and (spatial or arc):
+                yield role, command, position, target
             position = target
+
+
+def gcode_extrusion_roles(path):
+    return {role for role, _, _, _ in fixture_gcode_extrusions(path)}
+
+
+def raised_stroke_gcode_layers(path):
+    """Final upper-stroke extrusion evidence, independent of report statistics."""
+    layers = set()
+    for role, command, position, target in fixture_gcode_extrusions(path):
+        if role == "Outer wall" and 1.2 + 1e-6 < target["Z"] <= 2.4 + 1e-6:
+            require(command not in ("G2", "G3"), "Unexpected extruding arc in straight-stroke fixture")
+            if math.hypot(target["X"] - position["X"], target["Y"] - position["Y"]) > 1e-6:
+                layers.add(round(target["Z"], 6))
     return sorted(layers)
 
 
@@ -944,24 +595,26 @@ def main():
         for name, model in fixtures(output).items():
             by_support, configs_by_support = {}, {}
             for support_enabled in ((False, True) if name in SUPPORT_FIXTURES else (None,)):
-                reports, configurations = {}, {}
+                reports, configurations, roles = {}, {}, {}
                 for generator in ("classic", "arachne"):
                     report, facts = run_case(suite, model, generator, read_json(args.process), support_enabled)
                     reports[generator] = report
                     configurations[generator] = config_values(facts)
+                    roles[generator] = gcode_extrusion_roles(facts["path"])
                 changed = {key for key in configurations["classic"].keys() | configurations["arachne"].keys()
                            if configurations["classic"].get(key) != configurations["arachne"].get(key)}
                 require(changed == {"wall_generator"}, f"Unexpected effective parameter differences: {changed}")
-                verify_feature_metrics(name, reports)
+                verify_feature_metrics(name, reports, roles)
                 if support_enabled is not None:
-                    verify_support_fixture(name, reports, support_enabled)
+                    verify_support_fixture(name, reports, support_enabled, roles)
                 elif name == "new-island-tree":
-                    verify_support_fixture(name, reports, True)
+                    verify_support_fixture(name, reports, True, roles)
                 by_support[support_enabled] = reports
                 configs_by_support[support_enabled] = configurations
                 label = name if support_enabled is None else name + "-support-" + ("on" if support_enabled else "off")
                 summary["cases"][label] = {"model_sha256": digest(model), "changed_parameters": sorted(changed),
-                                           "reports": reports}
+                                           "reports": reports,
+                                           "actual_gcode_extrusion_roles": {key: sorted(value) for key, value in roles.items()}}
             if name in SUPPORT_FIXTURES:
                 verify_support_geometry_unchanged(by_support[False], by_support[True])
                 for generator in ("classic", "arachne"):

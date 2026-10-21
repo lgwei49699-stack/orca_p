@@ -25,6 +25,26 @@ ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "planning/cache/cli-assets"
 WALL_CLOCK_FIELDS = {"prepare_time", "export_time", "sliced_time", "sliced_time_with_cache"}
 QUALITY_CLAIMS = {"print_ready", "printable", "quality_passed", "print_quality_passed"}
+REMOVED_GROUP_METRICS = {
+    "nominal_target_path_connectivity", "source_volume_sampling", "source_surface_layer_alignment",
+    "solid_fill_target_depth", "planned_material_depth", "joint_lower_path_slab_coverage",
+    "planned_support_projection", "cross_layer_geometry", "external_bridge_projection",
+    "planned_perimeter_loops", "planned_bridge_paths", "planned_model_bed_footprint_area_mm2_per_instance",
+}
+CORE_LAYER_FIELDS = {
+    "layer_index", "slice_z_mm", "print_z_mm", "bottom_z_mm", "height_mm", "complete",
+    "excluded_path_count", "invalid_path_count", "section_area_mm2", "planned_path_area_mm2",
+    "section_island_count", "section_min_island_gap_mm",
+    "parallel_boundary_clearance", "completely_unprinted_island_count", "completely_unprinted_island_area_mm2",
+    "hole_area_mm2", "hole_intrusion_area_mm2", "closed_void_region_count", "closed_void_fully_covered_count",
+    "solid_fill_target_area_mm2", "solid_fill_uncovered_area_mm2",
+}
+CORE_GCODE_FIELDS = {"normal_estimate", "extruders"}
+CORE_NORMAL_FIELDS = {"total_time_s", "layer_sequence_count"}
+CORE_MATERIAL_FIELDS = {
+    "extruder_id", "configured_filament_max_volumetric_speed_mm3_s", "estimated_peak_flow",
+    "estimated_flow_cap_distance", "layer_time_threshold_observation", "estimated_volume_mm3",
+}
 
 
 def require(condition, message):
@@ -122,35 +142,6 @@ def validate_range(value, expected_count, label):
         require(value["min"] is None and value["max"] is None, f"Empty range must use null bounds: {label}")
 
 
-def validate_extrusion_ranges(ranges, expected_count, label):
-    for key in ("width_mm", "height_mm", "commanded_feedrate_mm_s", "nominal_volumetric_rate_mm3_s", "segment_length_mm"):
-        validate_range(ranges[key], expected_count, label + "." + key)
-    lengths = ranges["segment_length_mm"]
-    if lengths["count"] > 0 and lengths["invalid_count"] == 0:
-        nonnegative(ranges["path_length_mm"], label + ".path_length_mm")
-    else:
-        require(ranges["path_length_mm"] is None, label + ".path_length_mm must preserve unknowns")
-
-
-def validate_estimated_motion(value):
-    require(value["scope"] == "normal_estimator_finalized_extrusion_blocks", "Unexpected estimated-motion scope")
-    require(type(value["complete"]) is bool, "Estimated-motion completeness must be boolean")
-    ranges = (value["peak_speed_mm_s"], value["tangential_acceleration_mm_s2"])
-    if not value["complete"]:
-        require(value["block_count"] is None and all(item["min"] is None and item["max"] is None for item in ranges),
-                "Incomplete estimated motion must not expose partial blocks or ranges")
-    elif count(value["block_count"], "estimated-motion block count") == 0:
-        require(all(item["min"] is None and item["max"] is None for item in ranges),
-                "No finalized extrusion blocks have no estimated-motion ranges")
-    else:
-        for item in ranges:
-            low, high = item["min"], item["max"]
-            require(type(low) in (int, float) and type(high) in (int, float)
-                    and math.isfinite(low) and math.isfinite(high) and low <= high,
-                    "Invalid estimated-motion range")
-        require(ranges[0]["min"] > 0, "Estimated peak speed must be positive")
-
-
 def validate_estimated_peak_flow(value, configured_cap):
     require(value["scope"] == "normal_estimator_finalized_linear_e_blocks", "Unexpected estimated-peak-flow scope")
     require(type(value["complete"]) is bool, "Estimated-peak-flow completeness must be boolean")
@@ -199,92 +190,20 @@ def validate_estimated_flow_cap_distance(value, configured_cap):
 
 
 def validate_gcode_observations(metrics):
-    travel = metrics["travel"]
-    lengths = travel["segment_length_mm"]
-    validate_range(lengths, metrics["move_counts"]["travel"], "travel.segment_length_mm")
-    if lengths["invalid_count"]:
-        require(travel["path_length_mm"] is None, "Invalid travel must leave total unknown")
-    else:
-        total = nonnegative(travel["path_length_mm"], "travel.path_length_mm")
-        if lengths["count"] == 0:
-            require(total == 0, "No travel records must have zero total length")
-        else:
-            require(lengths["min"] * lengths["count"] <= total + 1e-6
-                    and total <= lengths["max"] * lengths["count"] + 1e-6, "Travel total outside its recorded range")
-    bounds = metrics["seam_position_bounds_mm"]
-    require(type(bounds["complete"]) is bool, "Seam completeness must be boolean")
-    if not bounds["complete"] or metrics["seam_record_count"] == 0:
-        require(bounds["min"] is None and bounds["max"] is None, "Absent/invalid seams must have no bounds")
-    else:
-        require(isinstance(bounds["min"], list) and isinstance(bounds["max"], list)
-                and len(bounds["min"]) == len(bounds["max"]) == 3, "Seam bounds must contain XYZ")
-        for low, high in zip(bounds["min"], bounds["max"]):
-            require(type(low) in (int, float) and type(high) in (int, float)
-                    and math.isfinite(low) and math.isfinite(high) and low <= high, "Invalid signed seam bounds")
-    seams = metrics["seam_positions_mm"]
-    require(seams["scope"] == "gcode_processor_preview_coordinates_in_move_order", "Unexpected seam coordinate scope")
-    require(type(seams["complete"]) is bool and seams["complete"] == bounds["complete"],
-            "Seam point completeness disagrees with bounds")
-    if not seams["complete"]:
-        require(seams["positions"] is None, "Incomplete seam positions must not expose a partial list")
-    else:
-        positions = seams["positions"]
-        require(isinstance(positions, list) and len(positions) == metrics["seam_record_count"], "Seam positions count disagrees")
-        require(all(isinstance(point, list) and len(point) == 3
-                    and all(type(value) in (int, float) and math.isfinite(value) for value in point)
-                    for point in positions), "Invalid seam XYZ coordinates")
-        if positions:
-            require([min(point[axis] for point in positions) for axis in range(3)] == bounds["min"]
-                    and [max(point[axis] for point in positions) for axis in range(3)] == bounds["max"],
-                    "Seam positions disagree with bounds")
-    for role in metrics["extrusion_by_role"]:
-        validate_estimated_motion(role["estimated_motion"])
-        flow = role["configured_flow_comparison"]
-        require(type(flow["complete"]) is bool, "Flow comparison completeness must be boolean")
-        above, ratio = flow["above_cap_path_length_mm"], flow["above_cap_path_length_ratio"]
-        if not flow["complete"]:
-            require(above is None and ratio is None, "Incomplete flow comparison must not expose partial totals")
-            continue
-        total = nonnegative(role["extrusion_ranges"]["path_length_mm"], "role path length")
-        require(nonnegative(above, "above cap length") <= total, "Above-cap length exceeds total role length")
-        if total == 0:
-            require(ratio is None, "Zero extrusion length has no flow length ratio")
-        else:
-            require(nonnegative(ratio, "above cap length ratio") <= 1
-                    and math.isclose(ratio, above / total, rel_tol=1e-9, abs_tol=1e-12),
-                    "Flow ratio must be length-weighted, not record-weighted")
-
-
-def validate_plate_bed_regions(value):
-    categories = ("model", "support_and_raft", "brim", "combined")
-    if not any(category + "_regions" in value for category in categories):
-        return  # Older reports predate the optional connected-region observation.
-    for category in categories:
-        regions = value[category + "_regions"]
-        if not value["complete"]:
-            require(regions is None, "Incomplete bed footprint must not expose partial connected regions")
-            continue
-        require(isinstance(regions, list), "Complete bed-footprint regions must be an array")
-        total = nonnegative(value[category + "_area_mm2"], category + " bed-footprint area")
-        require(bool(regions) == (total > 0), "Bed-footprint region presence disagrees with the category area")
-        for region in regions:
-            require(nonnegative(region["area_mm2"], "bed-footprint region area") > 0,
-                    "Connected bed-footprint regions must have positive area")
-            low, high = region["bounds_mm"]["min"], region["bounds_mm"]["max"]
-            require(isinstance(low, list) and isinstance(high, list) and len(low) == len(high) == 2,
-                    "Bed-footprint region bounds must contain XY")
-            require(all(type(a) in (int, float) and type(b) in (int, float)
-                        and math.isfinite(a) and math.isfinite(b) and a < b for a, b in zip(low, high)),
-                    "Invalid signed bed-footprint region bounds")
-    # Region order is not an identity, and reordering area additions can alter
-    # their last floating-point bits. Do not require a bit-identical area sum.
+    require(set(metrics) == CORE_GCODE_FIELDS, "G-code core fields are missing or include retired diagnostics")
+    require(set(metrics["normal_estimate"]) == CORE_NORMAL_FIELDS,
+            "Normal estimate must contain only time and the internal cooling sequence count")
+    require(isinstance(metrics["extruders"], list) and metrics["extruders"], "Missing material observations")
+    for item in metrics["extruders"]:
+        require(set(item) == CORE_MATERIAL_FIELDS, "Material core fields are missing or include retired diagnostics")
 
 
 def validate_plate_bed_footprint(value):
     require(value["scope"] == "planned_path_nominal_bottom_on_bed_before_gcode", "Unexpected plate bed-footprint scope")
     require(type(value["complete"]) is bool, "Bed-footprint completeness must be boolean")
-    validate_plate_bed_regions(value)
     keys = ("model_area_mm2", "support_and_raft_area_mm2", "brim_area_mm2", "combined_area_mm2")
+    require(set(value) == {"scope", "complete", *keys},
+            "Bed footprint must contain only scope, completeness and the four existing areas")
     if not value["complete"]:
         require(all(value[key] is None for key in keys), "Incomplete bed footprint must not expose partial areas")
         return
@@ -294,131 +213,17 @@ def validate_plate_bed_footprint(value):
             and combined <= model + support + brim + tolerance, "Bed footprint union contradicts category areas")
 
 
-def validate_perimeter_loops(value):
-    require(value["scope"] == "per_instance_closed_model_perimeter_centerlines_before_gcode", "Unexpected loop scope")
-    require(type(value["complete"]) is bool, "Loop completeness must be boolean")
-    ranges = (value["loop_length_mm"], value["turn_angle_degrees"])
-    if not value["complete"]:
-        require(value["loop_count"] is None and all(item["min"] is None and item["max"] is None for item in ranges),
-                "Incomplete loops must not expose partial totals")
-    elif count(value["loop_count"], "loop_count") == 0:
-        require(all(item["min"] is None and item["max"] is None for item in ranges), "Empty loops have no range")
-    else:
-        for item in ranges:
-            require(nonnegative(item["min"], "loop range min") <= nonnegative(item["max"], "loop range max"),
-                    "Inverted loop range")
-        require(ranges[0]["min"] > 0 and ranges[1]["max"] <= 180, "Invalid loop length or directional turn")
-
-
-def validate_solid_fill_target_depth(value, model_layer_count):
-    require(value["scope"] == "per_instance_continuous_solid_fill_surface_slabs", "Unexpected solid-fill depth scope")
-    require(type(value["complete"]) is bool, "Solid-fill depth completeness must be boolean")
-    require(nonnegative(value["z_resolution_mm"], "solid-fill depth Z resolution") > 0,
-            "Solid-fill depth Z resolution must be positive")
-    if count(model_layer_count, "model_layer_count") == 0:
-        require(not value["complete"], "No retained model layers must leave solid-fill depth unknown")
-    for side in ("top", "bottom"):
-        target = value[side]
-        area, depth = target["target_area_sum_mm2"], target["continuous_depth_mm"]
-        if not value["complete"]:
-            require(area is None and depth["min"] is None and depth["max"] is None,
-                    "Incomplete solid-fill depth must not expose partial targets or ranges")
-        elif nonnegative(area, side + " target area sum") == 0:
-            require(depth["min"] is None and depth["max"] is None, "No solid-fill targets have no depth range")
-        else:
-            low = nonnegative(depth["min"], side + " continuous depth min")
-            high = nonnegative(depth["max"], side + " continuous depth max")
-            require(0 < low <= high, "Solid-fill target depth must be positive and ordered")
-
-
-def validate_planned_material_depth(value, model_layer_count):
-    require(value["scope"] == "per_instance_fixed_xy_model_path_slabs_before_gcode", "Unexpected planned-material depth scope")
-    require(type(value["complete"]) is bool, "Planned-material depth completeness must be boolean")
-    require(nonnegative(value["z_resolution_mm"], "planned-material depth Z resolution") > 0,
-            "Planned-material depth Z resolution must be positive")
-    if count(model_layer_count, "model_layer_count") == 0:
-        require(not value["complete"], "No retained model layers must leave planned-material depth unknown")
-    for side in ("top", "bottom"):
-        target = value[side]
-        area, uncovered = target["target_area_sum_mm2"], target["uncovered_start_area_sum_mm2"]
-        depth = target["continuous_depth_mm"]
-        if not value["complete"]:
-            require(area is None and uncovered is None and depth["min"] is None and depth["max"] is None,
-                    "Incomplete planned-material depth must not expose partial targets, uncovered areas or ranges")
-            continue
-        nonnegative(area, side + " planned-material target area sum")
-        require(nonnegative(uncovered, side + " uncovered start area sum") <= area,
-                "Uncovered start area exceeds the planned-material target area")
-        if area == 0:
-            require(depth["min"] is None and depth["max"] is None, "No planned-material targets have no depth range")
-            continue
-        low = nonnegative(depth["min"], side + " planned-material continuous depth min")
-        high = nonnegative(depth["max"], side + " planned-material continuous depth max")
-        require(low <= high, "Planned-material depth range must be ordered")
-        if uncovered > 0:
-            require(low == 0, "Uncovered target area must contribute a known zero minimum depth")
-        if uncovered == area:
-            require(high == 0, "Entirely uncovered targets must have zero minimum and maximum depth")
-
-
-def validate_nominal_target_path_connectivity(value, model_layer_count):
-    require(value["scope"] == "per_instance_compensated_region_section_and_model_path_slabs",
-            "Unexpected nominal connectivity scope")
-    require(value["coordinate_frame"] == "print_object_local_xy_and_print_z",
-            "Unexpected nominal connectivity coordinate frame")
-    require(type(value["complete"]) is bool, "Nominal connectivity completeness must be boolean")
-    require(nonnegative(value["z_resolution_mm"], "nominal connectivity Z resolution") == 1e-6,
-            "Nominal connectivity Z resolution must be exactly 0.000001 mm")
-    if count(model_layer_count, "model_layer_count") == 0:
-        require(not value["complete"], "No retained model layers must leave nominal connectivity unknown")
-    components, joins = value["target_components"], value["cross_target_joins"]
-    if not value["complete"]:
-        require(components is None and joins is None, "Incomplete nominal connectivity must not expose partial arrays")
-        return
-    require(isinstance(components, list) and isinstance(joins, list), "Complete nominal connectivity requires arrays")
-
-    def bounds_3d(bounds):
-        low, high = bounds["min"], bounds["max"]
-        require(isinstance(low, list) and isinstance(high, list) and len(low) == len(high) == 3,
-                "Nominal connectivity bounds must have three XYZ coordinates")
-        require(all(type(item) in (int, float) and math.isfinite(item) for item in low + high),
-                "Nominal connectivity bounds must be finite numeric coordinates")
-        require(all(a < b for a, b in zip(low, high)), "Nominal connectivity bounds must have positive XYZ extents")
-        return low, high
-
-    for index, component in enumerate(components):
-        require(count(component["component_index"], "target component index") == index,
-                "Nonsequential nominal target component index")
-        low, high = bounds_3d(component["bounds_mm"])
-        volume = nonnegative(component["target_volume_mm3"], "nominal target volume")
-        require(volume > 0, "Nominal target volume must be positive")
-        uncovered = nonnegative(component["uncovered_volume_mm3"], "nominal uncovered volume")
-        require(uncovered <= volume, "Nominal uncovered volume exceeds target volume")
-        count(component["clipped_path_component_count"], "clipped path component count")
-        missing = component["missing_slab_regions"]
-        require(isinstance(missing, list) and bool(missing) == (uncovered > 0),
-                "Missing slab regions disagree with nominal uncovered volume")
-        for region in missing:
-            require(nonnegative(region["volume_mm3"], "missing slab region volume") > 0,
-                    "Missing slab region volume must be positive")
-            region_low, region_high = bounds_3d(region["bounds_mm"])
-            require(all(a <= b <= c <= d for a, b, c, d in zip(low, region_low, region_high, high)),
-                    "Missing slab region bounds exceed their target component bounds")
-        # Volumes may accumulate in different orders; do not impose bitwise
-        # equality with the region sum or infer filled volume from bounding boxes.
-
-    path_indices = set()
-    for join in joins:
-        path_index = count(join["path_component_index"], "joined path component index")
-        require(path_index not in path_indices, "Duplicate joined path component index")
-        path_indices.add(path_index)
-        targets = join["target_component_indices"]
-        require(isinstance(targets, list) and len(targets) >= 2, "A cross-target join needs at least two targets")
-        for index in targets:
-            require(count(index, "joined target component index") < len(components), "Joined target component is out of range")
-            require(components[index]["clipped_path_component_count"] > 0,
-                    "A joined target must contain a clipped path component")
-        require(len(set(targets)) == len(targets), "Duplicate target reference in cross-target join")
+def validate_core_report_group(group):
+    require(not REMOVED_GROUP_METRICS.intersection(group),
+            "Removed diagnostic groups must not be emitted, even as empty summaries")
+    coverage = group["planned_layer_coverage"]
+    require(coverage["scope"] == "per_instance_model_paths_before_gcode", "Unexpected footprint scope")
+    require(len(coverage["layers"]) == count(group["model_layer_count"], "model_layer_count"),
+            "Missing core layer observations")
+    for index, layer in enumerate(coverage["layers"]):
+        require(set(layer) == CORE_LAYER_FIELDS, "Core layer fields are missing or include retired diagnostics")
+        require(type(layer["layer_index"]) is int and layer["layer_index"] == index, "Nonsequential layer index")
+        require(type(layer["complete"]) is bool, "Coverage completeness must be boolean")
 
 
 def validate_layer_time_threshold_observation(value, sequence_count):
@@ -461,80 +266,34 @@ def validate_metric_values(report, plate, facts):
     require(objects["instance_count"] == sum(count(group["instance_count"], "instance_count") for group in groups),
             "Instance count disagrees")
     for index, group in enumerate(groups):
-        validate_perimeter_loops(group["planned_perimeter_loops"])
         require(group["group_index"] == index, "Nonsequential slice group index")
         layers = count(group["model_layer_count"], "model_layer_count")
-        validate_solid_fill_target_depth(group["solid_fill_target_depth"], layers)
-        validate_planned_material_depth(group["planned_material_depth"], layers)
-        if "nominal_target_path_connectivity" in group:
-            validate_nominal_target_path_connectivity(group["nominal_target_path_connectivity"], layers)
+        validate_core_report_group(group)
         count(group["support_layer_count"], "support_layer_count")
         validate_range(group["model_layer_height_mm"], layers, "model_layer_height_mm")
-        footprint = group["planned_model_bed_footprint_area_mm2_per_instance"]
-        if footprint is not None:
-            nonnegative(footprint, "planned_model_bed_footprint_area_mm2_per_instance")
+        first_section = group["first_model_layer_section_area_mm2_per_instance"]
+        if first_section is not None:
+            nonnegative(first_section, "first_model_layer_section_area_mm2_per_instance")
 
     metrics = report["gcode"]
     validate_gcode_observations(metrics)
     normal = metrics["normal_estimate"]
     require(abs(nonnegative(normal["total_time_s"], "total_time_s") - plate["total_time"]) <= 0.5001,
             "Estimated time differs from rounded legacy plate time")
-    nonnegative(normal["prepare_time_s"], "prepare_time_s")
     sequence_count = count(normal["layer_sequence_count"], "layer_sequence_count")
     require(sequence_count == facts["layers"], "Estimated layer sequence count differs from G-code layer markers")
-    validate_range(normal["layer_duration_s"], sequence_count, "layer_duration_s")
-    require(len(normal["layer_duration_sequence_s"]) == sequence_count, "Layer time sequence length disagrees")
-    for duration in normal["layer_duration_sequence_s"]:
-        if duration is not None:
-            nonnegative(duration, "layer duration")
-    require(count(metrics["seam_record_count"], "seam_record_count") <= metrics["move_counts"]["other"],
-            "Seam records must remain a subset of the legacy other count")
-    moves = metrics["move_counts"]
-    require(count(moves["total"], "move_counts.total") == sum(
-        count(moves[key], "move_counts." + key) for key in ("extrude", "travel", "retract", "unretract", "wipe", "other")),
-        "Move counts do not add up")
-    require(moves["extrude"] > 0, "Successful slice has no reported extrusion records")
-    validate_extrusion_ranges(metrics["extrusion_ranges"], moves["extrude"], "extrusion_ranges")
-    by_role = metrics["extrusion_by_role"]
-    require(isinstance(by_role, list) and bool(by_role), "Missing per-role extrusion ranges")
-    role_ids = [count(item["role_id"], "extrusion_by_role.role_id") for item in by_role]
-    require(len(set(role_ids)) == len(role_ids), "Duplicate extrusion role metrics")
-    role_records = 0
-    for item in by_role:
-        require(isinstance(item["role"], str) and bool(item["role"]), "Missing extrusion role name")
-        ranges = item["extrusion_ranges"]
-        records = (count(ranges["width_mm"]["count"], "role.width.count")
-                   + count(ranges["width_mm"]["invalid_count"], "role.width.invalid_count"))
-        validate_extrusion_ranges(ranges, records, "extrusion_by_role." + item["role"])
-        role_records += records
-    require(role_records == moves["extrude"], "Per-role extrusion counts disagree with total Extrude records")
-    # Model walls/fill and custom priming retain separate named role records.
-    # Do not require custom extrusion in every input, or constrain its inferred
-    # height to model layer heights (even for the default cube fixture).
     extruders = metrics["extruders"]
     ids = [count(item["extruder_id"], "extruder_id") for item in extruders]
     require(len(set(ids)) == len(ids), "Duplicate extruder metrics")
-    extrusion_count = 0
     total_mass, support_mass = 0., 0.
     total_volume_entries = 0
     for item in extruders:
         validate_estimated_peak_flow(item["estimated_peak_flow"], item["configured_filament_max_volumetric_speed_mm3_s"])
         validate_estimated_flow_cap_distance(item["estimated_flow_cap_distance"], item["configured_filament_max_volumetric_speed_mm3_s"])
         validate_layer_time_threshold_observation(item["layer_time_threshold_observation"], sequence_count)
-        ranges = item["extrusion_ranges"]
-        records = count(ranges["width_mm"]["count"], "width.count") + count(ranges["width_mm"]["invalid_count"], "width.invalid_count")
-        validate_extrusion_ranges(ranges, records, "extruder.extrusion_ranges")
         cap = item["configured_filament_max_volumetric_speed_mm3_s"]
-        ratio = item["max_nominal_flow_to_cap_ratio"]
-        flow = ranges["nominal_volumetric_rate_mm3_s"]
         if cap is not None:
             require(nonnegative(cap, "configured material flow cap") > 0, "Unlimited cap must be null")
-        if cap is not None and flow["count"] > 0 and flow["invalid_count"] == 0:
-            require(abs(nonnegative(ratio, "flow to cap ratio") - flow["max"] / cap) < 1e-9,
-                    "Flow to cap ratio disagrees with current material ranges")
-        else:
-            require(ratio is None, "Unknown cap or flow must not produce a ratio")
-        extrusion_count += records
         index = item["extruder_id"]
         require(index < len(facts["filament_densities"]), "Extruder has no G-code density metadata")
         volumes = item["estimated_volume_mm3"]
@@ -548,18 +307,11 @@ def validate_metric_values(report, plate, facts):
             total_mass += volumes["total"] * facts["filament_densities"][index] * 0.001
         if volumes["support"] is not None:
             support_mass += volumes["support"] * facts["filament_densities"][index] * 0.001
-    require(extrusion_count == moves["extrude"], "Per-extruder extrusion counts disagree")
     require(total_volume_entries > 0, "No recorded material volume")
     # Legacy JSON and G-code footer weights are rounded to 0.01 g.
     require(abs(total_mass - plate["total_filament_g"]) <= 0.0051, "Volume/density disagrees with legacy total material weight")
     require(abs(total_mass - facts["footer_mass_g"]) <= 0.0051, "Volume/density disagrees with G-code material footer")
     require(abs(support_mass - plate["support_filament_g"]) <= 0.0051, "Volume/density disagrees with legacy support weight")
-    for role in metrics["filament_by_role"]:
-        count(role["role_id"], "role_id")
-        require(isinstance(role["role"], str) and bool(role["role"]), "Missing role name")
-        for key in ("estimated_length_m", "estimated_mass_g"):
-            if role[key] is not None:
-                nonnegative(role[key], key)
     require(isinstance(report["limitations"], list) and bool(report["limitations"]), "Missing analysis limitations")
 
 
@@ -568,9 +320,8 @@ def validate_report(report, output, plate, facts):
     require(report.get("scope") == "sliced_print_metrics", "Wrong analysis scope")
     require(type(report.get("plate_index")) is int and report["plate_index"] == plate["id"],
             "Analysis does not identify its sliced plate")
-    # This entry validates fresh CLI output, unlike the historical metric reader.
     for group in report["objects"]["groups"]:
-        require("nominal_target_path_connectivity" in group, "Current CLI output lacks nominal_target_path_connectivity")
+        validate_core_report_group(group)
     name = report.get("gcode_file")
     require(isinstance(name, str) and bool(name), "Missing gcode_file")
     foreign = PureWindowsPath(name)

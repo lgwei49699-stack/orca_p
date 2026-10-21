@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:08cdeb35ff5abc9790d741e205a2ad94f4d154d3f6cbb6c0f71d6902e6b6e0ab",
-  "reason": "在linux/release2_3_2合并bc6684f180，保留发布分支工具链绑定依赖缓存、3G ccache、source_ref、并发控制、180分钟预算和无PCH诊断构建；叠加MeshLib ON静态ZLIB、运行库闭包及包内回归，未恢复旧宽泛缓存。YAML与12段Bash语法、53项工具测试中的50项通过/3项Linux专属跳过，实际远端构建和最终包验收另列。"
+  "source_fingerprint": "sha256:9f59df09433507ffe42f298918e0cfe7ee8354ce63142f0a28f964812bda33b6",
+  "reason": "在linux/release2_3_2合入69fe8a45bc：仅移除退休的报告专用SliceAnalysisGeometry源表项；保留发布分支工具链绑定缓存、3G ccache、source_ref、并发控制、180分钟预算、无PCH及MeshLib静态ZLIB/运行库闭包/包内回归。构建脚本与合并前HEAD相同，不移除CGAL/GMP/MeshLib；指纹按最终合并源码重算，当前检查与未重新打包边界见实施记录。"
 }
 -->
 
@@ -24,7 +24,7 @@
 
 `SliceAnalysis.cpp/.hpp` 加入现有 libslic3r，`test_slice_analysis.cpp` 加入现有 fff_print_tests；复用 JSON/Boost 与现有切片数据，不新增 SDK、独立进程、依赖或打包选项。本次仅最小应用/测试目标验证，平台和 GUI 状态见[实施记录](../validation/2026-10-18-slice-analysis.md)。
 
-统一名义连通集合测量的 `SliceAnalysisGeometry.cpp/.hpp` 编入现有 `libslic3r_cgal`，复用项目已链接的 CGAL/GMP/MPFR。CGAL 类型与浮点舍入编译选项不进入普通 SliceAnalysis 目标，对外提供隐藏几何实现的Region及Boost有理数；整数输入不依赖平台long宽度或先转double。无新依赖下载或平台分支；Mac实际构建与Windows/Linux待验证状态分别记录。
+切片报告按业务用途精简后，三维名义连通专用 `SliceAnalysisGeometry.cpp/.hpp` 及其 `libslic3r_cgal` 源列表项已删除；不再为报告编译该精确集合实现。原 CGAL 模型检测/修复、GMP/MPFR、MeshLib 和所有平台打包配置保留，不移除共享依赖。当前最小构建与运行结果见实施记录。
 
 `ModelStageReport.cpp/.hpp` 加入既有libslic3r目标，复用已链接的CGAL、OpenSSL与Boost，不新增程序或SDK依赖。只在显式CLI报告中调用；默认SDK OFF/ON及GUI链接边界不变。
 
