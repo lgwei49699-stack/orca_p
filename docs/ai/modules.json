@@ -897,8 +897,6 @@
         "src/libslic3r/GCodeReader.hpp",
         "src/libslic3r/SliceAnalysis.cpp",
         "src/libslic3r/SliceAnalysis.hpp",
-        "src/libslic3r/SliceAnalysisGeometry.cpp",
-        "src/libslic3r/SliceAnalysisGeometry.hpp",
         "src/slic3r/GUI/GCodeViewer.cpp",
         "src/slic3r/GUI/GCodeViewer.hpp",
         "src/slic3r/GUI/GUI_Preview.cpp",

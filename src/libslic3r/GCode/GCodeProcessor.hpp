@@ -164,7 +164,7 @@ class Print;
             float width{ 0.0f }; // mm
             float height{ 0.0f }; // mm
             float mm3_per_mm{ 0.0f };
-            float travel_dist{ 0.0f }; // mm, XYZ distance (arc-aware); G0/G1 Travel distance is collected for analysis only
+            float travel_dist{ 0.0f }; // mm, XYZ extrusion distance (arc-aware)
             float fan_speed{ 0.0f }; // percentage
             float temperature{ 0.0f }; // Celsius degrees
             float time{ 0.0f }; // s
@@ -193,16 +193,6 @@ class Print;
             std::vector<std::string> params;    // extra msg info
         };
 
-        struct EstimatedMotion
-        {
-            bool   complete{false};
-            size_t block_count{0};
-            float  min_peak_speed_mm_s{0.0f};
-            float  max_peak_speed_mm_s{0.0f};
-            float  min_tangential_acceleration_mm_s2{0.0f};
-            float  max_tangential_acceleration_mm_s2{0.0f};
-        };
-
         struct EstimatedPeakFlow
         {
             bool   complete{false};
@@ -228,10 +218,9 @@ class Print;
         std::vector<std::vector<unsigned char>> layer_extruder_ids;
         bool                                    layer_extruder_ids_complete{false};
         // Final normal-estimator blocks, not requested speed or physical machine motion.
-        std::array<EstimatedMotion, static_cast<size_t>(ExtrusionRole::erCount)> normal_estimated_motion;
-        bool                                                                     normal_estimated_peak_flow_available{false};
-        std::map<size_t, EstimatedPeakFlow>                                      normal_estimated_peak_flow;
-        std::map<size_t, EstimatedFlowCapDistance>                               normal_estimated_flow_cap_distance;
+        bool                                        normal_estimated_peak_flow_available{false};
+        std::map<size_t, EstimatedPeakFlow>          normal_estimated_peak_flow;
+        std::map<size_t, EstimatedFlowCapDistance>   normal_estimated_flow_cap_distance;
         // Positions of ends of lines of the final G-code this->filename after TimeProcessor::post_process() finalizes the G-code.
         std::vector<size_t> lines_ends;
         Pointfs printable_area;
@@ -277,7 +266,6 @@ class Print;
             moves = other.moves;
             layer_extruder_ids = other.layer_extruder_ids;
             layer_extruder_ids_complete = other.layer_extruder_ids_complete;
-            normal_estimated_motion = other.normal_estimated_motion;
             normal_estimated_peak_flow_available = other.normal_estimated_peak_flow_available;
             normal_estimated_peak_flow = other.normal_estimated_peak_flow;
             normal_estimated_flow_cap_distance = other.normal_estimated_flow_cap_distance;
@@ -484,6 +472,8 @@ class Print;
             };
 
             bool enabled;
+            // Internal collection state; only the normal machine inherits the processor's opt-in.
+            bool analysis_enabled{false};
             float acceleration; // mm/s^2
             // hard limit for the acceleration, to which the firmware will clamp.
             float max_acceleration; // mm/s^2
@@ -511,7 +501,6 @@ class Print;
             CustomGCodeTime gcode_time;
             std::vector<TimeBlock> blocks;
             // Populated only for the normal time machine; retained planner blocks are not counted yet.
-            std::vector<GCodeProcessorResult::EstimatedMotion>               estimated_motion;
             std::map<size_t, GCodeProcessorResult::EstimatedPeakFlow>        estimated_peak_flow;
             std::map<size_t, GCodeProcessorResult::EstimatedFlowCapDistance> estimated_flow_cap_distance;
             std::vector<G1LinesCacheItem>                                    g1_times_cache;

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:8e018bbfa18096fd3f3b618c6f513ec7cf8c424f6128715de162876e6c0be747",
-  "reason": "整合master版本2.3.2.3与真实固定位置/分盘CI回归，保留Linux MeshLib ON静态ZLIB、TBB符号隔离和包内运行库闭包；同时保留隐藏SDK的搬迁验收。默认OFF与Mac/Windows构建逻辑未扩大，源码构建和最终包运行分开验收；本轮身份与结果见合并审查记录。"
+  "source_fingerprint": "sha256:1b5e6ad376f3ea398dd2e4b4f7bde010766522b227ddf864d3ea15eb45b95b1e",
+  "reason": "仅从libslic3r_cgal源表移除退休的报告专用SliceAnalysisGeometry，不移除CGAL/GMP/MeshLib或平台打包配置。Mac arm64 Release应用和fff_print_tests当前源码重建通过；Linux/Windows本轮未打包，结果不替代目标环境验收。"
 }
 -->
 
@@ -24,7 +24,7 @@
 
 `SliceAnalysis.cpp/.hpp` 加入现有 libslic3r，`test_slice_analysis.cpp` 加入现有 fff_print_tests；复用 JSON/Boost 与现有切片数据，不新增 SDK、独立进程、依赖或打包选项。本次仅最小应用/测试目标验证，平台和 GUI 状态见[实施记录](../validation/2026-10-18-slice-analysis.md)。
 
-统一名义连通集合测量的 `SliceAnalysisGeometry.cpp/.hpp` 编入现有 `libslic3r_cgal`，复用项目已链接的 CGAL/GMP/MPFR。CGAL 类型与浮点舍入编译选项不进入普通 SliceAnalysis 目标，对外提供隐藏几何实现的Region及Boost有理数；整数输入不依赖平台long宽度或先转double。无新依赖下载或平台分支；Mac实际构建与Windows/Linux待验证状态分别记录。
+切片报告按业务用途精简后，三维名义连通专用 `SliceAnalysisGeometry.cpp/.hpp` 及其 `libslic3r_cgal` 源列表项已删除；不再为报告编译该精确集合实现。原 CGAL 模型检测/修复、GMP/MPFR、MeshLib 和所有平台打包配置保留，不移除共享依赖。当前最小构建与运行结果见实施记录。
 
 `ModelStageReport.cpp/.hpp` 加入既有libslic3r目标，复用已链接的CGAL、OpenSSL与Boost，不新增程序或SDK依赖。只在显式CLI报告中调用；默认SDK OFF/ON及GUI链接边界不变。
 

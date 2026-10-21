@@ -168,7 +168,7 @@ static void cli_write_slice_analysis(const Print&                print,
     const fs::path temporary   = fs::path(output_directory) / fs::unique_path("slice-analysis-%%%%-%%%%.tmp");
     try {
         boost::nowide::ofstream out(temporary.string(), std::ios::binary | std::ios::trunc);
-        out << report.dump(2) << '\n';
+        out << report.dump() << '\n';
         out.close();
         if (!out)
             throw std::runtime_error(L("Could not write the slice analysis report."));

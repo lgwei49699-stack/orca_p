@@ -235,55 +235,6 @@ static bool valid_finalized_extrusion_block(const GCodeProcessor::TimeBlock& blo
     return true;
 }
 
-static void observe_estimated_motion(GCodeProcessorResult::EstimatedMotion& motion, const GCodeProcessor::TimeBlock& block)
-{
-    if (!motion.complete)
-        return;
-    if (!valid_finalized_extrusion_block(block)) {
-        motion.complete = false;
-        return;
-    }
-
-    const float peak             = block.trapezoid.cruise_feedrate;
-    const float acceleration     = block.acceleration;
-    const float accelerate_until = block.trapezoid.accelerate_until;
-    const float decelerate_after = block.trapezoid.decelerate_after;
-    bool        has_phase        = false;
-    float       min_acceleration = 0.0f;
-    float       max_acceleration = 0.0f;
-    const auto  add_phase        = [&](float value) {
-        if (!has_phase) {
-            min_acceleration = max_acceleration = value;
-            has_phase                           = true;
-        } else {
-            min_acceleration = std::min(min_acceleration, value);
-            max_acceleration = std::max(max_acceleration, value);
-        }
-    };
-    if (accelerate_until > 0.0f)
-        add_phase(acceleration);
-    if (decelerate_after > accelerate_until)
-        add_phase(0.0f);
-    if (block.distance > decelerate_after)
-        add_phase(-acceleration);
-    if (!has_phase) {
-        motion.complete = false;
-        return;
-    }
-
-    if (motion.block_count == 0) {
-        motion.min_peak_speed_mm_s = motion.max_peak_speed_mm_s = peak;
-        motion.min_tangential_acceleration_mm_s2                = min_acceleration;
-        motion.max_tangential_acceleration_mm_s2                = max_acceleration;
-    } else {
-        motion.min_peak_speed_mm_s               = std::min(motion.min_peak_speed_mm_s, peak);
-        motion.max_peak_speed_mm_s               = std::max(motion.max_peak_speed_mm_s, peak);
-        motion.min_tangential_acceleration_mm_s2 = std::min(motion.min_tangential_acceleration_mm_s2, min_acceleration);
-        motion.max_tangential_acceleration_mm_s2 = std::max(motion.max_tangential_acceleration_mm_s2, max_acceleration);
-    }
-    ++motion.block_count;
-}
-
 static void observe_estimated_peak_flow(GCodeProcessorResult::EstimatedPeakFlow& flow, const GCodeProcessor::TimeBlock& block)
 {
     if (!flow.complete)
@@ -394,7 +345,7 @@ void GCodeProcessor::TimeMachine::reset()
     prev.reset();
     gcode_time.reset();
     blocks = std::vector<TimeBlock>();
-    estimated_motion.clear();
+    analysis_enabled = false;
     estimated_peak_flow.clear();
     estimated_flow_cap_distance.clear();
     g1_times_cache = std::vector<G1LinesCacheItem>();
@@ -503,8 +454,7 @@ void GCodeProcessor::TimeMachine::calculate_time(size_t keep_last_n_blocks, floa
     size_t n_blocks_process = blocks.size() - keep_last_n_blocks;
     for (size_t i = 0; i < n_blocks_process; ++i) {
         const TimeBlock& block = blocks[i];
-        if (!estimated_motion.empty() && is_observed_extrusion(block)) {
-            observe_estimated_motion(estimated_motion[static_cast<size_t>(block.role)], block);
+        if (analysis_enabled && is_observed_extrusion(block)) {
             auto entry = estimated_peak_flow.try_emplace(block.extruder_id, GCodeProcessorResult::EstimatedPeakFlow{true});
             observe_estimated_peak_flow(entry.first->second, block);
             observe_estimated_flow_cap_distance(estimated_flow_cap_distance[block.extruder_id], block);
@@ -717,7 +667,6 @@ void GCodeProcessorResult::reset() {
     moves = std::vector<GCodeProcessorResult::MoveVertex>();
     layer_extruder_ids.clear();
     layer_extruder_ids_complete = false;
-    normal_estimated_motion = {};
     normal_estimated_peak_flow_available = false;
     normal_estimated_peak_flow.clear();
     normal_estimated_flow_cap_distance.clear();
@@ -750,7 +699,6 @@ void GCodeProcessorResult::reset() {
     moves.clear();
     layer_extruder_ids.clear();
     layer_extruder_ids_complete = false;
-    normal_estimated_motion = {};
     normal_estimated_peak_flow_available = false;
     normal_estimated_peak_flow.clear();
     normal_estimated_flow_cap_distance.clear();
@@ -1360,12 +1308,7 @@ void GCodeProcessor::reset()
     m_producer = EProducer::Unknown;
 
     m_time_processor.reset();
-    if (m_collect_analysis) {
-        auto& motion = m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].estimated_motion;
-        motion.resize(static_cast<size_t>(ExtrusionRole::erCount));
-        for (auto& role : motion)
-            role.complete = true;
-    }
+    m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)].analysis_enabled = m_collect_analysis;
     m_used_filaments.reset();
 
     m_result.reset();
@@ -1510,24 +1453,20 @@ void GCodeProcessor::finalize(bool post_process)
     }
 
     if (m_collect_analysis) {
-        m_result.normal_estimated_motion              = {};
         m_result.normal_estimated_peak_flow_available = false;
         m_result.normal_estimated_peak_flow.clear();
         m_result.normal_estimated_flow_cap_distance.clear();
         const auto& normal_machine = m_time_processor.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)];
-        if (normal_machine.enabled && normal_machine.estimated_motion.size() == m_result.normal_estimated_motion.size()) {
-            std::copy(normal_machine.estimated_motion.begin(), normal_machine.estimated_motion.end(),
-                      m_result.normal_estimated_motion.begin());
+        if (normal_machine.enabled && normal_machine.analysis_enabled) {
             m_result.normal_estimated_peak_flow_available = true;
             m_result.normal_estimated_peak_flow           = normal_machine.estimated_peak_flow;
             m_result.normal_estimated_flow_cap_distance   = normal_machine.estimated_flow_cap_distance;
             // The existing estimator leaves a final single block unconsumed. Do not
-            // report its role as complete, or alter the estimator to consume it.
+            // report its material observations as complete, or alter the estimator to consume it.
             for (const auto& block : normal_machine.blocks)
                 if (is_observed_extrusion(block)) {
-                    m_result.normal_estimated_motion[static_cast<size_t>(block.role)].complete = false;
-                    m_result.normal_estimated_peak_flow[block.extruder_id].complete            = false;
-                    m_result.normal_estimated_flow_cap_distance[block.extruder_id].complete    = false;
+                    m_result.normal_estimated_peak_flow[block.extruder_id].complete         = false;
+                    m_result.normal_estimated_flow_cap_distance[block.extruder_id].complete = false;
                 }
         }
     }
@@ -2913,9 +2852,7 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
         return;
 
     EMoveType type = move_type(delta_pos);
-    // Analysis also needs the current travel distance; ordinary parsing only
-    // uses this value on extrusion records, as before the report was added.
-    if (type == EMoveType::Extrude || m_collect_analysis)
+    if (type == EMoveType::Extrude)
         m_travel_dist = std::sqrt(sqr(delta_pos[X]) + sqr(delta_pos[Y]) + sqr(delta_pos[Z]));
     if (type == EMoveType::Extrude) {
         const float delta_xyz = m_travel_dist;
