@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "support",
-  "source_fingerprint": "sha256:4d85d318ee6fd65d1bde0a1ef1c6d8f9cb3deb20531f9a3ea4f5243e59a5c292",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不被SupportMaterial/TreeSupport消费；支撑阈值、间隙、悬空告警和GUI支撑设置保持，证据流程不生成支撑路径。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。"
+  "source_fingerprint": "sha256:54c06ca3f68a7fafe57cc3ed11dca169e4a1a2ef2a34fb0f0d0fe58e86a64741",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不被SupportMaterial/TreeSupport消费；支撑阈值、间隙、悬空告警和GUI支撑设置保持，证据流程不生成支撑路径。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-22共享PrintConfig新键仅CLIMisc，未传至SupportMaterial/TreeSupport参数；新Fill内部选择默认false，支撑入口未开启。原支撑类型、阈值、间隙与预设不变；模型路径显式优化后的全流程重算按原Print处理，不宣称全支撑实印验收。"
 }
 -->
 

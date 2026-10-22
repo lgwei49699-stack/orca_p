@@ -967,6 +967,10 @@ public:
     //BBS: plate's origin related functions
     void        set_plate_origin(Vec3d origin);
     const Vec3d get_plate_origin() const { return m_origin; }
+    // Runtime CLI opt-in, deliberately not a persistent print/preset option.
+    // GUI callers never enable it. Change only before processing, like apply().
+    void set_model_detail_path_optimization(bool enabled);
+    bool model_detail_path_optimization() const { return m_model_detail_path_optimization; }
     //BBS: export gcode from previous gcode file from 3mf
     void set_gcode_file_ready();
     void set_gcode_file_invalidated();
@@ -1045,6 +1049,7 @@ private:
     Polygons            first_layer_islands() const;
 
     PrintConfig                             m_config;
+    bool                                    m_model_detail_path_optimization = false;
     PrintObjectConfig                       m_default_object_config;
     PrintRegionConfig                       m_default_region_config;
     PrintObjectPtrs                         m_objects;

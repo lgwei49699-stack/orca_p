@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "arrangement",
-  "source_fingerprint": "sha256:f42f64734416948821cf27e89bacbb892cc3b045cc4c75cea8a7911c926fce6c",
-  "reason": "合并master的CLI复制对象ID映射及单/多盘JSON边界，PartPlate几何、数量和GUI ArrangeJob算法未改；保留feature默认关闭的报告参数，其不参与摆盘配置。核对最终盘成员刷新和真实床面状态与报告按盘输出的衔接；实际回归及GUI待验见本轮记录。"
+  "source_fingerprint": "sha256:68d9393e92b51a70ba3db7baaa70139e2c6870a4534b1eef0b66e30549a4a2c7",
+  "reason": "合并master的CLI复制对象ID映射及单/多盘JSON边界，PartPlate几何、数量和GUI ArrangeJob算法未改；保留feature默认关闭的报告参数，其不参与摆盘配置。核对最终盘成员刷新和真实床面状态与报告按盘输出的衔接；实际回归及GUI待验见本轮记录。 2026-10-22共享PrintConfig新增项仅在CLIMisc，Print运行时选择只在CLI取盘后传给模型路径。未改Arrange、PartPlate分盘/摆放或既有参数；默认false不改变原位置与盘选择。固定位置/多盘回归见实施记录。"
 }
 -->
 

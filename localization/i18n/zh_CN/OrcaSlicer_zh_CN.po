@@ -8132,6 +8132,12 @@ msgstr "线宽"
 msgid "Seam"
 msgstr "接缝"
 
+msgid "Optimize model detail paths (CLI only)"
+msgstr "优化模型细节路径（仅 CLI）"
+
+msgid "Explicitly enable thin-wall recovery and variable-width extrusion corrections for CLI slicing. Disabled by default; independent of the analysis report. Requires --slice; incompatible with sliced-data cache import or export. Not saved in presets or projects; GUI slicing always uses the default path."
+msgstr "为 CLI 切片显式启用薄墙恢复及可变线宽挤出修正。默认关闭，与分析报告独立。需要 --slice，不兼容切片缓存导入或导出。不保存到预设或工程；GUI 切片始终使用默认路径。"
+
 msgid "Precision"
 msgstr "精度"
 

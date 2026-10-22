@@ -170,7 +170,7 @@ void Fill::fill_surface_extrusion(const Surface* surface, const FillParams& para
         size_t idx   = eec->entities.size();
         if (params.use_arachne) {
             Flow new_flow = params.flow.with_spacing(float(this->spacing));
-            variable_width(thick_polylines, params.extrusion_role, new_flow, eec->entities);
+            variable_width(thick_polylines, params.extrusion_role, new_flow, eec->entities, optimize_model_detail_paths);
             thick_polylines.clear();
         }
         else {
@@ -239,7 +239,7 @@ void Fill::_create_gap_fill(const Surface* surface, const FillParams& params, Ex
             }), polylines.end());
 
             ExtrusionEntityCollection gap_fill;
-            variable_width(polylines, erGapFill, params.flow, gap_fill.entities);
+            variable_width(polylines, erGapFill, params.flow, gap_fill.entities, optimize_model_detail_paths);
             auto gap = std::move(gap_fill.entities);
             out->append(gap);
         }

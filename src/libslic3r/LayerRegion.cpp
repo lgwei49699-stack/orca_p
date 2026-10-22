@@ -115,6 +115,7 @@ void LayerRegion::make_perimeters(const SurfaceCollection &slices, const LayerRe
     if (this->layer()->upper_layer != NULL)
         g.upper_slices_same_region = &this->layer()->upper_layer->get_region(region_id)->slices;
 
+    g.optimize_model_detail_paths = this->layer()->object()->print()->model_detail_path_optimization();
     g.layer_id              = (int)this->layer()->id();
     g.ext_perimeter_flow    = this->flow(frExternalPerimeter);
     g.overhang_flow         = this->bridging_flow(frPerimeter, object_config.thick_bridges);

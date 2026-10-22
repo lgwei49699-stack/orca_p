@@ -39,7 +39,7 @@ CORE_LAYER_FIELDS = {
     "hole_area_mm2", "hole_intrusion_area_mm2", "closed_void_region_count", "closed_void_fully_covered_count",
     "solid_fill_target_area_mm2", "solid_fill_uncovered_area_mm2",
 }
-CORE_GCODE_FIELDS = {"normal_estimate", "extruders"}
+CORE_GCODE_FIELDS = {"normal_estimate", "extruders", "quality_paths"}
 CORE_NORMAL_FIELDS = {"total_time_s", "layer_sequence_count"}
 CORE_MATERIAL_FIELDS = {
     "extruder_id", "configured_filament_max_volumetric_speed_mm3_s", "estimated_peak_flow",
@@ -191,6 +191,29 @@ def validate_estimated_flow_cap_distance(value, configured_cap):
 
 def validate_gcode_observations(metrics):
     require(set(metrics) == CORE_GCODE_FIELDS, "G-code core fields are missing or include retired diagnostics")
+    paths = metrics["quality_paths"]
+    require(paths["scope"] == "final_gcode_positive_extrusion_moves" and isinstance(paths["rows"], list),
+            "Unexpected quality path scope")
+    identities = set()
+    for row in paths["rows"]:
+        identity = (count(row["extruder_id"], "quality path material"), row["role"])
+        require(identity not in identities, "Duplicate material/role quality evidence")
+        identities.add(identity)
+        require(count(row["move_count"], "quality path moves") > 0 and type(row["complete"]) is bool,
+                "Quality evidence must have contributing moves and explicit completeness")
+        if row["complete"]:
+            require(nonnegative(row["path_length_mm"], "quality path length") > 0, "Empty quality path")
+            for key in ("commanded_speed_mm_s", "fan_speed_percent", "nominal_width_mm", "nominal_height_mm"):
+                low = nonnegative(row[key]["min"], key)
+                high = nonnegative(row[key]["max"], key)
+                require(low <= high and (high <= 100 if key == "fan_speed_percent" else low > 0),
+                        "Invalid quality path range")
+        else:
+            require(row["path_length_mm"] is None, "Incomplete path length must remain unknown")
+            for key in ("commanded_speed_mm_s", "fan_speed_percent", "nominal_width_mm", "nominal_height_mm"):
+                require(row[key]["min"] is None and row[key]["max"] is None, "Incomplete ranges must remain unknown")
+        if "width_height_observation" in row:
+            validate_width_height_observation(row)
     require(set(metrics["normal_estimate"]) == CORE_NORMAL_FIELDS,
             "Normal estimate must contain only time and the internal cooling sequence count")
     require(isinstance(metrics["extruders"], list) and metrics["extruders"], "Missing material observations")
@@ -224,6 +247,81 @@ def validate_core_report_group(group):
         require(set(layer) == CORE_LAYER_FIELDS, "Core layer fields are missing or include retired diagnostics")
         require(type(layer["layer_index"]) is int and layer["layer_index"] == index, "Nonsequential layer index")
         require(type(layer["complete"]) is bool, "Coverage completeness must be boolean")
+    if "solid_fill_peak" in coverage:
+        validate_solid_fill_peak(coverage["solid_fill_peak"], coverage["layers"])
+    for hole, key in ((False, "unprinted_peak"), (True, "hole_intrusion_peak")):
+        if key in coverage:
+            validate_residual_peak(coverage[key], coverage["layers"], hole)
+
+
+def validate_width_height_observation(row):
+    value = row["width_height_observation"]
+    require(value["scope"] == "same_move_nominal_width_height_non_bridge", "Unexpected bead observation scope")
+    require(type(value["complete"]) is bool and value["complete"] == row["complete"], "Bead completeness mismatch")
+    applicable = row["role"] not in ("bridge", "internal_bridge", "overhang_wall")
+    keys = ("below_height_move_count", "below_height_path_length_mm", "min_ratio", "width_at_min_mm", "height_at_min_mm", "print_z_at_min_mm")
+    if not row["complete"] or not applicable:
+        require(value["applicable"] is (applicable if row["complete"] else None)
+                and all(value[key] is None for key in keys), "Unavailable bead observation must remain unknown")
+        return
+    require(value["applicable"] is True, "Non-bridge bead observation must be applicable")
+    width, height, ratio = [nonnegative(value[key], key) for key in ("width_at_min_mm", "height_at_min_mm", "min_ratio")]
+    require(width > 0 and height > 0 and ratio > 0 and math.isclose(ratio, width / height, rel_tol=1e-6, abs_tol=1e-9),
+            "Bead ratio does not refer to the same move")
+    require(row["nominal_width_mm"]["min"] <= width <= row["nominal_width_mm"]["max"]
+            and row["nominal_height_mm"]["min"] <= height <= row["nominal_height_mm"]["max"], "Bead pair outside observed ranges")
+    moves = count(value["below_height_move_count"], "narrow bead moves")
+    length = nonnegative(value["below_height_path_length_mm"], "narrow bead length")
+    require(moves <= row["move_count"] and length <= row["path_length_mm"] and (moves > 0) == (ratio < 1)
+            and (length > 0) == (moves > 0), "Narrow bead length/count mismatch")
+    require(value["print_z_at_min_mm"] is None or (type(value["print_z_at_min_mm"]) in (float, int)
+            and math.isfinite(value["print_z_at_min_mm"])), "Invalid bead Z")
+
+
+def validate_residual_peak(value, layers, hole):
+    scope = "largest_hole_intrusion_layer_exclusive_path_kinds" if hole else "largest_unprinted_layer_region_slices"
+    total = "intrusion_area_mm2" if hole else "unprinted_area_mm2"
+    layer_key = "hole_intrusion_area_mm2" if hole else "completely_unprinted_island_area_mm2"
+    keys = ("wall_area_mm2", "gap_fill_area_mm2", "bridge_area_mm2", "other_fill_area_mm2", "mixed_area_mm2") if hole else (
+        "retained_region_area_mm2", "absent_region_area_mm2")
+    require(value["scope"] == scope, "Unexpected residual peak scope")
+    complete = bool(layers) and all(layer["complete"] for layer in layers)
+    require(type(value["complete"]) is bool and value["complete"] == complete, "Residual peak completeness mismatch")
+    if not complete:
+        require(all(value[k] is None for k in (*keys, total, "layer_index", "print_z_mm")), "Partial residual cannot be certified")
+        return
+    areas = [nonnegative(layer[layer_key], layer_key) for layer in layers]
+    maximum = nonnegative(value[total], total)
+    pieces = [nonnegative(value[k], k) for k in keys]
+    require(maximum == max(areas) and math.isclose(sum(pieces), maximum, abs_tol=1e-6, rel_tol=1e-6), "Residual partition mismatch")
+    if maximum == 0:
+        require(all(p == 0 for p in pieces) and value["layer_index"] is None and value["print_z_mm"] is None, "Empty residual has a location")
+    else:
+        index = count(value["layer_index"], "residual peak index")
+        require(index == areas.index(maximum) and value["print_z_mm"] == layers[index]["print_z_mm"], "Residual peak identity mismatch")
+
+
+def validate_solid_fill_peak(value, layers):
+    require(value["scope"] == "largest_solid_uncovered_layer_exclusive_target_kinds", "Unexpected solid gap peak scope")
+    complete = bool(layers) and all(layer["complete"] for layer in layers)
+    require(type(value["complete"]) is bool and value["complete"] == complete, "Solid gap maximum completeness disagrees")
+    keys = ("surface_area_mm2", "internal_solid_area_mm2", "bridge_area_mm2", "mixed_area_mm2")
+    if not complete:
+        require(all(value[key] is None for key in (*keys, "layer_index", "print_z_mm", "uncovered_area_mm2")),
+                "Incomplete maximum cannot expose a partial attribution")
+        return
+    areas = [nonnegative(layer["solid_fill_uncovered_area_mm2"], "solid gap") for layer in layers]
+    maximum = nonnegative(value["uncovered_area_mm2"], "solid gap maximum")
+    require(maximum == max(areas), "Solid gap attribution is not this group's maximum")
+    pieces = [nonnegative(value[key], key) for key in keys]
+    require(math.isclose(sum(pieces), maximum, rel_tol=1e-6, abs_tol=1e-6), "Exclusive gap categories do not sum to total")
+    if maximum == 0:
+        require(value["layer_index"] is None and value["print_z_mm"] is None and all(piece == 0 for piece in pieces),
+                "Fully covered targets cannot invent a problem layer")
+    else:
+        index = count(value["layer_index"], "solid gap peak index")
+        require(index < len(layers) and index == areas.index(maximum), "Solid gap maximum must use the first peak layer")
+        require(value["print_z_mm"] == layers[index]["print_z_mm"], "Solid gap maximum Z mismatch")
 
 
 def validate_layer_time_threshold_observation(value, sequence_count):
@@ -339,6 +437,7 @@ class Suite:
         self.args, self.output = args, output
         self.results = []
         self.baseline = None
+        self.optimized_baseline = None
 
     def run_process(self, command, case, cwd):
         save_json(case / "command.json", command)
@@ -359,7 +458,7 @@ class Suite:
                     raise
 
     def run(self, name, *, flags=(), slicing=True, output_arg=True, success=True,
-            report_expected=False, existing_report=False, source=None, help_only=False):
+            report_expected=False, existing_report=False, source=None, help_only=False, optimization=False):
         case = self.output / name
         case.mkdir()
         cwd, data, output = (case / child for child in ("working-directory", "data", "output"))
@@ -401,6 +500,7 @@ class Suite:
             if help_only:
                 help_text = (case / "stdout.log").read_text(errors="replace") + (case / "stderr.log").read_text(errors="replace")
                 require("slice-analysis-report" in help_text, "Help does not describe the new option")
+                require("optimize-model-detail-paths" in help_text, "Help does not describe the independent optimization option")
             elif success and slicing:
                 legacy = read_json(output / "result.json")
                 require(legacy.get("return_code") == 0, "Legacy result did not succeed")
@@ -426,13 +526,20 @@ class Suite:
                     self.baseline = {"legacy": comparable, "gcode": gcode, "plates": plates}
                 else:
                     require(self.baseline is not None, "Control case failed; cannot establish unchanged slicing")
-                    require(comparable == self.baseline["legacy"], "Legacy result fields/values changed")
                     require(gcode.keys() == self.baseline["gcode"].keys(), "Sliced plate set changed")
                     for index, facts in gcode.items():
                         original = self.baseline["gcode"][index]
-                        require(facts["commands"] == original["commands"], f"Executable G-code changed for plate {index}")
                         require(facts["configuration"] == original["configuration"], f"Effective configuration changed for plate {index}")
                         require(facts["layers"] == original["layers"], f"Layer count changed for plate {index}")
+                    if optimization and not report_expected:
+                        self.optimized_baseline = {"legacy": comparable, "gcode": gcode, "plates": plates}
+                    else:
+                        baseline = self.optimized_baseline if optimization else self.baseline
+                        require(baseline is not None, "Optimization control case failed; cannot compare report toggle")
+                        require(comparable == baseline["legacy"], "Legacy result fields/values changed within the same optimization mode")
+                        for index, facts in gcode.items():
+                            require(facts["commands"] == baseline["gcode"][index]["commands"],
+                                    f"Executable G-code changed within the same optimization mode for plate {index}")
                 record["plates"] = [{"id": index, "layers": facts["layers"],
                                      "commands_sha256": facts["commands_sha256"]} for index, facts in gcode.items()]
                 require(not (cwd / "result.json").exists(), "Successful slice wrote result.json outside outputdir")
@@ -479,6 +586,16 @@ def main():
     suite.run("default-off")
     suite.run("explicit-off", flags=("--slice-analysis-report", "0"))
     suite.run("enabled", flags=("--slice-analysis-report",), report_expected=True)
+    suite.run("optimization-explicit-off", flags=("--optimize-model-detail-paths", "0"))
+    suite.run("optimization-off-report-on", flags=("--optimize-model-detail-paths", "0", "--slice-analysis-report"), report_expected=True)
+    # Core corrections may change paths even on simple geometry. Compare the
+    # report toggle within each mode, while keeping effective configs identical.
+    suite.run("optimization-on-report-off", flags=("--optimize-model-detail-paths",), optimization=True)
+    suite.run("optimization-on-report-on", flags=("--optimize-model-detail-paths", "--slice-analysis-report"),
+              report_expected=True, optimization=True)
+    suite.run("reject-optimization-without-slice", slicing=False, flags=("--optimize-model-detail-paths",), success=False)
+    suite.run("reject-optimization-load-cache", flags=("--optimize-model-detail-paths", "--load-slicedata", str(output / "cache")), success=False)
+    suite.run("reject-optimization-export-cache", flags=("--optimize-model-detail-paths", "--export-slicedata", str(output / "cache")), success=False)
     suite.run("reject-flag-only", slicing=False, output_arg=False,
               flags=("--slice-analysis-report",), success=False)
     suite.run("reject-without-slice", slicing=False, flags=("--slice-analysis-report",), success=False)
@@ -502,7 +619,7 @@ def main():
         "input_sha256": {str(path): value for path, value in protected.items()},
         "timeout_seconds": args.timeout, "cases": suite.results, "integrity_errors": integrity_errors,
         "comparison": {"legacy_ignored_wall_clock_fields": sorted(WALL_CLOCK_FIELDS),
-                       "gcode": "all executable commands and complete CONFIG_BLOCK; comment timestamps excluded"},
+                       "gcode": "all executable commands within each optimization mode; complete CONFIG_BLOCK across modes; comment timestamps excluded"},
         "scope": {"built": False, "downloaded": False, "print_sent": False,
                   "gui_verified": False, "physical_quality_verified": False},
     })

@@ -11,6 +11,7 @@
 #include "Print.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <initializer_list>
 #include <limits>
@@ -295,6 +296,8 @@ struct PlannedFootprint
     Polygons     polygons;
     size_t       excluded_path_count = 0;
     size_t       invalid_path_count  = 0;
+    // Optional category filter, used only when diagnosing one peak hole layer.
+    int kind = 0;
 
     void add_path(const ExtrusionPath& path)
     {
@@ -307,6 +310,12 @@ struct PlannedFootprint
             ++invalid_path_count;
             return;
         }
+        const int path_kind = is_bridge(path.role())                                             ? 3 :
+                              (path.role() == erPerimeter || path.role() == erExternalPerimeter) ? 1 :
+                              path.role() == erGapFill                                           ? 2 :
+                                                                                                   4;
+        if (kind != 0 && kind != path_kind)
+            return;
         path.polygons_covered_by_width(polygons, 0.f);
     }
 
@@ -465,15 +474,137 @@ json planned_plate_bed_footprint(const Print& print)
     return result;
 }
 
+json solid_fill_peak(
+    const Print& print, const Layer* layer, size_t layer_index, const ExPolygons& uncovered, double uncovered_area, bool complete)
+{
+    json result = {{"scope", "largest_solid_uncovered_layer_exclusive_target_kinds"},
+                   {"complete", complete},
+                   {"layer_index", nullptr},
+                   {"print_z_mm", nullptr},
+                   {"uncovered_area_mm2", nullptr},
+                   {"surface_area_mm2", nullptr},
+                   {"internal_solid_area_mm2", nullptr},
+                   {"bridge_area_mm2", nullptr},
+                   {"mixed_area_mm2", nullptr}};
+    if (!complete)
+        return result;
+    result["uncovered_area_mm2"] = nonnegative_number(uncovered_area);
+    result["mixed_area_mm2"]     = 0.;
+    const std::array<const char*, 3> keys{"surface_area_mm2", "internal_solid_area_mm2", "bridge_area_mm2"};
+    for (const char* key : keys)
+        result[key] = 0.;
+    if (layer == nullptr)
+        return result;
+
+    result["layer_index"] = layer_index;
+    result["print_z_mm"]  = finite_number(layer->print_z);
+    std::array<ExPolygons, 3> targets;
+    // Classify only the largest already-computed gap, not every layer again.
+    // Bridge targets must never be presented as ordinary top/bottom gaps.
+    for (const LayerRegion* region : layer->regions())
+        for (const Surface& surface : region->fill_surfaces.surfaces) {
+            throw_if_canceled(print);
+            if (surface.is_solid())
+                targets[surface.is_bridge() ? 2 : surface.is_external() ? 0 : 1].push_back(surface.expolygon);
+        }
+    for (ExPolygons& target : targets) {
+        throw_if_canceled(print);
+        target = intersection_ex(uncovered, union_ex(target));
+    }
+    ExPolygons overlaps;
+    for (size_t i = 0; i < targets.size(); ++i)
+        for (size_t j = i + 1; j < targets.size(); ++j) {
+            throw_if_canceled(print);
+            append(overlaps, intersection_ex(targets[i], targets[j]));
+        }
+    overlaps                 = union_ex(overlaps);
+    result["mixed_area_mm2"] = nonnegative_number(area_mm2(overlaps));
+    for (size_t i = 0; i < targets.size(); ++i) {
+        throw_if_canceled(print);
+        result[keys[i]] = nonnegative_number(area_mm2(diff_ex(targets[i], overlaps)));
+    }
+    return result;
+}
+
+json residual_peak(const Print& print, const Layer* layer, size_t index, const ExPolygons& residual, double area, bool complete, bool hole)
+{
+    const std::vector<const char*> keys  = hole ? std::vector<const char*>{"wall_area_mm2", "gap_fill_area_mm2", "bridge_area_mm2",
+                                                                           "other_fill_area_mm2", "mixed_area_mm2"} :
+                                                  std::vector<const char*>{"retained_region_area_mm2", "absent_region_area_mm2"};
+    const char*                    total = hole ? "intrusion_area_mm2" : "unprinted_area_mm2";
+    json out = {{"scope", hole ? "largest_hole_intrusion_layer_exclusive_path_kinds" : "largest_unprinted_layer_region_slices"},
+                {"complete", complete},
+                {"layer_index", nullptr},
+                {"print_z_mm", nullptr},
+                {total, nullptr}};
+    for (const char* key : keys)
+        out[key] = nullptr;
+    if (!complete)
+        return out;
+    out[total] = nonnegative_number(area);
+    for (const char* key : keys)
+        out[key] = 0.;
+    if (layer == nullptr)
+        return out;
+    out["layer_index"] = index;
+    out["print_z_mm"]  = finite_number(layer->print_z);
+    if (!hole) {
+        ExPolygons retained;
+        for (const LayerRegion* region : layer->regions())
+            for (const Surface& surface : region->slices.surfaces) {
+                throw_if_canceled(print);
+                retained.push_back(surface.expolygon);
+            }
+        retained     = union_ex(retained);
+        out[keys[0]] = nonnegative_number(area_mm2(intersection_ex(residual, retained)));
+        out[keys[1]] = nonnegative_number(area_mm2(diff_ex(residual, retained)));
+        return out;
+    }
+    // Only this maximum layer is traversed again. No per-role/per-layer cache.
+    std::array<ExPolygons, 4> kinds;
+    for (size_t k = 0; k < kinds.size(); ++k) {
+        PlannedFootprint footprint{print};
+        footprint.kind = int(k + 1);
+        for (const LayerRegion* region : layer->regions()) {
+            footprint.add(region->perimeters);
+            footprint.add(region->fills);
+        }
+        kinds[k] = intersection_ex(residual, union_ex(footprint.polygons));
+    }
+    ExPolygons overlaps;
+    for (size_t i = 0; i < kinds.size(); ++i)
+        for (size_t j = i + 1; j < kinds.size(); ++j) {
+            throw_if_canceled(print);
+            append(overlaps, intersection_ex(kinds[i], kinds[j]));
+        }
+    overlaps         = union_ex(overlaps);
+    out[keys.back()] = nonnegative_number(area_mm2(overlaps));
+    for (size_t k = 0; k < kinds.size(); ++k) {
+        throw_if_canceled(print);
+        out[keys[k]] = nonnegative_number(area_mm2(diff_ex(kinds[k], overlaps)));
+    }
+    return out;
+}
+
 json analyze_model_layers(const Print& print, const PrintObject& object)
 {
-    json layers = json::array();
+    json         layers     = json::array();
+    const Layer* peak_layer = nullptr;
+    size_t       peak_index = 0;
+    double       peak_area  = 0.;
+    ExPolygons   peak_uncovered;
+    const Layer* missing_layer = nullptr;
+    const Layer* hole_layer    = nullptr;
+    size_t       missing_index = 0, hole_index = 0;
+    double       missing_area = 0., hole_area = 0.;
+    ExPolygons   missing_regions, hole_regions;
+    bool         all_complete = !object.layers().empty();
     for (const Layer* layer : object.layers()) {
         throw_if_canceled(print);
         // Keep geometry local to one layer. The business report does not need
         // a second model-wide path cache or three-dimensional material slabs.
         PlannedFootprint footprint{print};
-        ExPolygons solid_target;
+        ExPolygons       solid_target;
         for (const LayerRegion* region : layer->regions()) {
             footprint.add(region->perimeters);
             footprint.add(region->fills);
@@ -486,56 +617,83 @@ json analyze_model_layers(const Print& print, const PrintObject& object)
             }
         }
         throw_if_canceled(print);
-        const ExPolygons section = union_ex(layer->lslices);
-        const ExPolygons covered = union_ex(footprint.polygons);
-        const auto covered_bounds = get_extents_vector(covered);
-        const ExPolygons holes = bounded_voids(section);
-        const bool complete = valid_model_layer_geometry(*layer) && footprint.invalid_path_count == 0;
-        size_t unprinted_count = 0, fully_covered_voids = 0;
-        double unprinted_area = 0.;
+        const ExPolygons section         = union_ex(layer->lslices);
+        const ExPolygons covered         = union_ex(footprint.polygons);
+        const auto       covered_bounds  = get_extents_vector(covered);
+        const ExPolygons holes           = bounded_voids(section);
+        const bool       complete        = valid_model_layer_geometry(*layer) && footprint.invalid_path_count == 0;
+        size_t           unprinted_count = 0, fully_covered_voids = 0;
+        double           unprinted_area = 0.;
+        ExPolygons       unprinted;
         if (complete) {
             for (const ExPolygon& island : section) {
                 throw_if_canceled(print);
-                if (positive_region_count(intersection_ex(ExPolygons{island},
-                        bounding_box_candidates(covered, covered_bounds, get_extents(island)))) == 0) {
+                if (positive_region_count(
+                        intersection_ex(ExPolygons{island}, bounding_box_candidates(covered, covered_bounds, get_extents(island)))) == 0) {
                     ++unprinted_count;
                     unprinted_area += island.area() * SCALING_FACTOR * SCALING_FACTOR;
+                    unprinted.push_back(island);
                 }
             }
             for (const ExPolygon& hole : holes) {
                 throw_if_canceled(print);
-                if (hole.area() > 0. && positive_region_count(diff_ex(ExPolygons{hole},
-                        bounding_box_candidates(covered, covered_bounds, get_extents(hole)))) == 0)
+                if (hole.area() > 0. && positive_region_count(diff_ex(ExPolygons{hole}, bounding_box_candidates(covered, covered_bounds,
+                                                                                                                get_extents(hole)))) == 0)
                     ++fully_covered_voids;
             }
         }
-        solid_target = union_ex(solid_target);
+        solid_target                = union_ex(solid_target);
+        ExPolygons   uncovered      = diff_ex(solid_target, covered);
+        const double uncovered_area = area_mm2(uncovered);
+        all_complete                = all_complete && complete;
+        ExPolygons   intrusion      = intersection_ex(holes, covered);
+        const double intrusion_area = area_mm2(intrusion);
+        if (complete && unprinted_area > missing_area) {
+            missing_layer   = layer;
+            missing_index   = layers.size();
+            missing_area    = unprinted_area;
+            missing_regions = std::move(unprinted);
+        }
+        if (complete && intrusion_area > hole_area) {
+            hole_layer   = layer;
+            hole_index   = layers.size();
+            hole_area    = intrusion_area;
+            hole_regions = std::move(intrusion);
+        }
+        if (complete && uncovered_area > peak_area) {
+            peak_layer     = layer;
+            peak_index     = layers.size();
+            peak_area      = uncovered_area;
+            peak_uncovered = std::move(uncovered);
+        }
         const auto coverage_area = [complete](double area) { return complete ? nonnegative_number(area) : json(nullptr); };
-        layers.push_back({
-            {"layer_index", layers.size()},
-            {"slice_z_mm", finite_number(layer->slice_z)},
-            {"print_z_mm", finite_number(layer->print_z)},
-            {"bottom_z_mm", finite_number(layer->bottom_z())},
-            {"height_mm", nonnegative_number(layer->height)},
-            {"complete", complete},
-            {"excluded_path_count", footprint.excluded_path_count},
-            {"invalid_path_count", footprint.invalid_path_count},
-            {"section_area_mm2", nonnegative_number(area_mm2(section))},
-            {"planned_path_area_mm2", coverage_area(area_mm2(covered))},
-            {"section_island_count", complete ? json(positive_region_count(section)) : json(nullptr)},
-            {"section_min_island_gap_mm", complete ? section_min_island_gap(print, section) : json(nullptr)},
-            {"parallel_boundary_clearance", parallel_boundary_clearance(print, section, complete)},
-            {"completely_unprinted_island_count", complete ? json(unprinted_count) : json(nullptr)},
-            {"completely_unprinted_island_area_mm2", coverage_area(unprinted_area)},
-            {"hole_area_mm2", nonnegative_number(area_mm2(holes))},
-            {"hole_intrusion_area_mm2", coverage_area(area_mm2(intersection_ex(holes, covered)))},
-            {"closed_void_region_count", complete ? json(positive_region_count(holes)) : json(nullptr)},
-            {"closed_void_fully_covered_count", complete ? json(fully_covered_voids) : json(nullptr)},
-            {"solid_fill_target_area_mm2", nonnegative_number(area_mm2(solid_target))},
-            {"solid_fill_uncovered_area_mm2", coverage_area(area_mm2(diff_ex(solid_target, covered)))}
-        });
+        layers.push_back({{"layer_index", layers.size()},
+                          {"slice_z_mm", finite_number(layer->slice_z)},
+                          {"print_z_mm", finite_number(layer->print_z)},
+                          {"bottom_z_mm", finite_number(layer->bottom_z())},
+                          {"height_mm", nonnegative_number(layer->height)},
+                          {"complete", complete},
+                          {"excluded_path_count", footprint.excluded_path_count},
+                          {"invalid_path_count", footprint.invalid_path_count},
+                          {"section_area_mm2", nonnegative_number(area_mm2(section))},
+                          {"planned_path_area_mm2", coverage_area(area_mm2(covered))},
+                          {"section_island_count", complete ? json(positive_region_count(section)) : json(nullptr)},
+                          {"section_min_island_gap_mm", complete ? section_min_island_gap(print, section) : json(nullptr)},
+                          {"parallel_boundary_clearance", parallel_boundary_clearance(print, section, complete)},
+                          {"completely_unprinted_island_count", complete ? json(unprinted_count) : json(nullptr)},
+                          {"completely_unprinted_island_area_mm2", coverage_area(unprinted_area)},
+                          {"hole_area_mm2", nonnegative_number(area_mm2(holes))},
+                          {"hole_intrusion_area_mm2", coverage_area(intrusion_area)},
+                          {"closed_void_region_count", complete ? json(positive_region_count(holes)) : json(nullptr)},
+                          {"closed_void_fully_covered_count", complete ? json(fully_covered_voids) : json(nullptr)},
+                          {"solid_fill_target_area_mm2", nonnegative_number(area_mm2(solid_target))},
+                          {"solid_fill_uncovered_area_mm2", coverage_area(uncovered_area)}});
     }
-    return {{"scope", "per_instance_model_paths_before_gcode"}, {"layers", std::move(layers)}};
+    return {{"scope", "per_instance_model_paths_before_gcode"},
+            {"layers", std::move(layers)},
+            {"unprinted_peak", residual_peak(print, missing_layer, missing_index, missing_regions, missing_area, all_complete, false)},
+            {"hole_intrusion_peak", residual_peak(print, hole_layer, hole_index, hole_regions, hole_area, all_complete, true)},
+            {"solid_fill_peak", solid_fill_peak(print, peak_layer, peak_index, peak_uncovered, peak_area, all_complete)}};
 }
 
 json selected_settings(const ConfigBase& config, std::initializer_list<const char*> keys)
@@ -714,20 +872,121 @@ json layer_time_threshold_observation(const Print& print, const GCodeProcessorRe
             {"below_threshold_layer_ratio", applicable ? json(double(below) / double(active)) : json(nullptr)}};
 }
 
+// Stable keys for quality-relevant exported roles, not localized GUI labels.
+const char* quality_role(ExtrusionRole role)
+{
+    switch (role) {
+    case erPerimeter: return "inner_wall";
+    case erExternalPerimeter: return "outer_wall";
+    case erOverhangPerimeter: return "overhang_wall";
+    case erBridgeInfill: return "bridge";
+    case erInternalBridgeInfill: return "internal_bridge";
+    case erSolidInfill: return "internal_solid_infill";
+    case erTopSolidInfill: return "top_surface";
+    case erBottomSurface: return "bottom_surface";
+    case erGapFill: return "gap_infill";
+    case erSupportMaterial: return "support";
+    case erSupportMaterialInterface: return "support_interface";
+    case erSupportTransition: return "support_transition";
+    default: return nullptr;
+    }
+}
+
+struct QualityPathObservation
+{
+    size_t       move_count = 0;
+    bool         complete   = true;
+    double       length_mm  = 0.;
+    NumericRange speed, fan, width, height;
+
+    size_t below_height_count  = 0;
+    double below_height_length = 0.;
+    double min_ratio           = std::numeric_limits<double>::infinity();
+    double min_width = 0., min_height = 0., min_z = 0.;
+
+    void add(const GCodeProcessorResult::MoveVertex& move)
+    {
+        ++move_count;
+        // A bad observation invalidates this material/role only. Never turn
+        // a missing feedrate or width into a successful zero-risk measurement.
+        if (!std::isfinite(move.delta_extruder) || !std::isfinite(move.travel_dist) || move.travel_dist <= 0.f ||
+            !std::isfinite(move.feedrate) || move.feedrate <= 0.f || !std::isfinite(move.fan_speed) || move.fan_speed < 0.f ||
+            move.fan_speed > 100.f || !std::isfinite(move.width) || move.width <= 0.f || !std::isfinite(move.height) ||
+            move.height <= 0.f) {
+            complete = false;
+            return;
+        }
+        length_mm += move.travel_dist; // Includes native arcs' length, not their endpoint chord.
+        complete &= std::isfinite(length_mm);
+        speed.add(move.feedrate);
+        fan.add(move.fan_speed);
+        width.add(move.width);
+        height.add(move.height);
+        // Compare metadata from the SAME extrusion move. Dividing global min
+        // width by global max height can invent an impossible thin bead.
+        if (!is_bridge(move.extrusion_role)) {
+            const double ratio = double(move.width) / double(move.height);
+            if (ratio < min_ratio) {
+                min_ratio  = ratio;
+                min_width  = move.width;
+                min_height = move.height;
+                min_z      = move.position.z();
+            }
+            if (move.width < move.height) {
+                ++below_height_count;
+                below_height_length += move.travel_dist;
+            }
+        }
+    }
+
+    json to_json(size_t material, const std::string& role) const
+    {
+        const auto range = [this](const NumericRange& value) -> json {
+            return {{"min", complete ? json(value.minimum) : json(nullptr)}, {"max", complete ? json(value.maximum) : json(nullptr)}};
+        };
+        const bool applicable = role != "bridge" && role != "internal_bridge" && role != "overhang_wall";
+        const bool measured   = complete && applicable;
+        json       bead       = {{"scope", "same_move_nominal_width_height_non_bridge"},
+                                 {"complete", complete},
+                                 {"applicable", complete ? json(applicable) : json(nullptr)},
+                                 {"below_height_move_count", measured ? json(below_height_count) : json(nullptr)},
+                                 {"below_height_path_length_mm", measured ? nonnegative_number(below_height_length) : json(nullptr)},
+                                 {"min_ratio", measured ? nonnegative_number(min_ratio) : json(nullptr)},
+                                 {"width_at_min_mm", measured ? nonnegative_number(min_width) : json(nullptr)},
+                                 {"height_at_min_mm", measured ? nonnegative_number(min_height) : json(nullptr)},
+                                 {"print_z_at_min_mm", measured ? finite_number(min_z) : json(nullptr)}};
+        return {{"extruder_id", material},
+                {"role", role},
+                {"complete", complete},
+                {"move_count", move_count},
+                {"path_length_mm", complete ? json(length_mm) : json(nullptr)},
+                {"commanded_speed_mm_s", range(speed)},
+                {"fan_speed_percent", range(fan)},
+                {"nominal_width_mm", range(width)},
+                {"nominal_height_mm", range(height)},
+                {"width_height_observation", std::move(bead)}};
+    }
+};
+
 json gcode_summary(const Print& print, const GCodeProcessorResult& result)
 {
-    const auto& config = print.config();
-    const auto& statistics = result.print_statistics;
-    const auto& normal = statistics.modes[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)];
+    const auto&      config     = print.config();
+    const auto&      statistics = result.print_statistics;
+    const auto&      normal     = statistics.modes[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)];
     std::set<size_t> material_ids;
-    // Keep material identity, without measuring every move again for unused
-    // width/speed/length ranges, seam counts or nominal-flow comparisons.
+    // Reuse the existing report traversal. Bounded summaries answer whether
+    // quality-relevant paths actually exist and what commands they received.
+    // No per-move coordinates, second parser, or planner changes are introduced.
+    std::map<std::pair<size_t, ExtrusionRole>, QualityPathObservation> quality_paths;
     size_t move_index = 0;
     for (const auto& move : result.moves) {
         if (move_index++ % 4096 == 0)
             throw_if_canceled(print);
         if (move.type == EMoveType::Extrude)
             material_ids.insert(move.extruder_id);
+        if (move.type == EMoveType::Extrude && !(move.delta_extruder <= 0.f))
+            if (quality_role(move.extrusion_role) != nullptr)
+                quality_paths[{move.extruder_id, move.extrusion_role}].add(move);
     }
     // A material can have consumption without a drawable move (for example flush).
     const auto include_materials = [&material_ids](const auto& volumes) {
@@ -756,7 +1015,11 @@ json gcode_summary(const Print& print, const GCodeProcessorResult& result)
                                {"wipe_tower", volume_for(statistics.wipe_tower_volumes_per_extruder, id)},
                                {"flush", volume_for(statistics.flush_per_filament, id)}}}});
     }
-    return {{"normal_estimate",
+    json path_rows = json::array();
+    for (const auto& [identity, observation] : quality_paths)
+        path_rows.push_back(observation.to_json(identity.first, quality_role(identity.second)));
+    return {{"quality_paths", {{"scope", "final_gcode_positive_extrusion_moves"}, {"rows", std::move(path_rows)}}},
+            {"normal_estimate",
              {{"total_time_s", nonnegative_number(normal.time)},
               // Internal denominator for per-material cooling completeness,
               // not a model-layer count or a quality score.
@@ -804,6 +1067,9 @@ json make_slice_analysis_report(const Print& print, const GCodeProcessorResult& 
             "wipe tower and custom G-code and do not prove physical adhesion. Elevated models may have zero model footprint.",
             "Costs, movement speed and flow are estimates. Flow-cap comparisons use configured material limits; "
             "missing limits or unsupported data remain unknown. Layer times are not local cooling intervals.",
+            "Quality path roles summarize positive extrusion moves in final G-code. Speeds and fan percentages are commands, "
+            "not measured machine motion or cooling. Widths/heights are nominal metadata; small perimeters are not a separate "
+            "role. Missing bridge roles do not prove no geometrical bridge or certify support contact.",
             "Source IDs are process-local. Model layers, support layers and G-code layer sequences are different counts. "
             "Settings preserve object and region overrides, including inherited and percentage values.",
             "No surface sample thickness, per-fragment coordinates or exact three-dimensional target/path connectivity "

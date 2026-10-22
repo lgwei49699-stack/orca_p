@@ -3333,7 +3333,7 @@ Polylines FillMonotonicLines::fill_surface(const Surface *surface, const FillPar
     //    rectilinear_surface.expolygon = rectilinear_area;
     //    fill_surface_by_lines(&rectilinear_surface, params2, polylines_rectilinear);
     //}
-    
+
     // Orca: The above causes pockmarks in top layer surfaces with a properly calibrated printer with PA and EM tuned.
     // Revert implementation to the prusa slicer approach that respects the infill/wall overlap setting
     // while retaining the gap fill logic below. The user can adjust the overlap calue to reduce overflow if needed.
@@ -3400,7 +3400,7 @@ Polylines FillMonotonicLines::fill_surface(const Surface *surface, const FillPar
                 }), polylines.end());
 
             ExtrusionEntityCollection gap_fill;
-            variable_width(polylines, erGapFill, params.flow, gap_fill.entities);
+            variable_width(polylines, erGapFill, params.flow, gap_fill.entities, optimize_model_detail_paths);
             coll_nosort->append(std::move(gap_fill.entities));
 
         }
@@ -3432,7 +3432,7 @@ void FillMonotonicLineWGapFill::fill_surface_by_lines(const Surface* surface, co
     // On the polygons of poly_with_offset, the infill lines will be connected.
     ExPolygonWithOffset poly_with_offset(
         surface->expolygon,
-        - rotate_vector.first, 
+        - rotate_vector.first,
         float(scale_(0 - (0.5 - INFILL_OVERLAP_OVER_SPACING) * params.flow.spacing())),
         float(scale_(0 - 0.5f * params.flow.spacing())));
     if (poly_with_offset.n_contours_inner == 0) {
@@ -3459,25 +3459,25 @@ void FillMonotonicLineWGapFill::fill_surface_by_lines(const Surface* surface, co
 
     // Intersect a set of euqally spaced vertical lines wiht expolygon.
     size_t  n_vlines = (bounding_box.max(0) - bounding_box.min(0) + line_spacing - 1) / line_spacing;
-	coord_t x0 = bounding_box.min(0);
-	if (params.full_infill())
-		x0 += (line_spacing + coord_t(SCALED_EPSILON)) / 2;
+    coord_t x0 = bounding_box.min(0);
+    if (params.full_infill())
+        x0 += (line_spacing + coord_t(SCALED_EPSILON)) / 2;
 
     std::vector<SegmentedIntersectionLine> segs = slice_region_by_vertical_lines(poly_with_offset, n_vlines, x0, line_spacing);
     // Connect by horizontal / vertical links, classify the links based on link_max_length as too long.
-	connect_segment_intersections_by_contours(poly_with_offset, segs, params, link_max_length);
+    connect_segment_intersections_by_contours(poly_with_offset, segs, params, link_max_length);
 
     // Sometimes the outer contour pinches the inner contour from both sides along a single vertical line.
     // This situation is not handled correctly by generate_montonous_regions().
     // Insert phony OUTER_HIGH / OUTER_LOW pairs at the position where the contour is pinched.
     pinch_contours_insert_phony_outer_intersections(segs);
-	std::vector<MonotonicRegion> regions = generate_montonous_regions(segs);
+    std::vector<MonotonicRegion> regions = generate_montonous_regions(segs);
 
-	connect_monotonic_regions(regions, poly_with_offset, segs);
+    connect_monotonic_regions(regions, poly_with_offset, segs);
     if (! regions.empty()) {
-		std::mt19937_64 rng;
-		std::vector<MonotonicRegionLink> path = chain_monotonic_regions(regions, poly_with_offset, segs, rng);
-		polylines_from_paths(path, poly_with_offset, segs, polylines_out);
+        std::mt19937_64 rng;
+        std::vector<MonotonicRegionLink> path = chain_monotonic_regions(regions, poly_with_offset, segs, rng);
+        polylines_from_paths(path, poly_with_offset, segs, polylines_out);
     }
 
     // paths must be rotated back

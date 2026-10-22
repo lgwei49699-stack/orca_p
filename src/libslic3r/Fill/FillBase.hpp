@@ -137,6 +137,7 @@ public:
     // Orca: also used by gap fill function.
     const PrintConfig       *print_config        = nullptr;
     const PrintObjectConfig *print_object_config = nullptr;
+    bool                     optimize_model_detail_paths = false;
 
     // BBS: all no overlap expolygons in same layer
     ExPolygons  no_overlap_expolygons;

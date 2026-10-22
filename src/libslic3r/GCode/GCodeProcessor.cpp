@@ -230,9 +230,12 @@ static bool valid_finalized_extrusion_block(const GCodeProcessor::TimeBlock& blo
     if (!std::isfinite(block.distance) || block.distance <= 0.0f || !std::isfinite(peak) || peak <= 0.0f ||
         !std::isfinite(block.feedrate_profile.entry) || block.feedrate_profile.entry < 0.0f || !std::isfinite(acceleration) ||
         acceleration < 0.0f || !std::isfinite(accelerate_until) || !std::isfinite(decelerate_after) || accelerate_until < 0.0f ||
-        decelerate_after < accelerate_until || decelerate_after > block.distance)
+        decelerate_after < accelerate_until)
         return false;
-    return true;
+    // The planner subtracts then adds float phase lengths. Allow only that
+    // rounding error in read-only observations, not arbitrary malformed motion.
+    const double tolerance = 2. * std::numeric_limits<float>::epsilon() * double(block.distance);
+    return double(decelerate_after) <= double(block.distance) + tolerance;
 }
 
 static void observe_estimated_peak_flow(GCodeProcessorResult::EstimatedPeakFlow& flow, const GCodeProcessor::TimeBlock& block)
@@ -293,9 +296,11 @@ static void observe_estimated_flow_cap_distance(GCodeProcessorResult::EstimatedF
             const double threshold_speed   = observation.configured_cap_mm3_s / volume_per_mm;
             const double threshold_squared = threshold_speed * threshold_speed;
             const double entry             = block.feedrate_profile.entry;
-            const double accelerate_until  = block.trapezoid.accelerate_until;
-            const double decelerate_after  = block.trapezoid.decelerate_after;
-            const double accelerating      = accelerate_until -
+            // Normalize observation copies only, never the planner's trapezoid
+            // or time. Validation above rejects anything beyond float rounding.
+            const double accelerate_until = std::min(double(block.trapezoid.accelerate_until), distance);
+            const double decelerate_after = std::min(double(block.trapezoid.decelerate_after), distance);
+            const double accelerating     = accelerate_until -
                                         std::clamp((threshold_squared - entry * entry) / (2. * acceleration), 0., accelerate_until);
             const double cruising = decelerate_after - accelerate_until;
             // feedrate_profile.exit is not the finalized exit; integrate from

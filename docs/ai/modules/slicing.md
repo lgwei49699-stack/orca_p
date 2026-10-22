@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "slicing",
-  "source_fingerprint": "sha256:3c4a464f4a60ab06623e3fbfac034ab5a061c258b46ffa456f1b78b3384987c6",
-  "reason": "共享原有Polygons到ExPolygons转换，一次切层同时得到诊断和有效区域；保留正常slice_mesh_ex参数语义，补模式/变换/孔洞/空层及实际PrintObject对照。将现有全空层异常检查移到brim首层访问前，避免空列表访问；预检不生成墙填充支撑或G-code。本次共享PrintConfig变化仅增加CLI repair_evidence_close_boundaries及证据帮助；已有直接重建依据时由模型检测工作流跳过预检，不更改本模块层高、区域构造、切片参数和GUI/CLI正常切片行为。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 10-19新增两个const Brim访问器仅暴露已有整板路径，未修改Print步骤、配置覆盖、缓存失效、筏层/模型首层规则；报告几何计算仍独立。普通入口与新报告入口的实际对照见本轮记录。 2026-10-19 复核Print.hpp/.cpp只给export_gcode增加末尾默认false的内部统计采集参数并构造GCode实例；Print::process/apply、层状态/路径和配置不变，正文补导出边界。LayerCount/PrintApplyCache和40CLI实际验证见本轮记录。"
+  "source_fingerprint": "sha256:b12033068f40066b4358f3402b480f20f1b8dbf28784fed362c7b70e103d4143",
+  "reason": "共享原有Polygons到ExPolygons转换，一次切层同时得到诊断和有效区域；保留正常slice_mesh_ex参数语义，补模式/变换/孔洞/空层及实际PrintObject对照。将现有全空层异常检查移到brim首层访问前，避免空列表访问；预检不生成墙填充支撑或G-code。本次共享PrintConfig变化仅增加CLI repair_evidence_close_boundaries及证据帮助；已有直接重建依据时由模型检测工作流跳过预检，不更改本模块层高、区域构造、切片参数和GUI/CLI正常切片行为。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 10-19新增两个const Brim访问器仅暴露已有整板路径，未修改Print步骤、配置覆盖、缓存失效、筏层/模型首层规则；报告几何计算仍独立。普通入口与新报告入口的实际对照见本轮记录。 2026-10-19 复核Print.hpp/.cpp只给export_gcode增加末尾默认false的内部统计采集参数并构造GCode实例；Print::process/apply、层状态/路径和配置不变，正文补导出边界。LayerCount/PrintApplyCache和40CLI实际验证见本轮记录。 2026-10-22新增默认false、非持久化Print运行时模式及切换失效；LayerRegion和Layer Fill透传，原process/apply顺序与默认参数保持。GUI不启用，CLI只显式开启；关闭与修正前基线、模式切换缓存及开关报告的核查见实施记录。"
 }
 -->
 
@@ -35,6 +35,8 @@ Print::apply 将 Model 和完整配置拆成 PrintObject／PrintRegion，检测�
 网格替换时可保留未改体积的边界缓存，但 `PartiallyValid` 也必须检验 `trafo_bboxes` 与当前实例变换的兼容性。Z 平移、Z 缩放或倾斜不兼容时，在当前 apply 中清除旧体积边界/层区并用新变换生成；不能先用旧坐标切片、下一次无改动刷新才失效。原有允许绕 Z 旋转等兼容变换的缓存复用规则保留。
 
 ## 配置与约束
+
+`Print::set_model_detail_path_optimization`是仅CLI显式设置的运行时选择，初值false，不参加持久配置或对象覆盖。切换值先按现有状态锁和取消机制使全部对象/Print步骤失效，再发布新值，防止重用另一模式的路径/表面；重复设置同值不失效。LayerRegion把它传至PerimeterGenerator，Layer填充入口把它传至Fill，两者继续使用原执行顺序。GUI没有调用者，默认关闭；CLI开启时拒绝load/export-slicedata，不改变普通缓存流程。只读报告不能更改此状态。
 
 全局打印、对象、体积／区域和分层覆盖需按 apply 合成。可变层高、首层和筏层抬升会改变物理 Z；层编号并不总等于模型第几层。复用支撑缓存前必须恢复正确来源。
 

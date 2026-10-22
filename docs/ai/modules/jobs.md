@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "jobs",
-  "source_fingerprint": "sha256:54dca4908f1d0b43d89906efbcd73505e6e991856f1c7019a1fa6ee65edde01f",
-  "reason": "复核依赖的PrintApplyCache回归：修正共享Print区域变换缓存后，后台导出前无改动apply应保留已完成G-code；真实变更仍失效。未更改任务线程/取消实现，GUI交互与核心测试分开验收。"
+  "source_fingerprint": "sha256:2fd6b0c2e8128398abb2887fd9bea066216b56219106f213f821c5365676e82a",
+  "reason": "复核依赖的PrintApplyCache回归：修正共享Print区域变换缓存后，后台导出前无改动apply应保留已完成G-code；真实变更仍失效。未更改任务线程/取消实现，GUI交互与核心测试分开验收。 2026-10-22依赖Print新增CLI专用运行时选择，状态锁下切换先按既有取消/失效机制清全部步骤，同值不失效。GUI后台无setter调用，工作线程/队列实现不变；默认及切换缓存测试见实施记录。"
 }
 -->
 

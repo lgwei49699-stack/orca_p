@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gcode-export",
-  "source_fingerprint": "sha256:d9729bbc3ee9a3cc06aba000693f3e397d233b5f0f8d88d4283f0e142d77f5dc",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，只在模型检测组合解释；GCode/GCodeWriter、指令风格、速度流量、后处理及GUI导出路径未改，证据流程不输出G-code。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 复核GCode构造的collect_analysis仅传解析器，不修改写入器、速度/挤出/冷却/后处理。正文补默认false的内部导出边界，CLI40组指令/配置/统计严格等价，原GCode七项回归通过；GUI待用户兼容验证。"
+  "source_fingerprint": "sha256:248fa26084f76d2284f7ab5b1ddc73841b45ef6200960f4e039cb53b4752afc6",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，只在模型检测组合解释；GCode/GCodeWriter、指令风格、速度流量、后处理及GUI导出路径未改，证据流程不输出G-code。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 复核GCode构造的collect_analysis仅传解析器，不修改写入器、速度/挤出/冷却/后处理。正文补默认false的内部导出边界，CLI40组指令/配置/统计严格等价，原GCode七项回归通过；GUI待用户兼容验证。 2026-10-22仅共享Print运行时模式选择上游模型路径；GCodeWriter/冷却/速度/导出后处理无差异。默认恢复原路径，显式开启才消费修正后分段与E，报告保持独立只读；真实模型指令/参数对照见实施记录。"
 }
 -->
 

@@ -8317,6 +8317,14 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli     = "slice-analysis-report";
     def->set_default_value(new ConfigOptionBool(false));
 
+    def          = this->add("optimize_model_detail_paths", coBool);
+    def->label   = L("Optimize model detail paths (CLI only)");
+    def->tooltip = L("Explicitly enable thin-wall recovery and variable-width extrusion corrections for CLI slicing. Disabled by default; "
+                     "independent of the analysis report. Requires --slice; incompatible with sliced-data cache import or export. "
+                     "Not saved in presets or projects; GUI slicing always uses the default path.");
+    def->cli     = "optimize-model-detail-paths";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("variable_layer_height_mode", coString);
     def->label = L("Variable Layer Height Mode");
     def->tooltip = L("Control variable layer height profiles in CLI slicing: preserve keeps an existing profile, adaptive replaces it with an automatically generated profile, and reset removes it.");
