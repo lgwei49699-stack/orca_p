@@ -27,6 +27,7 @@ void FillConcentricInternal::fill_surface_extrusion(const Surface* surface, cons
 
         double min_nozzle_diameter = *std::min_element(print_config->nozzle_diameter.values.begin(), print_config->nozzle_diameter.values.end());
         Arachne::WallToolPathsParams input_params;
+        input_params.optimize_model_detail_paths      = optimize_model_detail_paths;
         input_params.min_bead_width = 0.85 * min_nozzle_diameter;
         input_params.min_feature_size = 0.25 * min_nozzle_diameter;
         input_params.wall_transition_length = 0.4;
@@ -87,7 +88,7 @@ void FillConcentricInternal::fill_surface_extrusion(const Surface* surface, cons
     if (!thick_polylines_out.empty()) {
         Flow new_flow = params.flow.with_spacing(float(this->spacing));
         ExtrusionEntityCollection gap_fill;
-        variable_width(thick_polylines_out, params.extrusion_role, new_flow, gap_fill.entities);
+        variable_width(thick_polylines_out, params.extrusion_role, new_flow, gap_fill.entities, optimize_model_detail_paths);
         coll_nosort->append(std::move(gap_fill.entities));
     }
 

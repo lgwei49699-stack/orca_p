@@ -16,7 +16,8 @@ tools = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tools)
 from test_cli_slice_analysis import (CORE_LAYER_FIELDS, CORE_GCODE_FIELDS, CORE_NORMAL_FIELDS, CORE_MATERIAL_FIELDS,
                                      REMOVED_GROUP_METRICS, validate_core_report_group,
-                                     validate_gcode_observations, validate_plate_bed_footprint, validate_report,
+                                     validate_gcode_observations, validate_plate_bed_footprint, validate_report, validate_solid_fill_peak,
+                                     validate_width_height_observation, validate_residual_peak,
                                      validate_layer_time_threshold_observation,
                                      validate_estimated_peak_flow, validate_estimated_flow_cap_distance, validate_metric_values)
 
@@ -77,6 +78,78 @@ class CoreReportFieldsTest(unittest.TestCase):
                   "objects": {"groups": [group]}}
         with self.assertRaisesRegex(AssertionError, "Removed diagnostic groups"):
             validate_report(report, Path("."), {"id": 1}, {})
+
+
+class SolidFillPeakTest(unittest.TestCase):
+    def fixture(self):
+        return {"scope": "largest_solid_uncovered_layer_exclusive_target_kinds", "complete": True,
+                "layer_index": 1, "print_z_mm": .4, "uncovered_area_mm2": 10.,
+                "surface_area_mm2": 1., "internal_solid_area_mm2": 2., "bridge_area_mm2": 6., "mixed_area_mm2": 1.}
+
+    def layers(self):
+        return [core_layer(solid_fill_uncovered_area_mm2=5.),
+                core_layer(layer_index=1, print_z_mm=.4, solid_fill_uncovered_area_mm2=10.)]
+
+    def test_disjoint_categories_match_the_actual_maximum_and_layer(self):
+        validate_solid_fill_peak(self.fixture(), self.layers())
+        for change in ({"layer_index": 0}, {"print_z_mm": .41}, {"bridge_area_mm2": 10.},
+                       {"surface_area_mm2": -1.}, {"mixed_area_mm2": float("nan")}, {"uncovered_area_mm2": 5.}):
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                validate_solid_fill_peak({**self.fixture(), **change}, self.layers())
+
+    def test_incomplete_nonpeak_layer_does_not_certify_the_maximum(self):
+        layers = self.layers()
+        layers[0]["complete"] = False
+        value = {key: None for key in self.fixture()}
+        value.update(scope=self.fixture()["scope"], complete=False)
+        validate_solid_fill_peak(value, layers)
+        for key in ("layer_index", "surface_area_mm2", "uncovered_area_mm2"):
+            with self.subTest(key=key), self.assertRaises(AssertionError):
+                validate_solid_fill_peak({**value, key: 0}, layers)
+
+    def test_zero_gap_has_no_problem_layer(self):
+        value = {key: 0 for key in self.fixture()}
+        value.update(scope=self.fixture()["scope"], complete=True, layer_index=None, print_z_mm=None)
+        validate_solid_fill_peak(value, [core_layer()])
+        with self.assertRaises(AssertionError):
+            validate_solid_fill_peak({**value, "layer_index": 0, "print_z_mm": .2}, [core_layer()])
+
+
+class ResidualEvidenceTest(unittest.TestCase):
+    def test_paired_bead_does_not_use_global_extrema(self):
+        row = {"complete": True, "role": "gap_infill", "move_count": 3, "path_length_mm": 15,
+               "nominal_width_mm": {"min": .065, "max": .4}, "nominal_height_mm": {"min": .08, "max": .32},
+               "width_height_observation": {"scope": "same_move_nominal_width_height_non_bridge", "complete": True,
+                   "applicable": True, "below_height_move_count": 1, "below_height_path_length_mm": 2,
+                   "min_ratio": .065 / .08, "width_at_min_mm": .065, "height_at_min_mm": .08, "print_z_at_min_mm": 3}}
+        validate_width_height_observation(row)
+        for change in ({"min_ratio": .065 / .32}, {"below_height_move_count": 4}, {"below_height_path_length_mm": 16},
+                       {"below_height_move_count": 0}, {"print_z_at_min_mm": float("nan")}, {"height_at_min_mm": .01}):
+            altered = copy.deepcopy(row)
+            altered["width_height_observation"].update(change)
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                validate_width_height_observation(altered)
+
+    def test_residual_first_peak_and_partition(self):
+        for hole in (False, True):
+            total = "intrusion_area_mm2" if hole else "unprinted_area_mm2"
+            layer_key = "hole_intrusion_area_mm2" if hole else "completely_unprinted_island_area_mm2"
+            value = {"scope": "largest_hole_intrusion_layer_exclusive_path_kinds" if hole else "largest_unprinted_layer_region_slices",
+                     "complete": True, "layer_index": 0, "print_z_mm": .2, total: 1.}
+            parts = {"wall_area_mm2": .5, "gap_fill_area_mm2": .2, "bridge_area_mm2": .2, "other_fill_area_mm2": 0., "mixed_area_mm2": .1} if hole else {
+                "retained_region_area_mm2": .5, "absent_region_area_mm2": .5}
+            value.update(parts)
+            layers = [core_layer(**{layer_key: 1.}), core_layer(layer_index=1, print_z_mm=.4, **{layer_key: 1.})]
+            validate_residual_peak(value, layers, hole)
+            for change in ({"layer_index": 1, "print_z_mm": .4}, {next(iter(parts)): 2.}, {total: .5}):
+                with self.subTest(hole=hole, change=change), self.assertRaises(AssertionError):
+                    validate_residual_peak({**value, **change}, layers, hole)
+            for key in (*parts, total): value[key] = 0.
+            value.update(layer_index=None, print_z_mm=None)
+            validate_residual_peak(value, [core_layer()], hole)
+            for key in (*parts, total): value[key] = None
+            value["complete"] = False
+            validate_residual_peak(value, [], hole)
 
 
 class LayerTimeThresholdObservationTest(unittest.TestCase):
@@ -385,7 +458,8 @@ class EstimatedPeakFlowTest(unittest.TestCase):
                     "layer_time_threshold_observation": {**LayerTimeThresholdObservationTest().fixture(),
                         "active_layer_sequence_count": 1, "below_threshold_layer_ratio": 1},
                     "estimated_volume_mm3": {"total": 1, "other": 1, "support": 0, "wipe_tower": 0, "flush": 0}}
-        gcode = {"normal_estimate": {"total_time_s": 1, "layer_sequence_count": 1}, "extruders": [material]}
+        gcode = {"normal_estimate": {"total_time_s": 1, "layer_sequence_count": 1}, "extruders": [material],
+                 "quality_paths": {"scope": "final_gcode_positive_extrusion_moves", "rows": []}}
         report = {"planned_plate_bed_footprint": {"scope": "planned_path_nominal_bottom_on_bed_before_gcode",
                   "complete": True, "model_area_mm2": 8, "support_and_raft_area_mm2": 0, "brim_area_mm2": 0, "combined_area_mm2": 8},
                   "objects": {"slice_object_group_count": 1, "source_object_count": 1, "instance_count": 1, "groups": [group]},
@@ -413,6 +487,7 @@ class EstimatedPeakFlowTest(unittest.TestCase):
 class GcodeCoreFieldsTest(unittest.TestCase):
     def fixture(self):
         return {"normal_estimate": {"total_time_s": 1, "layer_sequence_count": 1},
+                "quality_paths": {"scope": "final_gcode_positive_extrusion_moves", "rows": []},
                 "extruders": [{key: None for key in CORE_MATERIAL_FIELDS}]}
 
     def test_only_retained_observation_groups_remain(self):

@@ -32,6 +32,7 @@ public:
     float   wall_transition_filter_deviation;
     int     wall_distribution_count;
     bool    is_top_or_bottom_layer = false;
+    bool    optimize_model_detail_paths = false;
 };
 
 WallToolPathsParams make_paths_params(const int layer_id, const PrintObjectConfig &print_object_config, const PrintConfig &print_config);
@@ -107,7 +108,7 @@ protected:
      *
      * Works on both toolpaths and inner contours simultaneously.
      */
-    static void stitchToolPaths(std::vector<VariableWidthLines> &toolpaths, coord_t bead_width_x);
+    static void stitchToolPaths(std::vector<VariableWidthLines>& toolpaths, coord_t bead_width_x, bool connect_touching_first = false);
 
     /*!
      * Remove polylines shorter than half the smallest line width along that polyline.

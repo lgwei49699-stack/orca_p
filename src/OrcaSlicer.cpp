@@ -1596,6 +1596,16 @@ int CLI::run(int argc, char **argv)
     std::map<std::string, std::string> record_key_values;
 
     const bool slice_analysis_requested = m_config.opt_bool("slice_analysis_report");
+    const bool optimize_model_detail_paths = m_config.opt_bool("optimize_model_detail_paths");
+    if (optimize_model_detail_paths && (std::count(m_actions.begin(), m_actions.end(), "slice") != 1 ||
+                                        std::find(m_actions.begin(), m_actions.end(), "load_slicedata") != m_actions.end() ||
+                                        std::find(m_actions.begin(), m_actions.end(), "export_slicedata") != m_actions.end())) {
+        const std::string message =
+            "--optimize-model-detail-paths requires --slice and cannot be combined with --load-slicedata or --export-slicedata.";
+        BOOST_LOG_TRIVIAL(error) << message;
+        boost::nowide::cerr << message << std::endl;
+        return CLI_INVALID_PARAMS;
+    }
     if (slice_analysis_requested && (std::count(m_actions.begin(), m_actions.end(), "slice") != 1 || outfile_dir.empty())) {
         const std::string message = L("--slice-analysis-report requires one --slice action and an explicit --outputdir.");
         boost::nowide::cerr << message << std::endl;
@@ -7389,6 +7399,11 @@ int CLI::run(int argc, char **argv)
                         part_plate->get_print(&print, &gcode_result, &print_index);
 
                         print_fff = dynamic_cast<Print *>(print);
+                        if (print_fff != nullptr) {
+                            print_fff->set_model_detail_path_optimization(optimize_model_detail_paths);
+                            if (optimize_model_detail_paths)
+                                BOOST_LOG_TRIVIAL(info) << "CLI model detail path optimization explicitly enabled for plate " << index + 1;
+                        }
                         /*if (outfile_config.empty())
                         {
                             outfile = "plate_" + std::to_string(index + 1) + ".gcode";

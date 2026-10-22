@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "arrangement",
-  "source_fingerprint": "sha256:f42f64734416948821cf27e89bacbb892cc3b045cc4c75cea8a7911c926fce6c",
-  "reason": "合并master盘外JSON姿态修复；保留本分支默认关闭的分析报告及既有盘成员刷新。共享Arrange/PartPlate/GUI排布未变，CLI只读快照仅用于盘外JSON；按本分支源码核对指纹与合并验证边界。"
+  "source_fingerprint": "sha256:68d9393e92b51a70ba3db7baaa70139e2c6870a4534b1eef0b66e30549a4a2c7",
+  "reason": "合并功能分支独立默认关闭的CLI模型细节路径开关，保留发布分支排布前姿态快照、复制补记及盘外JSON规则。共享Arrange/PartPlate/GUI排布未改；新开关在CLI取盘后传给Print，不改变盘选择。仅解决审核头冲突，指纹按目标分支合并源码核对，来源测试不作为本目录新包验收。"
 }
 -->
 

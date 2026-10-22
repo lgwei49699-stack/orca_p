@@ -80,6 +80,7 @@ public:
     const PrintRegionConfig     *config;
     const PrintObjectConfig     *object_config;
     const PrintConfig           *print_config;
+    bool                         optimize_model_detail_paths = false;
     // Outputs:
     ExtrusionEntityCollection   *loops;
     ExtrusionEntityCollection   *gap_fill;

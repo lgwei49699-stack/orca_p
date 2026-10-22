@@ -83,6 +83,7 @@ void FillConcentric::_fill_surface_single(const FillParams& params,
 
         double min_nozzle_diameter = *std::min_element(print_config->nozzle_diameter.values.begin(), print_config->nozzle_diameter.values.end());
         Arachne::WallToolPathsParams input_params;
+        input_params.optimize_model_detail_paths      = optimize_model_detail_paths;
         input_params.min_bead_width = 0.85 * min_nozzle_diameter;
         input_params.min_feature_size = 0.25 * min_nozzle_diameter;
         input_params.wall_transition_length = 1.0 * min_nozzle_diameter;

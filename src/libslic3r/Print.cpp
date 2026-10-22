@@ -391,6 +391,19 @@ void Print::set_calib_params(const Calib_Params& params) {
     m_calib_params.mode = params.mode;
 }
 
+void Print::set_model_detail_path_optimization(bool enabled)
+{
+    std::scoped_lock<std::mutex> lock(this->state_mutex());
+    if (m_model_detail_path_optimization == enabled)
+        return;
+    // Do not reuse paths/surfaces produced with the other algorithm. Invalidate
+    // before publishing the new mode, which also cancels in-flight processing.
+    for (PrintObject* object : m_objects)
+        object->invalidate_all_steps();
+    this->invalidate_all_steps();
+    m_model_detail_path_optimization = enabled;
+}
+
 bool Print::invalidate_step(PrintStep step)
 {
 	bool invalidated = Inherited::invalidate_step(step);

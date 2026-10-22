@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "jobs",
-  "source_fingerprint": "sha256:75f4f790a6258c9bad107dce6132c1f7ea405a9a01b9b41cfe087b0a7b1d7ed9",
-  "reason": "复核PrintApplyCache既有语义不变；此次发布分支合并保留BoostThreadWorker.cpp显式wx/app.h，供无PCH构建获取wxTheApp声明，相对功能分支仅头依赖变化，任务线程、取消和通知业务未改。GUI交互及最终发布构建仍需对应验收。"
+  "source_fingerprint": "sha256:0e1dc5850c88da63dec4b90bfaf7c92264ce96ba703b5a3ee2ce13c6f4be8f08",
+  "reason": "保留发布分支BoostThreadWorker.cpp显式wx/app.h依赖及既有PrintApplyCache语义；合入Print的CLI运行时模式切换，锁内按既有取消/失效机制清理步骤，同值不失效。GUI后台无setter接入，工作线程/队列实现未改；仅合并审核头并按目标源码核对指纹，不宣称本次已运行GUI或发布构建。"
 }
 -->
 

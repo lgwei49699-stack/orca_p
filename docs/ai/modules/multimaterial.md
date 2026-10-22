@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "multimaterial",
-  "source_fingerprint": "sha256:8ef53810b28f976f03697e7dd550b0cac67007238df5494aed0a224bcf6824c0",
-  "reason": "继承功能分支默认关闭的CLI修复依据、阶段与切片报告配置，不修改本模块有效打印参数或消费者；此次发布分支合并另外保留ColorUtils/TextureToColor的boost/next_prior.hpp显式依赖，二者相对功能分支仅include变化。分色、冲刷、工具顺序及GUI颜色逻辑不变，未以工具检查宣称多材料运行通过。"
+  "source_fingerprint": "sha256:54e22bb94a5b8f474005e4d363ec791febb17ac6d622d587c45bdffde619b037",
+  "reason": "保留发布分支ColorUtils/TextureToColor的boost/next_prior.hpp显式头依赖。合入的模型细节路径开关属于CLI运行时选择，不新增材料/打印配置，不改分色、材料映射、冲刷参数或擦料塔算法；切换Print模式沿用步骤失效机制，默认关闭。正文无需新增多材料行为，本次仅解决审核头冲突并核对合并指纹，未运行多材料实印。"
 }
 -->
 

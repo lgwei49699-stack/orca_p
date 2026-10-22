@@ -96,7 +96,11 @@ ExtrusionMultiPath thick_polyline_to_multi_path(const ThickPolyline& thick_polyl
 }
 
 //BBS: new function to filter width to avoid too fragmented segments
-static ExtrusionPaths thick_polyline_to_extrusion_paths_2(const ThickPolyline& thick_polyline, ExtrusionRole role, const Flow& flow, const float tolerance)
+template<bool Optimize>
+static ExtrusionPaths thick_polyline_to_extrusion_paths_2(const ThickPolyline& thick_polyline,
+                                                          ExtrusionRole        role,
+                                                          const Flow&          flow,
+                                                          const float          tolerance)
 {
     ExtrusionPaths paths;
     ExtrusionPath path(role);
@@ -116,7 +120,13 @@ static ExtrusionPaths thick_polyline_to_extrusion_paths_2(const ThickPolyline& t
         const coordf_t line_len = line.length();
         if (line_len < SCALED_EPSILON) continue;
 
-        double thickness_delta = std::max(fabs(max_width - line.b_width), fabs(min_width - line.b_width));
+        // A shared position may carry different widths on its two segments.
+        // Check the whole candidate range, not only the new endpoint.
+        double thickness_delta;
+        if constexpr (Optimize)
+            thickness_delta = std::max({max_width, line.a_width, line.b_width}) - std::min({min_width, line.a_width, line.b_width});
+        else
+            thickness_delta = std::max(fabs(max_width - line.b_width), fabs(min_width - line.b_width));
         //BBS: has large difference in width
         if (thickness_delta > tolerance) {
             //BBS: 1 generate path from start_index to i(not included)
@@ -180,9 +190,13 @@ static ExtrusionPaths thick_polyline_to_extrusion_paths_2(const ThickPolyline& t
                 --i;
                 continue;
             }
+        } else if constexpr (!Optimize) {
+            // Keep the legacy grouping exactly when optimization is disabled.
+            max_width = std::max(max_width, std::max(line.a_width, line.b_width));
+            min_width = std::min(min_width, std::min(line.a_width, line.b_width));
         }
-        //BBS: just update the max and min width and continue
-        else {
+        if constexpr (Optimize) {
+            // Include both endpoints even when this segment starts a new group.
             max_width = std::max(max_width, std::max(line.a_width, line.b_width));
             min_width = std::min(min_width, std::min(line.a_width, line.b_width));
         }
@@ -192,11 +206,18 @@ static ExtrusionPaths thick_polyline_to_extrusion_paths_2(const ThickPolyline& t
     if (start_index < final_size) {
         path = ExtrusionPath(role);
         double length = lines[start_index].length();
+        // Integrate both endpoint widths, just as for the completed groups above.
+        // Using only the starting width makes the volume depend on path direction.
         double sum = lines[start_index].length() * lines[start_index].a_width;
+        if constexpr (Optimize)
+            sum = lines[start_index].length() * 0.5 * (lines[start_index].a_width + lines[start_index].b_width);
         path.polyline.append(lines[start_index].a);
         for (int idx = start_index + 1; idx < final_size; idx++) {
             length += lines[idx].length();
-            sum += lines[idx].length() * lines[idx].a_width;
+            if constexpr (Optimize)
+                sum += lines[idx].length() * 0.5 * (lines[idx].a_width + lines[idx].b_width);
+            else
+                sum += lines[idx].length() * lines[idx].a_width;
             path.polyline.append(lines[idx].a);
         }
         path.polyline.append(lines[final_size - 1].b);
@@ -213,14 +234,19 @@ static ExtrusionPaths thick_polyline_to_extrusion_paths_2(const ThickPolyline& t
     return paths;
 }
 
-void variable_width(const ThickPolylines& polylines, ExtrusionRole role, const Flow& flow, std::vector<ExtrusionEntity*>& out)
+void variable_width(const ThickPolylines&          polylines,
+                    ExtrusionRole                  role,
+                    const Flow&                    flow,
+                    std::vector<ExtrusionEntity*>& out,
+                    bool                           optimize_model_detail_paths)
 {
     // This value determines granularity of adaptive width, as G-code does not allow
     // variable extrusion within a single move; this value shall only affect the amount
     // of segments, and any pruning shall be performed before we apply this tolerance.
     const float tolerance = float(scale_(0.05));
     for (const ThickPolyline& p : polylines) {
-        ExtrusionPaths paths = thick_polyline_to_extrusion_paths_2(p, role, flow, tolerance);
+        ExtrusionPaths paths = optimize_model_detail_paths ? thick_polyline_to_extrusion_paths_2<true>(p, role, flow, tolerance) :
+                                                             thick_polyline_to_extrusion_paths_2<false>(p, role, flow, tolerance);
         // Append paths to collection.
         if (!paths.empty()) {
             if (paths.front().first_point() == paths.back().last_point())

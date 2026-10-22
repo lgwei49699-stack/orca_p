@@ -11,6 +11,47 @@
 using namespace Slic3r;
 using namespace Slic3r::Test;
 
+TEST_CASE("Detail path optimization is runtime-only and invalidates cached paths", "[Print][DetailPathOptIn]")
+{
+    CHECK_FALSE(print_config_def.has("optimize_model_detail_paths"));
+    REQUIRE(cli_misc_config_def.has("optimize_model_detail_paths"));
+    CHECK_FALSE(cli_misc_config_def.get("optimize_model_detail_paths")->default_value->getBool());
+    Print print;
+    CHECK_FALSE(print.model_detail_path_optimization());
+    // Fixed placement: this regression concerns slicing cache invalidation,
+    // not the unrelated synthetic InfiniteBed arrangement helper.
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set("layer_height", 0.3);
+    config.set_key_value("printable_area", new ConfigOptionPoints({{0., 0.}, {200., 0.}, {200., 200.}, {0., 200.}}));
+    config.set_key_value("bed_exclude_area", new ConfigOptionPoints());
+    Model        model;
+    ModelObject* object = model.add_object();
+    object->add_volume(make_cube(10., 10., 2.));
+    object->add_instance()->set_offset(Vec3d(80., 80., 0.));
+    print.auto_assign_extruders(object);
+    print.set_status_silent();
+    print.apply(model, config);
+    print.process();
+    REQUIRE(print.is_step_done(posInfill));
+    print.set_model_detail_path_optimization(false);
+    CHECK(print.is_step_done(posInfill));
+    for (bool enabled : {true, false}) {
+        print.set_model_detail_path_optimization(enabled);
+        CHECK(print.model_detail_path_optimization() == enabled);
+        CHECK_FALSE(print.is_step_done(posSlice));
+        CHECK_FALSE(print.is_step_done(posPerimeters));
+        CHECK_FALSE(print.is_step_done(posInfill));
+        CHECK_FALSE(print.is_step_done(psGCodeExport));
+        CHECK_FALSE(print.config().has("optimize_model_detail_paths"));
+        print.process();
+        REQUIRE(print.is_step_done(posInfill));
+        print.set_model_detail_path_optimization(enabled);
+        CHECK(print.is_step_done(posInfill));
+    }
+    Print gui_print;
+    CHECK_FALSE(gui_print.model_detail_path_optimization());
+}
+
 TEST_CASE("Mesh replacement updates region transforms before slicing and export", "[Print][PrintApplyCache]")
 {
     // Mesh only, Z placement, Z scale, tilt, and a compatible XY rotation.

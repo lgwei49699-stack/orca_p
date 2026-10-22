@@ -134,7 +134,8 @@ TEST_CASE("Slice analysis empty data remains explicitly absent", "[SliceAnalysis
     const auto& gcode = report.at("gcode");
     REQUIRE(gcode.at("extruders").empty());
     REQUIRE(gcode.at("normal_estimate").at("layer_sequence_count") == 0);
-    REQUIRE(gcode.size() == 2);
+    REQUIRE(gcode.size() == 3);
+    REQUIRE(gcode.at("quality_paths").at("rows").empty());
     REQUIRE(gcode.at("normal_estimate").size() == 2);
     REQUIRE_FALSE(report.at("limitations").empty());
     REQUIRE(json::parse(report.dump()) == report);
@@ -490,6 +491,86 @@ TEST_CASE("Slice analysis keeps configured solid targets separate and unions ove
     const auto first = coverage_layers(print).at(0);
     REQUIRE(first.at("solid_fill_target_area_mm2").get<double>() == Approx(16.));
     REQUIRE(first.at("solid_fill_uncovered_area_mm2").get<double>() == Approx(12.));
+}
+
+TEST_CASE("Slice analysis attributes only the peak solid gap and separates overlapping target kinds", "[SliceAnalysis][SolidGapPeak]")
+{
+    Model model;
+    Print print;
+    add_box(model, 1);
+    apply_model(print, model);
+    PrintObject* object = print.get_object(0);
+    for (size_t index = 0; index < 2; ++index) {
+        Layer* layer        = object->add_layer(index, 0.2, 0.2 * (index + 1), 0.1 + 0.2 * index);
+        layer->lslices      = {rectangle(0., 0., 10., 10.)};
+        LayerRegion* region = layer->add_region(&object->printing_region(0));
+        region->fill_surfaces.append({rectangle(0., 0., 2., 2.)}, stTop);
+        if (index == 1) {
+            region->fill_surfaces.append({rectangle(0., 0., 2., 2.)}, stBottom); // Same category: no double count.
+            region->fill_surfaces.append({rectangle(2., 0., 2., 2.)}, stInternalSolid);
+            region->fill_surfaces.append({rectangle(4., 0., 2., 2.)}, stBottomBridge);
+            region->fill_surfaces.append({rectangle(6., 0., 2., 2.)}, stInternalBridge);
+            region->fill_surfaces.append({rectangle(6., 0., 2., 2.)}, stTop);       // Mixed category: separate, not attributed twice.
+            region->fill_surfaces.append({rectangle(0., 2., 10., 8.)}, stInternal); // Sparse infill is not a solid target.
+            region->fills.append(planned_path(0., 1., 2., 1., 2.f));
+        }
+    }
+    const auto peak = [&]() {
+        return make_slice_analysis_report(print, InitializedResult{})
+            .at("objects")
+            .at("groups")
+            .at(0)
+            .at("planned_layer_coverage")
+            .at("solid_fill_peak");
+    };
+    const auto result = peak();
+    REQUIRE(result.at("scope") == "largest_solid_uncovered_layer_exclusive_target_kinds");
+    REQUIRE(result.at("complete") == true);
+    REQUIRE(result.at("layer_index") == 1);
+    REQUIRE(result.at("print_z_mm").get<double>() == Approx(0.4));
+    REQUIRE(result.at("uncovered_area_mm2").get<double>() == Approx(12.));
+    REQUIRE(result.at("surface_area_mm2") == 0.);
+    REQUIRE(result.at("internal_solid_area_mm2").get<double>() == Approx(4.));
+    REQUIRE(result.at("bridge_area_mm2").get<double>() == Approx(4.));
+    REQUIRE(result.at("mixed_area_mm2").get<double>() == Approx(4.));
+
+    object->layers().front()->regions().front()->fills.append(planned_path(0., 1., 2., 1., std::numeric_limits<float>::quiet_NaN()));
+    const auto invalid = peak();
+    REQUIRE(invalid.at("complete") == false); // An incomplete non-peak layer invalidates the maximum too.
+    for (const char* key : {"layer_index", "print_z_mm", "uncovered_area_mm2", "surface_area_mm2", "internal_solid_area_mm2",
+                            "bridge_area_mm2", "mixed_area_mm2"})
+        REQUIRE(invalid.at(key).is_null());
+}
+
+TEST_CASE("Slice analysis peak gap distinguishes empty, fully covered and absent layers", "[SliceAnalysis][SolidGapPeak]")
+{
+    Model model;
+    Print print;
+    add_box(model, 1);
+    apply_model(print, model);
+    PrintObject* object = print.get_object(0);
+    const auto   peak   = [&]() {
+        return make_slice_analysis_report(print, InitializedResult{})
+            .at("objects")
+            .at("groups")
+            .at(0)
+            .at("planned_layer_coverage")
+            .at("solid_fill_peak");
+    };
+    REQUIRE(peak().at("complete") == false);
+    Layer* layer        = object->add_layer(0, 0.2, 0.2, 0.1);
+    layer->lslices      = {rectangle(0., 0., 2., 2.)};
+    LayerRegion* region = layer->add_region(&object->printing_region(0));
+    REQUIRE(peak().at("complete") == true);
+    REQUIRE(peak().at("layer_index").is_null());
+    REQUIRE(peak().at("uncovered_area_mm2") == 0.);
+    region->fill_surfaces.append({rectangle(0., 0., 2., 2.)}, stTop);
+    region->fills.append(planned_path(0., 1., 2., 1., 2.f));
+    const auto covered = peak();
+    REQUIRE(covered.at("complete") == true);
+    REQUIRE(covered.at("layer_index").is_null());
+    REQUIRE(covered.at("surface_area_mm2") == 0.);
+    REQUIRE(covered.at("uncovered_area_mm2") == 0.);
 }
 
 TEST_CASE("Slice analysis does not turn invalid footprint data or cancellation into complete coverage", "[SliceAnalysis]")
@@ -2437,12 +2518,195 @@ TEST_CASE("Gcode flow-cap distance integrates triangle and trapezoid portions ra
     REQUIRE(result.print_statistics.total_volumes_per_extruder == original.print_statistics.total_volumes_per_extruder);
 }
 
+TEST_CASE("Quality path evidence separates actual roles and materials without counting travel or custom extrusion", "[SliceAnalysis]")
+{
+    Print             print;
+    InitializedResult result;
+    auto              outer = extrusion(0, .42f, .2f, 30.f, .08f);
+    outer.delta_extruder    = .5f;
+    outer.travel_dist       = 10.f;
+    outer.fan_speed         = 30.f;
+    auto bridge             = outer;
+    bridge.extrusion_role   = erBridgeInfill;
+    bridge.extruder_id      = 1;
+    bridge.feedrate         = 15.f;
+    bridge.fan_speed        = 100.f;
+    auto travel             = outer;
+    travel.type             = EMoveType::Travel;
+    auto custom             = outer;
+    custom.extrusion_role   = erCustom;
+    auto zero_e             = outer;
+    zero_e.delta_extruder   = 0.f;
+    result.moves            = {outer, bridge, travel, custom, zero_e};
+    const auto before       = all_settings(print);
+    const auto rows         = make_slice_analysis_report(print, result).at("gcode").at("quality_paths");
+    REQUIRE(rows.at("scope") == "final_gcode_positive_extrusion_moves");
+    REQUIRE(rows.at("rows").size() == 2);
+    const auto& a = rows.at("rows").at(0);
+    REQUIRE(a.at("role") == "outer_wall");
+    REQUIRE(a.at("extruder_id") == 0);
+    REQUIRE(a.at("complete") == true);
+    REQUIRE(a.at("move_count") == 1);
+    REQUIRE(a.at("path_length_mm") == 10.);
+    REQUIRE(a.at("commanded_speed_mm_s").at("max") == 30.);
+    REQUIRE(a.at("fan_speed_percent").at("min") == 30.);
+    REQUIRE(a.at("nominal_width_mm").at("min").get<double>() == Approx(.42));
+    REQUIRE(rows.at("rows").at(1).at("role") == "bridge");
+    REQUIRE(rows.at("rows").at(1).at("fan_speed_percent").at("min") == 100.);
+    REQUIRE(all_settings(print) == before);
+
+    auto invalid     = bridge;
+    invalid.feedrate = std::numeric_limits<float>::quiet_NaN();
+    result.moves.push_back(invalid);
+    const auto mixed = make_slice_analysis_report(print, result).at("gcode").at("quality_paths").at("rows");
+    REQUIRE(mixed.at(0).at("complete") == true);
+    REQUIRE(mixed.at(1).at("complete") == false);
+    REQUIRE(mixed.at(1).at("path_length_mm").is_null());
+    REQUIRE(mixed.at(1).at("commanded_speed_mm_s").at("max").is_null());
+}
+
+TEST_CASE("Quality path evidence reads final Gcode fan commands and native arc length", "[SliceAnalysis][GCodeProcessor]")
+{
+    GCodeProcessor processor(true);
+    initialize_flow_processor(processor);
+    processor.process_buffer(motion_preamble() + "G1 Z0.2 F6000\nM106 S255\n" + motion_role(erBridgeInfill) +
+                             "G1 X10 E.5 F900\nG2 X12 Y0 I1 J0 E.2\nG4 P0\n");
+    processor.finalize(false);
+    Print      print;
+    const auto rows = make_slice_analysis_report(print, processor.get_result()).at("gcode").at("quality_paths").at("rows");
+    REQUIRE(rows.size() == 1);
+    REQUIRE(rows.at(0).at("role") == "bridge");
+    REQUIRE(rows.at(0).at("complete") == true);
+    REQUIRE(rows.at(0).at("path_length_mm").get<double>() == Approx(10. + M_PI));
+    REQUIRE(rows.at(0).at("commanded_speed_mm_s").at("min").get<double>() == Approx(15.));
+    REQUIRE(rows.at(0).at("fan_speed_percent").at("min") == 100.);
+}
+
+TEST_CASE("Quality path slender beads use paired width and height, never independent extrema", "[SliceAnalysis][ResidualRisk]")
+{
+    Print             print;
+    InitializedResult result;
+    auto              a = extrusion(0, .065f, .08f, 25.f, .004f);
+    a.extrusion_role    = erGapFill;
+    a.delta_extruder    = .1f;
+    a.travel_dist       = 2.f;
+    a.fan_speed         = 100.f;
+    a.position          = Vec3f(1.f, 2.f, 3.f);
+    auto b              = a;
+    b.width             = .4f;
+    b.height            = .32f;
+    b.travel_dist       = 10.f;
+    auto c              = a;
+    c.width = c.height = .08f;
+    c.travel_dist      = 3.f;
+    result.moves       = {a, b, c};
+    const auto sample  = [&]() { return make_slice_analysis_report(print, result).at("gcode").at("quality_paths").at("rows").at(0); };
+    const auto bead    = sample().at("width_height_observation");
+    REQUIRE(bead.at("scope") == "same_move_nominal_width_height_non_bridge");
+    REQUIRE(bead.at("complete") == true);
+    REQUIRE(bead.at("applicable") == true);
+    REQUIRE(bead.at("below_height_move_count") == 1);
+    REQUIRE(bead.at("below_height_path_length_mm") == 2.);
+    REQUIRE(bead.at("min_ratio").get<double>() == Approx(.065 / .08));
+    REQUIRE(bead.at("width_at_min_mm").get<double>() == Approx(.065));
+    REQUIRE(bead.at("height_at_min_mm").get<double>() == Approx(.08));
+    REQUIRE(bead.at("print_z_at_min_mm") == 3.);
+    result.moves.front().width = std::numeric_limits<float>::quiet_NaN();
+    REQUIRE(sample().at("width_height_observation").at("complete") == false);
+    REQUIRE(sample().at("width_height_observation").at("below_height_path_length_mm").is_null());
+    result.moves                        = {a};
+    result.moves.front().extrusion_role = erBridgeInfill;
+    REQUIRE(sample().at("width_height_observation").at("applicable") == false);
+    REQUIRE(sample().at("width_height_observation").at("min_ratio").is_null());
+}
+
+TEST_CASE("Residual peaks localize missing contour stage and hole path sources without altering paths", "[SliceAnalysis][ResidualRisk]")
+{
+    Model model;
+    Print print;
+    add_box(model, 1);
+    apply_model(print, model);
+    PrintObject* object = print.get_object(0);
+    Layer*       layer  = object->add_layer(0, .2, .2, .1);
+    layer->lslices      = {square_with_hole(), rectangle(12., 0., 1., 1.)};
+    LayerRegion* region = layer->add_region(&object->printing_region(0));
+    region->slices.append({square_with_hole(), rectangle(12., 0., .5, 1.)}, stInternal);
+    region->perimeters.append(planned_path(0., 1., 10., 1.));
+    region->perimeters.append(planned_path(3.5, 4., 6.5, 4., .4f));
+    region->fills.append(planned_path(3.5, 5., 6.5, 5., .2f, erGapFill));
+    region->fills.append(planned_path(3.5, 6., 6.5, 6., .6f, erBridgeInfill));
+    const auto original = region->fills.as_polylines();
+    const auto read     = [&]() {
+        return make_slice_analysis_report(print, InitializedResult{}).at("objects").at("groups").at(0).at("planned_layer_coverage");
+    };
+    const auto coverage = read();
+    const auto missing  = coverage.at("unprinted_peak");
+    REQUIRE(missing.at("complete") == true);
+    REQUIRE(missing.at("layer_index") == 0);
+    REQUIRE(missing.at("unprinted_area_mm2").get<double>() == Approx(1.));
+    REQUIRE(missing.at("retained_region_area_mm2").get<double>() == Approx(.5));
+    REQUIRE(missing.at("absent_region_area_mm2").get<double>() == Approx(.5));
+    const auto hole = coverage.at("hole_intrusion_peak");
+    REQUIRE(hole.at("complete") == true);
+    REQUIRE(hole.at("wall_area_mm2").get<double>() > 1.);
+    REQUIRE(hole.at("gap_fill_area_mm2").get<double>() == Approx(.6));
+    REQUIRE(hole.at("bridge_area_mm2").get<double>() == Approx(1.8));
+    REQUIRE(hole.at("other_fill_area_mm2") == 0.);
+    REQUIRE(hole.at("mixed_area_mm2") == 0.);
+    REQUIRE(hole.at("intrusion_area_mm2").get<double>() ==
+            Approx(hole.at("wall_area_mm2").get<double>() + hole.at("gap_fill_area_mm2").get<double>() +
+                   hole.at("bridge_area_mm2").get<double>()));
+    REQUIRE(region->fills.as_polylines() == original);
+    region->fills.append(planned_path(3.5, 4., 6.5, 4., .4f, erSolidInfill));
+    REQUIRE(read().at("hole_intrusion_peak").at("mixed_area_mm2").get<double>() > 1.);
+    Layer* invalid          = object->add_layer(1, .2, .4, .3);
+    invalid->slicing_errors = true;
+    REQUIRE(read().at("unprinted_peak").at("complete") == false);
+    REQUIRE(read().at("hole_intrusion_peak").at("intrusion_area_mm2").is_null());
+}
+
+TEST_CASE("Gcode flow observations accept float-rounded phase endpoints without changing motion", "[SliceAnalysis][GCodeProcessor]")
+{
+    // Reduced from a real support path. (distance - ramp) + ramp rounds one
+    // float ULP above distance; it is not an invalid or unfinished movement.
+    const std::string gcode = motion_preamble() +
+                              "M204 P300\nM205 X8 Y8\nG1 Z0.24 F1500\n"
+                              "G92 X51.556 Y31.053\n" +
+                              motion_role(erCustom) + "G1 X52.444 Y31.025 E.03975 F1500\n" + motion_role(erSupportMaterial) +
+                              "G1 X52.433 Y36.031 E.22405\n" + motion_role(erCustom) + "G1 X51.869 Y38.697 E.12194\nG4 P0\n";
+    GCodeProcessor observed(true);
+    GCodeProcessor disabled;
+    const double   cap = GENERATE(1., 12., 1.e-12);
+    process_cap_distance(observed, gcode, {cap});
+    process_cap_distance(disabled, gcode, {cap});
+    const auto& result = observed.get_result();
+    const auto  moves  = positive_model_moves(result);
+    REQUIRE(moves.size() == 1);
+    const auto& peak = result.normal_estimated_peak_flow.at(0);
+    REQUIRE(peak.complete);
+    REQUIRE(peak.block_count == 1);
+    const double peak_speed = double(1500.f * (1.f / 60.f));
+    REQUIRE(peak.max_peak_volumetric_rate_mm3_s == peak_speed * moves.front()->mm3_per_mm);
+    const auto& distance = result.normal_estimated_flow_cap_distance.at(0);
+    REQUIRE(distance.complete);
+    REQUIRE(distance.participating_path_length_mm == double(moves.front()->travel_dist));
+    const double threshold_speed = cap / moves.front()->mm3_per_mm;
+    const double below           = std::max(0., (threshold_speed * threshold_speed - 8. * 8.) / (2. * 300.));
+    const double expected_above  = threshold_speed >= peak_speed ? 0. : distance.participating_path_length_mm - below;
+    REQUIRE(distance.above_cap_path_length_mm == Approx(expected_above));
+    REQUIRE(distance.above_cap_path_length_mm <= distance.participating_path_length_mm);
+    REQUIRE(peak_flow_report(result, 0).at("complete") == true);
+    REQUIRE(cap_distance_report(result, 0, {cap}).at("complete") == true);
+    require_no_analysis_metadata(disabled.get_result());
+    require_same_legacy_gcode_observations(result, disabled.get_result());
+}
+
 TEST_CASE("Gcode flow-cap distance equality uses the finalized rounded peak as its strict upper bound", "[SliceAnalysis][GCodeProcessor]")
 {
     const std::string gcode = motion_preamble() + "G1 Z0.2 F6000\n" + motion_role(erExternalPerimeter) + "G1 X1 E0.05 F6000\nG4 P0\n";
     GCodeProcessor    reference(true);
     process_cap_distance(reference, gcode, {1000.});
-    const auto& result = reference.get_result();
+    const auto&  result    = reference.get_result();
     const double peak_flow = result.normal_estimated_peak_flow.at(0).max_peak_volumetric_rate_mm3_s;
     const auto   moves     = positive_model_moves(result);
     REQUIRE(moves.size() == 1);

@@ -7,7 +7,11 @@
 
 namespace Slic3r {
     ExtrusionMultiPath thick_polyline_to_multi_path(const ThickPolyline& thick_polyline, ExtrusionRole role, const Flow& flow, const float tolerance, const float merge_tolerance);
-    void variable_width(const ThickPolylines& polylines, ExtrusionRole role, const Flow& flow, std::vector<ExtrusionEntity*>& out);
+    void variable_width(const ThickPolylines&          polylines,
+                        ExtrusionRole                  role,
+                        const Flow&                    flow,
+                        std::vector<ExtrusionEntity*>& out,
+                        bool                           optimize_model_detail_paths = false);
 }
 
 #endif

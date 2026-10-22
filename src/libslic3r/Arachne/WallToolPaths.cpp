@@ -530,13 +530,43 @@ const std::vector<VariableWidthLines> &WallToolPaths::generate()
     );
     wall_maker.generateToolpaths(toolpaths);
 
+    // Keep a bounded retry input only for an island made entirely of open
+    // thin-wall fragments. Normal walls/inner contours follow the legacy path.
+    VariableWidthLines thin_wall_fragments;
+    if (m_params.optimize_model_detail_paths && toolpaths.size() == 1 && toolpaths.front().size() > 1 &&
+        std::all_of(toolpaths.front().begin(), toolpaths.front().end(), [](const ExtrusionLine& line) {
+            return line.is_odd && !line.is_closed && line.size() > 1 &&
+                   std::all_of(line.begin(), line.end(), [](const ExtrusionJunction& j) { return j.w > 0; });
+        }))
+        thin_wall_fragments = toolpaths.front();
+
     stitchToolPaths(toolpaths, this->bead_width_x);
 
     removeSmallLines(toolpaths);
 
     separateOutInnerContour();
 
+    const auto has_nonzero_path = [&]() {
+        for (const auto& group : toolpaths)
+            for (const auto& line : group)
+                for (size_t i = 1; i < line.size(); ++i)
+                    if (line[i].p != line[i - 1].p)
+                        return true;
+        return false;
+    };
+    const bool had_thin_path = !thin_wall_fragments.empty() && has_nonzero_path();
     simplifyToolPaths(toolpaths);
+
+    // A gap-first stitch can close a short out-and-back line at its shared
+    // endpoint; simplification then collapses it to a single point. Retry
+    // only this total loss, never a normal path or a short-line-filtered island.
+    if (had_thin_path && !has_nonzero_path()) {
+        toolpaths = {std::move(thin_wall_fragments)};
+        stitchToolPaths(toolpaths, this->bead_width_x, true);
+        removeSmallLines(toolpaths);
+        separateOutInnerContour();
+        simplifyToolPaths(toolpaths);
+    }
 
     removeEmptyToolPaths(toolpaths);
     assert(std::is_sorted(toolpaths.cbegin(), toolpaths.cend(),
@@ -548,19 +578,49 @@ const std::vector<VariableWidthLines> &WallToolPaths::generate()
     return toolpaths;
 }
 
-void WallToolPaths::stitchToolPaths(std::vector<VariableWidthLines> &toolpaths, const coord_t bead_width_x)
+void WallToolPaths::stitchToolPaths(std::vector<VariableWidthLines>& toolpaths,
+                                    const coord_t                    bead_width_x,
+                                    const bool                       connect_touching_first)
 {
-    const coord_t stitch_distance = bead_width_x - 1; //In 0-width contours, junctions can cause up to 1-line-width gaps. Don't stitch more than 1 line width.
+    const coord_t stitch_distance =
+        bead_width_x - 1; // In 0-width contours, junctions can cause up to 1-line-width gaps. Don't stitch more than 1 line width.
 
     for (unsigned int wall_idx = 0; wall_idx < toolpaths.size(); wall_idx++) {
         VariableWidthLines& wall_lines = toolpaths[wall_idx];
 
         VariableWidthLines stitched_polylines;
         VariableWidthLines closed_polygons;
-        PolylineStitcher<VariableWidthLines, ExtrusionLine, ExtrusionJunction>::stitch(wall_lines, stitched_polylines, closed_polygons, stitch_distance);
+        // Connect touching pieces of a thin wall before bridging any gaps.
+        // Otherwise, starting at a shared endpoint can join the two free ends
+        // first, creating an out-and-back path which simplifies to one point.
+        // Regular walls and zero-width contours retain their existing stitch
+        // pass; no extrusion widths or short-line thresholds are changed.
+        const auto is_open_thin_wall = [](const ExtrusionLine& line) {
+            return line.is_odd && !line.is_closed && !line.empty() &&
+                   std::all_of(line.begin(), line.end(), [](const ExtrusionJunction& junction) { return junction.w > 0; });
+        };
+        if (connect_touching_first && std::count_if(wall_lines.begin(), wall_lines.end(), is_open_thin_wall) > 1) {
+            VariableWidthLines odd_lines;
+            for (const ExtrusionLine& line : wall_lines)
+                if (is_open_thin_wall(line))
+                    odd_lines.emplace_back(line);
+            VariableWidthLines connected;
+            VariableWidthLines closed;
+            // One scaled unit: only coincident endpoints are snapped. Do not
+            // turn the ordinary 0.01 mm snapping tolerance into a new gap.
+            PolylineStitcher<VariableWidthLines, ExtrusionLine, ExtrusionJunction>::stitch(odd_lines, connected, closed, 1, 1);
+            if (connected.size() + closed.size() < odd_lines.size()) {
+                wall_lines.erase(std::remove_if(wall_lines.begin(), wall_lines.end(), is_open_thin_wall), wall_lines.end());
+                for (auto& line : connected)
+                    wall_lines.emplace_back(std::move(line));
+                closed_polygons = std::move(closed);
+            }
+        }
+        PolylineStitcher<VariableWidthLines, ExtrusionLine, ExtrusionJunction>::stitch(wall_lines, stitched_polylines, closed_polygons,
+                                                                                       stitch_distance);
 #ifdef ARACHNE_STITCH_PATCH_DEBUG
         for (const ExtrusionLine& line : stitched_polylines) {
-            if ( ! line.is_odd && line.polylineLength() > 3 * stitch_distance && line.size() > 3) {
+            if (!line.is_odd && line.polylineLength() > 3 * stitch_distance && line.size() > 3) {
                 BOOST_LOG_TRIVIAL(error) << "Some even contour lines could not be closed into polygons!";
                 assert(false && "Some even contour lines could not be closed into polygons!");
                 BoundingBox aabb;

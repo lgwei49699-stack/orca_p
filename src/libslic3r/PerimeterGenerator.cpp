@@ -229,7 +229,8 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
     
     // Append thin walls to the nearest-neighbor search (only for first iteration)
     if (! thin_walls.empty()) {
-        variable_width(thin_walls, erExternalPerimeter, perimeter_generator.ext_perimeter_flow, coll.entities);
+        variable_width(thin_walls, erExternalPerimeter, perimeter_generator.ext_perimeter_flow, coll.entities,
+                       perimeter_generator.optimize_model_detail_paths);
         thin_walls.clear();
     }
     
@@ -1586,7 +1587,7 @@ void PerimeterGenerator::process_classic()
 
             if (! polylines.empty()) {
 				ExtrusionEntityCollection gap_fill;
-				variable_width(polylines, erGapFill, this->solid_infill_flow, gap_fill.entities);
+                variable_width(polylines, erGapFill, this->solid_infill_flow, gap_fill.entities, optimize_model_detail_paths);
                 /*  Make sure we don't infill narrow parts that are already gap-filled
                     (we only consider this surface's gaps to reduce the diff() complexity).
                     Growing actual extrusions ensures that gaps not filled by medial axis
@@ -2135,6 +2136,7 @@ void PerimeterGenerator::process_arachne()
                                                  : -float(ext_perimeter_width / 2. - ext_perimeter_spacing / 2.));
         
         Arachne::WallToolPathsParams input_params = Arachne::make_paths_params(this->model_layer_id(), *object_config, *print_config);
+        input_params.optimize_model_detail_paths  = optimize_model_detail_paths;
         // Set params is_top_or_bottom_layer for adjusting short-wall removal sensitivity.
         input_params.is_top_or_bottom_layer = (is_bottom_layer || is_topmost_layer) ? true : false;
 

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "fill",
-  "source_fingerprint": "sha256:c648ec3e7984de70c02e399e7075e9e74c439f9559f5a2a0ceab27c889080d0c",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助仅供模型建议，未传入Fill；密度、图案、搭墙延伸、顶底填充和GUI工艺控件均未改变，证据流程不生成填充。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。"
+  "source_fingerprint": "sha256:3f772cf936f883e5eefa6de378fe7190e46ed3b38d16e263b2a2af390f4e8624",
+  "reason": "2026-10-22Layer模型填充传递Print运行时选择，FillBase/Rectilinear/ConcentricInternal及两种Arachne同心入口显式消费。默认false恢复旧variable_width，未传入的支撑/筏层Fill也为false；不改密度/目标/过滤。关闭基线及开启候选同模型核查见实施记录。"
 }
 -->
 
@@ -20,6 +20,12 @@
 ## 核心流程
 
 LayerRegion 的表面分类和桥接结果进入 Fill；不同 pattern 生成多段线或可变线宽路径，再转换为挤出集合。同心填充和窄区实心填充会走 Arachne，填充不是独立于墙参数的完全封闭系统。
+
+两种Arachne同心填充共用[薄墙总退化恢复](walls.md#核心流程)，仅CLI显式`--optimize-model-detail-paths`才开启。Layer创建Fill时从Print复制默认false的运行时状态，再传入WallToolPathsParams及variable_width；普通CLI、GUI及其他未传入的Fill调用均保持关闭，不从报告开关或预设推断开启。仅开放正宽片段经简化全部消失时尝试重合端点优先重拼，仍执行原半线宽短线过滤；正常填充路径不重拼。
+
+显式开启优化时，补缝和可变宽实体填充经`variable_width`转换的末组与中间组一样，按每段两端宽度均值乘段长积分，分组上下界包含每段两端和共享接点宽度跳变。关闭时恢复原分组判据、上下界更新时机和末组起点积分，不在正常切片中使用本批修正。未扩展填充目标、改变密度、过滤或最小线宽；优化转换保留原拐点，插入点有整数舍入，后续原resolution简化可因分组变化选择不同中间点。
+
+开启时修正会影响名义覆盖面积与G-code的E；报表面积增减不代表实物优劣，也不能据极细线有正E断言稳定打印。应验证关闭与修正前基线一致、开启与先前优化候选一致，以及两种模式各自不受报告开关影响。既有候选的补缝/内部实体分段、几何偏差及适用模型身份见实施记录；这不是关闭模式的输出承诺。
 
 ## 配置与约束
 
