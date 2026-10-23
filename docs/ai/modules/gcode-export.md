@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gcode-export",
-  "source_fingerprint": "sha256:248fa26084f76d2284f7ab5b1ddc73841b45ef6200960f4e039cb53b4752afc6",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，只在模型检测组合解释；GCode/GCodeWriter、指令风格、速度流量、后处理及GUI导出路径未改，证据流程不输出G-code。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 复核GCode构造的collect_analysis仅传解析器，不修改写入器、速度/挤出/冷却/后处理。正文补默认false的内部导出边界，CLI40组指令/配置/统计严格等价，原GCode七项回归通过；GUI待用户兼容验证。 2026-10-22仅共享Print运行时模式选择上游模型路径；GCodeWriter/冷却/速度/导出后处理无差异。默认恢复原路径，显式开启才消费修正后分段与E，报告保持独立只读；真实模型指令/参数对照见实施记录。"
+  "source_fingerprint": "sha256:576162eacc7548ac6ffc3cded5594cd602102d93b8f5294828589094bf932675",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，只在模型检测组合解释；GCode/GCodeWriter、指令风格、速度流量、后处理及GUI导出路径未改，证据流程不输出G-code。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 复核GCode构造的collect_analysis仅传解析器，不修改写入器、速度/挤出/冷却/后处理。正文补默认false的内部导出边界，CLI40组指令/配置/统计严格等价，原GCode七项回归通过；GUI待用户兼容验证。 2026-10-22仅共享Print运行时模式选择上游模型路径；GCodeWriter/冷却/速度/导出后处理无差异。默认恢复原路径，显式开启才消费修正后分段与E，报告保持独立只读；真实模型指令/参数对照见实施记录。 2026-10-22复核新增CLI层高边界只改变显式计划的输入层；原G-code生成/后处理未改，新增验收在导出前。报告不改有效参数/执行指令的回归另记录。 2026-10-23仅collect_analysis显式开启时在既有循环汇总小轮廓选择，finalize后发布；原速度决策、路径、指令、GUI默认未改。正文区分选择值与最终输出，正/负命中及报告开关回归见质量策略记录。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。"
 }
 -->
 
@@ -23,6 +23,8 @@
 GCode 消费 Print 的层和挤出集合，协调工具顺序、接缝、回抽和空移；GCodeWriter 输出机器指令，CoolingBuffer/FanMover/PressureEqualizer 等进一步处理。配置块、缩略图和自定义起止代码随导出写入。
 
 `Print::export_gcode` 末尾的内部 `collect_analysis=false` 仅决定其 `GCode`/`GCodeProcessor` 是否额外收集报告统计；CLI显式报告传true，既有GUI和普通调用使用默认false。构造开关经过导出初始化的reset保持，普通估时/耗材与最终M73等后处理不依赖该统计，不改变打印参数或路径。没有新增用户配置，也不从模型/预设推断启用报告。
+
+显式采集时，`extrude_loop`复用既有路径遍历汇总小轮廓原生选中环数、普通非桥接墙路径数/长度及选择的速度范围；阈值仍按环周长判断，百分比仍相对外墙，普通内墙也使用该档。摘要在串行生成结束和处理器finalize后写入结果，不在并行后处理时共享修改计数。该证据位于首层/流量/冷却覆盖之前，不能把选择值当最终到达速度；不新增G-code标签、配置、扫描或速度重写。普通GUI/无报告CLI关闭采集，固定字段与分支仍有小量开销。
 
 `total_layer_count`、导出总层数与按层进度使用实际将输出的层组数：工具顺序建立后，以 `process_layer` 相同的“extruders 非空”条件计数，在展开启动代码前完成。复用 `collect_layers_to_print` 的真实层组与 Z 合并规则；逐层按全盘合并、逐对象按各对象实例数累加。不能只看模型层 `has_extrusions`，否则会漏掉支撑、筏层或擦料塔独占的层。空组仍留在原输出管线，不通过删层改变几何、冷却或已有空层检查；逐对象缓存层组，避免对每个副本重复收集/校验。
 

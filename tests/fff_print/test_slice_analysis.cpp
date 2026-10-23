@@ -134,7 +134,8 @@ TEST_CASE("Slice analysis empty data remains explicitly absent", "[SliceAnalysis
     const auto& gcode = report.at("gcode");
     REQUIRE(gcode.at("extruders").empty());
     REQUIRE(gcode.at("normal_estimate").at("layer_sequence_count") == 0);
-    REQUIRE(gcode.size() == 3);
+    REQUIRE(gcode.size() == 4);
+    REQUIRE(gcode.at("small_perimeter_selection").at("complete") == false);
     REQUIRE(gcode.at("quality_paths").at("rows").empty());
     REQUIRE(gcode.at("normal_estimate").size() == 2);
     REQUIRE_FALSE(report.at("limitations").empty());
@@ -2516,6 +2517,34 @@ TEST_CASE("Gcode flow-cap distance integrates triangle and trapezoid portions ra
     const auto mode = static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal);
     REQUIRE(result.print_statistics.modes[mode].time == original.print_statistics.modes[mode].time);
     REQUIRE(result.print_statistics.total_volumes_per_extruder == original.print_statistics.total_volumes_per_extruder);
+}
+
+TEST_CASE("Small perimeter selection remains distinct from final speed and survives result copy", "[SliceAnalysis][SmallPerimeterSelection]")
+{
+    Print print;
+    InitializedResult result;
+    const auto read = [&]() { return make_slice_analysis_report(print, result).at("gcode").at("small_perimeter_selection"); };
+    REQUIRE(read().at("complete") == false);
+    result.small_perimeter_selection.available = true;
+    REQUIRE(read().at("complete") == true);
+    REQUIRE(read().at("selected_loop_count") == 0);
+    REQUIRE(read().at("requested_speed_mm_s").at("min").is_null());
+    result.small_perimeter_selection = {true, 2, 3, 12., 15., 20.};
+    REQUIRE(read().at("selected_path_length_mm") == 12.);
+    REQUIRE(read().at("requested_speed_mm_s").at("min") == 15.);
+    REQUIRE(read().at("scope") == "native_small_perimeter_selection_before_speed_overrides");
+    InitializedResult copy;
+    static_cast<GCodeProcessorResult&>(copy) = result;
+    REQUIRE(copy.small_perimeter_selection.loop_count == 2);
+    copy.reset();
+    REQUIRE_FALSE(copy.small_perimeter_selection.available);
+    REQUIRE(copy.small_perimeter_selection.path_count == 0);
+    result.small_perimeter_selection.path_count = 1;
+    REQUIRE(read().at("complete") == false);
+    REQUIRE(read().at("selected_loop_count").is_null());
+    result.small_perimeter_selection.path_count = 3;
+    result.small_perimeter_selection.path_length_mm = std::numeric_limits<double>::infinity();
+    REQUIRE(read().at("complete") == false);
 }
 
 TEST_CASE("Quality path evidence separates actual roles and materials without counting travel or custom extrusion", "[SliceAnalysis]")

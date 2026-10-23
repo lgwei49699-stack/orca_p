@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-parameters",
-  "source_fingerprint": "sha256:1508c4163762e50f79be9c348181a41683d53271e3a4f278e0f46abc47a47606",
-  "reason": "合并云预设按机型隔离及三档旧标准名称兼容；共享Preset接口追加可选目录，默认调用和GUI参数联动不变。保留CLI默认关闭的repair_evidence/close_boundaries选项，它们不属于工艺键或对象覆盖，不新增Tab控件。合并构建/测试及GUI待验边界见主记录。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-22共享PrintConfig仅增加CLIMisc默认false开关，不进入PrintConfig/PrintObjectConfig或预设；按用户要求GUI无控件、无设置调用者，始终默认关闭。已有Tab/覆盖逻辑未改，正文无需变更，不宣称GUI已手测。"
+  "source_fingerprint": "sha256:d9cabe68d729aadea4f51afe2d93788a0aa7fdf89b2acaad59841397571cf83d",
+  "reason": "合并云预设按机型隔离及三档旧标准名称兼容；共享Preset接口追加可选目录，默认调用和GUI参数联动不变。保留CLI默认关闭的repair_evidence/close_boundaries选项，它们不属于工艺键或对象覆盖，不新增Tab控件。合并构建/测试及GUI待验边界见主记录。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-22共享PrintConfig仅增加CLIMisc默认false开关，不进入PrintConfig/PrintObjectConfig或预设；按用户要求GUI无控件、无设置调用者，始终默认关闭。已有Tab/覆盖逻辑未改，正文无需变更，不宣称GUI已手测。 2026-10-22复核新增min/max只在CLIMisc默认0，未加入Tab、机器参数或工艺保存，GUI仍调用旧adaptive重载；本模块正文无需改变，未声称GUI手测。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。"
 }
 -->
 

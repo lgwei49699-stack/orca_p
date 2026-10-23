@@ -194,6 +194,7 @@ public:
         m_silent_time_estimator_enabled(false),
         m_last_obj_copy(nullptr, Point(std::numeric_limits<coord_t>::max(), std::numeric_limits<coord_t>::max())),
         m_processor(collect_analysis),
+        m_collect_rule_analysis(collect_analysis),
         // BBS
         m_toolchange_count(0),
         m_nominal_z(0.)
@@ -609,6 +610,8 @@ private:
 
     // Processor
     GCodeProcessor m_processor;
+    const bool m_collect_rule_analysis;
+    GCodeProcessorResult::SmallPerimeterSelection m_small_perimeter_selection;
 
     //some post-processing on the file, with their data class
     std::unique_ptr<FanMover> m_fan_mover;

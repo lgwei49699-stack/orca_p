@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "slicing",
-  "source_fingerprint": "sha256:b12033068f40066b4358f3402b480f20f1b8dbf28784fed362c7b70e103d4143",
-  "reason": "共享原有Polygons到ExPolygons转换，一次切层同时得到诊断和有效区域；保留正常slice_mesh_ex参数语义，补模式/变换/孔洞/空层及实际PrintObject对照。将现有全空层异常检查移到brim首层访问前，避免空列表访问；预检不生成墙填充支撑或G-code。本次共享PrintConfig变化仅增加CLI repair_evidence_close_boundaries及证据帮助；已有直接重建依据时由模型检测工作流跳过预检，不更改本模块层高、区域构造、切片参数和GUI/CLI正常切片行为。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 10-19新增两个const Brim访问器仅暴露已有整板路径，未修改Print步骤、配置覆盖、缓存失效、筏层/模型首层规则；报告几何计算仍独立。普通入口与新报告入口的实际对照见本轮记录。 2026-10-19 复核Print.hpp/.cpp只给export_gcode增加末尾默认false的内部统计采集参数并构造GCode实例；Print::process/apply、层状态/路径和配置不变，正文补导出边界。LayerCount/PrintApplyCache和40CLI实际验证见本轮记录。 2026-10-22新增默认false、非持久化Print运行时模式及切换失效；LayerRegion和Layer Fill透传，原process/apply顺序与默认参数保持。GUI不启用，CLI只显式开启；关闭与修正前基线、模式切换缓存及开关报告的核查见实施记录。"
+  "source_fingerprint": "sha256:c61184ca1ad14a5f949a166686d58893218afb18ffdc4ac3f43e72284d78231e",
+  "reason": "2026-10-23本续轮显式bounded优先仅修末层，合法时保留所有先前层位；原5层分配为后备，不改普通/GUI/旧adaptive。11项1635断言与坡面G-code对照通过，原复杂模型同程序重复波动如实记录，见质量策略记录。 共享原有Polygons到ExPolygons转换，一次切层同时得到诊断和有效区域；保留正常slice_mesh_ex参数语义，补模式/变换/孔洞/空层及实际PrintObject对照。将现有全空层异常检查移到brim首层访问前，避免空列表访问；预检不生成墙填充支撑或G-code。本次共享PrintConfig变化仅增加CLI repair_evidence_close_boundaries及证据帮助；已有直接重建依据时由模型检测工作流跳过预检，不更改本模块层高、区域构造、切片参数和GUI/CLI正常切片行为。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 10-19新增两个const Brim访问器仅暴露已有整板路径，未修改Print步骤、配置覆盖、缓存失效、筏层/模型首层规则；报告几何计算仍独立。普通入口与新报告入口的实际对照见本轮记录。 2026-10-19 复核Print.hpp/.cpp只给export_gcode增加末尾默认false的内部统计采集参数并构造GCode实例；Print::process/apply、层状态/路径和配置不变，正文补导出边界。LayerCount/PrintApplyCache和40CLI实际验证见本轮记录。 2026-10-22新增默认false、非持久化Print运行时模式及切换失效；LayerRegion和Layer Fill透传，原process/apply顺序与默认参数保持。GUI不启用，CLI只显式开启；关闭与修正前基线、模式切换缓存及开关报告的核查见实施记录。 2026-10-22新增有界adaptive封装，复制参数求交并拒绝分层冲突；旧重载与默认算法未改。5项653断言通过，CLI另校验最终普通模型层，实物尚未验收。 2026-10-23仅显式bounded增加尾部受限顶高对齐，最多补1层且保留此前层位；旧adaptive/GUI不调用，普通切片对照和10项1375断言见本轮记录。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。"
 }
 -->
 
@@ -35,6 +35,10 @@ Print::apply 将 Model 和完整配置拆成 PrintObject／PrintRegion，检测�
 网格替换时可保留未改体积的边界缓存，但 `PartiallyValid` 也必须检验 `trafo_bboxes` 与当前实例变换的兼容性。Z 平移、Z 缩放或倾斜不兼容时，在当前 apply 中清除旧体积边界/层区并用新变换生成；不能先用旧坐标切片、下一次无改动刷新才失效。原有允许绕 Z 旋转等兼容变换的缓存复用规则保留。
 
 ## 配置与约束
+
+`layer_height_profile_adaptive_bounded` 是CLI显式选用的新封装：复制 `SlicingParameters`，将上下界与机器范围求交后调用原自适应算法；固定首层保留，普通曲线点在生成/平滑后限于计划内，冲突的自定义分层高度拒绝。它不修改原参数对象，也不改既有adaptive重载或GUI调用者。CLI在实际层生成后额外验收，不能把曲线点合规当作末端实际层必然合规；精确Z对齐若越界，导出前失败。见[本轮验证](../validation/2026-10-22-bounded-quality-policy.md)，不将软件边界等同实物质量保证。
+
+2026-10-23显式bounded生成后增加 `layer_height_profile_align_top_bounded`：用实际消费者的原机器参数生成层位，在机器/策略交集内使名义顶部对齐模型高度。优先只调整末层：新高度合法且相邻跳变不增大超过原跳变/原生步长时，其他层位全部保留；否则在末5个普通层内按容量分配，原5层容量不足时最多增加1层。这样避免可单层修正时无谓移动此前有效截面；并不保证末截面可生成路径。不移动窗口以前层位、不更改固定首层，不提高上限或取消原有坡度细化。饱和层不重复分摊；不可行、短模型、筏层、非固定首层或显式自定义分层保留原计划。重编码步进曲线的Z坐标保持未补偿口径，层高为实际毫米。只增加显式bounded路径的一次层计划遍历，不重复扫描三角网格；旧adaptive、普通CLI、GUI和原生precise_z_height逻辑均不改。顶部一致不是顶部实物质量、全截面特征保留或更短打印时间的证明；支撑和顶壳可能随新层位变化，不能声称整份G-code不变。坡面回归、原模型重复切片波动及当前构建身份见同一验证记录。
 
 `Print::set_model_detail_path_optimization`是仅CLI显式设置的运行时选择，初值false，不参加持久配置或对象覆盖。切换值先按现有状态锁和取消机制使全部对象/Print步骤失效，再发布新值，防止重用另一模式的路径/表面；重复设置同值不失效。LayerRegion把它传至PerimeterGenerator，Layer填充入口把它传至Fill，两者继续使用原执行顺序。GUI没有调用者，默认关闭；CLI开启时拒绝load/export-slicedata，不改变普通缓存流程。只读报告不能更改此状态。
 

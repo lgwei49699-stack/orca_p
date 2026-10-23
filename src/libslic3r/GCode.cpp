@@ -1591,6 +1591,7 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
     std::string path_tmp(path);
     path_tmp += ".tmp";
 
+    m_small_perimeter_selection = {};
     m_processor.initialize(path_tmp);
     m_processor.set_print(print);
     GCodeOutputStream file(boost::nowide::fopen(path_tmp.c_str(), "wb"), m_processor);
@@ -1680,6 +1681,12 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
     }
 
     m_processor.finalize(true);
+    // The serial generation stage has finished. Publish its compact selection
+    // evidence separately from finalized motion/flow observations.
+    if (m_collect_rule_analysis) {
+        m_small_perimeter_selection.available = true;
+        m_processor.result().small_perimeter_selection = m_small_perimeter_selection;
+    }
 //    DoExport::update_print_estimated_times_stats(m_processor, print->m_print_statistics);
     DoExport::update_print_estimated_stats(m_processor, m_writer.extruders(), print->m_print_statistics, print->config());
     if (result != nullptr) {
@@ -5072,13 +5079,26 @@ std::string GCode::extrude_loop(ExtrusionLoop loop, std::string description, dou
     m_multi_flow_segment_path_average_mm3_per_mm = 0;
     double weighted_sum_mm3_per_mm = 0.0;
     double total_multipath_length = 0.0;
+    bool selected_small_perimeter = false;
     for (const ExtrusionPath& path : paths) {
         if(!path.is_force_no_extrusion()){
             double path_length = unscale<double>(path.length()); //path length in mm
             weighted_sum_mm3_per_mm += path.mm3_per_mm * path_length;
             total_multipath_length += path_length;
+            if (m_collect_rule_analysis && small_peri_speed > 0 && is_perimeter(path.role()) &&
+                !is_bridge(path.role()) && path.mm3_per_mm > 0 && path_length > 0) {
+                selected_small_perimeter = true;
+                ++m_small_perimeter_selection.path_count;
+                m_small_perimeter_selection.path_length_mm += path_length;
+                m_small_perimeter_selection.min_speed_mm_s =
+                    std::min(m_small_perimeter_selection.min_speed_mm_s, small_peri_speed);
+                m_small_perimeter_selection.max_speed_mm_s =
+                    std::max(m_small_perimeter_selection.max_speed_mm_s, small_peri_speed);
+            }
         }
     }
+    if (selected_small_perimeter)
+        ++m_small_perimeter_selection.loop_count;
     if (total_multipath_length > 0.0)
         m_multi_flow_segment_path_average_mm3_per_mm = weighted_sum_mm3_per_mm / total_multipath_length;
     // Orca: end of multipath average mm3_per_mm value calculation

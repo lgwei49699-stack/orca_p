@@ -87,6 +87,7 @@
 #include "libslic3r/Orient.hpp"
 
 #include "OrcaSlicer.hpp"
+#include "CLIRegionalLayerPlan.hpp"
     // BBS: add exception handler for win32
 #include <wx/stdpaths.h>
 #ifdef WIN32
@@ -132,10 +133,20 @@ static std::vector<coordf_t> cli_generate_variable_layer_height_profile(
     float quality_speed,
     bool smooth,
     unsigned int smoothing_radius,
-    bool keep_min)
+    bool keep_min,
+    double minimum_height,
+    double maximum_height)
 {
     if (print_object.instances().empty() || print_object.instances().front().model_instance == nullptr)
         throw std::runtime_error("Cannot generate a variable layer height profile without a printable instance.");
+
+    if (minimum_height > 0) {
+        const HeightProfileSmoothingParams smoothing_params(smoothing_radius, keep_min);
+        return layer_height_profile_adaptive_bounded(
+            print_object.slicing_parameters(), *print_object.model_object(),
+            *print_object.instances().front().model_instance, quality_speed, minimum_height, maximum_height,
+            smooth ? &smoothing_params : nullptr);
+    }
 
     std::vector<coordf_t> profile = layer_height_profile_adaptive(
         print_object.slicing_parameters(),
@@ -1637,13 +1648,55 @@ int CLI::run(int argc, char **argv)
     const unsigned int variable_layer_height_smoothing_radius =
         unsigned(m_config.opt_int("variable_layer_height_smoothing_radius"));
     const bool variable_layer_height_keep_min = m_config.opt_bool("variable_layer_height_keep_min");
+    const double variable_layer_height_min = m_config.opt_float("variable_layer_height_min");
+    const double variable_layer_height_max = m_config.opt_float("variable_layer_height_max");
+    if (!std::isfinite(variable_layer_height_min) || !std::isfinite(variable_layer_height_max) ||
+        ((variable_layer_height_min != 0 || variable_layer_height_max != 0) &&
+         (variable_layer_height_mode != CLIVariableLayerHeightMode::Adaptive || variable_layer_height_min <= 0 ||
+          variable_layer_height_max < variable_layer_height_min || std::count(m_actions.begin(), m_actions.end(), "slice") != 1 ||
+          std::find(m_actions.begin(), m_actions.end(), "export_slicedata") != m_actions.end()))) {
+        const std::string message = "Adaptive bounds require --slice, adaptive mode and 0 < min <= max, without sliced-data cache export; "
+                                    "omit both to use machine limits.";
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        return CLI_INVALID_PARAMS;
+    }
     const bool variable_layer_height_changes_profile =
         variable_layer_height_mode != CLIVariableLayerHeightMode::Preserve;
 
-    if (variable_layer_height_changes_profile &&
-        std::find(m_actions.begin(), m_actions.end(), "load_slicedata") != m_actions.end()) {
-        const std::string message =
-            "--variable-layer-height-mode adaptive/reset cannot be combined with --load-slicedata because cached layers may use a different layer-height profile.";
+    std::optional<CLIRegionalLayerPlan> regional_layer_plan;
+    if (std::any_of(m_model_cli_specs.begin(), m_model_cli_specs.end(),
+                    [](const ModelCliSpec& spec) { return spec.layer_height_plan.has_value(); })) {
+        try {
+            const std::set<std::string> allowed_transforms =
+                {"model",         "model_position",          "model_scale",   "model_rotate", "model_process",
+                 "model_support", "model_layer_height_plan", "ensure_on_bed", "arrange",      "auto_plate"};
+            const std::set<std::string> allowed_actions = {"slice", "export_3mf", "export_model_transforms"};
+            CLIRegionalLayerPlan::require(m_input_files.size() == 1 && m_model_cli_specs.size() == 1 &&
+                                              boost::algorithm::iends_with(m_input_files.front(), ".stl") &&
+                                              std::count(m_actions.begin(), m_actions.end(), "slice") == 1 &&
+                                              std::all_of(m_actions.begin(), m_actions.end(),
+                                                          [&](const auto& key) { return allowed_actions.count(key); }) &&
+                                              std::all_of(m_transforms.begin(), m_transforms.end(),
+                                                          [&](const auto& key) { return allowed_transforms.count(key); }) &&
+                                              !variable_layer_height_changes_profile && m_config.opt_bool("ensure_on_bed") &&
+                                              m_config.opt_int("arrange") == 0 && m_config.opt_int("auto_plate") == 0 &&
+                                              !m_config.opt_bool("auto_repair_model") && m_config.opt_string("repair_model").empty() &&
+                                              m_config.opt_string("load_assemble_list").empty(),
+                                          "requires one fixed-pose STL slice without repair, global transforms, adaptive mode or cache");
+            regional_layer_plan = CLIRegionalLayerPlan::read(*m_model_cli_specs.front().layer_height_plan);
+            CLIRegionalLayerPlan::require(model_mesh_file_sha256(m_input_files.front()) == regional_layer_plan->model_sha256,
+                                          "source model SHA256 mismatch before loading");
+        } catch (const std::exception& ex) {
+            boost::nowide::cerr << ex.what() << std::endl;
+            record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, ex.what(), sliced_info);
+            return CLI_INVALID_PARAMS;
+        }
+    }
+
+    if (variable_layer_height_changes_profile && std::find(m_actions.begin(), m_actions.end(), "load_slicedata") != m_actions.end()) {
+        const std::string message = "--variable-layer-height-mode adaptive/reset cannot be combined with --load-slicedata because cached "
+                                    "layers may use a different layer-height profile.";
         BOOST_LOG_TRIVIAL(error) << message;
         boost::nowide::cerr << message << std::endl;
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
@@ -2787,6 +2840,14 @@ int CLI::run(int argc, char **argv)
                             }
                         }
                     }
+                }
+            }
+            if (regional_layer_plan) {
+                try {
+                    regional_layer_plan->apply(model);
+                } catch (const std::exception& ex) {
+                    record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, ex.what(), sliced_info);
+                    flush_and_exit(CLI_INVALID_PARAMS);
                 }
             }
             if (is_bbl_3mf)
@@ -5349,7 +5410,7 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature_initial_layer = " << m_config.opt_float("cli_nozzle_temperature_initial_layer");
         } else if (opt_key == "model" || opt_key == "model_filaments" || opt_key == "model_arrange_group" || opt_key == "model_color" ||
                    opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" ||
-                   opt_key == "model_process" || opt_key == "thumbnail_image") {
+                   opt_key == "model_process" || opt_key == "model_layer_height_plan" || opt_key == "thumbnail_image") {
             BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
             boost::nowide::cerr << "error: option not implemented yet: " << opt_key << std::endl;
@@ -7577,6 +7638,16 @@ int CLI::run(int argc, char **argv)
                         }
                         print->apply(model, new_print_config);
 
+                        if (regional_layer_plan) {
+                            try {
+                                CLIRegionalLayerPlan::require(print_fff != nullptr, "requires FFF slicing");
+                                regional_layer_plan->validate(*print_fff);
+                            } catch (const std::exception& ex) {
+                                record_exit_reson(outfile_dir, CLI_VALIDATE_ERROR, index + 1, ex.what(), sliced_info);
+                                flush_and_exit(CLI_VALIDATE_ERROR);
+                            }
+                        }
+
                         if (variable_layer_height_changes_profile) {
                             std::map<int, std::pair<std::string, std::vector<coordf_t>>> generated_profiles;
                             std::set<int> active_object_ids;
@@ -7599,7 +7670,9 @@ int CLI::run(int argc, char **argv)
                                             variable_layer_height_quality_speed,
                                             variable_layer_height_smooth,
                                             variable_layer_height_smoothing_radius,
-                                            variable_layer_height_keep_min);
+                                            variable_layer_height_keep_min,
+                                            variable_layer_height_min,
+                                            variable_layer_height_max);
 
                                         auto existing_profile = generated_profiles.find(object_id);
                                         if (existing_profile == generated_profiles.end()) {
@@ -7794,6 +7867,25 @@ int CLI::run(int argc, char **argv)
                                 }
                                 if (printer_technology == ptFFF) {
                                     const auto print_objects = print_fff->objects();
+                                    if (regional_layer_plan)
+                                        regional_layer_plan->validate_layers(*print_fff);
+                                    // Check actual generated layers, not just profile points. Native
+                                    // precise-Z alignment may redistribute the final few layer heights.
+                                    // Reject before exporting rather than silently violating an explicit plan.
+                                    if (variable_layer_height_min > 0) {
+                                        for (const PrintObject* object : print_objects) {
+                                            for (size_t layer_index = 1; layer_index < object->layers().size(); ++layer_index) {
+                                                const double height = object->layers()[layer_index]->height;
+                                                if (!std::isfinite(height) || height < variable_layer_height_min - EPSILON ||
+                                                    height > variable_layer_height_max + EPSILON) {
+                                                    const std::string message = "Generated model layers exceed the explicit adaptive bounds; "
+                                                        "check custom ranges and precise Z height alignment.";
+                                                    record_exit_reson(outfile_dir, CLI_VALIDATE_ERROR, index + 1, message, sliced_info);
+                                                    flush_and_exit(CLI_VALIDATE_ERROR);
+                                                }
+                                            }
+                                        }
+                                    }
                                     if (cgal_repair_requested &&
                                         std::none_of(print_objects.begin(), print_objects.end(),
                                                      [](const PrintObject* object) { return object->layer_count() > 0; })) {
@@ -8848,7 +8940,7 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
     ModelCliSpec *current = nullptr;
 
     const std::set<std::string> model_keys = {"model",       "model-filaments", "model-arrange-group", "model-color",  "model-position",
-                                              "model-scale", "model-rotate",    "model-support",       "model-process"};
+                                              "model-scale", "model-rotate",    "model-support",       "model-process", "model-layer-height-plan"};
 
     for (int i = 1; i < argc; ++i) {
         std::string token = argv[i];
@@ -8896,6 +8988,7 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
         else if (token == "model-rotate") target = &current->rotation;
         else if (token == "model-support") target = &current->support;
         else if (token == "model-process") target = &current->process;
+        else if (token == "model-layer-height-plan") target = &current->layer_height_plan;
 
         if (target != nullptr && target->has_value()) {
             boost::nowide::cerr << "Duplicate --" << token << " for model " << current->model_token << std::endl;

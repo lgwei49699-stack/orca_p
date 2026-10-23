@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:d0e133b88cc05e5d079ead9f68cd7d4072d5f2422fe3f5e5f7811b3ef30c9095",
-  "reason": "合并云导入预设的gfd-cloud机器子目录、保存/重载与三档旧名称兼容，默认save_current_preset调用保持原公共目录。保留CLI专用默认关闭的repair_evidence/close_boundaries选项，不把其纳入机器/耗材/工艺配置。正文补存储边界，合并后验证见主记录。 10-17 仅CLI misc新增默认关闭model_stage_report及默认空model_reference，不属于工艺/机器/耗材参数，未新增GUI面板或配置覆盖。 10-18 CLIMiscConfigDef仅新增默认false的slice_analysis_report，不加入有效打印参数、预设持久化或GUI面板；既有默认值和覆盖规则未改。 2026-10-22仅CLIMisc新增optimize_model_detail_paths=false，不加入PrintConfig/PrintObjectConfig、预设和工程持久化；GUI按用户要求默认关闭。原云预设、资源默认值及覆盖规则保留，正文补运行时边界。"
+  "source_fingerprint": "sha256:b0f214684e130416625de3e3b796ef0e1aed76c07e1ff47abaa085acc972fb35",
+  "reason": "合并云导入预设的gfd-cloud机器子目录、保存/重载与三档旧名称兼容，默认save_current_preset调用保持原公共目录。保留CLI专用默认关闭的repair_evidence/close_boundaries选项，不把其纳入机器/耗材/工艺配置。正文补存储边界，合并后验证见主记录。 10-17 仅CLI misc新增默认关闭model_stage_report及默认空model_reference，不属于工艺/机器/耗材参数，未新增GUI面板或配置覆盖。 10-18 CLIMiscConfigDef仅新增默认false的slice_analysis_report，不加入有效打印参数、预设持久化或GUI面板；既有默认值和覆盖规则未改。 2026-10-22仅CLIMisc新增optimize_model_detail_paths=false，不加入PrintConfig/PrintObjectConfig、预设和工程持久化；GUI按用户要求默认关闭。原云预设、资源默认值及覆盖规则保留，正文补运行时边界。 2026-10-22仅CLIMisc新增variable_layer_height_min/max默认0，未改PrintConfig/PrintObjectConfig有效配置、资源或持久化；正文补显式计划边界。 2026-10-23仅在CLITransform注册默认空的model_layer_height_plan及英文/简中帮助，非普通打印配置，不改预设继承/默认值或GUI面板；CLI契约与回归见进展记录。"
 }
 -->
 
@@ -32,6 +32,8 @@
 `PresetUpdater::sync` 获取更新，`config_update` 处理安装及通知；重新加载前检查未保存预设。AppConfig 保存应用偏好／启用选择，PrintConfig 描述打印参数，两者不是同一份配置。
 
 ## 配置与约束
+
+`variable_layer_height_min/max`仅属于CLIMisc，默认0，不是机型/耗材能力标定、不写入工艺/机器/项目配置。显式非零时与adaptive切片配对，原机型上下界仍约束生成器；GUI不新增控件或调用。普通CLI、省略参数的旧adaptive调用与资源默认值不变，实际验收见[质量策略记录](../validation/2026-10-22-bounded-quality-policy.md)。
 
 `optimize_model_detail_paths`仅加入CLIMiscConfigDef，默认false，不进入PrintConfig/PrintObjectConfig、工艺或机料预设、对象覆盖及工程持久化。CLI显式开启后写入本次Print运行时状态；GUI按用户要求不接入，始终默认关闭。它独立于`slice_analysis_report`，需要切片动作且开启时拒绝无模式身份的切片缓存导入/导出；旧调用不受该限制。没有修改既有配置默认值或资源预设。
 

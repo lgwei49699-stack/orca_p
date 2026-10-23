@@ -675,6 +675,7 @@ void GCodeProcessorResult::reset() {
     normal_estimated_peak_flow_available = false;
     normal_estimated_peak_flow.clear();
     normal_estimated_flow_cap_distance.clear();
+    small_perimeter_selection = {};
     printable_area = Pointfs();
     //BBS: add bed exclude area
     bed_exclude_area = Pointfs();
@@ -707,6 +708,7 @@ void GCodeProcessorResult::reset() {
     normal_estimated_peak_flow_available = false;
     normal_estimated_peak_flow.clear();
     normal_estimated_flow_cap_distance.clear();
+    small_perimeter_selection = {};
     lines_ends.clear();
     printable_area = Pointfs();
     //BBS: add bed exclude area

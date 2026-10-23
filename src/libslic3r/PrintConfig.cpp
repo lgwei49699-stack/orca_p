@@ -8262,6 +8262,13 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli_params = "process_json";
     def->set_default_value(new ConfigOptionStrings());
 
+    def             = this->add("model_layer_height_plan", coStrings);
+    def->label      = L("Model Layer Height Plan");
+    def->tooltip    = L("Explicit regional layer-height plan JSON for a fixed-pose STL model. Omit to preserve normal slicing.");
+    def->cli        = "model-layer-height-plan";
+    def->cli_params = "plan_json";
+    def->set_default_value(new ConfigOptionStrings());
+
     /*def = this->add("split", coBool);
     def->label = L("Split");
     def->tooltip = L("Detect unconnected parts in the given model(s) and split them into separate objects.");
@@ -8340,6 +8347,20 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->min = 0.0;
     def->max = 1.0;
     def->set_default_value(new ConfigOptionFloat(0.5));
+
+    def = this->add("variable_layer_height_min", coFloat);
+    def->label = L("Minimum adaptive layer height (CLI only)");
+    def->tooltip = L("Explicit adaptive lower bound in mm. Set together with the upper bound; 0 keeps machine limits. The first layer is retained.");
+    def->cli = "variable-layer-height-min";
+    def->min = 0;
+    def->set_default_value(new ConfigOptionFloat(0));
+
+    def = this->add("variable_layer_height_max", coFloat);
+    def->label = L("Maximum adaptive layer height (CLI only)");
+    def->tooltip = L("Explicit adaptive upper bound in mm. Set together with the lower bound; 0 keeps machine limits. The first layer is retained.");
+    def->cli = "variable-layer-height-max";
+    def->min = 0;
+    def->set_default_value(new ConfigOptionFloat(0));
 
     def = this->add("variable_layer_height_smooth", coBool);
     def->label = L("Smooth Variable Layer Height");

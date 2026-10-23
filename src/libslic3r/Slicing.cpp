@@ -349,6 +349,161 @@ std::vector<coordf_t> layer_height_profile_from_ranges(
    	return layer_height_profile;
 }
 
+std::vector<double> layer_height_profile_adaptive_bounded(const SlicingParameters&            slicing_params,
+                                                          const ModelObject&                  object,
+                                                          const ModelInstance&                instance,
+                                                          float                               quality_factor,
+                                                          double                              minimum_height,
+                                                          double                              maximum_height,
+                                                          const HeightProfileSmoothingParams* smoothing)
+{
+    if (!std::isfinite(quality_factor) || quality_factor < 0 || quality_factor > 1 || !std::isfinite(minimum_height) ||
+        !std::isfinite(maximum_height) || minimum_height <= 0 || maximum_height < minimum_height)
+        throw std::invalid_argument("Invalid bounded adaptive layer height plan.");
+
+    SlicingParameters bounded = slicing_params;
+    bounded.min_layer_height  = std::max(slicing_params.min_layer_height, minimum_height);
+    bounded.max_layer_height  = std::min(slicing_params.max_layer_height, maximum_height);
+    if (bounded.min_layer_height > bounded.max_layer_height)
+        throw std::invalid_argument("Adaptive layer height bounds do not intersect the machine limits.");
+    bounded.layer_height = std::clamp(bounded.layer_height, bounded.min_layer_height, bounded.max_layer_height);
+    for (const auto& [range, options] : object.layer_config_ranges) {
+        if (range.second < bounded.first_object_layer_height || range.first > bounded.object_print_z_uncompensated_height())
+            continue;
+        const double height = options.opt_float("layer_height");
+        if (!std::isfinite(height) || height < bounded.min_layer_height || height > bounded.max_layer_height)
+            throw std::invalid_argument("A custom layer height range conflicts with the adaptive bounds.");
+    }
+
+    auto profile = layer_height_profile_adaptive(bounded, object, instance, quality_factor);
+    // The native adjacent-height step may initially lie outside the requested
+    // interval when the retained first layer is taller/shorter than that interval.
+    const size_t first_regular_height  = bounded.first_object_layer_height_fixed() ? 5 : 3;
+    auto         clamp_regular_heights = [&]() {
+        for (size_t i = first_regular_height; i < profile.size(); i += 2)
+            profile[i] = std::clamp(profile[i], bounded.min_layer_height, bounded.max_layer_height);
+    };
+    clamp_regular_heights();
+    if (smoothing != nullptr) {
+        profile = smooth_height_profile(profile, bounded, *smoothing);
+        clamp_regular_heights();
+    }
+    // Do not redistribute explicitly configured layer ranges. Native precise-Z
+    // remains a separate user setting; ordinary/GUI adaptive callers are untouched.
+    return object.layer_config_ranges.empty() ?
+               layer_height_profile_align_top_bounded(slicing_params, profile, bounded.min_layer_height, bounded.max_layer_height) :
+               profile;
+}
+
+std::vector<double> layer_height_profile_align_top_bounded(const SlicingParameters&   slicing_params,
+                                                           const std::vector<double>& profile,
+                                                           double                     minimum_height,
+                                                           double                     maximum_height)
+{
+    constexpr size_t tail_layers = 5; // Same local extent as native precise Z.
+    constexpr double tolerance   = 1e-8;
+    const double     scale       = slicing_params.object_shrinkage_compensation_z;
+    if (!std::isfinite(minimum_height) || !std::isfinite(maximum_height) || minimum_height <= 0 || maximum_height < minimum_height ||
+        !std::isfinite(scale) || scale <= 0)
+        throw std::invalid_argument("Invalid bounded top alignment limits.");
+    minimum_height = std::max(minimum_height, slicing_params.min_layer_height);
+    maximum_height = std::min(maximum_height, slicing_params.max_layer_height);
+    if (minimum_height > maximum_height)
+        throw std::invalid_argument("Bounded top alignment limits do not intersect the machine limits.");
+    if (profile.empty() || slicing_params.has_raft() || !slicing_params.first_object_layer_height_fixed())
+        return profile;
+
+    // Use the actual consumer's machine parameters, not the adaptive generator's
+    // narrowed copy: its interpolation samples depend on min_layer_height.
+    auto layers = generate_object_layers(slicing_params, profile, false);
+    if (layers.size() < (tail_layers + 1) * 2)
+        return profile;
+    const double target    = slicing_params.object_print_z_height();
+    double       remaining = target - layers.back();
+    if (std::abs(remaining) <= tolerance)
+        return profile;
+    const size_t first       = layers.size() - tail_layers * 2;
+    const double tail_height = target - layers[first];
+    if (tail_height < tail_layers * minimum_height - tolerance)
+        return profile;
+
+    std::vector<double> heights(tail_layers);
+    for (size_t i = 0; i < tail_layers; ++i) {
+        heights[i] = layers[first + i * 2 + 1] - layers[first + i * 2];
+        if (heights[i] < minimum_height - tolerance || heights[i] > maximum_height + tolerance)
+            return profile;
+    }
+    // Prefer correcting only the terminal layer. Redistributing a small top
+    // offset over five layers needlessly moves four valid source sections and
+    // can lower the last printable path on a taper. This is still a layer-plan
+    // constraint, not proof that the terminal section produces an extrusion.
+    const double terminal_height = target - layers[layers.size() - 2];
+    const double previous_height = heights[tail_layers - 2];
+    const double terminal_jump   = std::max(std::abs(heights.back() - previous_height), LAYER_HEIGHT_CHANGE_STEP);
+    if (terminal_height >= minimum_height - tolerance && terminal_height <= maximum_height + tolerance &&
+        std::abs(terminal_height - previous_height) <= terminal_jump + tolerance) {
+        heights.back() = std::clamp(terminal_height, minimum_height, maximum_height);
+        remaining -= heights.back() - (layers.back() - layers[layers.size() - 2]);
+    }
+    // If the five layers are already near their maximum, add at most one layer
+    // INSIDE the same tail window. Never move the body or remove a sampled layer
+    // to force alignment. A narrow/constant interval may still be infeasible.
+    if (tail_height > tail_layers * maximum_height + tolerance) {
+        if (tail_height < (tail_layers + 1) * minimum_height - tolerance || tail_height > (tail_layers + 1) * maximum_height + tolerance)
+            return profile;
+        heights.push_back(minimum_height);
+        remaining -= minimum_height;
+    }
+    // Water-fill only layers with remaining capacity; a saturated layer must
+    // never be moved again by a later redistribution pass.
+    for (size_t pass = 0; pass <= heights.size() && std::abs(remaining) > tolerance; ++pass) {
+        size_t active = 0;
+        for (double height : heights)
+            if (remaining > 0 ? height < maximum_height : height > minimum_height)
+                ++active;
+        if (active == 0)
+            return profile;
+        const double share   = remaining / active;
+        double       applied = 0;
+        for (double& height : heights) {
+            const double next = std::clamp(height + share, minimum_height, maximum_height);
+            applied += next - height;
+            height = next;
+        }
+        remaining -= applied;
+    }
+    if (std::abs(remaining) > tolerance)
+        return profile;
+    for (size_t i = 0; i < heights.size(); ++i) {
+        const size_t index = first + i * 2;
+        if (index <= 2) // Retained first-layer transition is allowed to differ.
+            continue;
+        const double previous = i == 0 ? layers[index - 1] - layers[index - 2] : heights[i - 1];
+        const double old_jump = i < tail_layers ? std::abs((layers[index + 1] - layers[index]) - (layers[index - 1] - layers[index - 2])) :
+                                                  0.;
+        if (std::abs(heights[i] - previous) > std::max(old_jump, LAYER_HEIGHT_CHANGE_STEP) + tolerance)
+            return profile;
+    }
+    layers.resize(first + heights.size() * 2);
+    for (size_t i = 0; i < heights.size(); ++i) {
+        if (i != 0)
+            layers[first + i * 2] = layers[first + i * 2 - 1];
+        layers[first + i * 2 + 1] = layers[first + i * 2] + heights[i];
+    }
+    layers.back() = target;
+
+    // Freeze the already generated body layers, then encode the changed tail as
+    // constant-height intervals. Duplicate Z points denote a step, as in native
+    // range profiles. Coordinates are uncompensated; heights stay physical mm.
+    std::vector<double> aligned;
+    aligned.reserve(layers.size() * 2);
+    for (size_t i = 0; i < layers.size(); i += 2) {
+        const double height = layers[i + 1] - layers[i];
+        aligned.insert(aligned.end(), {layers[i] / scale, height, layers[i + 1] / scale, height});
+    }
+    return aligned;
+}
+
 // Based on the work of @platsch.
 // Fill layer_height_profile by heights ensuring a prescribed maximum cusp height.
 // The profile Z coordinates are expressed in uncompensated model coordinates.

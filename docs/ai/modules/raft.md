@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "raft",
-  "source_fingerprint": "sha256:e87242dc5dd5def7dea10c402aa4e9d96b2d610f9a842393c4191b54eed45c72",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入RaftPlan/RaftGeometry/RaftMerge；筏层分块、平滑、气隙、阶段参数和GUI筏层面板均未改变。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 本轮共享Print.cpp差异只在export_gcode传递报告统计开关，不改Raft计划、首层参数、合并/分块及气隙；正文无需调整，既有G-code/筏层导出回归和CLI场景结果见本轮记录，不宣称GUI/实印已验。 2026-10-22新增CLI模型路径运行时选择，未改RaftPlan/Geometry/Merge或阶段参数，筏层Fill不设置新选择，默认false。Print模式切换清缓存，不复用跨模式切片数据；普通模式的筏层流程不改，正文无需调整。"
+  "source_fingerprint": "sha256:0e149d71e80f6ef14ee63697e7d9d2ce478dcb310c809246c1832a0230082f84",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入RaftPlan/RaftGeometry/RaftMerge；筏层分块、平滑、气隙、阶段参数和GUI筏层面板均未改变。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 本轮共享Print.cpp差异只在export_gcode传递报告统计开关，不改Raft计划、首层参数、合并/分块及气隙；正文无需调整，既有G-code/筏层导出回归和CLI场景结果见本轮记录，不宣称GUI/实印已验。 2026-10-22新增CLI模型路径运行时选择，未改RaftPlan/Geometry/Merge或阶段参数，筏层Fill不设置新选择，默认false。Print模式切换清缓存，不复用跨模式切片数据；普通模式的筏层流程不改，正文无需调整。 2026-10-22复核新增CLI边界不改筏层参数与计划；有界封装保留固定首模型层，默认筏层调用不变。未声称本批覆盖所有筏层实际场景。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。"
 }
 -->
 

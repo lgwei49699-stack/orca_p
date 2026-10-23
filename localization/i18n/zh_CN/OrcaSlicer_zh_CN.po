@@ -4340,6 +4340,18 @@ msgstr "可变层高"
 msgid "Adaptive"
 msgstr "自适应"
 
+msgid "Minimum adaptive layer height (CLI only)"
+msgstr "最小自适应层高（仅命令行）"
+
+msgid "Maximum adaptive layer height (CLI only)"
+msgstr "最大自适应层高（仅命令行）"
+
+msgid "Explicit adaptive lower bound in mm. Set together with the upper bound; 0 keeps machine limits. The first layer is retained."
+msgstr "自适应层高下限（毫米），必须与上限一起设置；0 表示沿用机器范围。保留首层高度。"
+
+msgid "Explicit adaptive upper bound in mm. Set together with the lower bound; 0 keeps machine limits. The first layer is retained."
+msgstr "自适应层高上限（毫米），必须与下限一起设置；0 表示沿用机器范围。保留首层高度。"
+
 msgid "Quality / Speed"
 msgstr "细节/速度"
 
@@ -19932,3 +19944,11 @@ msgstr "切片指标报告需要本次生成的 G-code 统计。"
 #: src/OrcaSlicer.cpp
 msgid "Slice analysis failed; the generated G-code has been retained."
 msgstr "切片指标报告生成失败，已生成的 G-code 已保留。"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Model Layer Height Plan"
+msgstr "模型局部层高计划"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Explicit regional layer-height plan JSON for a fixed-pose STL model. Omit to preserve normal slicing."
+msgstr "用于固定姿态 STL 模型的显式局部层高计划 JSON。省略时保持普通切片行为。"

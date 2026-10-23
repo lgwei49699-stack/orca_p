@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "fill",
-  "source_fingerprint": "sha256:3f772cf936f883e5eefa6de378fe7190e46ed3b38d16e263b2a2af390f4e8624",
-  "reason": "2026-10-22Layer模型填充传递Print运行时选择，FillBase/Rectilinear/ConcentricInternal及两种Arachne同心入口显式消费。默认false恢复旧variable_width，未传入的支撑/筏层Fill也为false；不改密度/目标/过滤。关闭基线及开启候选同模型核查见实施记录。"
+  "source_fingerprint": "sha256:bd5b6bbc10ceef4be13aa62bd99841590baac5d9cb117c513d7677744a623b48",
+  "reason": "2026-10-22Layer模型填充传递Print运行时选择，FillBase/Rectilinear/ConcentricInternal及两种Arachne同心入口显式消费。默认false恢复旧variable_width，未传入的支撑/筏层Fill也为false；不改密度/目标/过滤。关闭基线及开启候选同模型核查见实施记录。 2026-10-22复核共享配置新增项仅CLI层高边界，未改填充/补缝参数或算法；显式变层高使用原填充流程，默认调用不变。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。"
 }
 -->
 

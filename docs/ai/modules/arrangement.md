@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "arrangement",
-  "source_fingerprint": "sha256:68d9393e92b51a70ba3db7baaa70139e2c6870a4534b1eef0b66e30549a4a2c7",
-  "reason": "合并master的CLI复制对象ID映射及单/多盘JSON边界，PartPlate几何、数量和GUI ArrangeJob算法未改；保留feature默认关闭的报告参数，其不参与摆盘配置。核对最终盘成员刷新和真实床面状态与报告按盘输出的衔接；实际回归及GUI待验见本轮记录。 2026-10-22共享PrintConfig新增项仅在CLIMisc，Print运行时选择只在CLI取盘后传给模型路径。未改Arrange、PartPlate分盘/摆放或既有参数；默认false不改变原位置与盘选择。固定位置/多盘回归见实施记录。"
+  "source_fingerprint": "sha256:6c63ac585575fa424855514e0bac6f2b01229f514568e3012909a9a13cfeb7e4",
+  "reason": "合并master的CLI复制对象ID映射及单/多盘JSON边界，PartPlate几何、数量和GUI ArrangeJob算法未改；保留feature默认关闭的报告参数，其不参与摆盘配置。核对最终盘成员刷新和真实床面状态与报告按盘输出的衔接；实际回归及GUI待验见本轮记录。 2026-10-22共享PrintConfig新增项仅在CLIMisc，Print运行时选择只在CLI取盘后传给模型路径。未改Arrange、PartPlate分盘/摆放或既有参数；默认false不改变原位置与盘选择。保留本模块其他已有文档改动，固定位置/多盘回归见实施记录。 2026-10-22复核PrintConfig新增键仅CLI层高边界，未改变摆盘输入/算法/机型默认值；边界在摆盘后生成层时生效，普通分盘不变。保留本模块其他在途记录。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。"
 }
 -->
 
