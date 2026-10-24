@@ -9,6 +9,7 @@
 #include "libslic3r/Slicing.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/miniz_extension.hpp"
+#include "slic3r/Utils/GFDCloudPreset.hpp"
 
 #include <boost/filesystem/operations.hpp>
 #include <nlohmann/json.hpp>
@@ -17,6 +18,7 @@
 #include <array>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <stdexcept>
 
 using namespace Slic3r;
@@ -434,6 +436,63 @@ std::string required_feature_namespace_declaration()
 }
 
 } // namespace
+
+TEST_CASE("Cloud process imports the same effective values from full and delta 3MF presets", "[3mf][EPONE][GFDCloud][CloudProcess]")
+{
+    const bool full_embedded_preset = GENERATE(false, true);
+    CAPTURE(full_embedded_preset);
+    const std::map<std::string, std::string> expected      = {{"line_width", "0.42"},
+                                                              {"initial_layer_line_width", "0.5"},
+                                                              {"outer_wall_line_width", "0.45"},
+                                                              {"inner_wall_line_width", "0.42"},
+                                                              {"top_surface_line_width", "0.45"},
+                                                              {"sparse_infill_line_width", "0.42"},
+                                                              {"internal_solid_infill_line_width", "0.42"},
+                                                              {"support_line_width", "0.4"},
+                                                              {"initial_layer_print_height", "0.24"},
+                                                              {"support_type", "tree(auto)"},
+                                                              {"enable_support", "1"},
+                                                              {"sparse_infill_density", "15%"}};
+    DynamicPrintConfig                       stored_config = DynamicPrintConfig::full_print_config();
+    for (const auto& [key, value] : expected)
+        stored_config.set_deserialize_strict(key, value);
+
+    Preset embedded(Preset::TYPE_PRINT, "EPONE cloud tree 15%", false);
+    embedded.is_project_embedded = true;
+    stored_config.set_deserialize_strict("print_settings_id", embedded.name);
+    if (full_embedded_preset)
+        embedded.config.apply_only(stored_config, Preset::print_options());
+    embedded.config.set_deserialize_strict("inherits", "0.20mm Standard @EPONE");
+    embedded.config.set_deserialize_strict("print_settings_id", embedded.name);
+    embedded.config.set_deserialize_strict("outer_wall_line_width", "0.45");
+    embedded.config.set_deserialize_strict("enable_support", "1");
+    embedded.config.set_deserialize_strict("sparse_infill_density", "15%");
+    attach_enum_vector_serialization_maps(embedded.config);
+
+    Temporary3mfPath archive("orca-cloud-effective-process");
+    REQUIRE(store_bbs_project(archive.path(), stored_config, nullptr, {&embedded}));
+
+    DynamicPrintConfig        loaded_config;
+    BbsLoadArtifacts          artifacts;
+    ConfigSubstitutionContext substitutions{ForwardCompatibilitySubstitutionRule::Enable};
+    bool                      is_bbl_3mf = false;
+    Semver                    file_version;
+    // Use cloud import's BBS parser and flags, with isolated scratch storage.
+    // No system parents or real user presets are loaded.
+    Model                loaded;
+    ModelBackupPathGuard backup_path_guard(loaded);
+    REQUIRE(load_bbs_3mf(archive.path().c_str(), &loaded_config, &substitutions, &loaded, &artifacts.plates, &artifacts.presets,
+                        &is_bbl_3mf, &file_version, nullptr, LoadStrategy::LoadConfig | LoadStrategy::CheckVersion));
+    REQUIRE(artifacts.presets.size() == 1);
+    REQUIRE(artifacts.presets.front()->name == embedded.name);
+    CHECK(artifacts.presets.front()->config.has("support_type") == full_embedded_preset);
+    Preset::normalize(loaded_config);
+    const auto effective = GFD::cloud_process_config(loaded_config, &artifacts.presets.front()->config);
+    for (const auto& [key, value] : expected) {
+        INFO(key);
+        CHECK(effective.opt_serialize(key) == value);
+    }
+}
 
 SCENARIO("Reading 3mf file", "[3mf]") {
     GIVEN("umlauts in the path of the file") {

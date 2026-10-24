@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:0582495ef4a3435c2fbcd36a5e299916fe564f81a8ea78c9c84470d19f8fdbc4",
-  "reason": "master未发布版本2.3.2.3-Release保留，Linux AppImage发布前在既有真实切片回归后增加单/多盘JSON及3MF对照，复用切片脚本的独立参数，并总是保存分盘证据。当前仅Mac最小构建及本地测试通过，工作流静态核对，未触发Linux发布或部署。本次归并复核确认旧Linux未提交发布检查已完整包含，保留该分支已提交的打包差异；仅澄清当前版本和历史版本叙述，构建源码及指纹未变。"
+  "source_fingerprint": "sha256:58940affa9e5e3308f2fb378c5c236cb31bcff6b4f4c7aeca02855110d51a1c5",
+  "reason": "现有 GUI 源清单登记 GFDCloudPreset.hpp，无新目标/依赖/开关；回归仍编入 libslic3r_tests，master 的独立缓存重新构建，记录见 EPONE 云导入文档。"
 }
 -->
 
@@ -86,6 +86,8 @@ Apple ld 的重复库告警通过链接器探测后才关闭，不重排或删�
 Windows GFD 设备选择的循环辅助实现注册在 `src/slic3r/CMakeLists.txt`，仍编入现有 GUI 库。`SLIC3R_GUI_TESTS=ON` 额外注册独立 `gfd_modal_dialog_tests`，仅编译辅助实现并链接 wx core/base；不为测试链接整套切片／云端业务。该开关默认关闭，运行需交互桌面。`.gitattributes` 仅为本次两个 Windows 诊断 CMD 固定 `eol=crlf`，保证同步代码后的启动器换行格式，不改变其他文件的检出规则。
 
 ## 修改与验证
+
+`GFDCloudPreset.hpp` 登记到现有 GUI 源清单；工艺合成没有 GUI 依赖，EPONE 和真实 3MF 回归编入已有 `libslic3r_tests`。无新增构建目标/依赖，当前 master 的应用/测试构建身份见 [EPONE 记录](../validation/2026-10-24-epone-cloud-preset-roundtrip.md)。
 
 `test_macos_build_compatibility.py` 以小型原生 Mach-O 测构建入口、缓存、校验工具、双架构与签名，
 并实际探测 CMake 告警选项；替换昂贵的源码/应用构建，不把夹具通过视为完整应用各架构验收。

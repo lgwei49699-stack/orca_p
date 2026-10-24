@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:79a47384b6c5fc1a7c8084d4a0f7c74f9c3af5e40ff28febad25ff6f44dbdd16",
-  "reason": "合并云导入预设的gfd-cloud机器子目录、保存/重载与三档旧名称兼容，默认save_current_preset调用保持原公共目录。保留CLI专用默认关闭的repair_evidence/close_boundaries选项，不把其纳入机器/耗材/工艺配置。正文补存储边界，合并后验证见主记录。"
+  "source_fingerprint": "sha256:484e8a3177007d6b5b182791c8ce68d274b11750da25544546d8776e3124e459",
+  "reason": "云工艺改为工程有效值优先、缺键回退嵌入值；补充配置来源正文，测试覆盖显式零/百分比和隔离目录保存重载。PresetCollection 和系统资源默认值未改。"
 }
 -->
 
@@ -34,6 +34,8 @@
 ## 配置与约束
 
 父项提供基础、子项显式值覆盖；机器／耗材／工艺及模型覆盖由不同阶段合成。renamed_from 是旧名称迁移别名，不是当前默认耗材选择。资源版本变化也不等于已覆盖用户本地参数。
+
+云端导入工艺以工程有效快照恢复继承值和未保存编辑，仅快照缺键时回退到嵌入工艺；不依赖接收端父预设版本来重算已保存的工程值。普通预设继承/默认值没有修改，`save_current_preset` 和机器子目录继续承担持久化。回归覆盖差量/全量 3MF 解析以及新建/替换/另存后重载，见 [EPONE 记录](../validation/2026-10-24-epone-cloud-preset-roundtrip.md)。
 
 ## 失败与取消
 

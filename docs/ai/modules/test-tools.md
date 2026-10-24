@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:f6aedb670a12bd1b29e9729794914bfdcb2603346bfce4ab7f89349c8fd99d25",
-  "reason": "新增薄片及盘外有效姿态回归，以排布前实际3MF作几何参照，逐点核对原旋转、缩放、镜像、自动定向和全局变换。混合正常对象、显式单盘及省略模式均有对照，JSON开关始终核对实际3MF一致；保留原154次回归，新增30次调用。"
+  "source_fingerprint": "sha256:643026ce34bc247e7d44fe919a05f05ee7ca388e1bae97e0d99c907ef17a1c30",
+  "reason": "扩展 EPONE 云工艺合成/持久化测试，新增通过真实3MF写入与云解析入口验证差量/全量一致的测试；使用临时归档和预设目录，不连接云端或写真实预设。"
 }
 -->
 
@@ -89,6 +89,8 @@ Windows GUI 采集脚本使用 PowerShell 5.1 与内嵌 C# P/Invoke，默认延�
 固定位置脚本追加已有3MF与新增STL/OBJ混合、单盘/多盘、盘内/完全越界/部分越界及显式盘号，成功时三个对象必须均有实际挤出路径。分盘脚本追加全局旋转/缩放/三轴组合、per-model叠加、自动定向、切片及repetitions复制；用JSON重建源顶点并与3MF实际顶点逐点比对，不仅检查包围盒或退出码。不同对象已有不同volume旋转时各自验证；无法用rotation+scale表达的剪切应明确拒绝，而不导出JSON时仍可保存3MF。格式层新增 `[PlateReferences]`，范围与失败语义见[格式模块](formats.md)。
 
 ## 修改与验证
+
+`[CloudProcess]` 覆盖工程有效工艺优先、显式零/百分比、缺项回退及保存后重载；另通过真实 3MF 写入/读取验证差量和全量嵌入工艺产生一致结果。测试隔离用户目录，云端网络与替换/另存弹窗仍需 GUI 验证；本次结果见 [EPONE 记录](../validation/2026-10-24-epone-cloud-preset-roundtrip.md)。
 
 `scripts/test_cli_fixed_position_slice.py` 自带机器／工艺／耗材和小型 STL/OBJ，使用独立目录执行真实 CLI，
 不下载输入、不使用用户配置、不构建或打印。核对退出码、结果 JSON、实际 G-code 挤出指令，

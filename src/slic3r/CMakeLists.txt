@@ -552,6 +552,7 @@ set(SLIC3R_GUI_SOURCES
     Utils/GFDConfig.cpp
     Utils/GFDConfig.hpp
     Utils/GFDCloudConfig.hpp
+    Utils/GFDCloudPreset.hpp
     Utils/HexFile.cpp
     Utils/HexFile.hpp
     Utils/Http.cpp

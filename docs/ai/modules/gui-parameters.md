@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-parameters",
-  "source_fingerprint": "sha256:07a0e3694974585f4744ea4b498a0917bdcf567c772300db6806451651d37975",
-  "reason": "合并云预设按机型隔离及三档旧标准名称兼容；共享Preset接口追加可选目录，默认调用和GUI参数联动不变。保留CLI默认关闭的repair_evidence/close_boundaries选项，它们不属于工艺键或对象覆盖，不新增Tab控件。合并构建/测试及GUI待验边界见主记录。"
+  "source_fingerprint": "sha256:5d016248694efda9c98510050102339c838fe543469dd74c4b78ea8117cfac8f",
+  "reason": "云导入从工程有效快照恢复线宽/支撑值，Tab 控件、单位、对象覆盖及导入后选择规则不变；配置来源说明由云模块承接。"
 }
 -->
 
