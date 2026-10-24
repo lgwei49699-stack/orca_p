@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model-repair",
-  "source_fingerprint": "sha256:1c3dc94481e512f38798ca6b13ce9e54787024aa27ba3f6f7e2682abe10cf203",
-  "reason": "本次仅调整macOS可选运行库准备目录、构建RPATH及本地打包说明；编译时身份记录签名后的最终库内容，运行校验不弱化。默认AlphaWrap、GUI入口、修复算法和CLI参数保持；不包含工作区模型阶段报告改动。平台配置测试不等于Windows/Linux原生运行验收。"
+  "source_fingerprint": "sha256:170de5b8f3eeea25b8b13ee07ad567dbbc137432a2379964ad974517ceee4e4a",
+  "reason": "默认时钟 lambda 使用完整 std::chrono::steady_clock 名称，修复 MSVC 对类内 Clock 别名的解析失败；补充跨平台编译约束及验证记录。时钟类型、注入接口、GUI/CLI 入口和预算语义均不变；诊断阶段最小 MSVC 对照已通过，按用户要求完整应用由用户编译。"
 }
 -->
 
@@ -33,6 +33,8 @@
 Orca CLI → 当前进程后台线程 → 内部 C++20 静态适配库的 `rebuildMesh` → CGAL 复检/比较/回变换/凸包 → 独立目录的 STL 与报告。适配接口只传普通数组/标量/报告字符串，SDK类型不泄漏到Orca；有界内存STL维持原加载语义（每面50字节＋84字节），无中间文件或IPC。关闭加载telemetry，记录跳面/复制顶点和实际参数；加载漏面拒绝。MR网格/临时转换缓冲先离开作用域，再进行独立复检；库内部缓存可能驻留。最终STL回读逐三角形精确比较，不能以SDK成功替代网格验收。
 
 复用重建独占槽、私有输入及选项快照。`InProcessReconstructionControl` 由调用线程每20ms采样进程RSS、截止时间与取消；SDK回调只读原子停止状态，不调用GUI/外部回调。先做有溢出/体素网格范围检查的启发式准入估算，未知RSS失败关闭；估算不是峰值上界，采样预算也不是硬内存限制。SDK取消、CGAL/凸包阶段检查共享预算，不重置时钟；不可中断阶段可能延迟取消。任何回调异常先取消并join，不detach、不在主进程使用WorkerGuard/RLIMIT/kill。同进程无法隔离SDK崩溃。旧Alpha Wrap进程监督保持；已移除不再使用的嵌套sidecar累计RSS选项。
+
+默认时钟回调直接使用 `std::chrono::steady_clock::now()`，避免 MSVC 14.44 在构造函数默认参数的 lambda 中无法解析类内 `Clock` 别名；时钟类型、注入接口及超时规则不变。该头文件在关闭 MeshLib 时仍参与主程序构建，验证范围见 [Windows 编译修复记录](../validation/2026-10-24-msvc-reconstruction-clock.md)。
 
 MeshLib报告保留 `model_reconstruction_v1`，增加 backend/sdk_version、输入/候选SHA256、`engine.sdk`原报告、输入缺陷、独立输出复检和分阶段耗时；`execution`记录同进程PID、非硬超时/无崩溃隔离，`admission`及`resource_limits`记录估算、预算模式和观测峰值RSS。SDK身份哈希不是原生代码沙箱。双向距离复用AlphaWrap的同一有界采样函数，只作偏差告警，不是最大误差证明。候选通过仍需确认间隙、薄壁和独立部件，`shape_confirmation=not_confirmed`、`print_ready=false`、`applied=false`。不按“只留最大部件”或样本专用阈值删除碎片，不硬编码7部件；Q对照79,400面/7部件包含额外删壳，不是无删除后端必达值。无效/取消/超时结果不导出成功STL，原件保留。
 
