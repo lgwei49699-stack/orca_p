@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "support",
-  "source_fingerprint": "sha256:aff2a7a269e5341bef6143b777ed5b4430ce19fdead660fb87051111d5c64396",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不被SupportMaterial/TreeSupport消费；支撑阈值、间隙、悬空告警和GUI支撑设置保持，证据流程不生成支撑路径。"
+  "source_fingerprint": "sha256:0701cf3ab8487650975fecb9e8baedb0a22731aa5c3a1892157cfb54bb393908",
+  "reason": "复核 SupportCommon 的 ZigZag 局部坐标修复：包括无墙、带墙和最后接触层；恢复原包围盒及输出坐标，Rectilinear 和模型采样不变。正文补充生成规则及 GUI/CLI 交接。"
 }
 -->
 
@@ -22,6 +22,11 @@
 ## 核心流程
 
 PrintObject::generate_support_material 根据支撑类型分派普通和树状实现。普通生成接触、界面和中间支撑层，树状／有机路径构建节点、体积及工具路径；SupportCommon 汇合公共层和路径处理。
+
+CuraV1 中间／顶部的 ZigZag 在 `fill_expolygon_generate_paths` 中使用垫层包围盒中心作为共同原点，
+生成后将路径移回并恢复填充器包围盒。所有岛和层使用同一参考系，覆盖有墙填充和最后接触层；
+避免模型部分薄片被采样忽略后，偏心垫层漏掉整层或只剩局部扫描线。Rectilinear、旧版垫层和
+模型填充不走该转换，已居中的 RaftMerge 路径不重复偏移。首层采样、物理 Z、气隙与告警规则保持。
 
 未启用支撑时的 `TreeSupport::detect_overhangs(true)` 用于告警。仅在周长墙和填充均已完成时，对无下层承托的几何尖尾候选追加实际挤出线宽覆盖检查：perimeters/fills（含 GapFill）完全无交集才排除。小面积本身不豁免；中心线在外但线宽相交仍告警。路径未完成时保留几何判断，支撑生成的 `false` 调用不做这项筛选，不能借此声称网格形状或打印可行性通过。
 
@@ -42,6 +47,9 @@ PrintObject::generate_support_material 根据支撑类型分派普通和树状�
 支撑类型切换、普通 Grid/Snug、树状／有机／混合树都要覆盖。测试应同时核对普通支撑保留、筏层边界和重切缓存，而非只检查分块看得见。
 
 现有测试/工具范围：`tests/fff_print/test_support_material.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+`[OffsetFill]` 以双薄片构造实际偏心垫层，检查五层路径、覆盖范围／面积与床面边界；
+GUI／CLI 共享入口、真实任务对照及 GUI 待验见[偏心垫层修复](../validation/2026-10-25-cura-raft-offset-fill.md)。
 
 `[FloatingWarning]` 覆盖无挤出微区、真实周长墙、GapFill、实际线宽相交；龙模型优化前后同有效配置运动命令一致。全量支撑旧用例的摆放夹具异常与新专项结果分列，见[验证记录](../validation/2026-10-04-smart-print-engine.md#2026-10-07-悬空微区与切片包导出修正)，不将失败抹成全量通过。
 

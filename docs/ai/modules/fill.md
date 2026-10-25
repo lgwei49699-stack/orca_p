@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "fill",
-  "source_fingerprint": "sha256:9ede2086525ca15bd11131eb22b70891d46af00bc116bddf040defc42d23baa5",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助仅供模型建议，未传入Fill；密度、图案、搭墙延伸、顶底填充和GUI工艺控件均未改变，证据流程不生成填充。"
+  "source_fingerprint": "sha256:4808fd0471d6c2890d28ddfd352552a3a25e7c11d48c77fe7496d537fc7e0a19",
+  "reason": "本轮只修改支撑调用侧 ZigZag 的坐标系；FillRectilinear 通用实现、模型填充、增强路径的搭墙延伸限制未变。复核新增覆盖面积断言，正文明确两项修复相互独立。"
 }
 -->
 
@@ -28,6 +28,10 @@ FillRectilinear 默认在折返内轮廓与外侧扫描轮廓之间保留搭墙�
 无墙 ZigZag 设置为 0.001 mm，使凹口附近扫描线也在安全中心线域内，避免生成后裁断。
 模型填充、普通支撑、有墙筏层及关闭增强的旧路径不启用此限制。
 
+另一个独立的坐标问题由 SupportCommon 调用侧处理：偏心 CuraV1 ZigZag 区域先以垫层包围盒
+中心为原点填充，再把路径移回。此转换包含普通未分块、有墙填充及最后接触层；不修改
+FillRectilinear 的通用算法或模型填充，也不改变上述增强模式的安全裁剪设置。
+
 密度、间距、角度、线宽、连接及实心／稀疏角色一起决定结果；模型坐标与 pattern 原点要稳定。no_sort 集合表达保序意图，下游不能扁平化后任意重排。
 
 当前分支可检索的配置键：`sparse_infill_pattern`、`sparse_infill_density`、`internal_solid_infill_pattern`、`top_surface_pattern`、`bottom_surface_pattern`、`infill_direction`。定义与默认值集中于 PrintConfig；实际生效仍要读取对象覆盖后的值。
@@ -41,6 +45,8 @@ FillRectilinear 默认在折返内轮廓与外侧扫描轮廓之间保留搭墙�
 修改 pattern 应覆盖实心、稀疏、带孔、窄区、旋转、多层方向和短线。与墙共同验证两种同心路径及首层／其他层最小线宽。
 
 现有测试/工具范围：`tests/fff_print/test_fill.cpp`；`tests/fff_print/test_extrusion_entity.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+垫层调用侧坐标修复、真实任务 CLI 与 GUI 待验步骤见[偏心垫层修复](../validation/2026-10-25-cura-raft-offset-fill.md)。
 
 `test_support_material.cpp` 的 `[EndpointOverlap]` 使用捕获的阶梯轮廓验证四个方向、两种线宽/密度、
 原模式能复现裁断、限制后裁剪前后逐点不变、流量属性保持及恢复原模式输出。

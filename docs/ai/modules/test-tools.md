@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:643026ce34bc247e7d44fe919a05f05ee7ca388e1bae97e0d99c907ef17a1c30",
-  "reason": "扩展 EPONE 云工艺合成/持久化测试，新增通过真实3MF写入与云解析入口验证差量/全量一致的测试；使用临时归档和预设目录，不连接云端或写真实预设。"
+  "source_fingerprint": "sha256:d7dc8eeff45ade7c385811970dbaa0634964f8ac2b2be324ff6998cc9bb28faf",
+  "reason": "在现有 fff_print_tests 添加 OffsetFill 合成模型回归，16 组参数检查五层路径、覆盖范围/面积和床面边界；无新测试目标、依赖或外部夹具。正文链接修复前后证据及 GUI 交接。"
 }
 -->
 
@@ -128,6 +128,11 @@ Windows GUI 采集在 2026-10-09 收到同事现场 JSON：64 位 Windows PowerS
 打包子进程 PATH 中的 spctl/xattr/sudo
 替身记录调用并失败，要求没有调用记录，防止把说明命令变成自动操作；不实际关闭 Gatekeeper，
 不把内容及签名完整性检查当成目标系统的首次启动放行验证。
+
+筏层 `[OffsetFill]` 在同一测试目标中用两个长方体合成 0.10／0.25 mm 双薄片，覆盖普通／树状、
+有墙／无墙、正反偏心及分块开关，共 16 组参数；逐层检查物理 Z、路径覆盖范围／面积和床面边界。
+未修复核心确有失败，修复后与完整筏层专项、真实任务 CLI 结果及 GUI 待验步骤见
+[10-25 修复记录](../validation/2026-10-25-cura-raft-offset-fill.md)。不添加依赖、目标或私有模型夹具。
 
 筏层 `[EndpointOverlap]` 使用 `tests/data/raft_geometry/benchy-stepped-raft.json` 捕获轮廓，
 不依赖完整用户 3MF 或本机路径。先证明旧搭墙延伸会被安全裁断，再检查限制后的路径、

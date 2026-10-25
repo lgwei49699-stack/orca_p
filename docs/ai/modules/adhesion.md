@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "adhesion",
-  "source_fingerprint": "sha256:29c271c32bb3276afcc9fe307ab07e30dbe489623e068d58b581486ab8b59226",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助只控制建议，未接入make_brim或Skirt；附着类型、宽度、间隙、绘制耳朵和GUI附着设置保持。"
+  "source_fingerprint": "sha256:8d06b1a2734d63d2ce0161374e116bf669e7a89fcd16bec5437050eb321234df",
+  "reason": "指纹变化来自共享 test_support_material.cpp 新增 OffsetFill 双薄片回归；Brim/Skirt 源码及配置未改，原床面裁剪断言复用。复核无需调整附着业务正文，相关既有用例纳入筏层专项。"
 }
 -->
 

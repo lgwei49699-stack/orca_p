@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "raft",
-  "source_fingerprint": "sha256:13117dd1dd3c7f40a94e74871b45b047a78c54ab1d5da1f14c803bb5d81c6ea5",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入RaftPlan/RaftGeometry/RaftMerge；筏层分块、平滑、气隙、阶段参数和GUI筏层面板均未改变。"
+  "source_fingerprint": "sha256:ceb41eda44f61f0aac5790c88bce3cce2489e123013ae3a5dab34f217ce15ba6",
+  "reason": "复核普通 CuraV1 与 RaftMerge 调用：偏心区域由 SupportCommon 居中，已居中合并路径不变；层数、气隙、分块裁剪和告警保持。新增 OffsetFill 回归，正文记录范围与验证。"
 }
 -->
 
@@ -27,6 +27,10 @@ GUI“筏层”配置与 CLI 加载工艺/对象覆盖后的有效配置均经 `
 
 RaftPlan 将基底／中间／顶部三个阶段解析成物理层的 Z、厚度、间距、流量、速度和风扇参数。RaftAngleResolver 根据模型首层底面方向选择顶部角度，没有唯一方向时使用稳定回退值；普通支撑生成端消费计划。
 
+单对象未合并／未分块路径也通过 SupportCommon 的 ZigZag 局部坐标处理，保证偏离对象原点的
+中间／顶部区域能够完整填充，最后接触层同样处理。既有 RaftMerge 已居中，输出不再增加位移；
+基底 Rectilinear、层计划与空层检查保持。模型高度低于首层采样面造成的薄片漏切不属于本项修复。
+
 ## 配置与约束
 
 传统筏层和 CuraV1 走不同配置解释；总层数、气隙和起始层重叠共同决定模型抬升，不能把模型首层高度直接当筏层基底高度。分块和轮廓平滑是两个独立能力，是否存在必须看本分支说明。
@@ -42,6 +46,9 @@ RaftPlan 将基底／中间／顶部三个阶段解析成物理层的 Z、厚度
 验证按阶段检查实际线宽、挤出覆盖、空移／跨缝、边界和普通支撑。模型路径应单独比较，筏层改变导致总时长变化不证明模型改变。实机跨缝可靠性仍由模型师验证。
 
 现有测试/工具范围：`tests/fff_print/test_support_material.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+偏心双薄片 `[OffsetFill]`、完整筏层专项和左右上角真实任务 CLI 结果，及重切／预览的 GUI 交接，
+见[10-25 修复记录](../validation/2026-10-25-cura-raft-offset-fill.md)。
 
 ## 分支现状
 

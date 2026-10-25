@@ -484,6 +484,82 @@ TEST_CASE("SlicingParameters characterizes the legacy three-layer raft layout", 
     }
 }
 
+TEST_CASE("Cura V1 fills every raft layer beneath an off-centre surviving thin plate", "[SupportMaterial][Raft][CuraV1][OffsetFill]")
+{
+    const auto support_type = GENERATE(stNormalAuto, stTreeAuto);
+    const int  walls        = GENERATE(0, 1);
+    const bool mirrored     = GENERATE(false, true);
+    const bool segmented    = GENERATE(false, true);
+    CAPTURE(support_type, walls, mirrored, segmented);
+
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("support_type", new ConfigOptionEnum<SupportType>(support_type));
+    config.set_key_value("support_style", new ConfigOptionEnum<SupportMaterialStyle>(smsDefault));
+    config.set("initial_layer_print_height", 0.24);
+    config.set("raft_layers", 0);
+    config.set("raft_base_layers", 1);
+    config.set("raft_interface_layers", 2);
+    config.set("raft_surface_layers", 2);
+    config.set("raft_base_layer_height", 0.32);
+    config.set("raft_interface_layer_height", 0.3);
+    config.set("raft_surface_layer_height", 0.2);
+    config.set("raft_surface_line_width", 0.8);
+    config.set("raft_surface_line_spacing", 0.);
+    config.set("raft_interface_wall_count", walls);
+    config.set("raft_surface_wall_count", walls);
+    config.set("raft_airgap", 0.22);
+    config.set("raft_segmented", segmented);
+    config.set("raft_chunk_size", 15.);
+
+    // One STL/object with two distant sheets: the 0.10 mm sheet disappears at
+    // the 0.12 mm sampling plane, leaving the raft far from the object origin.
+    TriangleMesh mesh  = make_cube(30., 30., 0.10);
+    TriangleMesh thick = make_cube(30., 30., 0.25);
+    mesh.translate(0.5f, 1.5f, 0.f);
+    thick.translate(69.5f, 69.5f, 0.f);
+    mesh.merge(thick);
+    mesh.translate(-50.f, -50.f, 0.f);
+    if (mirrored)
+        mesh.rotate_z(float(M_PI));
+    Model        model;
+    ModelObject* object = model.add_object();
+    object->name        = "offset thin plates";
+    object->add_volume(std::move(mesh));
+    object->add_instance()->set_offset(Vec3d(50., 50., 0.));
+    object->ensure_on_bed();
+
+    Print print;
+    process_raft_bed_test(print, model, config);
+    const PrintObject& printed = *print.objects().front();
+    REQUIRE(printed.layers().size() == 1);
+    REQUIRE(printed.layers().front()->lslices.size() == 1);
+    REQUIRE(printed.layers().front()->print_z == Approx(1.78));
+    REQUIRE(printed.support_layers().size() == 5);
+    const std::array<double, 5> expected_z{0.32, 0.62, 0.92, 1.12, 1.32};
+    for (size_t i = 0; i < expected_z.size(); ++i) {
+        const SupportLayer& layer = *printed.support_layers()[i];
+        CAPTURE(i, layer.print_z);
+        REQUIRE(layer.print_z == Approx(expected_z[i]));
+        REQUIRE(layer.has_extrusions());
+        const Polygons    coverage = layer.support_fills.polygons_covered_by_width();
+        const BoundingBox paths    = get_extents(coverage);
+        const BoundingBox area     = get_extents(layer.raft_outline);
+        // A nonempty perimeter or a few clipped hatch lines are not enough:
+        // the deposited paths must reach both sides of the raft footprint.
+        REQUIRE(paths.defined);
+        REQUIRE(paths.min.x() <= area.min.x() + scale_(2.));
+        REQUIRE(paths.min.y() <= area.min.y() + scale_(2.));
+        REQUIRE(paths.max.x() >= area.max.x() - scale_(2.));
+        REQUIRE(paths.max.y() >= area.max.y() - scale_(2.));
+        if (i > 0) {
+            // Walls alone can span the outline while the hatch is still gone.
+            const double covered_area = Slic3r::area(intersection_ex(coverage, to_polygons(layer.raft_outline)));
+            REQUIRE(covered_area >= (i < 3 ? 0.5 : 0.7) * Slic3r::area(layer.raft_outline));
+        }
+    }
+    require_raft_inside_bed(print);
+}
+
 TEST_CASE("Cura V1 raft plan preserves the three physical phases", "[SupportMaterial][Raft][CuraV1]")
 {
     ConfigOptionEnum<RaftMode> serialized_mode(RaftMode::CuraV1);

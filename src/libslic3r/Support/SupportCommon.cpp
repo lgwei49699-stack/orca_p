@@ -658,22 +658,34 @@ SupportGeneratorLayersPtr generate_raft_base(
     return raft_layers;
 }
 
-static inline void fill_expolygon_generate_paths(
-    ExtrusionEntitiesPtr    &dst,
-    ExPolygon              &&expolygon,
-    Fill                    *filler,
-    const FillParams        &fill_params,
-    float                    density,
-    ExtrusionRole            role,
-    const Flow              &flow,
-    double                   flow_ratio = 1.)
+static inline void fill_expolygon_generate_paths(ExtrusionEntitiesPtr& dst,
+                                                 ExPolygon&&           expolygon,
+                                                 Fill*                 filler,
+                                                 const FillParams&     fill_params,
+                                                 float                 density,
+                                                 ExtrusionRole         role,
+                                                 const Flow&           flow,
+                                                 double                flow_ratio = 1.)
 {
     Surface surface(stInternal, std::move(expolygon));
+    // CuraV1 Interface/Surface use ZigZag, whose rotation envelope assumes a
+    // bounding box centred on the origin. Use one common raft-local frame for
+    // every island/layer, including the final contact layer and walled infill.
+    const BoundingBox fill_bounds = filler->bounding_box;
+    const Point       fill_origin = fill_params.pattern == ipZigZag && fill_bounds.defined ? fill_bounds.center() : Point(0, 0);
+    if (fill_origin != Point(0, 0)) {
+        surface.expolygon.translate(-fill_origin);
+        filler->bounding_box.translate(-fill_origin);
+    }
     Polylines polylines;
     try {
         assert(!fill_params.use_arachne);
         polylines = filler->fill_surface(&surface, fill_params);
-    } catch (InfillFailedException &) {
+    } catch (InfillFailedException&) {}
+    if (fill_origin != Point(0, 0)) {
+        filler->set_bounding_box(fill_bounds);
+        for (Polyline& polyline : polylines)
+            polyline.translate(fill_origin);
     }
     extrusion_entities_append_paths(
         dst,
