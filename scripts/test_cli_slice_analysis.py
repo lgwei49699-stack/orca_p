@@ -39,7 +39,7 @@ CORE_LAYER_FIELDS = {
     "hole_area_mm2", "hole_intrusion_area_mm2", "closed_void_region_count", "closed_void_fully_covered_count",
     "solid_fill_target_area_mm2", "solid_fill_uncovered_area_mm2",
 }
-CORE_GCODE_FIELDS = {"normal_estimate", "extruders", "quality_paths"}
+CORE_GCODE_FIELDS = {"normal_estimate", "extruders", "quality_paths", "small_perimeter_selection"}
 CORE_NORMAL_FIELDS = {"total_time_s", "layer_sequence_count"}
 CORE_MATERIAL_FIELDS = {
     "extruder_id", "configured_filament_max_volumetric_speed_mm3_s", "estimated_peak_flow",
@@ -191,6 +191,25 @@ def validate_estimated_flow_cap_distance(value, configured_cap):
 
 def validate_gcode_observations(metrics):
     require(set(metrics) == CORE_GCODE_FIELDS, "G-code core fields are missing or include retired diagnostics")
+    selected = metrics["small_perimeter_selection"]
+    require(selected["scope"] == "native_small_perimeter_selection_before_speed_overrides"
+            and type(selected["complete"]) is bool, "Unexpected small-perimeter selection scope")
+    fields = ("selected_loop_count", "selected_path_count", "selected_path_length_mm")
+    speed = selected["requested_speed_mm_s"]
+    if selected["complete"]:
+        loops = count(selected["selected_loop_count"], "selected small loops")
+        paths_count = count(selected["selected_path_count"], "selected small paths")
+        length = nonnegative(selected["selected_path_length_mm"], "selected small path length")
+        require(paths_count >= loops, "Small-perimeter paths cannot be fewer than loops")
+        if loops:
+            require(length > 0 and 0 < nonnegative(speed["min"], "small speed") <= nonnegative(speed["max"], "small speed"),
+                    "Selected small perimeters need positive length and speed")
+        else:
+            require(paths_count == 0 and length == 0 and speed["min"] is None and speed["max"] is None,
+                    "No selected small perimeters must not invent a speed")
+    else:
+        require(all(selected[key] is None for key in fields) and speed["min"] is None and speed["max"] is None,
+                "Unknown small-perimeter selection must not expose successful counts")
     paths = metrics["quality_paths"]
     require(paths["scope"] == "final_gcode_positive_extrusion_moves" and isinstance(paths["rows"], list),
             "Unexpected quality path scope")

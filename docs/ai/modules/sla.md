@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "sla",
-  "source_fingerprint": "sha256:e411e9dcf37f413863117bfa76d92f9b2c8178ccc97a50b1c023810f22d690ed",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助仅供独立模型建议；SLAPrint中空/排孔/支撑/光栅化和曝光参数不消费此键，GUI SLA工艺行为未改。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-22共享PrintConfig仅CLIMisc新增FFF模型路径选择，setter绑定Print而非SLAPrint；SLA算法、曝光、支撑和预设未改，正文无需变更，不宣称SLA运行验证。"
+  "source_fingerprint": "sha256:ed69e7b6ff6af6c262f226a0265a7ffcced55082249dcd19c7c955e28921611b",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助仅供独立模型建议；SLAPrint中空/排孔/支撑/光栅化和曝光参数不消费此键，GUI SLA工艺行为未改。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-22共享PrintConfig仅CLIMisc新增FFF模型路径选择，setter绑定Print而非SLAPrint；SLA算法、曝光、支撑和预设未改，正文无需变更，不宣称SLA运行验证。 2026-10-22复核新增层高边界是CLI FFF自适应封装，未改SLA配置或算法；非FFF入口沿用已有拒绝，不声称SLA运行验证。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。"
 }
 -->
 

@@ -60,11 +60,15 @@
       "sources": [
         "src/OrcaSlicer.cpp",
         "src/OrcaSlicer.hpp",
+        "src/CLIRegionalLayerPlan.hpp",
         "src/OrcaSlicer_app_msvc.cpp"
       ],
       "watch": [
         "src/libslic3r/ModelRepairEvidence.hpp",
-        "src/libslic3r/ModelReconstruction.hpp"
+        "src/libslic3r/ModelReconstruction.hpp",
+        "src/libslic3r/PrintConfig.cpp",
+        "src/libslic3r/Print.hpp",
+        "src/libslic3r/Slicing.hpp"
       ],
       "entrypoints": [
         "src/OrcaSlicer.cpp",
@@ -77,7 +81,8 @@
         "scripts/test_cli_oversized_arrange.py",
         "scripts/test_cli_slice_analysis.py",
         "scripts/test_cli_slice_features.py",
-        "scripts/test_cli_fixed_position_slice.py"
+        "scripts/test_cli_fixed_position_slice.py",
+        "scripts/test_cli_regional_layer_plan.py"
       ],
       "test_note": "修改动作路由优先检查 run/export_models 和结果序列化；验证无参数启动、模型导出、分盘→切片和不合法参数。使用隔离输出目录；共享业务按 validation.md 与 GUI 的有效配置、结果及失败语义对照。"
     },
@@ -1738,6 +1743,12 @@
         "scripts/copy_windows_active_log.cmd",
         "scripts/copy_windows_active_log.ps1",
         "scripts/check_ai_module_docs.py",
+        "scripts/evaluate_layer_height_candidate.py",
+        "scripts/evaluate_relief_height_candidate.py",
+        "scripts/check_regional_layer_scope.py",
+        "scripts/audit_feature_parameters.py",
+        "scripts/test_cli_regional_layer_plan.py",
+        "scripts/layer_surface_proxy.py",
         "scripts/generate_repair_fixtures.py",
         "scripts/orca_extra_profile_check.py",
         "scripts/orca_filament_lib.py",
@@ -1759,6 +1770,11 @@
         "scripts/tests/test_macos_build_compatibility.py",
         "scripts/tests/test_macos_runtime_bundle.py",
         "scripts/tests/test_check_ai_module_docs.py",
+        "scripts/tests/test_layer_height_candidate.py",
+        "scripts/tests/test_relief_height_candidate.py",
+        "scripts/tests/test_regional_layer_scope.py",
+        "scripts/tests/test_feature_parameter_audit.py",
+        "scripts/tests/test_layer_surface_proxy.py",
         "scripts/tests/test_cli_slice_features.py",
         "scripts/tests/test_gmp_platform_selection.py",
         "scripts/tests/test_meshlib_platform_config.py",

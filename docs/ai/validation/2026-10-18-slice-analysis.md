@@ -10,6 +10,18 @@
 
 ### 2026-10-22 Orca 选择性提交与配套服务审核
 
+Orca已完成提交`8cd9900c98`（隔离模型细节路径优化并补齐只读质量分析），未推送。44个相关文件；全工作区检查35模块/0问题，暂存检查17个受影响模块/0问题，cached diff检查通过。混合文档已按暂存源码重算test-tools指纹，无关正文及文件原样留在工作区。服务审核已完成，未发现本批新增阻塞入库问题；证据目录`/tmp/services-review-20261022.OKOoOy/`。只审阅/本地mock回归，不提交服务、不连接业务基础设施。
+
+服务基准：PDS独立工作目录`Print3DSliceService-model-feature`为c606337（4个改动文件），Compare为a8dfbfb（3个），PAM为c128fa8（4个），Blender为c304057（3个业务/测试/文档文件，另有不入库pycache），四者均在`codex/model-feature-analysis-20261018`；Web为`develop@a7a14ef`（17个跟踪改动及新qualityPaths测试）。PDS原分盘目录不切分支、不合并。本轮先读实际差异与消费接口，再使用现有授权的离线单测；不把先前流水当本轮新执行。
+
+审核结果：PDS只接受请求Boolean.TRUE追加开关，单模型/固定位置多模型均接线；队列传递完整SliceReq，普通缺字段/false、报告、修复、层高及自定义命令保持原边界。Compare只在首次提交构造A=false/B=true并先冻结请求，已提交任务仅查询，不回填或自动重切。PAM持续薄壁规则要求同线宽/分辨率证据、正整数墙圈与合法短墙系数，顶底补缝要求有效窄区/凹孔和完整适用实体表面配置，既有更大补缝范围不收窄；均不修改输入模板、A或最小线宽/流量倍率。Blender在原预算内继续找持续宽度，短分支阳性不被后续空结果/异常覆盖，提前退出不伪装完整扫描。Web按新报告实际层位/峰值/分类和及同段宽高验证，不把旧报告缺字段补0；参数请求、原生路径证据和实物收益分开，共用参数不重复归因。
+
+本轮真实执行结果（所有命令退出0）：Java17离线Maven PDS144项（OrcaSliceAnalysisTest、OrcaRepairExecutionTest、CompareSliceCompatibilityTest、SliceJobServiceImplTest、SliceFilamentParamCommandTest、OrcaSliceServiceImplTest），Compare88项（ExperimentWorkerServiceTest、CompareSnapshotServiceTest），PAM全量160项；日志pds/compare/pam.log。Web `npm test`272项与`npm run build`通过，日志web-test/web-build.log，保留已有大于500kB chunk提示，不作为业务正确性失败。Blender复用已核对的本地5.1隔离依赖包装器，纯几何22、墙几何14、模板35、独立墙入口4项通过（geometry/wall-geometry/blender-template/blender-wall.log）；未操作用户GUI、业务数据库或打印。所有服务`git diff --check`通过，未运行禁用的H2/业务库集成测试。
+
+另将本轮Orca真实STL默认/优化两份284层报告送入当前Web的sliceMetrics、optimizationExecution和optimizationAdvice：两份均保留11类有效路径、实际层高，实体/无路径/孔交叠峰值均能校验和定位；补缝宽高观察分别117/131段，文本无undefined/NaN。没有因开启优化而隐藏新增的名义细线风险。此前Compare→PDS→实际Orca四次调用的证据仍见服务接入节，本次未冒充重新执行真实队列联调。
+
+入库/部署条件：服务修改仍未提交，Web新增qualityPaths.test.js必须随源代码入库；Blender字节码缓存不得入库。PDS必须从上述模型优化工作目录选择性提交，原`Print3DSliceService`仍为干净的分盘分支6bb5f11，不能据其干净状态认为新功能已发布。先部署新Orca，再完成全部PDS实例及interface更新，最后Compare；旧PDS会忽略未知请求字段，滚动发布未完成时不得放新B任务。PAM、Blender、Web作为检测/选参/展示配套一并发布，新建实验检查；不回写旧实验。本次开关/规则增量没有新SQL，既有报告地址列仍是前置要求。目标Linux、真实Nacos/Redis队列/对象存储及实印未验证，不宣称生产验收；该审核没有再改业务代码。CodeGraph MCP未暴露，PDS工作目录虽有.codegraph目录但CLI状态无可用索引，其他服务未见索引；按源码/文档审查，不自动初始化或借用Orca过期图谱。
+
 用户授权提交已审核的Orca改动，再审核配套服务；本轮不推送、不部署，服务先审查不提交。提交范围为独立默认关闭的模型细节路径修正、只读分析增量、对应测试/简中CLI帮助和相关模块文档。复用上一节同源码同构建的本地回归，先运行全工作区文档检查，再仅暂存本批内容并验证暂存快照。排除result.json、Thingi10K下载工具、其他GUI/分盘/修复专题；arrangement/walls/test-tools混合文档仅取相关段落，test-tools指纹按实际暂存源码单独核对。随后检查Compare、PDS、参数匹配、Blender及Web当前分支/差异和接口消费者，服务结论另记录。
 
 ### 2026-10-22 默认关闭后的 Orca 入库复核（已完成，可选择性入测试分支）

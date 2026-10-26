@@ -107,6 +107,7 @@ struct ModelCliSpec {
     std::optional<std::string> rotation;
     std::optional<std::string> support;
     std::optional<std::string> process;
+    std::optional<std::string> layer_height_plan;
 };
 
 

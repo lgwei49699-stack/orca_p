@@ -210,6 +210,18 @@ class Print;
             double above_cap_path_length_mm{0.0};
         };
 
+        // Native loop selection before first-layer/flow/cooling overrides. Not
+        // inferred from final wall speed and not a physical quality assessment.
+        struct SmallPerimeterSelection
+        {
+            bool   available{false};
+            size_t loop_count{0};
+            size_t path_count{0};
+            double path_length_mm{0.0};
+            double min_speed_mm_s{std::numeric_limits<double>::infinity()};
+            double max_speed_mm_s{0.0};
+        };
+
         std::string             filename;
         unsigned int id;
         std::vector<MoveVertex> moves;
@@ -221,6 +233,7 @@ class Print;
         bool                                        normal_estimated_peak_flow_available{false};
         std::map<size_t, EstimatedPeakFlow>          normal_estimated_peak_flow;
         std::map<size_t, EstimatedFlowCapDistance>   normal_estimated_flow_cap_distance;
+        SmallPerimeterSelection                    small_perimeter_selection;
         // Positions of ends of lines of the final G-code this->filename after TimeProcessor::post_process() finalizes the G-code.
         std::vector<size_t> lines_ends;
         Pointfs printable_area;
@@ -269,6 +282,7 @@ class Print;
             normal_estimated_peak_flow_available = other.normal_estimated_peak_flow_available;
             normal_estimated_peak_flow = other.normal_estimated_peak_flow;
             normal_estimated_flow_cap_distance = other.normal_estimated_flow_cap_distance;
+            small_perimeter_selection = other.small_perimeter_selection;
             lines_ends = other.lines_ends;
             printable_area = other.printable_area;
             bed_exclude_area = other.bed_exclude_area;

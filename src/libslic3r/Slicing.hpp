@@ -241,6 +241,23 @@ struct HeightProfileSmoothingParams
     HeightProfileSmoothingParams(unsigned int radius, bool keep_min) : radius(radius), keep_min(keep_min) {}
 };
 
+// Explicit opt-in for a CLI quality plan. Bounds intersect the machine limits;
+// the first object layer is retained. Incompatible custom ranges are rejected.
+// Existing adaptive/GUI callers are unaffected.
+std::vector<double> layer_height_profile_adaptive_bounded(
+    const SlicingParameters& slicing_params, const ModelObject& object, const ModelInstance& instance,
+    float quality_factor, double minimum_height, double maximum_height,
+    const HeightProfileSmoothingParams* smoothing = nullptr);
+
+// Attempt exact top alignment within the final five regular layers, retaining
+// all earlier physical layer boundaries and the fixed first layer. May add one
+// layer inside that tail window; if still infeasible, keep the original profile.
+// This is used only by explicit bounded plans, not native precise-Z / GUI.
+std::vector<double> layer_height_profile_align_top_bounded(const SlicingParameters&   slicing_params,
+                                                           const std::vector<double>& profile,
+                                                           double                     minimum_height,
+                                                           double                     maximum_height);
+
 std::vector<double> smooth_height_profile(
     const std::vector<double>& profile, const SlicingParameters& slicing_params,
     const HeightProfileSmoothingParams& smoothing_params);

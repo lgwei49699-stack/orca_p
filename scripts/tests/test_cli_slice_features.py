@@ -459,6 +459,9 @@ class EstimatedPeakFlowTest(unittest.TestCase):
                         "active_layer_sequence_count": 1, "below_threshold_layer_ratio": 1},
                     "estimated_volume_mm3": {"total": 1, "other": 1, "support": 0, "wipe_tower": 0, "flush": 0}}
         gcode = {"normal_estimate": {"total_time_s": 1, "layer_sequence_count": 1}, "extruders": [material],
+                 "small_perimeter_selection": {"scope": "native_small_perimeter_selection_before_speed_overrides", "complete": True,
+                    "selected_loop_count": 0, "selected_path_count": 0, "selected_path_length_mm": 0,
+                    "requested_speed_mm_s": {"min": None, "max": None}},
                  "quality_paths": {"scope": "final_gcode_positive_extrusion_moves", "rows": []}}
         report = {"planned_plate_bed_footprint": {"scope": "planned_path_nominal_bottom_on_bed_before_gcode",
                   "complete": True, "model_area_mm2": 8, "support_and_raft_area_mm2": 0, "brim_area_mm2": 0, "combined_area_mm2": 8},
@@ -487,6 +490,9 @@ class EstimatedPeakFlowTest(unittest.TestCase):
 class GcodeCoreFieldsTest(unittest.TestCase):
     def fixture(self):
         return {"normal_estimate": {"total_time_s": 1, "layer_sequence_count": 1},
+                "small_perimeter_selection": {"scope": "native_small_perimeter_selection_before_speed_overrides", "complete": True,
+                    "selected_loop_count": 0, "selected_path_count": 0, "selected_path_length_mm": 0,
+                    "requested_speed_mm_s": {"min": None, "max": None}},
                 "quality_paths": {"scope": "final_gcode_positive_extrusion_moves", "rows": []},
                 "extruders": [{key: None for key in CORE_MATERIAL_FIELDS}]}
 
@@ -495,6 +501,25 @@ class GcodeCoreFieldsTest(unittest.TestCase):
         before = copy.deepcopy(value)
         validate_gcode_observations(value)
         self.assertEqual(value, before)
+
+    def test_small_perimeter_selection_positive_and_unknown_are_distinct(self):
+        value = self.fixture()
+        selected = value["small_perimeter_selection"]
+        selected.update(selected_loop_count=2, selected_path_count=3, selected_path_length_mm=12,
+                        requested_speed_mm_s={"min": 15, "max": 20})
+        validate_gcode_observations(value)
+        for key, bad in (("selected_path_count", 1), ("selected_path_length_mm", 0),
+                         ("requested_speed_mm_s", {"min": 20, "max": 15})):
+            invalid = copy.deepcopy(value)
+            invalid["small_perimeter_selection"][key] = bad
+            with self.subTest(key=key), self.assertRaises(AssertionError):
+                validate_gcode_observations(invalid)
+        selected.update(complete=False, selected_loop_count=None, selected_path_count=None,
+                        selected_path_length_mm=None, requested_speed_mm_s={"min": None, "max": None})
+        validate_gcode_observations(value)
+        selected["selected_loop_count"] = 0
+        with self.assertRaises(AssertionError):
+            validate_gcode_observations(value)
 
     def test_missing_core_groups_cannot_silently_become_zero(self):
         for keys, select in ((CORE_GCODE_FIELDS, lambda value: value),

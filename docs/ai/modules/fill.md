@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "fill",
-  "source_fingerprint": "sha256:85b43f5450a718dd633df0a617e999d8a0ec144203f31bd3c065ab5396d21de9",
-  "reason": "2026-10-22Layer模型填充传递Print运行时选择，FillBase/Rectilinear/ConcentricInternal及两种Arachne同心入口显式消费。默认false恢复旧variable_width，未传入的支撑/筏层Fill也为false；不改密度/目标/过滤。关闭基线及开启候选同模型核查见实施记录。 本轮只修改支撑调用侧 ZigZag 的坐标系；FillRectilinear 通用实现、模型填充、增强路径的搭墙延伸限制未变。复核新增覆盖面积断言，正文明确两项修复相互独立。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。"
+  "source_fingerprint": "sha256:5f702f962088dc89b9f42312c7a85213f663d77e5105b49274fc5960ea0727c6",
+  "reason": "2026-10-22Layer模型填充传递Print运行时选择，FillBase/Rectilinear/ConcentricInternal及两种Arachne同心入口显式消费。默认false恢复旧variable_width，未传入的支撑/筏层Fill也为false；不改密度/目标/过滤。关闭基线及开启候选同模型核查见实施记录。 本轮只修改支撑调用侧 ZigZag 的坐标系；FillRectilinear 通用实现、模型填充、增强路径的搭墙延伸限制未变。复核新增覆盖面积断言，正文明确两项修复相互独立。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。 2026-10-22Layer模型填充传递Print运行时选择，FillBase/Rectilinear/ConcentricInternal及两种Arachne同心入口显式消费。默认false恢复旧variable_width，未传入的支撑/筏层Fill也为false；不改密度/目标/过滤。关闭基线及开启候选同模型核查见实施记录。 2026-10-22复核共享配置新增项仅CLI层高边界，未改填充/补缝参数或算法；显式变层高使用原填充流程，默认调用不变。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。 2026-10-26合入f9bcf0afe：保留master修复、Linux打包与特征CLI边界，当前组合验证另记。 2026-10-26发布分支最终复核：保留master支撑侧偏心ZigZag修复与已有默认关闭的细节路径模式；新CLI计划通过既有层位消费，不改普通填充默认值。 构建/回归及GUI待验见发布合并记录。"
 }
 -->
 

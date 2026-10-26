@@ -771,6 +771,23 @@ json object_summary(const Print& print, const PrintObject& object, size_t index)
             {"configured_settings", object_settings(object)}};
 }
 
+json small_perimeter_selection(const GCodeProcessorResult& result)
+{
+    const auto& value = result.small_perimeter_selection;
+    const bool selected = value.loop_count > 0;
+    const bool complete = value.available && value.path_count >= value.loop_count &&
+        std::isfinite(value.path_length_mm) && (selected ? value.path_length_mm > 0 : value.path_length_mm == 0) &&
+        (selected ? std::isfinite(value.min_speed_mm_s) && std::isfinite(value.max_speed_mm_s) &&
+                        value.min_speed_mm_s > 0 && value.max_speed_mm_s >= value.min_speed_mm_s : value.path_count == 0);
+    return {{"scope", "native_small_perimeter_selection_before_speed_overrides"},
+            {"complete", complete},
+            {"selected_loop_count", complete ? json(value.loop_count) : json(nullptr)},
+            {"selected_path_count", complete ? json(value.path_count) : json(nullptr)},
+            {"selected_path_length_mm", complete ? json(value.path_length_mm) : json(nullptr)},
+            {"requested_speed_mm_s", {{"min", complete && selected ? json(value.min_speed_mm_s) : json(nullptr)},
+                                       {"max", complete && selected ? json(value.max_speed_mm_s) : json(nullptr)}}}};
+}
+
 json volume_for(const std::map<size_t, double>& volumes, size_t extruder)
 {
     const auto found = volumes.find(extruder);
@@ -1019,6 +1036,7 @@ json gcode_summary(const Print& print, const GCodeProcessorResult& result)
     for (const auto& [identity, observation] : quality_paths)
         path_rows.push_back(observation.to_json(identity.first, quality_role(identity.second)));
     return {{"quality_paths", {{"scope", "final_gcode_positive_extrusion_moves"}, {"rows", std::move(path_rows)}}},
+            {"small_perimeter_selection", small_perimeter_selection(result)},
             {"normal_estimate",
              {{"total_time_s", nonnegative_number(normal.time)},
               // Internal denominator for per-material cooling completeness,
