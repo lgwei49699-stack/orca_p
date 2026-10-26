@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "project-state",
-  "source_fingerprint": "sha256:17a6e6a2f51f858697535ba781407dd8df8f3ac58cc9162b0ecc99a8361af2b2",
-  "reason": "复核共享导出失败返回及原文件保护；新增PlateReferences覆盖无效引用/缺映射和临时包清理，未修改脏标记、Undo或崩溃恢复流程。"
+  "source_fingerprint": "sha256:58dcd3a7d9ba0c56183ff82e8dfd995c7209ab31533b26fa45ed1e890aac5f05",
+  "reason": "Plater 仅调整云工艺来源，test_3mf 新增配置归档回归；普通工程保存/打开、Undo 和恢复规则未改，云导入边界见云模块。"
 }
 -->
 

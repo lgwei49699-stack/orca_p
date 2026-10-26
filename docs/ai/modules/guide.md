@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "guide",
-  "source_fingerprint": "sha256:190338b4c2244739b4af28d96ac5bb9ab4e8399f5f746e52238c2a887bd0a9b9",
-  "reason": "本轮变更仅触及共享 Plater/预设/翻译文件中的云导入隔离逻辑；本模块正文流程无新增行为，合并后Mac arm64应用和测试目标已重新构建；回归结果及云导入GUI待验边界见模型修复主记录，不把构建通过当完整业务验收。"
+  "source_fingerprint": "sha256:1054231dfd4d86a0a77e409d9f1a83f4f5e098c48edba65451253ae2e38712fc",
+  "reason": "共享 test_epone_presets 新增云工艺值恢复回归，向导身份、机型继承解析和预设创建入口未修改，无需改正文。"
 }
 -->
 

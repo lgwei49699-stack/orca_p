@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "scene-editing",
-  "source_fingerprint": "sha256:16239a36c3028281024db91f0a53d3e0b1f14484a6b47e0effc53ebbb3695809",
-  "reason": "本轮变更仅触及共享 Plater/预设/翻译文件中的云导入隔离逻辑；本模块正文流程无新增行为，合并后Mac arm64应用和测试目标已重新构建；回归结果及云导入GUI待验边界见模型修复主记录，不把构建通过当完整业务验收。"
+  "source_fingerprint": "sha256:08b697395aa48ee8c743013c1b4ebc161ebff2357902b0d392f4a5a5bb829bca",
+  "reason": "共享 Plater.cpp 仅修改云工艺合成，未修改对象、网格、变换、选择或场景提交；无需改本模块正文。"
 }
 -->
 

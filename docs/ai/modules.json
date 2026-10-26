@@ -1288,7 +1288,8 @@
         "src/slic3r/GUI/GFDCloudConfigDialog.cpp",
         "src/slic3r/GUI/GFDCloudConfigDialog.hpp",
         "src/slic3r/Utils/GFDCloudConfig.hpp",
-        "src/slic3r/Utils/GFDPrintOptions.hpp"
+        "src/slic3r/Utils/GFDPrintOptions.hpp",
+        "src/slic3r/Utils/GFDCloudPreset.hpp"
       ],
       "watch": [
         "src/slic3r/GUI/Plater.cpp",
@@ -1307,7 +1308,9 @@
         "tests/gui/test_gfd_modal_dialog.cpp",
         "tests/gui/test_gfd_cloud_config_dialog.cpp",
         "tests/slic3rutils/test_gfd_cloud_config.cpp",
-        "tests/slic3rutils/test_gfd_print_options.cpp"
+        "tests/slic3rutils/test_gfd_print_options.cpp",
+        "tests/libslic3r/test_epone_presets.cpp",
+        "tests/libslic3r/test_3mf.cpp"
       ],
       "test_note": "改认证／导入时测试失效会话、坏响应、取消、同名预设和机型不兼容；云服务不可用时仍能编辑本地工程。用户版已关闭的同步入口不能在文档中写成存在。"
     },

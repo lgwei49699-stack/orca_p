@@ -126,6 +126,7 @@
 #include "../Utils/PresetUpdater.hpp"
 #include "../Utils/Process.hpp"
 #include "../Utils/GFDConfig.hpp"
+#include "../Utils/GFDCloudPreset.hpp"
 #include "../Utils/ModelExportPolicy.hpp"
 #include "RemovableDriveManager.hpp"
 #include "InstanceCheck.hpp"
@@ -9833,11 +9834,10 @@ bool Plater::priv::gfd_apply_prepared_cloud_config(const GFDCloudConfigInfo&   c
 
         const std::string         embedded_process_id = gfd_config_string(cloud_project_config, "print_settings_id");
         const Preset*             cloud_process = gfd_find_cloud_preset(prepared.project_presets, Preset::TYPE_PRINT, embedded_process_id);
-        const DynamicPrintConfig* cloud_process_config = cloud_process != nullptr ?
-                                                             &cloud_process->config :
-                                                             (gfd_has_cloud_preset_options(cloud_project_config, Preset::print_options()) ?
-                                                                  &cloud_project_config :
-                                                                  nullptr);
+        const DynamicPrintConfig  effective_process_config = GFD::cloud_process_config(cloud_project_config, cloud_process != nullptr ?
+                                                                                                                 &cloud_process->config :
+                                                                                                                 nullptr);
+        const DynamicPrintConfig* cloud_process_config     = effective_process_config.empty() ? nullptr : &effective_process_config;
 
         std::string cloud_process_name = boost::algorithm::trim_copy(config.name);
         if (cloud_process_name.empty())

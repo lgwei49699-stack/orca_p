@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "raft",
-  "source_fingerprint": "sha256:e87242dc5dd5def7dea10c402aa4e9d96b2d610f9a842393c4191b54eed45c72",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入RaftPlan/RaftGeometry/RaftMerge；筏层分块、平滑、气隙、阶段参数和GUI筏层面板均未改变。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 本轮共享Print.cpp差异只在export_gcode传递报告统计开关，不改Raft计划、首层参数、合并/分块及气隙；正文无需调整，既有G-code/筏层导出回归和CLI场景结果见本轮记录，不宣称GUI/实印已验。 2026-10-22新增CLI模型路径运行时选择，未改RaftPlan/Geometry/Merge或阶段参数，筏层Fill不设置新选择，默认false。Print模式切换清缓存，不复用跨模式切片数据；普通模式的筏层流程不改，正文无需调整。"
+  "source_fingerprint": "sha256:caef5f01a109891ac6fe3d5c358f7f355aba22606ff85c4506b774eb321d35f5",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入RaftPlan/RaftGeometry/RaftMerge；筏层分块、平滑、气隙、阶段参数和GUI筏层面板均未改变。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 本轮共享Print.cpp差异只在export_gcode传递报告统计开关，不改Raft计划、首层参数、合并/分块及气隙；正文无需调整，既有G-code/筏层导出回归和CLI场景结果见本轮记录，不宣称GUI/实印已验。 2026-10-22新增CLI模型路径运行时选择，未改RaftPlan/Geometry/Merge或阶段参数，筏层Fill不设置新选择，默认false。Print模式切换清缓存，不复用跨模式切片数据；普通模式的筏层流程不改，正文无需调整。 复核普通 CuraV1 与 RaftMerge 调用：偏心区域由 SupportCommon 居中，已居中合并路径不变；层数、气隙、分块裁剪和告警保持。新增 OffsetFill 回归，正文记录范围与验证。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。"
 }
 -->
 
@@ -27,6 +27,10 @@ GUI“筏层”配置与 CLI 加载工艺/对象覆盖后的有效配置均经 `
 
 RaftPlan 将基底／中间／顶部三个阶段解析成物理层的 Z、厚度、间距、流量、速度和风扇参数。RaftAngleResolver 根据模型首层底面方向选择顶部角度，没有唯一方向时使用稳定回退值；普通支撑生成端消费计划。
 
+单对象未合并／未分块路径也通过 SupportCommon 的 ZigZag 局部坐标处理，保证偏离对象原点的
+中间／顶部区域能够完整填充，最后接触层同样处理。既有 RaftMerge 已居中，输出不再增加位移；
+基底 Rectilinear、层计划与空层检查保持。模型高度低于首层采样面造成的薄片漏切不属于本项修复。
+
 ## 配置与约束
 
 传统筏层和 CuraV1 走不同配置解释；总层数、气隙和起始层重叠共同决定模型抬升，不能把模型首层高度直接当筏层基底高度。分块和轮廓平滑是两个独立能力，是否存在必须看本分支说明。
@@ -42,6 +46,9 @@ RaftPlan 将基底／中间／顶部三个阶段解析成物理层的 Z、厚度
 验证按阶段检查实际线宽、挤出覆盖、空移／跨缝、边界和普通支撑。模型路径应单独比较，筏层改变导致总时长变化不证明模型改变。实机跨缝可靠性仍由模型师验证。
 
 现有测试/工具范围：`tests/fff_print/test_support_material.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+偏心双薄片 `[OffsetFill]`、完整筏层专项和左右上角真实任务 CLI 结果，及重切／预览的 GUI 交接，
+见[10-25 修复记录](../validation/2026-10-25-cura-raft-offset-fill.md)。
 
 ## 分支现状
 

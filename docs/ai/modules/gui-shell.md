@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-shell",
-  "source_fingerprint": "sha256:cec934a0b43feaaca335d258b1a7e6bdfd2e79dcf138f8a418f7159173461620",
-  "reason": "本轮变更仅触及共享 Plater/预设/翻译文件中的云导入隔离逻辑；本模块正文流程无新增行为，合并后Mac arm64应用和测试目标已重新构建；回归结果及云导入GUI待验边界见模型修复主记录，不把构建通过当完整业务验收。"
+  "source_fingerprint": "sha256:60f1413c028acd52f2e2b6072468f5bbea72a8b87062e7cb83c3b36d39a3e3e7",
+  "reason": "复核 Plater 的云工艺来源切换：工程有效配置优先，机器/耗材、窗口生命周期和导入后选择恢复不变；业务说明归云模块，GUI 待验见 EPONE 记录。"
 }
 -->
 

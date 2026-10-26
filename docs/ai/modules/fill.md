@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "fill",
-  "source_fingerprint": "sha256:3f772cf936f883e5eefa6de378fe7190e46ed3b38d16e263b2a2af390f4e8624",
-  "reason": "2026-10-22Layer模型填充传递Print运行时选择，FillBase/Rectilinear/ConcentricInternal及两种Arachne同心入口显式消费。默认false恢复旧variable_width，未传入的支撑/筏层Fill也为false；不改密度/目标/过滤。关闭基线及开启候选同模型核查见实施记录。"
+  "source_fingerprint": "sha256:85b43f5450a718dd633df0a617e999d8a0ec144203f31bd3c065ab5396d21de9",
+  "reason": "2026-10-22Layer模型填充传递Print运行时选择，FillBase/Rectilinear/ConcentricInternal及两种Arachne同心入口显式消费。默认false恢复旧variable_width，未传入的支撑/筏层Fill也为false；不改密度/目标/过滤。关闭基线及开启候选同模型核查见实施记录。 本轮只修改支撑调用侧 ZigZag 的坐标系；FillRectilinear 通用实现、模型填充、增强路径的搭墙延伸限制未变。复核新增覆盖面积断言，正文明确两项修复相互独立。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。"
 }
 -->
 
@@ -34,6 +34,10 @@ FillRectilinear 默认在折返内轮廓与外侧扫描轮廓之间保留搭墙�
 无墙 ZigZag 设置为 0.001 mm，使凹口附近扫描线也在安全中心线域内，避免生成后裁断。
 模型填充、普通支撑、有墙筏层及关闭增强的旧路径不启用此限制。
 
+另一个独立的坐标问题由 SupportCommon 调用侧处理：偏心 CuraV1 ZigZag 区域先以垫层包围盒
+中心为原点填充，再把路径移回。此转换包含普通未分块、有墙填充及最后接触层；不修改
+FillRectilinear 的通用算法或模型填充，也不改变上述增强模式的安全裁剪设置。
+
 密度、间距、角度、线宽、连接及实心／稀疏角色一起决定结果；模型坐标与 pattern 原点要稳定。no_sort 集合表达保序意图，下游不能扁平化后任意重排。
 
 当前分支可检索的配置键：`sparse_infill_pattern`、`sparse_infill_density`、`internal_solid_infill_pattern`、`top_surface_pattern`、`bottom_surface_pattern`、`infill_direction`。定义与默认值集中于 PrintConfig；实际生效仍要读取对象覆盖后的值。
@@ -47,6 +51,8 @@ FillRectilinear 默认在折返内轮廓与外侧扫描轮廓之间保留搭墙�
 修改 pattern 应覆盖实心、稀疏、带孔、窄区、旋转、多层方向和短线。与墙共同验证两种同心路径及首层／其他层最小线宽。
 
 现有测试/工具范围：`tests/fff_print/test_fill.cpp`；`tests/fff_print/test_extrusion_entity.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
+
+垫层调用侧坐标修复、真实任务 CLI 与 GUI 待验步骤见[偏心垫层修复](../validation/2026-10-25-cura-raft-offset-fill.md)。
 
 `test_support_material.cpp` 的 `[EndpointOverlap]` 使用捕获的阶梯轮廓验证四个方向、两种线宽/密度、
 原模式能复现裁断、限制后裁剪前后逐点不变、流量属性保持及恢复原模式输出。

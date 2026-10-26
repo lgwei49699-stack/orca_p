@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "adhesion",
-  "source_fingerprint": "sha256:853ca15ad71a6233a4f36e2c9c2aa984de3655286ff35370529d9f572768eb98",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助只控制建议，未接入make_brim或Skirt；附着类型、宽度、间隙、绘制耳朵和GUI附着设置保持。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 共享Print.cpp只新增导出阶段内部统计开关，Brim/Skirt生成、配置和裁剪未变；正文无需调整，不以此声明附着质量或GUI已验证。 2026-10-22CLI新增模型路径模式，Brim/Skirt配置与实现未改，普通调用默认false。显式模式切换按Print原失效机制重建附着，避免使用旧模型路径缓存；本轮不新增自动Brim选择或附着质量结论。"
+  "source_fingerprint": "sha256:c265a57bb2e2a105b39db0edfef2908ff92dc705ea531a08707f858dd9af14d3",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助只控制建议，未接入make_brim或Skirt；附着类型、宽度、间隙、绘制耳朵和GUI附着设置保持。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 共享Print.cpp只新增导出阶段内部统计开关，Brim/Skirt生成、配置和裁剪未变；正文无需调整，不以此声明附着质量或GUI已验证。 2026-10-22CLI新增模型路径模式，Brim/Skirt配置与实现未改，普通调用默认false。显式模式切换按Print原失效机制重建附着，避免使用旧模型路径缓存；本轮不新增自动Brim选择或附着质量结论。 指纹变化来自共享 test_support_material.cpp 新增 OffsetFill 双薄片回归；Brim/Skirt 源码及配置未改，原床面裁剪断言复用。复核无需调整附着业务正文，相关既有用例纳入筏层专项。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。"
 }
 -->
 

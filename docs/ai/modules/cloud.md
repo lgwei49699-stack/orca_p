@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cloud",
-  "source_fingerprint": "sha256:0290a1e713163e3ab972a7d581e7c2cc1f0832996b24583f69f0522e2809c8fb",
-  "reason": "按机器隔离云导入工艺/耗材并兼容三档旧标准名称；该模块其他流程未变，合并后Mac arm64应用和测试目标已重新构建；回归结果及云导入GUI待验边界见模型修复主记录，不把构建通过当完整业务验收。"
+  "source_fingerprint": "sha256:19b821471654d45a26d3f834f9d828329f50ebb0ca50b66c136dd92a6db4ff74",
+  "reason": "新增 GFDCloudPreset 按工艺键优先采用工程快照、缺项回退嵌入工艺；新建/替换/另存共用，补差量/全量归档与持久化回归，上传及机器/耗材分支未改。"
 }
 -->
 
@@ -38,6 +38,8 @@ Advancer3 请求使用 MAC 作为 `deviceId`，发送 `levelingBeforePrint`、`m
 云端工艺导入按兼容机器查找原有用户预设，标准档继续兼容无档位后缀的旧名称；新名称附机器名并保留三档后缀，避免同名方案在 EPONE 和 EPONE Plus 间互相覆盖。替换工艺或耗材前检查目标仅属于当前机器；另存为的用户文件进入该机器的 `gfd-cloud` 子目录。此存储调整只影响本地预设，CLI 没有对应的云方案导入管理命令；普通 CLI 预设加载使用共享的 `PresetCollection` 路径。
 
 打印设备列表在 QA／正式环境均使用 modelcenter 的 `/app/print3dModel/manage/v1/md/query`，由 `device_query_url` 单独选择地址。不得改回通用业务网关的 `/app/print3d/manage/v1/md/query`：二者返回不同设备集合，仅将旧网关域名换成 qa-print 也无法补齐设备。认证、云方案、动态耗材、耗材槽位、上传授权及打印命令继续使用各自原有地址；本次只读对照和目标设备字段检查见[Advancer3 记录](../validation/2026-10-09-adv3-custom-feasibility.md)。CLI 无此云设备选择功能。
+
+云端工艺采用 [GFDCloudPreset.hpp](../../../src/slic3r/Utils/GFDCloudPreset.hpp) 按工艺键合成有效配置：完整工程快照优先，缺键才从嵌入工艺补充。嵌入预设可能只是继承差量，不能直接用它覆盖通用默认值或已有本地工艺。显式 0/百分比保留；新建、替换、另存共用此结果，本地名称及机器绑定沿用原规则。没有完整工程的旧包仍取嵌入值；本次不改变机器/耗材分支和上传格式。CLI 无云方案导入管理命令。回归和待 GUI 项见 [EPONE 云端导入记录](../validation/2026-10-24-epone-cloud-preset-roundtrip.md)。
 
 ## 失败与取消
 

@@ -3,6 +3,7 @@
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/GuideMachineMetadata.hpp"
 #include "libslic3r/Utils.hpp"
+#include "slic3r/Utils/GFDCloudPreset.hpp"
 
 #include <boost/filesystem.hpp>
 #include <boost/nowide/fstream.hpp>
@@ -386,6 +387,119 @@ TEST_CASE("Loading EPONE Plus user presets preserves files and never creates Pro
             CHECK(bundle.filament_presets.front() == expected[family + 2].name);
             check_user_presets(bundle, expected);
             CHECK(directory.file_contents() == original_files);
+        }
+    }
+}
+
+TEST_CASE("Cloud process restores effective EPONE values instead of inherited deltas", "[Preset][EPONE][GFDCloud][CloudProcess]")
+{
+    // Values from the reported tree-support / 15% infill project. The embedded
+    // preset only overrides outer_wall_line_width; all other widths and the
+    // support type come from its parent and are present in project_settings.
+    const std::map<std::string, std::string> expected = {{"line_width", "0.42"},
+                                                         {"initial_layer_line_width", "0.5"},
+                                                         {"outer_wall_line_width", "0.45"},
+                                                         {"inner_wall_line_width", "0.42"},
+                                                         {"top_surface_line_width", "0.45"},
+                                                         {"sparse_infill_line_width", "0.42"},
+                                                         {"internal_solid_infill_line_width", "0.42"},
+                                                         {"support_line_width", "0.4"},
+                                                         {"initial_layer_print_height", "0.24"},
+                                                         {"support_type", "tree(auto)"},
+                                                         {"support_style", "default"},
+                                                         {"enable_support", "1"},
+                                                         {"sparse_infill_density", "15%"}};
+    DynamicPrintConfig                       project;
+    for (const auto& [key, value] : expected)
+        project.set_deserialize_strict(key, value);
+    project.set_deserialize_strict("printer_settings_id", "EPONE 0.4 nozzle");
+    project.set_deserialize_strict("nozzle_temperature", "210");
+
+    DynamicPrintConfig embedded;
+    embedded.set_deserialize_strict("inherits", "0.20mm Standard @EPONE");
+    embedded.set_deserialize_strict("outer_wall_line_width", "0.45");
+    embedded.set_deserialize_strict("enable_support", "1");
+    embedded.set_deserialize_strict("sparse_infill_density", "15%");
+
+    SECTION("project values survive new and existing local defaults")
+    {
+        const auto   effective = GFD::cloud_process_config(project, &embedded);
+        PresetBundle bundle;
+        auto         local = bundle.prints.default_preset().config;
+        local.set_deserialize_strict("support_type", "normal(auto)");
+        local.set_deserialize_strict("line_width", "0.7");
+        for (auto base : {bundle.prints.default_preset().config, local}) {
+            base.apply(effective);
+            for (const auto& [key, value] : expected) {
+                INFO(key);
+                CHECK(base.opt_serialize(key) == value);
+            }
+        }
+        CHECK_FALSE(effective.has("printer_settings_id"));
+        CHECK_FALSE(effective.has("nozzle_temperature"));
+    }
+    SECTION("effective explicit edits including zero and percentages win")
+    {
+        project.set_deserialize_strict("outer_wall_line_width", "0");
+        project.set_deserialize_strict("support_line_width", "110%");
+        embedded.set_deserialize_strict("support_line_width", "0.4");
+        embedded.set_deserialize_strict("support_type", "normal(auto)");
+        const auto effective = GFD::cloud_process_config(project, &embedded);
+        CHECK(effective.opt_serialize("outer_wall_line_width") == "0");
+        CHECK(effective.opt_serialize("support_line_width") == "110%");
+        CHECK(effective.opt_serialize("support_type") == "tree(auto)");
+    }
+    SECTION("legacy embedded-only and project-only inputs remain supported")
+    {
+        const auto legacy = GFD::cloud_process_config({}, &embedded);
+        CHECK(legacy == embedded);
+        CHECK_FALSE(legacy.has("support_type"));
+        const auto project_only = GFD::cloud_process_config(project, nullptr);
+        for (const auto& [key, value] : expected)
+            CHECK(project_only.opt_serialize(key) == value);
+        CHECK(GFD::cloud_process_config({}, nullptr).empty());
+    }
+    SECTION("partial project settings fall back only for absent keys")
+    {
+        project.erase("support_line_width");
+        embedded.set_deserialize_strict("support_line_width", "0.4");
+        embedded.set_deserialize_strict("support_type", "normal(auto)");
+        const auto effective = GFD::cloud_process_config(project, &embedded);
+        CHECK(effective.opt_serialize("support_line_width") == "0.4");
+        CHECK(effective.opt_serialize("support_type") == "tree(auto)");
+    }
+    SECTION("machine-scoped new, replacement and save-as retain values after reload")
+    {
+        ScopedPresetDirectory directory;
+        const std::string     user = "cloud-effective-process";
+        PresetBundle          bundle;
+        bundle.load_user_presets(user, ForwardCompatibilitySubstitutionRule::Disable);
+        // Install a deliberately different local parent. The imported effective
+        // values must not depend on the receiver's version of that parent.
+        Preset parent(Preset::TYPE_PRINT, "0.20mm Standard @EPONE", false);
+        parent.config  = bundle.prints.default_preset().config;
+        parent.version = Semver("2.3.0");
+        bundle.prints.save_current_preset(parent.name, true, false, &parent);
+        const auto effective = GFD::cloud_process_config(project, &embedded);
+        for (const std::string name : {"Cloud new", "Cloud replacement", "Cloud save-as"}) {
+            Preset preset(Preset::TYPE_PRINT, name, false);
+            preset.config  = bundle.prints.default_preset().config;
+            preset.version = Semver("2.3.0");
+            if (name == "Cloud replacement")
+                bundle.prints.save_current_preset(name, true, false, &preset, nullptr, "gfd-cloud/EPONE 0.4 nozzle");
+            preset.config.apply(effective);
+            preset.config.set_deserialize_strict("compatible_printers", "EPONE 0.4 nozzle");
+            bundle.prints.save_current_preset(name, name == "Cloud new", false, &preset, nullptr, "gfd-cloud/EPONE 0.4 nozzle");
+        }
+        PresetBundle reloaded;
+        reloaded.load_user_presets(user, ForwardCompatibilitySubstitutionRule::Disable);
+        for (const std::string name : {"Cloud new", "Cloud replacement", "Cloud save-as"}) {
+            const Preset* saved = reloaded.prints.find_preset(name, false, true);
+            REQUIRE(saved != nullptr);
+            for (const auto& [key, value] : expected) {
+                INFO(name << ": " << key);
+                CHECK(saved->config.opt_serialize(key) == value);
+            }
         }
     }
 }

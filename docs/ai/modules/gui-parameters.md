@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-parameters",
-  "source_fingerprint": "sha256:1508c4163762e50f79be9c348181a41683d53271e3a4f278e0f46abc47a47606",
-  "reason": "合并云预设按机型隔离及三档旧标准名称兼容；共享Preset接口追加可选目录，默认调用和GUI参数联动不变。保留CLI默认关闭的repair_evidence/close_boundaries选项，它们不属于工艺键或对象覆盖，不新增Tab控件。合并构建/测试及GUI待验边界见主记录。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-22共享PrintConfig仅增加CLIMisc默认false开关，不进入PrintConfig/PrintObjectConfig或预设；按用户要求GUI无控件、无设置调用者，始终默认关闭。已有Tab/覆盖逻辑未改，正文无需变更，不宣称GUI已手测。"
+  "source_fingerprint": "sha256:e24576e246b614996eb34f654f47d6d7ea133523c6bd6de9a1df8c70817cb5aa",
+  "reason": "合并云预设按机型隔离及三档旧标准名称兼容；共享Preset接口追加可选目录，默认调用和GUI参数联动不变。保留CLI默认关闭的repair_evidence/close_boundaries选项，它们不属于工艺键或对象覆盖，不新增Tab控件。合并构建/测试及GUI待验边界见主记录。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-22共享PrintConfig仅增加CLIMisc默认false开关，不进入PrintConfig/PrintObjectConfig或预设；按用户要求GUI无控件、无设置调用者，始终默认关闭。已有Tab/覆盖逻辑未改，正文无需变更，不宣称GUI已手测。 云导入从工程有效快照恢复线宽/支撑值，Tab 控件、单位、对象覆盖及导入后选择规则不变；配置来源说明由云模块承接。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。"
 }
 -->
 

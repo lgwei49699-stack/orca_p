@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:9f59df09433507ffe42f298918e0cfe7ee8354ce63142f0a28f964812bda33b6",
-  "reason": "在linux/release2_3_2合入69fe8a45bc：仅移除退休的报告专用SliceAnalysisGeometry源表项；保留发布分支工具链绑定缓存、3G ccache、source_ref、并发控制、180分钟预算、无PCH及MeshLib静态ZLIB/运行库闭包/包内回归。构建脚本与合并前HEAD相同，不移除CGAL/GMP/MeshLib；指纹按最终合并源码重算，当前检查与未重新打包边界见实施记录。"
+  "source_fingerprint": "sha256:2dd98a34f66473024af142bdfd9b27d765aee96c4372458fe5a5f50337cdb764",
+  "reason": "在linux/release2_3_2合入69fe8a45bc：仅移除退休的报告专用SliceAnalysisGeometry源表项；保留发布分支工具链绑定缓存、3G ccache、source_ref、并发控制、180分钟预算、无PCH及MeshLib静态ZLIB/运行库闭包/包内回归。构建脚本与合并前HEAD相同，不移除CGAL/GMP/MeshLib；指纹按最终合并源码重算，当前检查与未重新打包边界见实施记录。 现有 GUI 源清单登记 GFDCloudPreset.hpp，无新目标/依赖/开关；回归仍编入 libslic3r_tests，master 的独立缓存重新构建，记录见 EPONE 云导入文档。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。"
 }
 -->
 
@@ -102,6 +102,8 @@ Apple ld 的重复库告警通过链接器探测后才关闭，不重排或删�
 Windows GFD 设备选择的循环辅助实现注册在 `src/slic3r/CMakeLists.txt`，仍编入现有 GUI 库。`SLIC3R_GUI_TESTS=ON` 额外注册独立 `gfd_modal_dialog_tests`，仅编译辅助实现并链接 wx core/base；不为测试链接整套切片／云端业务。该开关默认关闭，运行需交互桌面。`.gitattributes` 仅为本次两个 Windows 诊断 CMD 固定 `eol=crlf`，保证同步代码后的启动器换行格式，不改变其他文件的检出规则。
 
 ## 修改与验证
+
+`GFDCloudPreset.hpp` 登记到现有 GUI 源清单；工艺合成没有 GUI 依赖，EPONE 和真实 3MF 回归编入已有 `libslic3r_tests`。无新增构建目标/依赖，当前 master 的应用/测试构建身份见 [EPONE 记录](../validation/2026-10-24-epone-cloud-preset-roundtrip.md)。
 
 `test_macos_build_compatibility.py` 以小型原生 Mach-O 测构建入口、缓存、校验工具、双架构与签名，
 并实际探测 CMake 告警选项；替换昂贵的源码/应用构建，不把夹具通过视为完整应用各架构验收。

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "formats",
-  "source_fingerprint": "sha256:841d3cf3eba5ec31986efa09e7ef76ae6380b26eebf11445fb8233c6d8df1c1a",
-  "reason": "共享3MF导出器预检被序列化的盘成员；实际写出时复查对象/实例及导出映射，失败返回false并沿用临时文件回滚。纯G-code盘和未选中盘语义保留，增加PlateReferences测试。"
+  "source_fingerprint": "sha256:ce8d35243fe1e685f3ece8d9198a366494014fca597c8a119fdf8cc471d15682",
+  "reason": "仅在 test_3mf 增加差量/全量工艺的真实归档读写回归，使用云导入相同的 LoadConfig/CheckVersion 入口；格式源码、协议和导出表示未改。"
 }
 -->
 
@@ -46,6 +46,8 @@ GUI与CLI共用的3MF导出器在写盘成员前拒绝负数/越界对象及实�
 `[PlateReferences]` 覆盖普通/切片包负数与越界对象/实例、缺盘数据、导出中新增但未进入映射的对象、晚期失效成员、已有文件保护及纯G-code无模型导出。该测试与 `[SlicedExport]` 不替代GUI保存交互；手测步骤及构建身份见[修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。
 
 ## 修改与验证
+
+`[CloudProcess]` 通过临时 3MF 写入/读取比较差量与全量嵌入工艺，调用云导入同样的 `LoadConfig | CheckVersion` 入口，再验证工程有效线宽、树状支撑和填充值。格式读写源码未变；结果和 GUI 待验见 [EPONE 记录](../validation/2026-10-24-epone-cloud-preset-roundtrip.md)。
 
 改格式优先做读写往返、模型变换／盘名／颜色／配置保持、损坏输入拒绝；图片还检查 RGB/RGBA、方向和非法尺寸。外部产品互通需使用具体版本实际验证。
 

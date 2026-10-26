@@ -35,7 +35,7 @@ public:
         unsigned    timeout_ms,
         size_t      memory_limit_mb,
         RssReader   rss_reader   = current_reconstruction_resident_bytes,
-        ClockReader clock_reader = [] { return Clock::now(); });
+        ClockReader clock_reader = [] { return std::chrono::steady_clock::now(); });
 
     // Call only from the coordinating caller thread. These functions do not
     // throw; reader failures latch MonitorFailed. The first stop reason wins.

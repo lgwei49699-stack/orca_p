@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "resource-profiles",
-  "source_fingerprint": "sha256:17b2fa418a26404eff410fd1cf97bc0a04ae680b64d643c023bc58d134d20656",
-  "reason": "本轮变更仅触及共享 Plater/预设/翻译文件中的云导入隔离逻辑；本模块正文流程无新增行为，合并后Mac arm64应用和测试目标已重新构建；回归结果及云导入GUI待验边界见模型修复主记录，不把构建通过当完整业务验收。"
+  "source_fingerprint": "sha256:c9d8e0cbdfd0a8ab0453d86f5e8a20659915262b5e63c7c28e725b173079540c",
+  "reason": "共享 EPONE 测试新增云导入回归，EPONE/Pro/Plus 资源、默认值和版本均未修改；无需改正文。"
 }
 -->
 
