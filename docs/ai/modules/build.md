@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:2dd98a34f66473024af142bdfd9b27d765aee96c4372458fe5a5f50337cdb764",
-  "reason": "在linux/release2_3_2合入69fe8a45bc：仅移除退休的报告专用SliceAnalysisGeometry源表项；保留发布分支工具链绑定缓存、3G ccache、source_ref、并发控制、180分钟预算、无PCH及MeshLib静态ZLIB/运行库闭包/包内回归。构建脚本与合并前HEAD相同，不移除CGAL/GMP/MeshLib；指纹按最终合并源码重算，当前检查与未重新打包边界见实施记录。 现有 GUI 源清单登记 GFDCloudPreset.hpp，无新目标/依赖/开关；回归仍编入 libslic3r_tests，master 的独立缓存重新构建，记录见 EPONE 云导入文档。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。"
+  "source_fingerprint": "sha256:39be1256729d71c95a92578b1b4584fb758325f24366cf2d9510103692e8fdb0",
+  "reason": "在linux/release2_3_2合入69fe8a45bc：仅移除退休的报告专用SliceAnalysisGeometry源表项；保留发布分支工具链绑定缓存、3G ccache、source_ref、并发控制、180分钟预算、无PCH及MeshLib静态ZLIB/运行库闭包/包内回归。构建脚本与合并前HEAD相同，不移除CGAL/GMP/MeshLib；指纹按最终合并源码重算，当前检查与未重新打包边界见实施记录。 现有 GUI 源清单登记 GFDCloudPreset.hpp，无新目标/依赖/开关；回归仍编入 libslic3r_tests，master 的独立缓存重新构建，记录见 EPONE 云导入文档。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。 2026-10-27复核：既有Linux包内验证复用固定位置夹具补跑局部计划/真实FIFO/精简3MF回归并归档证据；不更改编译选项、缓存、版本或切片算法。"
 }
 -->
 
@@ -56,7 +56,7 @@ ZLIB 配置回归单独覆盖 Linux 系统 `FindZLIB` 的真实导入目标：ON
 
 本次公开版本为 `2.3.2.3-Release`，用于识别固定位置切片修复；内部兼容版本不变。
 `.github/workflows/build-linux.yml` 在上传 AppImage／创建 Release 前解压刚生成的包，清除显示服务环境变量，
-调用包内 AppRun 执行 `test_cli_fixed_position_slice.py`，再复用其自带参数执行 `test_cli_oversized_arrange.py` 验证单/多盘JSON及实际3MF一致性。没有 G-code、分盘返回错误或任何回归失败即停止发布，
+调用包内 AppRun 执行 `test_cli_fixed_position_slice.py`，再复用其自带参数执行 `test_cli_oversized_arrange.py` 验证单/多盘JSON及实际3MF一致性，并执行 `test_cli_regional_layer_plan.py` 验证局部计划、真实FIFO进度及精简3MF导出。没有 G-code、分盘返回错误或任何回归失败即停止发布，
 另以 always 步骤保存测试证据、AppImage 和包内可执行文件 SHA256。原有文件存在检查只代表文件生成，
 不再宣称可部署。该门槛针对此工作流；本地编译通过不代表 Linux 镜像或业务配置已验证，状态见
 [固定位置切片修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。

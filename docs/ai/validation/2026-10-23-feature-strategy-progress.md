@@ -2,6 +2,23 @@
 
 ## 当前执行状态
 
+- 2026-10-27 本地修复验证完成：发布目录orca-slicer/linux/release2_3_2@a7dcee2ce上仅修改1行业务代码，在显式局部计划允许动作中增加pipe/min_save，修复QA进度回传和EP7精简3MF的同类误拒绝。42个局部计划/真实FIFO组合、64个普通固定位置/多盘场景通过；真实QA模型8次出码完成，计划159→166模型层、两个窗口实现、128个窗口外层位保持。旧程序自身也有树支撑路径波动，真实模型不宣称整份G-code逐字一致；新旧模型非支撑正挤出段/挤出量与质量角色指标一致，详情如下。用户已授权审核后提交、推送并触发GitHub打包；提交前本地验证完成，Linux新包结果另以该提交的Actions运行记录为准。QA仍需更新Orca/Slicer镜像及Web静态资源后复验，未部署/打印。GUI无新入口、共享算法/服务源码未改；本目录无CodeGraph索引，MCP未暴露、CLI已安装，按本分支文档/源码定位，不初始化。
+
+### 2026-10-27：局部计划与服务进度、精简导出的兼容修复
+
+- 基准/范围：orca-slicer 的 linux/release2_3_2@a7dcee2ce，起始工作区干净；不是在orca-slicer-soft的未提交业务上开发。QA失败实验fa79883d-6b8e-4a63-b4b7-59fc73a8e4c4及下载快照沿用上一轮。PDS origin/develop@685c1a42正常创建FIFO并传入pipe；EP7另传export-3mf/smooth-m73-progress/min-save。源码追踪确认pipe只启停/发送进度，min_save只为导出SaveStrategy增加SkipModel；没有新增模型变换、参数改写或算法调用。
+- 最小修复：src/OrcaSlicer.cpp同一allowed_actions集合仅加pipe/min_save。保持单STL/单slice、固定姿态、禁修复/全局层高/缓存、输入哈希及实际层位约束。普通请求没有局部计划时不进入此检查；GUI没有这项CLI入口，共享Print/支撑/填充/G-code算法均无差异。没有删除校验、关闭进度或关闭计划来绕过错误。
+- 先复现后修复：原程序SHA256=0b1840894588678fdd59686176e7f19be196502e1dc597060af35c5a699b1e72。独立min-save组合返回254/-2；新增真实FIFO回归在fixed-pipe通过后准确失败于regional-pipe返回254/-2。首次测试命令误用相对二进制路径，在进入切片前FileNotFoundError；改为绝对路径重跑，原失败日志保留，不作为业务结论。
+- 最小构建：核对无并发构建，当前目录arm64/Ninja Multi-Config/Release/MeshLib OFF，执行cmake --build build/arm64 --config Release --target OrcaSlicer --parallel 2，退出0。只重编CLI翻译单元并链接，既有头文件警告保留。新应用SHA256=fb6aeefba077c1e4a94787f70ef77c82c813f815159e36989ea697f2246a15fb；源码、测试、CMakeCache和新旧程序身份保存final-identities.json。
+- 持久回归：扩展既有scripts/test_cli_regional_layer_plan.py，使用mkfifo和真实cat读取端，成功必须收到合法单调进度并到100、读端能正常退出，失败也清理读端与FIFO。覆盖普通/局部/报告开关/细节优化/EP7完整与精简3MF、无export-model-transforms的真实服务动作组合；核对G-code可执行指令一致、包内G-code与独立文件一致，非法计划/姿态/配置及带pipe的修复/缓存仍拒绝。最终42例通过（final-regional/completed.json），不累计中途同样42例。旧程序普通带/不带pipe均与新程序对照一致。
+- 普通流程：test_cli_fixed_position_slice.py 64场景全部通过，含STL/OBJ、固定位置、多盘/自动分盘、禁用对象、越界、报告开关、工程导出与盘选择；每个案例的进程/JSON/产物均核对，非只检查退出0。未修改排列或模型导入源码；没有重新运行无关全量算法测试冒充本次增量覆盖。
+- QA原模型：使用下载的A/B快照（EP3Plus/PLA/0.4mm）、模型SHA=e5c13c00cf05e6dfb7be3c6a9da3cfca24416a0ba528314c72504da33df6ae18和原局部计划，统一居中50.5,50.5、缩放1/旋转0；执行新旧A各2次、同B固定层基线、B局部计划无管道/有管道/有管道无报告共8次，全部成功出码。计划两个区间Z10.44–14.24为23层、Z20.84–23.24为15层；159→166个模型层，128个范围外层位、129个同Z截面核对无变化。计划不会因为放行pipe变为全局自适应，报告不自动修改参数/重切。
+- 真实模型差异如实保留：最初整份G-code逐行断言失败，停止结论并重复旧程序；旧对旧同样不一致。四次A报告配置完全相同，8类非支撑质量角色完整指标完全相同，实际非支撑G1正挤出段XYZ与五位小数挤出量一致；支撑及接触面路径变化伴随空移/回抽/估时波动，旧程序估时7652.33→7681.51秒，新程序7678.84→7689.33秒。B的pipe/报告开关对照同样验证非支撑实际挤出段/挤出量一致，计划范围通过；不宣称真实树支撑整文件确定性或物理质量改善。支撑算法无改动，本轮不顺便改写其既有非确定性。
+- 检查与交付：已更新CLI/测试工具/构建正文及指纹。GitHub既有包内回归步骤复用固定位置测试夹具补跑局部计划/FIFO/精简3MF脚本，并一并上传证据；不变更打包版本、缓存或构建配置。总业务变化仅上述一行；新增代码位于回归脚本，无新生产抽象、版本、依赖或配置。GUI实际操作、目标Linux新包、真实QA新版本和实印未验；普通GUI应继续默认切片，复用既有GUI单/多模型检查清单。发布前需在目标Linux包运行同一FIFO/精简3MF回归，并更新Slicer引用；QA前端当前旧资源另按Web develop@c33dd53核对重发，不以本地修复代替部署成功。
+- 提交前打包验证：复用Linux工作流所用固定位置夹具，在当前同身份macOS程序运行40项局部计划回归全部通过（不传旧程序，故少2项旧程序对照）；YAML解析及新增包内验证Shell语法通过。Linux目标平台结果待GitHub新包实际运行，不以本地结果代替。
+- 证据目录：/var/folders/yf/phh21zl17kq613y4x_6dc0n40000gn/T/orca-pipe-review-20261026.jhwdeq_w 。build.log、final-regional/、fixed/和qa-model/保留输入身份/命令/返回/报告/进度及scope.json；qa-model/completed.json明确whole_gcode_identical=false和已复现旧支撑波动，原失败脚本及日志不覆盖。未动QA数据、打印机、其他服务源码和另一个工作区的无关改动。
+
+
 - 当前入库审核：用户确认将 Orca 本轮冗余收敛并入已推送的 `25ab0b2b91`，相对父提交 `8cd9900c98` 整理为一笔中文提交，本次不推送。累计原生调用链与本轮增量复核未发现阻塞项；普通切片、显式计划和只读报告边界及构建身份已核对，具体证据见下方“合并入库复核”。其他服务、无关文档、下载工具及 result.json 不纳入；合并后的实际提交身份以 Git 记录为准。
 - 当前完成：2026-10-23 本轮冗余收敛已实现，Orca基准25ab0b2b91加当前工作区；PDS/PAM/Compare/Web基准同下。统一PAM当前质量规则、删除生产候选协商和保护空分支；Compare只冻结，PDS入口校验与命令透传，Orca单次输入SHA及实际配置/层位检查。32局部计划+17报告CLI、PAM195、PDS85、Compare90、Web286项及Web构建通过；Python175项、35模块文档检查及五仓diff检查通过。当前原生SHA为2d8393293736f17c469f627f4c443ffeb417ff3322f10a027af8a78533e004f9。未提交/推送/部署/打印；GUI和真实服务联调未执行。
 - 上一批历史记录：按用户要求简化服务层层高接入。Orca 已提交基准为 `25ab0b2b91`，本轮不改其算法；PDS 基准 `1fb202e6`、PAM `e370b77e`、Compare `510687ac`、Web `develop@cc913e74` 加已有工作区改动。已删除 PDS 重复 SHA/策略数值检查和额外 UUID 回执，入口校验保留实际必需约束，质量策略改明确布尔开关；Web 和离线工具已同步。PDS84/PAM110/Compare90/Web286/Python175项通过，Web生产构建通过。既有其他工作区改动保留，本轮未提交、推送、部署或打印，详细证据见下节。

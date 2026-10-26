@@ -247,7 +247,7 @@ jobs:
     
     # Exercise the packaged executable, not just the build-tree binary. This
     # catches missing G-code and incorrect single/multi-plate JSON before release.
-    - name: Verify packaged CLI slicing and arrangement
+    - name: Verify packaged CLI slicing, arrangement and regional plans
       shell: bash -e {0}
       run: |
         set -o pipefail
@@ -271,6 +271,12 @@ jobs:
           --process "${VERIFY_DIR}/results/process.json" \
           --filament "${VERIFY_DIR}/results/filament.json" \
           --outputdir "${VERIFY_DIR}/arrangement-results"
+        env -u DISPLAY -u WAYLAND_DISPLAY python3 scripts/test_cli_regional_layer_plan.py \
+          --binary "${VERIFY_DIR}/app/squashfs-root/AppRun" \
+          --machine "${VERIFY_DIR}/results/machine.json" \
+          --process "${VERIFY_DIR}/results/process.json" \
+          --filament "${VERIFY_DIR}/results/filament.json" \
+          --output-dir "${VERIFY_DIR}/regional-results"
 
     - name: Upload CLI slicing evidence
       if: ${{ always() }}
@@ -280,6 +286,7 @@ jobs:
         path: |
           ${{ runner.temp }}/orca-cli-slice-check/results
           ${{ runner.temp }}/orca-cli-slice-check/arrangement-results
+          ${{ runner.temp }}/orca-cli-slice-check/regional-results
           ${{ runner.temp }}/orca-cli-slice-check/identity.txt
           ${{ runner.temp }}/orca-cli-slice-check/extract.log
         if-no-files-found: ignore

@@ -3,8 +3,10 @@
 import argparse
 import copy
 import json
+import os
 from pathlib import Path
 import subprocess
+import zipfile
 
 from test_cli_slice_analysis import digest, save_json
 from test_cli_slice_features import write_stl
@@ -44,7 +46,8 @@ def main():
     summary = {}
 
     def run(name, value=None, pose=(1.,0.,0.,0.), extra=(), error=False, report=True, binary=None, raw=None,
-            process_override=None, machine_override=None, filament_override=None):
+            process_override=None, machine_override=None, filament_override=None, progress=False,
+            export_transforms=True):
         case = root/name
         case.mkdir()
         paths = [args.machine, process_path, args.filament]
@@ -58,18 +61,35 @@ def main():
         command = [str(binary or args.binary), '--datadir', str(case/'data'), '--debug', '1', '--slice', '0',
             '--load-settings', str(paths[0])+';'+str(paths[1]), '--load-filaments', str(paths[2]),
             '--outputdir', str(case/'output'), '--arrange', '0', '--auto-plate', '0', '--ensure-on-bed',
-            '--auto-repair-model', '0', '--export-model-transforms', '--model', model.name,
+            '--auto-repair-model', '0', '--model', model.name,
             '--model-position', '80,90,0', '--model-scale', str(pose[0]), '--model-rotate', ','.join(map(str,pose[1:]))]
+        if export_transforms:
+            command.append('--export-model-transforms')
         if report:
             command.append('--slice-analysis-report')
+        if progress:
+            command += ['--pipe', str(case/'progress.pipe')]
         if value is not None or raw is not None:
             path = case/'plan.json'
             path.write_text(raw if raw is not None else json.dumps(value))
             command += ['--model-layer-height-plan', str(path)]
         command += list(extra) + [str(model)]
         save_json(case/'command.json', command)
-        with (case/'stdout.log').open('wb') as log:
-            result = subprocess.run(command, cwd=case, stdout=log, stderr=subprocess.STDOUT, timeout=120)
+        with (case/'stdout.log').open('wb') as log, (case/'progress.jsonl').open('wb') as progress_log:
+            reader = None
+            try:
+                if progress:
+                    os.mkfifo(case/'progress.pipe')
+                    reader = subprocess.Popen(['cat', str(case/'progress.pipe')], stdout=progress_log)
+                result = subprocess.run(command, cwd=case, stdout=log, stderr=subprocess.STDOUT, timeout=120)
+                if reader is not None and result.returncode == 0:
+                    assert reader.wait(timeout=5) == 0, 'Progress reader did not finish'
+            finally:
+                if reader is not None:
+                    if reader.poll() is None:
+                        reader.terminate()
+                    reader.wait(timeout=5)
+                    (case/'progress.pipe').unlink()
         result_path = case/'output/result.json'
         native = json.loads(result_path.read_text()) if result_path.exists() else {}
         row = {'exit_code': result.returncode, 'return_code': native.get('return_code'), 'passed': False}
@@ -80,11 +100,19 @@ def main():
             assert not list((case/'output').glob('*.gcode')), name
         else:
             assert result.returncode == 0 and native.get('return_code') == 0, (name, row)
-            transforms = native['model_transforms']
-            assert len(transforms) == 1, transforms
-            assert all(abs(a-b) < 1e-4 for a,b in zip(transforms[0]['position'], [80,90,0])), transforms
+            if export_transforms:
+                transforms = native['model_transforms']
+                assert len(transforms) == 1, transforms
+                assert all(abs(a-b) < 1e-4 for a,b in zip(transforms[0]['position'], [80,90,0])), transforms
             if report:
                 load_artifacts(case)  # Actual G-code and native report must both parse.
+            if progress:
+                messages = [json.loads(line) for line in (case/'progress.jsonl').read_text().splitlines()]
+                percentages = [message['total_percent'] for message in messages]
+                assert percentages and percentages[-1] == 100, (name, messages)
+                assert all(0 <= percent <= 100 for percent in percentages), (name, percentages)
+                assert percentages == sorted(percentages), (name, percentages)
+                row['progress_messages'] = len(messages)
         row['passed'] = True
         save_json(root/'summary.json', summary)
         print(name, 'PASS', flush=True)
@@ -107,6 +135,32 @@ def main():
         assert commands(before) == commands(fixed), 'Ordinary slicing changed'
         _, before_fact, _ = load_artifacts(before)
         assert before_fact['configuration'] == baseline_fact['configuration']
+    if os.name == 'posix':
+        fixed_pipe = run('fixed-pipe', progress=True)
+        regional_pipe = run('regional-pipe', plan, progress=True)
+        regional_pipe_no_report = run('regional-pipe-no-report', plan, progress=True, report=False)
+        assert commands(fixed_pipe) == commands(fixed), 'Pipe changed ordinary G-code'
+        assert commands(regional_pipe) == commands(regional), 'Pipe changed regional G-code'
+        assert commands(regional_pipe_no_report) == commands(regional), 'Pipe/report changed regional G-code'
+        if args.before_binary:
+            before_pipe = run('before-fixed-pipe', progress=True, binary=args.before_binary)
+            assert commands(before_pipe) == commands(fixed_pipe), 'Ordinary service slicing changed'
+        service_flags = ['--allow-multicolor-oneplate', '--optimize-model-detail-paths', '1']
+        service = run('service-detail', plan, extra=service_flags, export_transforms=False)
+        service_pipe = run('service-detail-pipe', plan, extra=service_flags, progress=True, export_transforms=False)
+        assert commands(service_pipe) == commands(service), 'Service pipe changed detail G-code'
+        package_flags = service_flags + ['--export-3mf', 'slice.gcode.3mf', '--smooth-m73-progress', '1']
+        package_full = run('service-3mf-full', plan, extra=package_flags, progress=True, export_transforms=False)
+        package_min = run('service-3mf-min', plan, extra=package_flags + ['--min-save'], progress=True, export_transforms=False)
+        assert commands(package_full) == commands(package_min), 'Minimum save changed G-code'
+        for package in [package_full, package_min]:
+            with zipfile.ZipFile(package/'output/slice.gcode.3mf') as archive:
+                embedded = [name for name in archive.namelist() if name.endswith('.gcode')]
+                assert len(embedded) == 1, archive.namelist()
+                assert archive.read(embedded[0]) == (package/'output/plate_1.gcode').read_bytes()
+        for name, extra in [('repair', ['--repair-model','cgal']),
+                            ('cache', ['--export-slicedata',str(root/'pipe-cache')])]:
+            run('pipe-conflict-'+name, plan, extra=extra, progress=True, error=True)
     # The 1.25 budget belongs to PAM, not the native execution contract.
     lower_budget = copy.deepcopy(plan)
     lower_budget['minimumMm'] = .12

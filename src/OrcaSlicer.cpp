@@ -1671,7 +1671,7 @@ int CLI::run(int argc, char **argv)
             const std::set<std::string> allowed_transforms =
                 {"model",         "model_position",          "model_scale",   "model_rotate", "model_process",
                  "model_support", "model_layer_height_plan", "ensure_on_bed", "arrange",      "auto_plate"};
-            const std::set<std::string> allowed_actions = {"slice", "export_3mf", "export_model_transforms"};
+            const std::set<std::string> allowed_actions = {"slice", "export_3mf", "export_model_transforms", "pipe", "min_save"};
             CLIRegionalLayerPlan::require(m_input_files.size() == 1 && m_model_cli_specs.size() == 1 &&
                                               boost::algorithm::iends_with(m_input_files.front(), ".stl") &&
                                               std::count(m_actions.begin(), m_actions.end(), "slice") == 1 &&
