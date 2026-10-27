@@ -3248,6 +3248,115 @@ struct RaftMergeTemporaryPath
 };
 } // namespace
 
+TEST_CASE("Cura raft gap survives intervening support without hiding missing paths", "[SupportMaterial][Raft][CuraV1][RaftGap]")
+{
+    const std::string scenario = GENERATE("healthy", "shared_contact", "empty_contact", "ordinary_contact", "empty_first_raft",
+                                          "empty_first_model", "empty_middle", "raised_model", "legacy");
+    const bool        sequential = GENERATE(false, true);
+    CAPTURE(scenario, sequential);
+    DynamicPrintConfig config = raft_bed_test_config();
+    config.set_key_value("print_sequence",
+                         new ConfigOptionEnum<PrintSequence>(sequential ? PrintSequence::ByObject : PrintSequence::ByLayer));
+    if (scenario == "legacy")
+        config.set_key_value("raft_mode", new ConfigOptionEnum<RaftMode>(RaftMode::Legacy));
+    config.set("enable_prime_tower", false);
+    config.set("layer_height", 0.08);
+    config.set("initial_layer_print_height", 0.4);
+    config.set("raft_base_layer_height", 0.3);
+    config.set("raft_interface_layer_height", 0.3);
+    config.set("raft_surface_layer_height", 0.08);
+    config.set("raft_airgap", 0.5);
+    config.set("raft_contact_distance", 0.5);
+    config.set("raft_layer_0_z_overlap", 0.);
+    config.set("support_top_z_distance", 0.2);
+    config.set("support_bottom_z_distance", 0.2);
+    for (const std::string& key : config.keys()) {
+        const auto* option     = dynamic_cast<const ConfigOptionEnumsGeneric*>(config.option(key));
+        const auto* definition = print_config_def.get(key);
+        if (option && !option->keys_map && definition && definition->enum_keys_map) {
+            auto* mapped   = new ConfigOptionEnumsGeneric(definition->enum_keys_map);
+            mapped->values = option->values;
+            config.set_key_value(key, mapped);
+        }
+    }
+    Model        model;
+    ModelObject* cube = model.add_object();
+    cube->name        = "raft contact gap";
+    cube->add_volume(make_cube(8., 8., 2.));
+    cube->add_instance()->set_offset(Vec3d(40., 40., 0.));
+    Print print;
+    process_raft_bed_test(print, model, config);
+    PrintObject*  object  = print.get_object(0);
+    SupportLayer* contact = object->support_layers().back();
+    const auto&   params  = object->slicing_parameters();
+    REQUIRE(contact->id() + 1 == params.raft_layers());
+    REQUIRE(contact->print_z == Approx(params.raft_contact_top_z));
+    REQUIRE(contact->has_extrusions());
+    REQUIRE(object->layers().size() > 12);
+
+    // Ordinary support can end inside the intentional raft-to-model gap.
+    // Its rounded 0.24 mm contact distance must not replace the 0.5 mm raft gap.
+    auto*         support = object->add_support_layer(int(params.raft_layers()), 0, 0.25, contact->print_z + 0.25);
+    ExtrusionPath path(erSupportMaterial, 0.1, 0.4f, 0.25f);
+    path.polyline = Polyline({Point::new_scale(-2., -2.), Point::new_scale(2., -2.)});
+    support->support_fills.append(path);
+    const auto clear_model_layer = [](Layer* layer) {
+        for (LayerRegion* region : layer->regions()) {
+            region->perimeters.clear();
+            region->fills.clear();
+        }
+    };
+    if (scenario == "empty_contact" || scenario == "shared_contact") {
+        contact->support_fills.clear();
+        contact->raft_entity_flags.clear();
+    } else if (scenario == "ordinary_contact") {
+        // A support path at the raft height is not evidence of a raft contact.
+        std::fill(contact->raft_entity_flags.begin(), contact->raft_entity_flags.end(), 0);
+    } else if (scenario == "empty_first_raft") {
+        object->support_layers().front()->support_fills.clear();
+    } else if (scenario == "empty_first_model") {
+        clear_model_layer(object->layers().front());
+    } else if (scenario == "empty_middle") {
+        for (size_t i = 3; i < 11; ++i)
+            clear_model_layer(object->layers()[i]);
+    } else if (scenario == "raised_model") {
+        for (Layer* layer : object->layers())
+            layer->print_z += 0.1;
+    }
+    // Recompute tool ordering while retaining the deliberately modified paths.
+    config.set("prime_tower_width", config.opt_float("prime_tower_width") + 1.);
+    print.apply(model, config);
+    REQUIRE_FALSE(print.is_step_done(psWipeTower));
+    REQUIRE(object->is_step_done(posInfill));
+    REQUIRE(object->is_step_done(posSupportMaterial));
+    if (scenario == "empty_first_raft") {
+        REQUIRE_THROWS_AS(print.process(), SlicingErrors);
+        return;
+    }
+    // This flag is the merge subsystem's contract for a contact emitted by a
+    // neighbouring owner; real multi-object merging has its own regression tests.
+    contact->raft_covered_by_shared_paths = scenario == "shared_contact";
+    print.process();
+    const auto check_warnings = [&](PrintStep step) {
+        const auto warnings            = print.step_state_with_warnings(step).warnings;
+        const bool empty_layer_warning = std::any_of(warnings.begin(), warnings.end(), [](const PrintStateBase::Warning& warning) {
+            return warning.message_id == PrintStateBase::SlicingEmptyGcodeLayers;
+        });
+        REQUIRE(empty_layer_warning == (scenario != "healthy" && scenario != "shared_contact"));
+    };
+    check_warnings(psSkirtBrim);
+    const RaftMergeTemporaryPath output(".gcode");
+    struct ResourceGuard
+    {
+        std::string previous = resources_dir();
+        ~ResourceGuard() { set_resources_dir(previous); }
+    } resources;
+    set_resources_dir((boost::filesystem::path(TEST_DATA_DIR).parent_path().parent_path() / "resources").string());
+    GCodeProcessorResult result;
+    REQUIRE_NOTHROW(print.export_gcode(output.path.string(), &result, nullptr));
+    check_warnings(psGCodeExport);
+}
+
 TEST_CASE("Four independent legs share overlapping rafts while a distant tabletop stays independent", "[SupportMaterial][Raft][Merge]")
 {
     const auto style = GENERATE(smsGrid, smsSnug, smsTreeOrganic, smsTreeSlim, smsTreeStrong, smsTreeHybrid);

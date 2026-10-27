@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:d7dc8eeff45ade7c385811970dbaa0634964f8ac2b2be324ff6998cc9bb28faf",
-  "reason": "在现有 fff_print_tests 添加 OffsetFill 合成模型回归，16 组参数检查五层路径、覆盖范围/面积和床面边界；无新测试目标、依赖或外部夹具。正文链接修复前后证据及 GUI 交接。"
+  "source_fingerprint": "sha256:1d8d1ec5e2c0054f7a8cd34afe898f950bbb26aaa2dc27a907bd4d202631d8f2",
+  "reason": "新增 [RaftGap]：同一夹具覆盖 9 场景×逐层/逐对象，共 18 组，包含计划气隙、共享接触层、真实缺层、错位首层及 legacy；同时检查 Print::process 与 G-code 导出告警。无新目标、依赖或外部夹具，91 用例回归通过，实际模型 CLI 与 GUI 验证见对应记录。"
 }
 -->
 
@@ -128,6 +128,10 @@ Windows GUI 采集在 2026-10-09 收到同事现场 JSON：64 位 Windows PowerS
 打包子进程 PATH 中的 spctl/xattr/sudo
 替身记录调用并失败，要求没有调用记录，防止把说明命令变成自动操作；不实际关闭 Gatekeeper，
 不把内容及签名完整性检查当成目标系统的首次启动放行验证。
+
+筏层 `[RaftGap]` 以小立方体和气隙内普通支撑路径构造误报，检查处理及导出阶段。
+删除接触路径、来源标记、模型首层/中部路径、移动模型首层以及切回 legacy 均有负例，
+共享接触覆盖单独验证；实际模型及 GUI 交接见[10-27 记录](../validation/2026-10-27-raft-bottom-empty-layers.md)。
 
 筏层 `[OffsetFill]` 在同一测试目标中用两个长方体合成 0.10／0.25 mm 双薄片，覆盖普通／树状、
 有墙／无墙、正反偏心及分块开关，共 16 组参数；逐层检查物理 Z、路径覆盖范围／面积和床面边界。

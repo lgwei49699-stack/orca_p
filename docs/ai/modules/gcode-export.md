@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gcode-export",
-  "source_fingerprint": "sha256:0a0cf5103f8a5186f982eb946db1284e665b09010bae6a353be5f2f6b07133a2",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，只在模型检测组合解释；GCode/GCodeWriter、指令风格、速度流量、后处理及GUI导出路径未改，证据流程不输出G-code。"
+  "source_fingerprint": "sha256:d2bb73c909b850ae0519fe4e493deac985631e85a98181515612966a1b2cb038",
+  "reason": "复核 collect_layers_to_print：仅 Cura V1 真实接触层（来源标记且有体积，或已共享覆盖）允许计划模型首层跨越气隙，普通支撑不能取代该锚点；缺层、错位首层和 legacy 保留原检查。正文补充处理/导出共用规则，RaftGap 与实际模型对照通过。"
 }
 -->
 
@@ -25,6 +25,10 @@ GCode 消费 Print 的层和挤出集合，协调工具顺序、接缝、回抽�
 `total_layer_count`、导出总层数与按层进度使用实际将输出的层组数：工具顺序建立后，以 `process_layer` 相同的“extruders 非空”条件计数，在展开启动代码前完成。复用 `collect_layers_to_print` 的真实层组与 Z 合并规则；逐层按全盘合并、逐对象按各对象实例数累加。不能只看模型层 `has_extrusions`，否则会漏掉支撑、筏层或擦料塔独占的层。空组仍留在原输出管线，不通过删层改变几何、冷却或已有空层检查；逐对象缓存层组，避免对每个副本重复收集/校验。
 
 文件头层数仍由 GCodeProcessor 解析实际换层标签后填入；本次修正上游计数，不在后处理里搜索替换用户机器代码。`max_z_height` 保留原有计划最高模型层语义，不把它当作实际最后一个挤出层，也不调整尺寸或安全抬升。
+
+Cura V1 的首层间隙校验保留实际垫层接触面锚点：层号与计划顶面一致、来源标记对应的路径有挤出体积，或接触层已由合并垫层覆盖。即使普通支撑先打印到气隙中，也可允许有实际路径且位于 `raft_contact_top_z + gap_raft_object + first_object_layer_height` 的模型首层通过。该条件不扩大后续层、错位首层、无接触路径或 legacy 的允许间隙，不用额外容差掩盖缺层。
+
+GUI 的处理阶段（`Print::process` 内 psSkirtBrim）与 GUI/CLI 导出均调用同一 `collect_layers_to_print`；两阶段一起覆盖。具体正反例及 GUI 实测见[底部空层修复](../validation/2026-10-27-raft-bottom-empty-layers.md)。
 
 ## 配置与约束
 

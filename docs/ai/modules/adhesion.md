@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "adhesion",
-  "source_fingerprint": "sha256:8d06b1a2734d63d2ce0161374e116bf669e7a89fcd16bec5437050eb321234df",
-  "reason": "指纹变化来自共享 test_support_material.cpp 新增 OffsetFill 双薄片回归；Brim/Skirt 源码及配置未改，原床面裁剪断言复用。复核无需调整附着业务正文，相关既有用例纳入筏层专项。"
+  "source_fingerprint": "sha256:e6ba749e548e5278da029e974af13e395696e27371b4e5728569cdd42fe6f2fb",
+  "reason": "本次共享 test_support_material.cpp 新增 RaftGap 回归，验证 psSkirtBrim 调用共享空层检查的结果；未改 Brim/Skirt 几何、参数或床面裁剪，无需调整附着业务正文。完整筏层和 LayerCount 专项通过。"
 }
 -->
 

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "fill",
-  "source_fingerprint": "sha256:4808fd0471d6c2890d28ddfd352552a3a25e7c11d48c77fe7496d537fc7e0a19",
-  "reason": "本轮只修改支撑调用侧 ZigZag 的坐标系；FillRectilinear 通用实现、模型填充、增强路径的搭墙延伸限制未变。复核新增覆盖面积断言，正文明确两项修复相互独立。"
+  "source_fingerprint": "sha256:9275ef42f5fab52e8427db2ad584f19f8e4fb0b983c1bffb6db9fd167a4535ce",
+  "reason": "本次指纹变化仅来自共享 test_support_material.cpp 新增 RaftGap 正反例；填充器、ZigZag 坐标修复和模型填充未修改。勺子真实模型修复前后 179374 条运动指令相同，无需改填充业务正文。"
 }
 -->
 

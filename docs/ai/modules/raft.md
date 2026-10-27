@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "raft",
-  "source_fingerprint": "sha256:ceb41eda44f61f0aac5790c88bce3cce2489e123013ae3a5dab34f217ce15ba6",
-  "reason": "复核普通 CuraV1 与 RaftMerge 调用：偏心区域由 SupportCommon 居中，已居中合并路径不变；层数、气隙、分块裁剪和告警保持。新增 OffsetFill 回归，正文记录范围与验证。"
+  "source_fingerprint": "sha256:59df68c888df50178c394e3ddc58c1adc2a452ce617b930fa282bde00aacfab3",
+  "reason": "新增 Cura V1 接触面锚点校验，普通支撑插入气隙时只允许真实计划首层通过；不改 RaftPlan、气隙、路径生成及模板。正文链接 18 组 RaftGap 正反例、91 用例回归和 GUI 实测；master 偏心垫层旧修复已复验，无重复改动。"
 }
 -->
 
@@ -49,6 +49,10 @@ RaftPlan 将基底／中间／顶部三个阶段解析成物理层的 Z、厚度
 
 偏心双薄片 `[OffsetFill]`、完整筏层专项和左右上角真实任务 CLI 结果，及重切／预览的 GUI 交接，
 见[10-25 修复记录](../validation/2026-10-25-cura-raft-offset-fill.md)。
+
+Cura V1 合法首层气隙被中间普通支撑误判的问题由共享 GCode 检查修复，不改生成参数或支撑形状。
+只允许有真实垫层接触路径且模型首层位于计划高度的情况；真正缺少模型首层路径的梵高对照仍报空层。
+实现、自动化与 GUI 实测结果见[10-27 底部空层修复](../validation/2026-10-27-raft-bottom-empty-layers.md)。
 
 ## 分支现状
 

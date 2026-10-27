@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "support",
-  "source_fingerprint": "sha256:0701cf3ab8487650975fecb9e8baedb0a22731aa5c3a1892157cfb54bb393908",
-  "reason": "复核 SupportCommon 的 ZigZag 局部坐标修复：包括无墙、带墙和最后接触层；恢复原包围盒及输出坐标，Rectilinear 和模型采样不变。正文补充生成规则及 GUI/CLI 交接。"
+  "source_fingerprint": "sha256:1747e1414df55a2cad49d1bf24b3ec144dcc34f0adb5c8d4fadf420d5001d4ed",
+  "reason": "本次只改共享 GCode 校验及 RaftGap 测试，SupportCommon/TreeSupport 生成逻辑不变。补充合法气隙误报与真实首层路径缺失的区别；梵高真实缺层 0.32/0.4 对照仍拒绝，不将此项定位标成已修复。"
 }
 -->
 
@@ -52,6 +52,10 @@ CuraV1 中间／顶部的 ZigZag 在 `fill_expolygon_generate_paths` 中使用�
 GUI／CLI 共享入口、真实任务对照及 GUI 待验见[偏心垫层修复](../validation/2026-10-25-cura-raft-offset-fill.md)。
 
 `[FloatingWarning]` 覆盖无挤出微区、真实周长墙、GapFill、实际线宽相交；龙模型优化前后同有效配置运动命令一致。全量支撑旧用例的摆放夹具异常与新专项结果分列，见[验证记录](../validation/2026-10-04-smart-print-engine.md#2026-10-07-悬空微区与切片包导出修正)，不将失败抹成全量通过。
+
+Cura V1 合法首层气隙被中间普通支撑误判的问题由共享 GCode 检查修复，不改生成参数或支撑形状。
+只允许有真实垫层接触路径且模型首层位于计划高度的情况；真正缺少模型首层路径的梵高对照仍报空层。
+实现、自动化与 GUI 实测结果见[10-27 底部空层修复](../validation/2026-10-27-raft-bottom-empty-layers.md)。
 
 ## 关联模块
 
