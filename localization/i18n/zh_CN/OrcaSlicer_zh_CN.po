@@ -19870,8 +19870,8 @@ msgid "Stage report contains invalid mesh coordinates or indices."
 msgstr "阶段报告中的网格坐标或索引无效。"
 
 #: src/libslic3r/ModelStageReport.cpp
-msgid "Stage reports support only uncolored STL files in millimeters."
-msgstr "阶段报告仅支持以毫米为单位的无色 STL 文件。"
+msgid "Stage reports support only STL files in millimeters."
+msgstr "阶段报告仅支持以毫米为单位的 STL 文件。"
 
 #: src/libslic3r/ModelStageReport.cpp
 msgid "Stage report already exists; use a fresh output directory."

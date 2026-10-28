@@ -289,7 +289,8 @@ json base_report()
             {"requires_manual_confirmation", true}};
 }
 
-TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot_sha256 = nullptr, bool share_exact_vertices = false)
+TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot_sha256 = nullptr, bool share_exact_vertices = false,
+                                    bool geometry_only = false)
 {
     if (!fs::is_regular_file(path))
         throw std::invalid_argument(L("STL input is missing or is not a regular file."));
@@ -323,7 +324,7 @@ TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot
     const uint32_t faces = data.size() >= 84 ? read_u32(bytes + 80) : 0;
     if (data.size() >= 84 && data.size() == 84 + uint64_t(faces) * 50) {
         const std::string header(data.data(), 80);
-        if (header.find("COLOR=") != std::string::npos || header.find("MATERIAL=") != std::string::npos)
+        if (!geometry_only && (header.find("COLOR=") != std::string::npos || header.find("MATERIAL=") != std::string::npos))
             throw std::invalid_argument(L("Colored or extended binary STL is not supported by reconstruction."));
         if (faces == 0 || faces > INPUT_FACE_LIMIT)
             throw std::invalid_argument(L("STL exceeds the reconstruction face limit."));
@@ -331,7 +332,7 @@ TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot
         its.indices.reserve(faces);
         for (uint32_t i = 0; i < faces; ++i) {
             const unsigned char* face = bytes + 84 + size_t(i) * 50;
-            if (face[48] != 0 || face[49] != 0)
+            if (!geometry_only && (face[48] != 0 || face[49] != 0))
                 throw std::invalid_argument(L("Colored or extended binary STL is not supported by reconstruction."));
             std::array<Vec3f, 3> vertices;
             for (size_t vertex = 0; vertex < 3; ++vertex)
@@ -378,10 +379,20 @@ TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot
         };
         std::istringstream number;
         number.imbue(std::locale::classic());
-        const auto read_number = [&]() {
-            const std::string token = next_token();
+        const auto read_number = [&](bool unused_normal = false) {
+            std::string token = next_token();
             if (token.empty())
                 throw std::invalid_argument(L("Missing ASCII STL coordinate."));
+            // Some ASCII exporters write NaN normals for degenerate faces.
+            // Stage geometry uses only vertices, as with binary STL. Keep the
+            // vertices and strict reconstruction entry fully validated.
+            if (unused_normal) {
+                for (char& c : token)
+                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (token == "nan" || token == "+nan" || token == "-nan" || token == "inf" || token == "+inf" ||
+                    token == "-inf" || token == "infinity" || token == "+infinity" || token == "-infinity")
+                    return 0.f;
+            }
             number.clear();
             number.str(token);
             double value = 0;
@@ -405,7 +416,7 @@ TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot
             } else if (token == "facet" && inside_solid) {
                 expect("normal");
                 for (size_t axis = 0; axis < 3; ++axis)
-                    read_number();
+                    read_number(geometry_only);
                 expect("outer");
                 expect("loop");
                 std::array<Vec3f, 3> vertices;
@@ -773,7 +784,9 @@ bool run_meshlib_in_process(const TriangleMesh&                 source,
 
 TriangleMesh read_bounded_model_stl(const std::string& path, std::string& sha256)
 {
-    return read_reconstruction_stl(fs::path(path), &sha256, true);
+    // Stage reports compare geometry, matching ordinary STL import. Preserve
+    // the original file/hash; standalone reconstruction still rejects colors.
+    return read_reconstruction_stl(fs::path(path), &sha256, true, true);
 }
 
 std::string model_mesh_file_sha256(const std::string& path) { return sha256_file(fs::path(path)); }

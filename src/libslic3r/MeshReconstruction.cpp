@@ -15,6 +15,7 @@
 #include <CGAL/Polygon_mesh_processing/orientation.h>
 #include <CGAL/Polygon_mesh_processing/self_intersections.h>
 #include <CGAL/Polygon_mesh_processing/triangulate_hole.h>
+#include <CGAL/Side_of_triangle_mesh.h>
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/alpha_wrap_3.h>
 #include <CGAL/boost/graph/helpers.h>
@@ -28,6 +29,8 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <memory>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -141,6 +144,34 @@ Surface to_surface(const Soup& soup)
     PMP::non_manifold_vertices(surface, std::back_inserter(singular));
     require(singular.empty(), "unsupported_topology", L("The reconstructed surface contains non-manifold vertices."));
     return surface;
+}
+
+// Compare the exact physical surfaces already prepared for the stage distance
+// report. Sort only indices; no second triangle soup or spatial index is built.
+bool same_surface(const Soup& source, const Soup& candidate)
+{
+    if (source.faces.size() != candidate.faces.size())
+        return false;
+    const auto key = [](const Soup& soup, uint32_t index) {
+        std::array<std::array<double, 3>, 3> triangle;
+        for (int i = 0; i < 3; ++i) {
+            const auto& p = soup.points[soup.faces[index][i]];
+            triangle[i]   = {p.x(), p.y(), p.z()};
+        }
+        std::sort(triangle.begin(), triangle.end());
+        return triangle;
+    };
+    const auto ordered = [&](const Soup& soup) {
+        std::vector<uint32_t> indices(soup.faces.size());
+        std::iota(indices.begin(), indices.end(), 0);
+        std::sort(indices.begin(), indices.end(), [&](uint32_t a, uint32_t b) { return key(soup, a) < key(soup, b); });
+        return indices;
+    };
+    const auto left = ordered(source), right = ordered(candidate);
+    for (std::size_t i = 0; i < left.size(); ++i)
+        if (key(source, left[i]) != key(candidate, right[i]))
+            return false;
+    return true;
 }
 
 std::size_t component_count(Surface& surface)
@@ -259,6 +290,190 @@ nlohmann::json comparison_metrics(const Soup& source, const Soup& output, double
             {"candidate_samples", reverse_samples},
             {"deviation_warning_mm", warning_mm},
             {"deviation_warning", std::max({forward, reverse, bbox}) > warning_mm}};
+}
+
+// A union can remove internal interfaces without losing an exterior surface.
+// Classify against the ORIGINAL closed solids, never against the candidate.
+// This is bounded sampled evidence, not a Hausdorff or design-intent proof.
+nlohmann::json material_union_comparison(const Soup& source, const Soup& output)
+{
+    nlohmann::json result = {{"status", "not_applicable"}, {"method", "closed_solid_overlap_samples"}};
+    // Extra trees and point-location queries are only for explicit stage reports.
+    if (source.faces.size() > 50000) {
+        result["reason"] = "source_face_budget";
+        return result;
+    }
+    std::vector<std::size_t> parents(source.faces.size());
+    std::iota(parents.begin(), parents.end(), 0);
+    const auto root = [&](std::size_t id) {
+        while (parents[id] != id) {
+            parents[id] = parents[parents[id]];
+            id          = parents[id];
+        }
+        return id;
+    };
+    std::map<std::pair<std::size_t, std::size_t>, std::size_t> edges;
+    for (std::size_t i = 0; i < source.faces.size(); ++i)
+        for (int corner = 0; corner < 3; ++corner) {
+            auto a = source.faces[i][corner], b = source.faces[i][(corner + 1) % 3];
+            if (a > b)
+                std::swap(a, b);
+            auto entry = edges.emplace(std::make_pair(a, b), i);
+            if (!entry.second)
+                parents[root(i)] = root(entry.first->second);
+        }
+    std::map<std::size_t, std::size_t> components;
+    std::vector<std::size_t> owner(source.faces.size());
+    for (std::size_t i = 0; i < source.faces.size(); ++i)
+        owner[i] = components.emplace(root(i), components.size()).first->second;
+    const auto count             = components.size();
+    result["source_components"] = count;
+    if (count < 2 || count > 16) {
+        result["reason"] = "source_component_budget";
+        return result;
+    }
+    std::vector<Surface> solids(count);
+    std::vector<std::map<std::size_t, Surface::Vertex_index>> vertices(count);
+    for (std::size_t i = 0; i < source.faces.size(); ++i) {
+        const auto id = owner[i];
+        std::array<Surface::Vertex_index, 3> face;
+        for (int c = 0; c < 3; ++c) {
+            const auto index = source.faces[i][c];
+            auto entry = vertices[id].emplace(index, Surface::null_vertex());
+            if (entry.second)
+                entry.first->second = solids[id].add_vertex(source.points[index]);
+            face[c] = entry.first->second;
+        }
+        if (solids[id].add_face(face[0], face[1], face[2]) == Surface::null_face()) {
+            result["reason"] = "source_not_solid";
+            return result;
+        }
+    }
+    vertices.clear();
+    edges.clear();
+    using Side = CGAL::Side_of_triangle_mesh<Surface, Kernel>;
+    std::vector<std::unique_ptr<Side::AABB_tree>> solid_trees;
+    std::vector<std::unique_ptr<Side>> sides;
+    for (auto& solid : solids) {
+        std::vector<Surface::Halfedge_index> singular;
+        PMP::non_manifold_vertices(solid, std::back_inserter(singular));
+        // A negative shell can represent a cavity. Never reinterpret it as a
+        // positive solid, nor use open/self-intersecting shells for containment.
+        if (!singular.empty() || !CGAL::is_closed(solid) || PMP::does_self_intersect(solid) ||
+            !PMP::is_outward_oriented(solid) || !(PMP::volume(solid) > 0)) {
+            result["reason"] = "source_not_solid";
+            return result;
+        }
+        solid_trees.emplace_back(std::make_unique<Side::AABB_tree>(solid.faces().begin(), solid.faces().end(), solid));
+        solid_trees.back()->build();
+        sides.emplace_back(std::make_unique<Side>(*solid_trees.back()));
+    }
+    // Imported float coordinates can leave nanometre-scale seams between otherwise
+    // opposing planes. Only these flat interfaces allow 1e-5 mm numeric noise;
+    // the exterior-surface budget and distinct-part protection are unchanged.
+    // Require ALL incident faces on both shells to share that plane: creases,
+    // hole rims and genuine crossing edges remain exterior samples.
+    constexpr double INTERFACE_TOLERANCE_MM = 1e-5;
+    const auto flat_interface = [&](const Point& p, const Triangle& reference, std::size_t owner_id, std::size_t other) {
+        const auto normal = CGAL::cross_product(reference[1] - reference[0], reference[2] - reference[0]);
+        for (const auto id : {other, owner_id}) {
+            std::vector<Surface::Face_index> incident;
+            const Kernel::Iso_cuboid_3 vicinity(p.x() - INTERFACE_TOLERANCE_MM, p.y() - INTERFACE_TOLERANCE_MM,
+                                               p.z() - INTERFACE_TOLERANCE_MM, p.x() + INTERFACE_TOLERANCE_MM,
+                                               p.y() + INTERFACE_TOLERANCE_MM, p.z() + INTERFACE_TOLERANCE_MM);
+            solid_trees[id]->all_intersected_primitives(vicinity, std::back_inserter(incident));
+            if (incident.empty())
+                return false;
+            for (const auto face : incident) {
+                const auto& mesh = solids[id];
+                const auto h = mesh.halfedge(face);
+                const auto& a = mesh.point(mesh.source(h));
+                const auto& b = mesh.point(mesh.target(h));
+                const auto& c = mesh.point(mesh.target(mesh.next(h)));
+                for (const auto& v : {a, b, c})
+                    if (CGAL::squared_distance(v, reference.supporting_plane()) > INTERFACE_TOLERANCE_MM * INTERFACE_TOLERANCE_MM)
+                        return false;
+                const double alignment = CGAL::cross_product(b - a, c - a) * normal;
+                if (id == other ? alignment >= 0 : alignment <= 0)
+                    return false;
+            }
+        }
+        return true;
+    };
+    const auto target = triangles(output);
+    Tree       tree(target.begin(), target.end());
+    tree.accelerate_distance_queries();
+    struct Sample
+    {
+        std::size_t owner;
+        uint32_t    inside;
+        double      distance_squared;
+    };
+    std::vector<Sample> samples;
+    samples.reserve(source.faces.size() * 7);
+    std::vector<uint32_t> overlaps(count, 0);
+    const auto sample = [&](const Point& p, std::size_t id, const Triangle& reference) {
+        uint32_t inside = 0, interface = 0;
+        for (std::size_t other = 0; other < count; ++other) {
+            if (other == id)
+                continue;
+            const auto side = (*sides[other])(p);
+            if (side == CGAL::ON_BOUNDED_SIDE)
+                inside |= uint32_t(1) << other;
+            else if (solid_trees[other]->squared_distance(p) <= INTERFACE_TOLERANCE_MM * INTERFACE_TOLERANCE_MM &&
+                     flat_interface(p, reference, id, other))
+                interface |= uint32_t(1) << other;
+        }
+        overlaps[id] |= inside;
+        samples.push_back({id, inside | interface, double(tree.squared_distance(p))});
+    };
+    for (std::size_t i = 0; i < source.faces.size(); ++i) {
+        const auto& face = source.faces[i];
+        const auto& a = source.points[face[0]];
+        const auto& b = source.points[face[1]];
+        const auto& c = source.points[face[2]];
+        for (const auto& p : {a, b, c, CGAL::midpoint(a, b), CGAL::midpoint(b, c), CGAL::midpoint(c, a), CGAL::centroid(a, b, c)})
+            sample(p, owner[i], Triangle(a, b, c));
+    }
+    // Only mutually penetrating shells may merge. Mere containment, boundary
+    // contact and separated solids keep their original surface/count checks.
+    parents.resize(count);
+    std::iota(parents.begin(), parents.end(), 0);
+    std::vector<uint32_t> mutual(count, 0);
+    std::size_t expected = count;
+    for (std::size_t a = 0; a < count; ++a)
+        for (std::size_t b = a + 1; b < count; ++b)
+            if ((overlaps[a] & (uint32_t(1) << b)) && (overlaps[b] & (uint32_t(1) << a))) {
+                mutual[a] |= uint32_t(1) << b;
+                mutual[b] |= uint32_t(1) << a;
+                if (root(a) != root(b)) {
+                    parents[root(a)] = root(b);
+                    --expected;
+                }
+            }
+    std::vector<std::size_t> exterior(count, 0);
+    std::size_t internal        = 0;
+    double      maximum_squared = 0;
+    for (const auto& item : samples) {
+        if (item.inside & mutual[item.owner]) {
+            ++internal;
+        } else {
+            ++exterior[item.owner];
+            maximum_squared = std::max(maximum_squared, item.distance_squared);
+        }
+    }
+    if (expected == count || std::find(exterior.begin(), exterior.end(), 0) != exterior.end()) {
+        result["reason"] = "overlap_not_established";
+        return result;
+    }
+    result["status"] = "completed";
+    result["expected_components"] = expected;
+    result["interface_tolerance_mm"] = INTERFACE_TOLERANCE_MM;
+    result["source_samples"] = samples.size();
+    result["interior_samples"] = internal;
+    result["exterior_samples"] = samples.size() - internal;
+    result["sampled_exterior_to_candidate_mm"] = std::sqrt(maximum_squared);
+    return result;
 }
 
 // A wrap of an open surface can be a paper-thin envelope instead of the intended
@@ -410,7 +625,7 @@ nlohmann::json compare_reconstruction_meshes(const TriangleMesh&              so
     return metrics;
 }
 
-nlohmann::json compare_model_stage_meshes(const TriangleMesh& source_mm, const TriangleMesh& candidate_mm)
+nlohmann::json compare_model_stage_meshes(const TriangleMesh& source_mm, const TriangleMesh& candidate_mm, bool inspect_material_union)
 {
     const auto source  = read_soup(source_mm, RECONSTRUCTION_MAX_INPUT_FACES, true);
     const auto output  = read_soup(candidate_mm, RECONSTRUCTION_MAX_INPUT_FACES, true);
@@ -424,6 +639,14 @@ nlohmann::json compare_model_stage_meshes(const TriangleMesh& source_mm, const T
     metrics["reference_excluded_duplicate_faces"]  = source.removed_duplicates;
     metrics["candidate_excluded_degenerate_faces"] = output.removed_degenerate;
     metrics["candidate_excluded_duplicate_faces"]  = output.removed_duplicates;
+    // A zero-area tail can change raw bounds/component counts without changing
+    // any actual surface. Exact CGAL collinearity is used, never a thinness or
+    // area tolerance. This evidence does not replace final mesh inspection.
+    if (source.removed_degenerate > 0)
+        metrics["degenerate_cleanup_preserves_surface"] = output.removed_degenerate == 0 && output.removed_duplicates == 0 &&
+                                                          same_surface(source, output);
+    if (inspect_material_union)
+        metrics["material_union"] = material_union_comparison(source, output);
     return metrics;
 }
 

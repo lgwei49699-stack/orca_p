@@ -21,6 +21,13 @@ ModelStageReportContext prepare_model_stage_report(const std::string& input_file
                                                    const std::string& reference_file,
                                                    const std::string& output_directory);
 
+// Read-only evidence for bounded, valid stage meshes. Verifies unchanged source
+// triangles plus disk patches on source boundaries; never replaces inspection.
+nlohmann::json inspect_model_hole_fill(const TriangleMesh& source, const TriangleMesh& candidate);
+
+// Every triangle must match after rounding each coordinate to 1e-6 mm.
+bool model_stage_preserves_surface(const TriangleMesh& source, const TriangleMesh& candidate);
+
 // Publishes model-stage.json only after identity, readback and comparisons
 // succeed. Consumers still require exit 0; failed invocations are never rescued
 // from leftover files. The inspection must describe inspected_mesh exactly.

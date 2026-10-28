@@ -36,6 +36,15 @@ def create_fixtures(directory):
     # move these coordinates by one ULP on every import. Stage inspection must
     # bind to the raw serialized STL, not to that re-centered Model mesh.
     fractional = [(-1.1 if x == 0. else 5.3, y, z) for x, y, z in VERTICES]
+    numeric_vertices = [(x, y, z + (face_id + 1) * 1e-12 if z == 0 else z)
+                        for face_id, face in enumerate(FACES) for x, y, z in (VERTICES[index] for index in face)]
+    numeric_faces = [tuple(range(i, i + 3)) for i in range(0, len(numeric_vertices), 3)]
+    colored_header = binary_stl(attribute=0xAB72)
+    colored_header = b"COLOR=\x91\xdcP\xff".ljust(80, b" ") + colored_header[80:]
+    nan_normal_ascii = "solid normals\n" + "".join(
+        "facet normal NaN NaN NaN\nouter loop\n"
+        + "".join("vertex " + " ".join(map(str, VERTICES[index])) + "\n" for index in face)
+        + "endloop\nendfacet\n" for face in FACES) + "endsolid normals\n"
     fixtures = {
         "cube": ("cube.stl", binary_stl()),
         "open": ("open.stl", binary_stl(faces=FACES[:2] + FACES[4:])),
@@ -44,6 +53,10 @@ def create_fixtures(directory):
                                       FACES + [tuple(index + 8 for index in face) for face in FACES])),
         "fractional": ("fractional-bounds.stl", binary_stl(vertices=fractional)),
         "colored": ("colored.stl", binary_stl(attribute=0x801F)),
+        "colored_header": ("colored-header.stl", colored_header),
+        "nan_normals": ("nan-normals.stl", nan_normal_ascii.encode("ascii")),
+        "nan_vertex": ("nan-vertex.stl", nan_normal_ascii.replace("vertex 0.0", "vertex NaN", 1).encode("ascii")),
+        "numeric_cracks": ("numeric-cracks.stl", binary_stl(vertices=numeric_vertices, faces=numeric_faces)),
         "truncated": ("truncated.stl", binary_stl()[:-1]),
         "unicode": ("中文 模型/方块.stl", binary_stl()),
         "obj": ("cube.obj", ("\n".join(
@@ -61,6 +74,10 @@ def create_fixtures(directory):
     existing = Path(__file__).resolve().parents[1] / "tests/data/model_repair_acceptance/08-intersecting-shells.stl"
     paths["intersecting"] = directory / "intersecting.stl"
     paths["intersecting"].write_bytes(existing.read_bytes())
+    for key, name in (("degenerate", "05-degenerate-face"), ("isolated", "06-isolated-face"), ("thin", "07-thin-solid")):
+        source = existing.parent / (name + ".stl")
+        paths[key] = directory / source.name
+        paths[key].write_bytes(source.read_bytes())
     return paths
 
 
@@ -234,11 +251,45 @@ def expect_shape(report, *, status=None, repair=None, reference_components=None,
 
 def expect_repaired_hole(report):
     expect_shape(report, status="passed", repair="repaired", reference_components=1, candidate_components=1)
+    proof = report["change"]["hole_fill"]
+    assert proof["status"] == "verified", proof
+    assert proof["method"] == "boundary_disks_preserve_source", proof
+    assert proof["source_faces"] == proof["preserved_faces"] == 10, proof
+    assert proof["added_faces"] > 0 and proof["patches"] == 1 and proof["boundary_edges"] == 4, proof
     # The reference is the raw input, not the repaired output. The newly added
     # face must appear in candidate -> reference distance, even with unchanged
     # bounds. This prevents an accidentally self-compared "zero change" report.
     change = report["change"]
     assert change["sampled_candidate_to_source_mm"] > 0.1, change
+
+
+def expect_zero_area_cleanup(report):
+    expect_shape(report, status="passed", reference_components=1, candidate_components=1)
+    change = report["change"]
+    assert change["bbox_deviation_mm"] == 10, change
+    assert change["reference_excluded_degenerate_faces"] == 2, change
+    assert change["degenerate_cleanup_preserves_surface"] is True, change
+    assert change["sampled_source_to_candidate_mm"] == change["sampled_candidate_to_source_mm"] == 0, change
+
+
+def expect_preserved_thin_solid(report):
+    expect_shape(report, status="passed", reference_components=2, candidate_components=2)
+    assert "degenerate_cleanup_preserves_surface" not in report["change"], report["change"]
+
+
+def expect_isolated_surface_change(report):
+    expect_shape(report, status="passed", reference_components=2, candidate_components=1)
+    assert "degenerate_cleanup_preserves_surface" not in report["change"], report["change"]
+    assert report["change"]["sampled_source_to_candidate_mm"] > 0.25, report["change"]
+    assert report["change"]["numerical_cleanup_preserves_surface"] is False, report["change"]
+
+
+def expect_numeric_cleanup(report):
+    change = report["change"]
+    assert report["inspection"]["status"] == "passed", report
+    assert change["reference_components"] > change["candidate_components"] == 1, change
+    assert change["numerical_cleanup_preserves_surface"] is True, change
+    assert change["sampled_source_to_candidate_mm"] < 1e-6, change
 
 
 def expect_reconstructed_shifted_reference(report):
@@ -294,6 +345,10 @@ def main():
         r, status="passed", repair="not_requested", reference_components=1,
         candidate_components=1, distances=(0., 0., 0.)))
     suite.run("check-defects", missing_top, verify=lambda r: expect_shape(r, status="defects_detected"))
+    suite.run("check-zero-area-cleanup", fixtures["degenerate"], verify=expect_zero_area_cleanup)
+    suite.run("check-numeric-crack-cleanup", fixtures["numeric_cracks"], verify=expect_numeric_cleanup)
+    suite.run("check-preserves-thin-solid", fixtures["thin"], verify=expect_preserved_thin_solid)
+    suite.run("check-nonzero-isolated-face-not-exempt", fixtures["isolated"], verify=expect_isolated_surface_change)
     suite.run("advanced-healthy", cube, stage="advanced", verify=lambda r: expect_shape(
         r, status="passed", repair="not_needed", reference_components=1, candidate_components=1))
     suite.run("advanced-hole", missing_top, stage="advanced", verify=expect_repaired_hole)
@@ -322,8 +377,20 @@ def main():
               flags=("--model-stage-report", "0"), success=False)
     suite.run("non-stl-input", fixtures["obj"], success=False)
     suite.run("non-stl-reference", cube, reference=fixtures["obj"], success=False)
-    suite.run("colored-input", fixtures["colored"], success=False)
-    suite.run("colored-reference", cube, reference=fixtures["colored"], success=False)
+    suite.run("colored-input", fixtures["colored"], verify=lambda r: expect_shape(r, status="passed"))
+    suite.run("colored-header-input", fixtures["colored_header"], verify=lambda r: expect_shape(r, status="passed"))
+    suite.run("colored-reference", cube, reference=fixtures["colored"],
+              verify=lambda r: expect_shape(r, status="passed", distances=(0., 0., 0.)))
+    suite.run("ascii-nan-normals", fixtures["nan_normals"], verify=lambda r: expect_shape(
+        r, status="passed", distances=(0., 0., 0.)))
+    suite.run("ascii-nan-normals-advanced", fixtures["nan_normals"], stage="advanced",
+              verify=lambda r: expect_shape(r, status="passed", distances=(0., 0., 0.)))
+    suite.run("ascii-nan-vertex-rejected", fixtures["nan_vertex"], success=False)
+    # Report geometry accepts STL attributes, while standalone reconstruction
+    # still refuses to discard a colored input's metadata.
+    if args.meshlib == "enabled":
+        suite.run("colored-reconstruction-still-rejected", fixtures["colored"], stage="reconstruction", success=False)
+        suite.run("ascii-nan-normal-reconstruction-still-rejected", fixtures["nan_normals"], stage="reconstruction", success=False)
     suite.run("truncated-input", fixtures["truncated"], success=False)
     suite.run("truncated-reference", cube, reference=fixtures["truncated"], success=False)
     suite.run("invalid-export-combination", cube, flags=("--export-obj",), success=False)
