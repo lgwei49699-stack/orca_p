@@ -1047,7 +1047,9 @@ void GUI_App::post_init()
             bool        sys_preset  = app_config->get("sync_system_preset") == "true";
             this->preset_updater->sync(http_url, language, network_ver, sys_preset ? preset_bundle : nullptr);
 
-            this->check_new_version_sf();
+            // Application updates are checked explicitly from Help > Check for Update.
+            // Do not interrupt startup or project creation with a modal release dialog.
+            BOOST_LOG_TRIVIAL(info) << "Automatic application update check disabled; use Help > Check for Update.";
             if (m_agent && m_agent->is_user_login() && !app_config->get_stealth_mode()) {
                 // this->check_privacy_version(0);
                 request_user_handle(0);
@@ -4765,6 +4767,7 @@ void GUI_App::check_new_version_sf(bool show_tips, int by_user)
 
                 wxCommandEvent* evt = new wxCommandEvent(EVT_SLIC3R_VERSION_ONLINE);
                 evt->SetString((prefer_release ? best_release : best_pre).to_string());
+                evt->SetInt(by_user);
                 GUI::wxGetApp().QueueEvent(evt);
             } catch (...) {}
         });
