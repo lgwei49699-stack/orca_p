@@ -130,3 +130,5 @@ Clang 支持/不支持及非 Clang 拒绝分支；模拟选项不用于编译，
 [公共运行时与平台辅助](platform.md)、[测试基础设施与维护工具](test-tools.md)、[中英文与翻译资源](localization.md)、[打印机、耗材与工艺资源](resource-profiles.md)。
 
 `GFDCloudConfigDialog.cpp/.hpp` 编入现有GUI库，复用保存/上传进度和模态收尾。`SLIC3R_GUI_TESTS=ON` 新增独立 `gfd_cloud_config_dialog_tests`，仅链接wx core/base；需要桌面，不连接云端。第六批Mac arm64 Release应用及辅助测试构建通过，第六批36项生命周期检查与CLI --help通过；提交前重登边界修改另按云方案记录重建验证；实际表单/云写入及Windows待验，见[云方案记录](../validation/2026-10-09-cloud-config-quality-analysis.md)。
+
+2026-10-30 App 检查/高级修复合入本发布分支，构建入口、版本、Linux/MeshLib 打包选项保持原值；本轮合并、回归和打包状态见 [App 发布记录](../validation/2026-10-30-app-repair-release.md)。

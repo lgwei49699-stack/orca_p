@@ -27,6 +27,9 @@ struct ModelInspectionOptions
     unsigned    max_intersections    = 20000;
     std::size_t max_solid_components = 128;
     std::size_t detail_limit         = 200;
+    // App basic counts lightweight defects; edge/face targets request one repair.
+    // Full additionally checks vertex links, intersections and components.
+    bool analyze_components = true;
     // Optional existence test on existing intersection pairs; at most one side
     // may use an exact two-face coplanar edge neighborhood. Shared-edge fans
     // and two-sided patch assembly remain unproven. No second pair search/edits.

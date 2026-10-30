@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "walls",
-  "source_fingerprint": "sha256:06ce64e57018a372e522057b1435c0e016cce9526228552d38f123b8c6b95c85",
-  "reason": "2026-10-22将本批薄墙恢复与VariableWidth修正隔离为显式CLI运行时opt-in，默认false；关闭恢复旧拼接/分组/末组积分，GUI默认关闭。开启才保留两端完整分组和同段积分，无参数阈值放宽。补旧算法冻结结果、开启恢复及默认值测试，原min_length_factor参数工厂修正仍保留。 2026-10-22复核共享配置仅CLI层高边界，未改墙生成器参数/短墙过滤/默认路径修正开关。显式变层高会按既有规则重切墙，不把边界策略称为墙质量证明。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。"
+  "source_fingerprint": "sha256:feac540338a34b130e06eb2a1a843ac222a4a908551d874922f34820e4126611",
+  "reason": "2026-10-22将本批薄墙恢复与VariableWidth修正隔离为显式CLI运行时opt-in，默认false；关闭恢复旧拼接/分组/末组积分，GUI默认关闭。开启才保留两端完整分组和同段积分，无参数阈值放宽。补旧算法冻结结果、开启恢复及默认值测试，原min_length_factor参数工厂修正仍保留。 2026-10-22复核共享配置仅CLI层高边界，未改墙生成器参数/短墙过滤/默认路径修正开关。显式变层高会按既有规则重切墙，不把边界策略称为墙质量证明。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。 2026-10-30：复核本次共享PrintConfig.cpp差异仅在CLI配置区新增model_inspection_mode（默认full），由独立check-model入口读取；本模块使用的打印配置、默认值及执行路径均未改，不新增计算，正文无需改动。 2026-10-30末轮：PrintConfig 仅修正已有 CLI basic 检查范围帮助文字（去除七类全检误述），键/类型/默认值及本模块读取规则未改，已核对逐行差异；同步中英文。ModelCheckWorkflow 头仅更正范围注释，详细说明及测试见模型修复记录。 2026-10-30本模块仅因watch的PrintConfig.cpp中App检查帮助改为原生未连接边而更新指纹；无配置键/默认值/有效值或本模块算法变化，正文无需变更。"
 }
 -->
 

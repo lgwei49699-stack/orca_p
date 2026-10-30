@@ -63,6 +63,14 @@ def create_fixtures(directory):
             ["v " + " ".join(map(str, vertex)) for vertex in VERTICES]
             + ["f " + " ".join(str(index + 1) for index in face) for face in FACES]) + "\n").encode("utf-8")),
     }
+    # One repairable part beside two intersecting shells with an open face.
+    # Their bounds overlap, so the latter must remain one failed group.
+    mixed_vertices = ([(5*x, 5*y, 5*z) for x, y, z in VERTICES]
+                      + [(5*x + 5., 5*y + 5., 5*z + 5.) for x, y, z in VERTICES]
+                      + [(5*x + 50., 5*y, 5*z) for x, y, z in VERTICES])
+    mixed_faces = (FACES + [tuple(i + 8 for i in f) for f in FACES[:-1]]
+                   + [tuple(i + 16 for i in f) for f in FACES[:4] + FACES[6:]])
+    fixtures["mixed"] = ("mixed.stl", binary_stl(vertices=mixed_vertices, faces=mixed_faces))
     paths = {}
     for key, (name, contents) in fixtures.items():
         path = directory / name
@@ -104,24 +112,32 @@ def check_stage_report(report, output, source, reference, stage):
     assert inspection["status"] in ("passed", "defects_detected", "incomplete"), inspection
     assert inspection["mesh_status"] in ("passed", "needs_repair", "unknown"), inspection
     assert isinstance(inspection["check_complete"], bool), inspection
-    validate_issue_summary(inspection["issues"])
+    validate_issue_summary(inspection["issues"], basic=inspection.get("scope") == "basic")
+    if inspection.get("scope") == "basic":
+        expected_action = "advanced_repair" if any(inspection["issues"][key]["count"] > 0
+            for key in ("boundary", "duplicate", "degenerate", "orientation")) else "none"
+        assert inspection["next_action"] == expected_action, inspection
     if inspection["status"] == "passed":
         assert inspection["mesh_status"] == "passed" and inspection["check_complete"], inspection
-        assert all(item == {"count": 0, "complete": True} for item in inspection["issues"].values()), inspection
+        assert all(item["count"] == 0 and item["complete"] for key, item in inspection["issues"].items()
+                   if not (inspection.get("scope") == "basic" and key in ("nonmanifold_vertex", "self_intersection"))), inspection
     elif inspection["status"] == "defects_detected":
-        assert any(item["count"] > 0 for item in inspection["issues"].values()), inspection
+        assert any(item["count"] is not None and item["count"] > 0 for item in inspection["issues"].values()), inspection
     assert isinstance(report["repair_status"], str) and report["repair_status"], report
 
     change = report["change"]
-    assert change["status"] == "completed", change
-    for field in DISTANCES:
-        assert type(change[field]) in (int, float) and math.isfinite(change[field]) and change[field] >= 0, change
-    for field in ("source_samples", "candidate_samples", "reference_components", "candidate_components"):
-        assert type(change[field]) is int and change[field] > 0, change
-    assert change["distance_is_upper_bound"] is False, change
-    assert change["distance_method"] == "sampled_vertices_edge_midpoints_and_face_centroids", change
-    assert change["component_method"] == "exact_position_welded_edge_connected_all_faces", change
-    assert change["components_complete"] is True, change
+    if inspection.get("scope") == "basic" and stage in ("check", "advanced"):
+        assert change == {"status": "not_requested", "reason": "app_basic"}, change
+    else:
+        assert change["status"] == "completed", change
+        for field in DISTANCES:
+            assert type(change[field]) in (int, float) and math.isfinite(change[field]) and change[field] >= 0, change
+        for field in ("source_samples", "candidate_samples", "reference_components", "candidate_components"):
+            assert type(change[field]) is int and change[field] > 0, change
+        assert change["distance_is_upper_bound"] is False, change
+        assert change["distance_method"] == "sampled_vertices_edge_midpoints_and_face_centroids", change
+        assert change["component_method"] == "exact_position_welded_edge_connected_all_faces", change
+        assert change["components_complete"] is True, change
     reconstruction = report["reconstruction"]
     assert reconstruction["assessment"] in ("not_needed", "evidence_present", "undetermined", "blocked"), reconstruction
     assert isinstance(reconstruction["reason"], str) and reconstruction["reason"], reconstruction
@@ -195,7 +211,8 @@ class Suite:
             assert not list(output.glob("model-stage-*.tmp")), "Stage report temporary file was not cleaned up"
             if success and stage in ("check", "advanced"):
                 legacy = json.loads((output / "result.json").read_text(encoding="utf-8"))
-                old = validate_business_result(legacy, evidence=stage == "advanced" or "--repair-evidence" in flags)
+                old = validate_business_result(legacy, evidence=stage == "advanced" or "--repair-evidence" in flags,
+                                               basic="basic" in flags)
                 assert legacy["return_code"] == 0 and legacy["error_string"] == "", legacy
                 if report:
                     assert old["issues"] == report["inspection"]["issues"], (old, report)
@@ -391,6 +408,18 @@ def main():
     if args.meshlib == "enabled":
         suite.run("colored-reconstruction-still-rejected", fixtures["colored"], stage="reconstruction", success=False)
         suite.run("ascii-nan-normal-reconstruction-still-rejected", fixtures["nan_normals"], stage="reconstruction", success=False)
+    for kind in ("cube", "open", "fractional", "intersecting", "degenerate", "isolated", "thin"):
+        for stage in ("check", "advanced"):
+            suite.run(f"basic-{kind}-{stage}", fixtures[kind], stage=stage,
+                      flags=("--model-inspection-mode", "basic"))
+    suite.run("basic-mixed-check", fixtures["mixed"], flags=("--model-inspection-mode", "basic"),
+              verify=lambda r: expect_shape(r, status="defects_detected"))
+    suite.run("basic-mixed-advanced", fixtures["mixed"], stage="advanced", flags=("--model-inspection-mode", "basic"),
+              verify=lambda r: expect_shape(r, status="defects_detected", repair="partially_repaired"))
+    suite.run("basic-shifted-reference", cube, reference=fixtures["shifted"],
+              flags=("--model-inspection-mode", "basic"))
+    suite.run("invalid-inspection-mode", cube, flags=("--model-inspection-mode", "fastest"), success=False)
+    suite.run("basic-without-check", cube, stage="export", flags=("--model-inspection-mode", "basic"), success=False)
     suite.run("truncated-input", fixtures["truncated"], success=False)
     suite.run("truncated-reference", cube, reference=fixtures["truncated"], success=False)
     suite.run("invalid-export-combination", cube, flags=("--export-obj",), success=False)

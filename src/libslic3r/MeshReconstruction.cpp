@@ -20,6 +20,7 @@
 #include <CGAL/alpha_wrap_3.h>
 #include <CGAL/boost/graph/helpers.h>
 #include <CGAL/version.h>
+#include <boost/container_hash/hash.hpp>
 
 #include <algorithm>
 #include <array>
@@ -32,9 +33,10 @@
 #include <memory>
 #include <numeric>
 #include <optional>
-#include <set>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -79,21 +81,33 @@ Soup read_soup(const TriangleMesh& source, std::size_t face_limit, bool clean_in
             L("The vertex limit was exceeded."));
     for (const auto& vertex : source.its.vertices)
         require(vertex.allFinite(), "invalid_input", L("The mesh contains a non-finite coordinate."));
-    Soup                                         soup;
-    std::map<std::array<double, 3>, std::size_t> canonical;
+    Soup soup;
+    // Canonical IDs are assigned on first encounter, never by table iteration.
+    // Exact equality and cleaned face order are identical to the ordered tables.
+    using Vertex = std::array<double, 3>;
+    std::unordered_map<Vertex, std::size_t, boost::hash<Vertex>> canonical;
+    canonical.reserve(std::min(source.its.vertices.size(), source.its.indices.size() * 3));
     soup.faces.reserve(source.its.indices.size());
-    std::set<Face> unique_faces;
+    std::unordered_set<Face, boost::hash<Face>> unique_faces;
+    if (clean_input)
+        unique_faces.reserve(source.its.indices.size());
+    // Shared vertices appear in several faces. Canonicalize each source index
+    // once, while retaining first-face encounter order and exact-position welds.
+    std::vector<std::size_t> vertex_ids(source.its.vertices.size(), std::numeric_limits<std::size_t>::max());
     for (const auto& face : source.its.indices) {
         Face ids;
         for (int corner = 0; corner != 3; ++corner) {
             require(face[corner] >= 0 && std::size_t(face[corner]) < source.its.vertices.size(), "invalid_input",
                     L("The mesh contains an invalid triangle index."));
-            const Vec3d v        = source.its.vertices[face[corner]].cast<double>();
-            const auto  inserted = canonical.emplace(std::array<double, 3>{v.x(), v.y(), v.z()}, soup.points.size());
-            if (inserted.second) {
-                soup.points.emplace_back(v.x(), v.y(), v.z());
+            auto& index = vertex_ids[face[corner]];
+            if (index == std::numeric_limits<std::size_t>::max()) {
+                const Vec3d v        = source.its.vertices[face[corner]].cast<double>();
+                const auto  inserted = canonical.emplace(std::array<double, 3>{v.x(), v.y(), v.z()}, soup.points.size());
+                if (inserted.second)
+                    soup.points.emplace_back(v.x(), v.y(), v.z());
+                index = inserted.first->second;
             }
-            ids[corner] = inserted.first->second;
+            ids[corner] = index;
         }
         const bool degenerate = CGAL::collinear(soup.points[ids[0]], soup.points[ids[1]], soup.points[ids[2]]);
         if (clean_input && degenerate) {

@@ -1737,7 +1737,8 @@ int CLI::run(int argc, char **argv)
                                                         "repair_evidence",
                                                         "repair_evidence_close_boundaries",
                                                         "model_stage_report",
-                                                        "model_reference"};
+                                                        "model_reference",
+                                                        "model_inspection_mode"};
             for (const auto& key : m_requested_options)
                 if (allowed_options.count(key) == 0)
                     throw std::invalid_argument("--check-model does not accept this slicing/transform option: " + key);
@@ -1764,6 +1765,7 @@ int CLI::run(int argc, char **argv)
             options.export_format          = m_config.opt_bool("export_obj") ? "obj" : (m_config.opt_bool("export_stl") ? "stl" : "");
             options.stage_report           = m_config.opt_bool("model_stage_report");
             options.reference_file         = m_config.opt_string("model_reference");
+            options.inspection_mode        = m_config.opt_string("model_inspection_mode");
             run_model_check_workflow(options, check_report);
         } catch (const std::invalid_argument& error) {
             code    = CLI_INVALID_PARAMS;
@@ -1817,6 +1819,12 @@ int CLI::run(int argc, char **argv)
         return code;
     }
     sliced_info.cgal_repair_requested     = cgal_repair_requested;
+    if (std::find(m_requested_options.begin(), m_requested_options.end(), "model_inspection_mode") != m_requested_options.end()) {
+        const std::string message = "--model-inspection-mode requires --check-model.";
+        boost::nowide::cerr << message << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        return CLI_INVALID_PARAMS;
+    }
     sliced_info.repair_evidence_requested = repair_evidence_requested;
     if (stage_options_requested) {
         const std::string message = L("--model-stage-report and --model-reference require --check-model or --reconstruct-model.");

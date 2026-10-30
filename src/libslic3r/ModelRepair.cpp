@@ -1,9 +1,13 @@
 #include "ModelRepair.hpp"
 
+// Include before Model.hpp introduces OpenCascade's Handle macro.
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+
 #include "AABBTreeIndirect.hpp"
 #include "I18N.hpp"
 #include "MeshBoolean.hpp"
 #include "Model.hpp"
+#include "ModelInspection.hpp"
 
 #include <boost/log/trivial.hpp>
 #include <algorithm>
@@ -159,6 +163,17 @@ bool is_not_3dimensional_part(const TriangleMesh& mesh)
     return true;
 }
 
+bool has_only_zero_area_faces(const TriangleMesh& mesh)
+{
+    using Point      = CGAL::Exact_predicates_inexact_constructions_kernel::Point_3;
+    const auto point = [&mesh](int index) {
+        const auto& v = mesh.its.vertices[size_t(index)];
+        return Point(v.x(), v.y(), v.z());
+    };
+    return std::all_of(mesh.its.indices.begin(), mesh.its.indices.end(),
+                       [&point](const auto& face) { return CGAL::collinear(point(face[0]), point(face[1]), point(face[2])); });
+}
+
 // Use OrcaSlicer 2.4.2's source-local cleanup thresholds, not nozzle/layer limits
 // or instance-scaled sizes. Volume cutoffs require a proven bounded solid:
 // signed sums for open, inconsistently wound or intersecting surfaces may cancel.
@@ -221,6 +236,11 @@ bool mesh_requires_repair(const TriangleMesh& mesh, size_t open_edges, const Mod
 {
     if (open_edges != 0)
         return true;
+    if (options.basic_repair) {
+        ModelInspectionOptions inspection;
+        inspection.analyze_components = false;
+        return inspect_model_mesh(mesh, inspection).at("next_action") == "advanced_repair";
+    }
     return options.mesh_requires_repair ? options.mesh_requires_repair(mesh) : MeshBoolean::cgal::requires_repair(mesh);
 }
 
@@ -806,7 +826,12 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
         size_t                   disconnected_part_count = 1;
         std::vector<RepairGroup> repair_groups;
         try {
-            if (options.split_components && !mesh.its.indices.empty() && volume->is_splittable()) {
+            if (options.split_components && options.basic_repair) {
+                // Preserve original faces/winding, including thin parts and
+                // cavities. Unlike volume->split(), grouping does not discard
+                // small parts or count separation alone as repair progress.
+                repair_groups = separated_repair_groups(mesh);
+            } else if (options.split_components && !mesh.its.indices.empty() && volume->is_splittable()) {
                 split_volume = has_only_safely_separable_components(mesh, disconnected_part_count);
                 if (!split_volume && options.allow_partial)
                     repair_groups = separated_repair_groups(mesh);
@@ -912,10 +937,13 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     parts.push_back(object->volumes[volume_index + part_index]);
             }
 
-            if (options.remove_non_3d_parts) {
+            if (options.remove_non_3d_parts || options.basic_repair) {
                 for (size_t part_offset = parts.size(); part_offset > 0; --part_offset) {
                     ModelVolume* part        = parts[part_offset - 1];
-                    const bool   discardable = is_discardable_repair_part(part->mesh(), options);
+                    // App removes only proven zero-area groups. A planar surface
+                    // or a very thin solid still has area and must be retained.
+                    const bool discardable = options.basic_repair ? has_only_zero_area_faces(part->mesh()) :
+                                                                    is_discardable_repair_part(part->mesh(), options);
                     if (cancellation_requested()) {
                         volume_finished(stored_report);
                         return false;
@@ -968,8 +996,12 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     !has_finite_vertices(part_mesh))
                     throw std::runtime_error("Repair failed: split produced an invalid model part.");
 
-                const size_t part_open_edges      = its_num_open_edges(part_mesh.its);
-                const bool   part_requires_repair = mesh_requires_repair(part_mesh, part_open_edges, options);
+                // The original, unsplit volume has already been inspected above.
+                // New split/grouped parts still require their own inspection.
+                const bool   unchanged_part       = part == volume && !split_volume && !grouped_repair;
+                const size_t part_open_edges      = unchanged_part ? stored_report.before_open_edges : its_num_open_edges(part_mesh.its);
+                const bool   part_requires_repair = unchanged_part ? repair_volume :
+                                                                     mesh_requires_repair(part_mesh, part_open_edges, options);
                 if (cancellation_requested()) {
                     stored_report.result  = ModelRepairVolumeStatus::RolledBack;
                     stored_report.message = "Repair was canceled during model inspection.";
@@ -993,7 +1025,7 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                 TriangleMesh repaired_mesh;
                 TriangleMesh basic_mesh;
                 BasicMeshPreparation preparation;
-                if (options.allow_partial) {
+                if (options.allow_partial && !options.basic_repair) {
                     const auto prepare = [&]() { preparation = prepare_basic_mesh(part_mesh, basic_mesh); };
                     if (options.run_mesh_preparation)
                         options.run_mesh_preparation(prepare);
@@ -1029,6 +1061,8 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     repaired_mesh    = repair_source;
                     if (options.repair_mesh) {
                         repair_succeeded = options.repair_mesh(repaired_mesh, error);
+                    } else if (options.basic_repair) {
+                        repair_succeeded = MeshBoolean::cgal::repair_basic(repaired_mesh, &error);
                     } else if (options.allow_partial) {
                         const auto outcome = MeshBoolean::cgal::repair_with_partial(repaired_mesh, &error);
                         repair_succeeded   = outcome != MeshRepairOutcome::Rejected;
@@ -1055,13 +1089,16 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     if (repaired_mesh.its.vertices.empty() || repaired_mesh.its.indices.empty() || !has_valid_indices(repaired_mesh) ||
                         !has_finite_vertices(repaired_mesh))
                         throw std::runtime_error("Repair failed: CGAL returned an invalid or open mesh.");
-                    const size_t open_edges   = its_num_open_edges(repaired_mesh.its);
-                    const bool   needs_repair = mesh_requires_repair(repaired_mesh, open_edges, options);
+                    const size_t open_edges = its_num_open_edges(repaired_mesh.its);
+                    // App mode relies on CGAL's own validation of a successful
+                    // repair. Keep storage/closure checks and partial validation;
+                    // other callers retain the independent full inspection.
+                    const bool needs_repair = !options.basic_repair && mesh_requires_repair(repaired_mesh, open_edges, options);
                     if (cancellation_requested())
                         return false;
                     if (partial_candidate || open_edges != 0 || needs_repair) {
                         bool retainable = false;
-                        if (options.allow_partial) {
+                        if (options.allow_partial && !options.basic_repair) {
                             const auto validate = [&]() {
                                 retainable = MeshBoolean::cgal::is_safe_partial_repair(repair_source, repaired_mesh);
                             };
@@ -1086,7 +1123,7 @@ static bool repair_staged_model_impl(Model& model, ModelRepairReport& report, co
                     }
                 }
                 if (!repair_succeeded) {
-                    if (!options.allow_partial || is_not_3dimensional_part(repair_source))
+                    if (!options.allow_partial || (!options.basic_repair && is_not_3dimensional_part(repair_source)))
                         throw std::runtime_error(error.empty() ? "Repair failed." : error);
                     add_unresolved(report, stored_report, error.empty() ? "Repair failed." : error);
                     // Never retain the rejected candidate, even if a delegated

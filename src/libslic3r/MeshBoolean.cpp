@@ -1779,6 +1779,109 @@ static bool repair_impl(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors,
     }
 }
 
+bool repair_basic(TriangleMesh& mesh, std::string* error)
+{
+    namespace PMP = CGAL::Polygon_mesh_processing;
+    RepairStageTimer timing;
+    if (error != nullptr)
+        error->clear();
+    const auto fail = [&](const std::string& message) {
+        BOOST_LOG_TRIVIAL(warning) << "CGAL basic repair: stage=" << timing.stage() << ", reason=" << message;
+        if (error != nullptr)
+            *error = message;
+        return false;
+    };
+    if (mesh.its.vertices.empty() || mesh.its.indices.empty())
+        return fail("Repair failed: mesh is empty.");
+    for (const auto& vertex : mesh.its.vertices)
+        if (!vertex.allFinite())
+            return fail("Repair failed: mesh contains non-finite vertices.");
+    for (const auto& face : mesh.its.indices)
+        for (int i = 0; i < 3; ++i)
+            if (face[i] < 0 || size_t(face[i]) >= mesh.its.vertices.size())
+                return fail("Repair failed: mesh contains an invalid vertex index.");
+
+    try {
+        timing.next("soup_cleanup");
+        std::vector<_EpicMesh::Point>    points;
+        std::vector<std::vector<size_t>> polygons;
+        points.reserve(mesh.its.vertices.size());
+        polygons.reserve(mesh.its.indices.size());
+        for (const auto& vertex : mesh.its.vertices)
+            points.emplace_back(vertex.x(), vertex.y(), vertex.z());
+        for (const auto& face : mesh.its.indices) {
+            // Remove strictly collinear faces, not small printable details.
+            if (!CGAL::collinear(points[face[0]], points[face[1]], points[face[2]]))
+                polygons.push_back({size_t(face[0]), size_t(face[1]), size_t(face[2])});
+        }
+        PMP::repair_polygon_soup(points, polygons);
+        if (points.empty() || polygons.empty())
+            return fail("Repair failed: polygon soup cleanup removed all geometry.");
+
+        timing.next("soup_orientation");
+        // false means singular vertices were duplicated, not necessarily failure.
+        PMP::orient_polygon_soup(points, polygons);
+        if (!PMP::is_polygon_soup_a_polygon_mesh(polygons))
+            return fail("Repair failed: polygon soup is still invalid after orientation.");
+        _EpicMesh candidate;
+        PMP::polygon_soup_to_polygon_mesh(points, polygons, candidate);
+        if (candidate.num_faces() != polygons.size() || !CGAL::is_valid_polygon_mesh(candidate) || !CGAL::is_triangle_mesh(candidate))
+            return fail("Repair failed: polygon soup conversion produced invalid topology.");
+        // Release the soup before the more memory-intensive mesh operations.
+        decltype(points)().swap(points);
+        decltype(polygons)().swap(polygons);
+
+        timing.next("mesh_cleanup");
+        if (!PMP::remove_degenerate_faces(candidate))
+            return fail("Repair failed: mesh still contains degenerate faces after cleanup.");
+        PMP::remove_isolated_vertices(candidate);
+        PMP::duplicate_non_manifold_vertices(candidate);
+        if (!CGAL::is_closed(candidate))
+            PMP::stitch_borders(candidate);
+        candidate.collect_garbage();
+
+        timing.next("hole_filling");
+        using halfedge_descriptor = boost::graph_traits<_EpicMesh>::halfedge_descriptor;
+        using face_descriptor     = boost::graph_traits<_EpicMesh>::face_descriptor;
+        using vertex_descriptor   = boost::graph_traits<_EpicMesh>::vertex_descriptor;
+        std::vector<halfedge_descriptor> borders;
+        PMP::extract_boundary_cycles(candidate, std::back_inserter(borders));
+        for (auto border : borders) {
+            std::vector<face_descriptor>   patch_faces;
+            std::vector<vertex_descriptor> patch_vertices;
+            PMP::triangulate_and_refine_hole(candidate, border, std::back_inserter(patch_faces), std::back_inserter(patch_vertices));
+        }
+        if (candidate.is_empty() || !CGAL::is_valid_polygon_mesh(candidate) || !CGAL::is_triangle_mesh(candidate) ||
+            !CGAL::is_closed(candidate))
+            return fail("Repair failed: repaired mesh is invalid, empty or open.");
+
+        timing.next("volume_orientation");
+        // CGAL's volume orientation requires no self-intersections. Check once;
+        // do not retry with self-union or experimental intersection repair.
+        if (PMP::does_self_intersect(candidate))
+            return fail("Repair failed: repaired mesh still self-intersects.");
+        PMP::orient_to_bound_a_volume(candidate);
+        if (!PMP::does_bound_a_volume(candidate))
+            return fail("Repair failed: mesh orientation does not bound a volume.");
+
+        timing.next("output_validation");
+        candidate.collect_garbage();
+        auto repaired = cgal_to_indexed_triangle_set(candidate);
+        for (const auto& vertex : repaired.vertices)
+            if (!vertex.allFinite())
+                return fail("Repair failed: converted mesh contains non-finite vertices.");
+        if (repaired.indices.empty() || its_num_open_edges(repaired) != 0)
+            return fail("Repair failed: converted mesh is empty or open.");
+        mesh = TriangleMesh(std::move(repaired), RepairedMeshErrors{});
+        timing.accept();
+        return true;
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception& exception) {
+        return fail(exception.what());
+    }
+}
+
 bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors, std::string* error)
 {
     return repair_impl(mesh, repaired_errors, error, nullptr);

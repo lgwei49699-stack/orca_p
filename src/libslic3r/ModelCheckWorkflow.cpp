@@ -112,6 +112,11 @@ json business_issue_counts(const json& inspection)
         const auto& issue = inspection.at("issues").at(key);
         // Incomplete counts are lower bounds, never a clean-model conclusion.
         counts[key] = {{"count", issue.at("count")}, {"complete", issue.at("complete")}};
+        if (inspection.value("inspection_scope", "full") == "basic")
+            for (const char* field :
+                 {"status", "method", "count_is_lower_bound", "geometric_count", "same_winding_extra_faces", "opposite_winding_groups"})
+                if (issue.contains(field))
+                    counts[key][field] = issue.at(field);
     }
     return counts;
 }
@@ -215,8 +220,10 @@ json model_check_business_result(const json& checks, int return_code, const std:
                                   {"issues", business_issue_counts(inspection)}};
         if (check.value("repair_evidence_requested", false))
             summary["boundary"] = check_boundary(check);
-        // Presentation-only reduction: aggregate completeness still includes
-        // internal structural checks. Do not turn unknown findings into a pass.
+        if (inspection.is_object() && inspection.value("inspection_scope", "full") == "basic")
+            summary["inspection_scope"] = "basic";
+        // The default contract still includes structural checks. Explicit basic
+        // calls declare their narrower scope; incomplete geometry never passes.
         result["model_checks"].push_back(std::move(summary));
     }
     return result;
@@ -250,6 +257,9 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
     if (options.stage_report)
         stage_context = prepare_model_stage_report(options.input_file, options.reference_file, options.output_directory);
     auto inspection_options = options.inspection_options;
+    if (options.inspection_mode != "full" && options.inspection_mode != "basic")
+        throw std::invalid_argument("Model inspection mode must be basic or full.");
+    inspection_options.analyze_components = options.inspection_mode == "full";
     // The same pair search supplies evidence for the inspected serialized mesh.
     // Normal checks and ordinary advanced repair retain their old work budget.
     if (options.advanced_repair && options.repair_evidence)
@@ -325,15 +335,18 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
     if (options.advanced_repair) {
         if (before.at("mesh_status") == "passed") {
             report.check["advanced_repair"]["status"] = "not_needed";
+        } else if (options.inspection_mode == "basic" && before.at("next_action") == "none") {
+            report.check["advanced_repair"]["status"] = "unresolved";
         } else {
             report.failure_stage                      = "repair";
             report.repair_attempted                   = true;
             report.check["advanced_repair"]["status"] = "running";
             ModelRepairOptions repair_options;
             repair_options.allow_partial             = true;
+            repair_options.basic_repair              = options.inspection_mode == "basic";
             repair_options.preserve_annotations      = !options.ignore_materials;
             repair_options.allow_annotation_clearing = options.ignore_materials;
-            repair_options.remove_non_3d_parts       = options.ignore_materials;
+            repair_options.remove_non_3d_parts       = options.ignore_materials && !repair_options.basic_repair;
             const bool ok                            = repair_model(working, report.repair, repair_options);
             if (options.repair_evidence)
                 report.check["repair_evidence"] = model_repair_boundary(report.repair);
@@ -353,7 +366,9 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
             if (!report.repair.committed) {
                 report.check["advanced_repair"]["status"]         = "unresolved";
                 report.check["advanced_repair"]["retained_stage"] = "prepared";
-                if (!options.repair_evidence) {
+                // App stage reports can retain an unresolved mesh without
+                // requesting reconstruction diagnostics that the App will not use.
+                if (!options.repair_evidence && !(options.stage_report && options.inspection_mode == "basic")) {
                     report.repair_no_progress = true;
                     throw std::runtime_error("Advanced repair produced no retainable change; see the remaining inspection findings.");
                 }

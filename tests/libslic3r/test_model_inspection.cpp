@@ -17,6 +17,121 @@
 
 using namespace Slic3r;
 
+TEST_CASE("Basic inspection includes native open edges and declares skipped checks", "[ModelInspection][AppBasic]")
+{
+    ModelInspectionOptions options;
+    options.analyze_components = false;
+    auto mesh                  = make_cube(10., 10., 10.);
+    for (bool open : {false, true}) {
+        if (open)
+            mesh.its.indices.pop_back();
+        const auto basic = inspect_model_mesh(mesh, options);
+        CHECK(basic["issues"]["boundary"]["count"] == its_num_open_edges(mesh.its));
+        CHECK(basic["issues"]["boundary"]["method"] == "orca_open_edges");
+        for (const char* key : {"nonmanifold_vertex", "self_intersection"}) {
+            CHECK(basic["issues"][key]["status"] == "not_requested");
+            CHECK(basic["issues"][key]["count"].is_null());
+        }
+        for (const char* key : {"nonmanifold_edge", "degenerate", "duplicate", "orientation"}) {
+            CHECK(basic["issues"][key]["count"] == 0);
+            CHECK(basic["issues"][key]["complete"] == true);
+        }
+        CHECK(basic.at("component_analysis").at("status") == "not_requested");
+        CHECK(basic.at("check_complete") == true);
+        CHECK(model_inspection_boundary(basic).at("status") == (open ? "defects_detected" : "passed"));
+        CHECK_FALSE(basic.at("printability_verified").get<bool>());
+        auto incomplete                              = basic;
+        incomplete["issues"]["boundary"]["complete"] = false;
+        CHECK(model_inspection_boundary(incomplete).at("status") == "incomplete");
+        incomplete = basic;
+        incomplete["issues"].erase("self_intersection");
+        CHECK(model_inspection_boundary(incomplete).at("status") == "incomplete");
+    }
+}
+
+TEST_CASE("App conclusion includes every measured basic defect without changing geometry", "[ModelInspection][AppBasic]")
+{
+    const char* fixture  = GENERATE("01-missing-top", "03-wrong-winding", "04-duplicate-face", "05-degenerate-face", "07-thin-solid",
+                                    "08-intersecting-shells", "09-nonmanifold-edge");
+    auto        mesh     = load_model(std::string("model_repair_acceptance/") + fixture + ".obj");
+    const auto  vertices = mesh.its.vertices;
+    const auto  faces    = mesh.its.indices;
+    ModelInspectionOptions options;
+    options.analyze_components = false;
+    const auto basic           = inspect_model_mesh(mesh, options);
+    const auto open_edges      = its_num_open_edges(mesh.its);
+    CHECK(basic["issues"]["boundary"]["count"] == open_edges);
+    bool has_defect = false;
+    for (const auto& issue : basic["issues"])
+        has_defect |= issue["count"].is_number() && issue["count"].get<size_t>() != 0;
+    CHECK(basic["mesh_status"] == (has_defect ? "needs_repair" : "passed"));
+    CHECK(model_inspection_boundary(basic)["status"] != "incomplete");
+    const auto full = inspect_model_mesh(mesh);
+    for (const char* key : {"nonmanifold_edge", "degenerate", "duplicate", "orientation"})
+        CHECK(basic["issues"][key]["count"] == full["issues"][key]["count"]);
+    CHECK(basic["issues"]["boundary"]["geometric_count"] == full["issues"]["boundary"]["count"]);
+    if (std::string(fixture) == "08-intersecting-shells") {
+        CHECK(open_edges == 0);
+        CHECK(inspect_model_mesh(mesh)["issues"]["self_intersection"]["count"].get<size_t>() > 0);
+        CHECK(basic["issues"]["self_intersection"]["count"].is_null());
+    }
+    CHECK(mesh.its.vertices == vertices);
+    CHECK(mesh.its.indices == faces);
+}
+
+TEST_CASE("App requests repair of coordinate duplicates even with closed native shells", "[ModelInspection][AppBasic]")
+{
+    auto       mesh     = make_cube(10., 10., 10.);
+    auto       copy     = mesh;
+    const bool reversed = GENERATE(false, true);
+    if (reversed)
+        copy.flip_triangles();
+    mesh.merge(copy); // Separate indices, exactly equal coordinates.
+    ModelInspectionOptions options;
+    options.analyze_components = false;
+    const auto report          = inspect_model_mesh(mesh, options);
+    CHECK(report["issues"]["boundary"]["count"] == 0);
+    CHECK(report["issues"]["boundary"]["geometric_count"] == 0);
+    CHECK(report["issues"]["nonmanifold_edge"]["count"] == 18);
+    CHECK(report["issues"]["duplicate"]["count"] == 12);
+    CHECK(report["issues"]["duplicate"]["same_winding_extra_faces"] == (reversed ? 0 : 12));
+    CHECK(report["issues"]["duplicate"]["opposite_winding_groups"] == (reversed ? 12 : 0));
+    CHECK(report["mesh_status"] == "needs_repair");
+    const auto boundary = model_inspection_boundary(report);
+    CHECK(boundary["status"] == "defects_detected");
+    CHECK(boundary["has_geometry_defects"] == true);
+    CHECK(boundary["known_defects"].size() == 2);
+}
+
+TEST_CASE("App counts strictly collinear faces but retains tiny nonzero area", "[ModelInspection][AppBasic]")
+{
+    indexed_triangle_set its;
+    its.vertices = {{0.f, 0.f, 0.f}, {1.f, 0.f, 0.f}, {2.f, 0.f, 0.f}, {2.f, 1e-25f, 0.f}};
+    its.indices  = {{0, 1, 2}, {0, 1, 3}};
+    TriangleMesh           mesh(its);
+    ModelInspectionOptions options;
+    options.analyze_components = false;
+    const auto report          = inspect_model_mesh(mesh, options);
+    CHECK(report["issues"]["degenerate"]["count"] == 1);
+    CHECK(report["issues"]["boundary"]["geometric_count"] == 3);
+    CHECK(report["issues"]["duplicate"]["count"] == 0);
+    CHECK(mesh.its.indices == its.indices);
+    CHECK(mesh.its.vertices == its.vertices);
+}
+
+TEST_CASE("App basic still rejects malformed meshes and admission limits", "[ModelInspection][AppBasic]")
+{
+    ModelInspectionOptions options;
+    options.analyze_components = false;
+    auto mesh                  = make_cube(10., 10., 10.);
+    SECTION("invalid index") { mesh.its.indices.front()[0] = -1; }
+    SECTION("nonfinite") { mesh.its.vertices.front().x() = std::numeric_limits<float>::infinity(); }
+    SECTION("empty") { mesh.its.indices.clear(); }
+    SECTION("vertex limit") { options.max_vertices = 1; }
+    SECTION("face limit") { options.max_triangles = 1; }
+    CHECK_THROWS(inspect_model_mesh(mesh, options));
+}
+
 namespace {
 struct InspectionTempDirectory
 {
@@ -348,6 +463,24 @@ TEST_CASE("Workflow separates opt-in completion from legacy repair outcomes", "[
         CHECK(result["model_checks"][0]["boundary"]["reconstruction"]["failure_kind"] == "repair_failed");
         CHECK(inspection_file_bytes(options.input_file) == original);
     }
+    SECTION("App stage report retains unresolved open mesh without reconstruction diagnostics")
+    {
+        auto mesh = load_model("model_repair_acceptance/08-intersecting-shells.obj");
+        mesh.its.indices.erase(mesh.its.indices.begin());
+        const auto input = (temp.path / "open-crossing.stl").string();
+        REQUIRE(store_stl(input.c_str(), &mesh, true));
+        options.input_file = input;
+        options.stage_report = true;
+        options.inspection_mode = "basic";
+        options.repair_evidence = false;
+        run_model_check_workflow(options, report);
+        CHECK(report.check["operation_status"] == "completed");
+        CHECK(report.check["advanced_repair"]["status"] == "unresolved");
+        CHECK(report.check["mesh_status"] == "needs_repair");
+        CHECK_FALSE(report.check.contains("section_evidence"));
+        CHECK_FALSE(report.check.contains("repair_evidence"));
+        CHECK(boost::filesystem::exists(report.check["working_model"].get<std::string>()));
+    }
     SECTION("Legacy unresolved workflow does not run the new preflight")
     {
         options.repair_evidence = false;
@@ -604,6 +737,11 @@ TEST_CASE("Inspection distinguishes point contacts from edge-connected component
     REQUIRE(result["issues"]["nonmanifold_vertex"]["count"] == 1);
     REQUIRE(result["component_analysis"]["containment_complete"] == false);
     REQUIRE(result["mesh_status"] == "needs_repair");
+    ModelInspectionOptions basic_options;
+    basic_options.analyze_components = false;
+    const auto basic                 = inspect_model_mesh(mesh, basic_options);
+    CHECK(basic["mesh_status"] == "passed");
+    CHECK(model_inspection_boundary(basic)["status"] == "passed");
 }
 
 TEST_CASE("Whole shell direction no longer affects the public inspection conclusion", "[ModelRepair][Inspection]")
@@ -1192,4 +1330,20 @@ TEST_CASE("Business JSON never substitutes zero findings for an inspection that 
     CHECK(model_check_business_result(json::array({check}), -27, "Invalid model") == result);
     check["working_model"] = "/different.stl";
     CHECK(model_check_business_result(json::array({check}), -27, "Invalid model") == result);
+}
+
+TEST_CASE("Closed edge contacts remain reported without automatic union", "[ModelInspection][AppBasic]")
+{
+    auto mesh   = make_cube(10., 10., 10.);
+    auto second = make_cube(10., 10., 10.);
+    second.translate(10., 10., 0.);
+    mesh.merge(second);
+    ModelInspectionOptions options;
+    options.analyze_components = false;
+    const auto result          = inspect_model_mesh(mesh, options);
+    CHECK(result["issues"]["boundary"]["count"] == 0);
+    CHECK(result["issues"]["nonmanifold_edge"]["count"].get<size_t>() > 0);
+    CHECK(result["mesh_status"] == "needs_repair");
+    CHECK(result["next_action"] == "none");
+    CHECK(model_inspection_boundary(result)["status"] == "defects_detected");
 }

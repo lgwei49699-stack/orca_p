@@ -3,6 +3,7 @@
 
 #include <libslic3r/TriangleMesh.hpp>
 #include <libslic3r/MeshBoolean.hpp>
+#include <libslic3r/ModelInspection.hpp>
 #include <libslic3r/Utils.hpp>
 #include <algorithm>
 #include <limits>
@@ -262,4 +263,53 @@ TEST_CASE("CGAL partial checkpoints retain hole filling in one self-intersecting
     CHECK(MeshBoolean::cgal::is_safe_partial_repair(source, partial));
     CHECK(source.its.vertices == original.vertices);
     CHECK(source.its.indices == original.indices);
+}
+
+TEST_CASE("App basic repair handles measured local defects in one pass", "[MeshBoolean][ModelRepair][AppBasic]")
+{
+    const char*      fixture = GENERATE("01-missing-top", "03-wrong-winding", "04-duplicate-face", "05-degenerate-face", "07-thin-solid");
+    auto             mesh    = load_model(std::string("model_repair_acceptance/") + fixture + ".obj");
+    std::string      error;
+    RepairLogCapture logs;
+    REQUIRE(MeshBoolean::cgal::repair_basic(mesh, &error));
+    INFO(fixture);
+    INFO(error);
+    CHECK(inspect_model_mesh(mesh)["mesh_status"] == "passed");
+    CHECK_FALSE(logs.contains("surface_distance"));
+    CHECK_FALSE(logs.contains("checkpoint"));
+    CHECK_FALSE(logs.contains("fidelity_checked"));
+}
+
+TEST_CASE("App basic rejected candidates leave original geometry intact", "[MeshBoolean][ModelRepair][AppBasic]")
+{
+    auto mesh = make_cube(10., 10., 10.);
+    SECTION("complex intersections")
+    {
+        auto other = make_cube(10., 10., 10.);
+        other.translate(5., 5., 5.);
+        mesh.merge(other);
+        mesh.its.indices.pop_back();
+    }
+    SECTION("only a zero area face") { mesh.its.indices = {{0, 0, 1}}; }
+    SECTION("invalid index") { mesh.its.indices[0][0] = -1; }
+    const auto  original = mesh.its;
+    std::string error;
+    CHECK_FALSE(MeshBoolean::cgal::repair_basic(mesh, &error));
+    CHECK_FALSE(error.empty());
+    CHECK(mesh.its.vertices == original.vertices);
+    CHECK(mesh.its.indices == original.indices);
+}
+
+TEST_CASE("App basic cleanup repairs duplicated closed shells", "[MeshBoolean][ModelRepair][AppBasic]")
+{
+    auto mesh = make_cube(10., 10., 10.);
+    auto copy = mesh;
+    if (GENERATE(false, true))
+        copy.flip_triangles();
+    mesh.merge(copy);
+    std::string error;
+    REQUIRE(MeshBoolean::cgal::repair_basic(mesh, &error));
+    CHECK(mesh.its.indices.size() == 12);
+    CHECK(mesh.volume() == Approx(1000.));
+    CHECK(inspect_model_mesh(mesh)["mesh_status"] == "passed");
 }
