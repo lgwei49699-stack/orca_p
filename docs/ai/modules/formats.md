@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "formats",
-  "source_fingerprint": "sha256:ce8d35243fe1e685f3ece8d9198a366494014fca597c8a119fdf8cc471d15682",
-  "reason": "仅在 test_3mf 增加差量/全量工艺的真实归档读写回归，使用云导入相同的 LoadConfig/CheckVersion 入口；格式源码、协议和导出表示未改。"
+  "source_fingerprint": "sha256:2b7e8cf2d038b99ff11084153e86ed2afadb22df0f86a0d006bf6a8332b5aba6",
+  "reason": "objparser 按上游方式接受可选第三纹理分量，仍只存二维 UV；OBJ.cpp 的索引校验不改。补充混合维数/正负索引和越界回归，master 原始 EP7KE.obj 完整切片通过，GUI 步骤另记。 2026-10-30在master c0ccf31b22基准重审：仅OBJ可选纹理w兼容，二维UV和有效负索引保留；41项OBJ/5900断言、58普通CLI通过，真实原文件与去w副本12221条运动/状态指令相同。GUI及其他平台待验；本轮证据见OBJ修复记录。"
 }
 -->
 
@@ -28,6 +28,8 @@ Model 导入分派 STL/OBJ/3MF/STEP 等格式；bbs_3mf 读写工程模型、配
 
 工程 3MF 与 gcode.3mf 不是同义：后者可能只有切片缓存，不能保证重新切片。来源版本、必需功能标记和配置兼容分别检查；不能修改品牌头绕过功能拒绝。
 
+GUI 和 CLI 的 OBJ 导入共用 `objparser.cpp`，接受 `vt u v [w]`，读取可选 w 后只存 u/v；混合两分量和三分量记录仍按每条两个数索引，负索引换算规则不变。`load_obj` 仍拒绝无效或越界纹理索引（含负索引换算后越界及四边形第四顶点），不以零 UV 替代错误；显式 geometry-only 的既有材质忽略行为不变。
+
 非增量 `WithGcode + SkipModel` 表示本软件输出的切片包，必须至少含一个目标盘有效且非空的 G-code。单盘只校验所选盘；全盘按 PartPlate 的可打印实例状态跳过不参与打印的盘，不能仅凭对象列表非空要求该盘切片。参与打印但切片失效的盘仍拒绝导出。没有可编辑实例但含切片/G-code 的导入盘仍需校验并保留，真正空盘可跳过；没有运行时快照的调用者对非空盘保守校验。GUI 和 CLI `--min-save` 共用此约束；普通带模型工程和增量备份仍可保存未切片状态。SkipModel 不含可编辑三角网格不是错误，工程及机型/工艺/耗材参数仍写入；保存模型应使用普通工程。
 
 `PlateData::has_printable_instances` 是 PartPlateList 同时供 GUI/CLI 使用的临时导出快照，不写入工程协议。`is_selected_for_sliced_export` 统一预检、G-code、MD5、model_settings 内容及 slice_info 的盘选择，避免被跳过盘的旧缓存、缺失引用或本机绝对路径留在切片包。model_settings 对未选中盘仅保留原编号空槽，不带 G-code/实例/缩略图引用；读取器要求盘号连续，不能直接删掉前面盘的记录而让第二盘独存。普通工程不启用该筛选，不独立重排 G-code 文件名。
@@ -46,6 +48,8 @@ GUI与CLI共用的3MF导出器在写盘成员前拒绝负数/越界对象及实�
 `[PlateReferences]` 覆盖普通/切片包负数与越界对象/实例、缺盘数据、导出中新增但未进入映射的对象、晚期失效成员、已有文件保护及纯G-code无模型导出。该测试与 `[SlicedExport]` 不替代GUI保存交互；手测步骤及构建身份见[修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。
 
 ## 修改与验证
+
+`test_obj.cpp` 覆盖可选 w 为零/非零、两/三分量记录混用、绝对/相对索引与越界拒绝。master 的 `[OBJ]` 专项和未修改 EP7KE.obj 的 CLI 切片结果、构建身份及待 GUI 步骤见 [OBJ 纹理分量修复记录](../validation/2026-10-25-obj-texture-w.md)。
 
 `[CloudProcess]` 通过临时 3MF 写入/读取比较差量与全量嵌入工艺，调用云导入同样的 `LoadConfig | CheckVersion` 入口，再验证工程有效线宽、树状支撑和填充值。格式读写源码未变；结果和 GUI 待验见 [EPONE 记录](../validation/2026-10-24-epone-cloud-preset-roundtrip.md)。
 

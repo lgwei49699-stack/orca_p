@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:1d8d1ec5e2c0054f7a8cd34afe898f950bbb26aaa2dc27a907bd4d202631d8f2",
-  "reason": "新增 [RaftGap]：同一夹具覆盖 9 场景×逐层/逐对象，共 18 组，包含计划气隙、共享接触层、真实缺层、错位首层及 legacy；同时检查 Print::process 与 G-code 导出告警。无新目标、依赖或外部夹具，91 用例回归通过，实际模型 CLI 与 GUI 验证见对应记录。"
+  "source_fingerprint": "sha256:4d3ecf2514d42aff37fec66f83f263e80e20622e26fe9d2b588bb9a1a081f6bd",
+  "reason": "在现有 test_obj 临时夹具中覆盖可选第三纹理分量、混合 UV、正负索引和越界拒绝；无新目标、依赖或外部夹具。[OBJ] 专项及原模型 CLI 通过，链接本次记录及 GUI 待验步骤。 追加 [RaftGap]：同一夹具覆盖 9 场景×逐层/逐对象，共18组，包含计划气隙、共享接触层、真实缺层、错位首层及 legacy；同时检查 Print::process 与 G-code 导出告警。无新目标/依赖，原 OBJ 测试改动保留。 2026-10-30在master c0ccf31b22基准重审：仅OBJ可选纹理w兼容，二维UV和有效负索引保留；41项OBJ/5900断言、58普通CLI通过，真实原文件与去w副本12221条运动/状态指令相同。GUI及其他平台待验；本轮证据见OBJ修复记录。"
 }
 -->
 
@@ -89,6 +89,8 @@ Windows GUI 采集脚本使用 PowerShell 5.1 与内嵌 C# P/Invoke，默认延�
 固定位置脚本追加已有3MF与新增STL/OBJ混合、单盘/多盘、盘内/完全越界/部分越界及显式盘号，成功时三个对象必须均有实际挤出路径。分盘脚本追加全局旋转/缩放/三轴组合、per-model叠加、自动定向、切片及repetitions复制；用JSON重建源顶点并与3MF实际顶点逐点比对，不仅检查包围盒或退出码。不同对象已有不同volume旋转时各自验证；无法用rotation+scale表达的剪切应明确拒绝，而不导出JSON时仍可保存3MF。格式层新增 `[PlateReferences]`，范围与失败语义见[格式模块](formats.md)。
 
 ## 修改与验证
+
+`test_obj.cpp` 的 `[OBJ][CLI][Import]` 增加可选第三纹理分量兼容回归；检查混合两/三分量时正负索引对应的 UV 值及四边形拆分，同时保留越界拒绝和显式 geometry-only 对照。使用既有临时文件夹具；本次专项及原始模型切片证据见 [OBJ 修复记录](../validation/2026-10-25-obj-texture-w.md)。
 
 `[CloudProcess]` 覆盖工程有效工艺优先、显式零/百分比、缺项回退及保存后重载；另通过真实 3MF 写入/读取验证差量和全量嵌入工艺产生一致结果。测试隔离用户目录，云端网络与替换/另存弹窗仍需 GUI 验证；本次结果见 [EPONE 记录](../validation/2026-10-24-epone-cloud-preset-roundtrip.md)。
 

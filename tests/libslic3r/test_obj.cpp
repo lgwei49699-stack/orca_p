@@ -254,6 +254,10 @@ TEST_CASE("OBJ import rejects invalid UV indices unless explicitly loading geome
     SECTION("positive out of range") { fixture.obj("f 1/5 2/2 3/3\n"); }
     SECTION("negative out of range") { fixture.obj("f 1/-5 2/-3 3/-2\n"); }
     SECTION("invalid fourth corner") { fixture.obj("f 1/1 2/2 3/3 4/9\n"); }
+    SECTION("out of range with an optional texture w component")
+    {
+        fixture.write("input.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0 0\nf 1/1 2/2 3/1\n");
+    }
     TriangleMesh mesh;
     ObjInfo      info;
     std::string  message;
@@ -263,6 +267,29 @@ TEST_CASE("OBJ import rejects invalid UV indices unless explicitly loading geome
     REQUIRE(fixture.load(mesh, geometry_info, message, true));
     CHECK(geometry_info.face_colors.empty());
     CHECK(geometry_info.uvs.empty());
+}
+
+TEST_CASE("OBJ import accepts optional texture w components without shifting UV indices", "[OBJ][CLI][Import]")
+{
+    ObjImportFixture fixture;
+    std::string      faces;
+    SECTION("absolute UV indices") { faces = "f 1/1 2/2 3/3 4/4\n"; }
+    SECTION("relative UV indices") { faces = "f 1/-4 2/-3 3/-2 4/-1\n"; }
+    fixture.write("input.obj", "mtllib palette.mtl\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+                               "vt 0 0 0\nvt 1 0\nvt 1 1 0.5\nvt 0 1 -0.5\nusemtl color\n" +
+                                   faces);
+    TriangleMesh mesh;
+    ObjInfo      info;
+    std::string  message;
+    REQUIRE(fixture.load(mesh, info, message));
+    REQUIRE(mesh.facets_count() == 2);
+    REQUIRE(info.uvs.size() == 2);
+    const std::array<Vec2f, 3> first{Vec2f(0, 0), Vec2f(1, 0), Vec2f(1, 1)};
+    const std::array<Vec2f, 3> second{Vec2f(0, 0), Vec2f(1, 1), Vec2f(0, 1)};
+    for (size_t i = 0; i < 3; ++i) {
+        CHECK((info.uvs[0][i] - first[i]).squaredNorm() == 0.f);
+        CHECK((info.uvs[1][i] - second[i]).squaredNorm() == 0.f);
+    }
 }
 
 TEST_CASE("OBJ negative UV indices and quad triangulation preserve UV corner order", "[OBJ][CLI][Import]")
