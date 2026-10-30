@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gcode-export",
-  "source_fingerprint": "sha256:0ef49c1f362a1cc802de5cace2fadf515ef004f17c8f914bb32799d25655d917",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，只在模型检测组合解释；GCode/GCodeWriter、指令风格、速度流量、后处理及GUI导出路径未改，证据流程不输出G-code。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 复核GCode构造的collect_analysis仅传解析器，不修改写入器、速度/挤出/冷却/后处理。正文补默认false的内部导出边界，CLI40组指令/配置/统计严格等价，原GCode七项回归通过；GUI待用户兼容验证。 2026-10-22仅共享Print运行时模式选择上游模型路径；GCodeWriter/冷却/速度/导出后处理无差异。默认恢复原路径，显式开启才消费修正后分段与E，报告保持独立只读；真实模型指令/参数对照见实施记录。 2026-10-22复核新增CLI层高边界只改变显式计划的输入层；原G-code生成/后处理未改，新增验收在导出前。报告不改有效参数/执行指令的回归另记录。 2026-10-23仅collect_analysis显式开启时在既有循环汇总小轮廓选择，finalize后发布；原速度决策、路径、指令、GUI默认未改。正文区分选择值与最终输出，正/负命中及报告开关回归见质量策略记录。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。 2026-10-30：复核本次共享PrintConfig.cpp差异仅在CLI配置区新增model_inspection_mode（默认full），由独立check-model入口读取；本模块使用的打印配置、默认值及执行路径均未改，不新增计算，正文无需改动。 2026-10-30末轮：PrintConfig 仅修正已有 CLI basic 检查范围帮助文字（去除七类全检误述），键/类型/默认值及本模块读取规则未改，已核对逐行差异；同步中英文。ModelCheckWorkflow 头仅更正范围注释，详细说明及测试见模型修复记录。 2026-10-30本模块仅因watch的PrintConfig.cpp中App检查帮助改为原生未连接边而更新指纹；无配置键/默认值/有效值或本模块算法变化，正文无需变更。"
+  "source_fingerprint": "sha256:c00ff20bb6d13fb2bfa260f50f9d444b468dfc6e4e69f2ec8578cbe6f5dced7d",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，只在模型检测组合解释；GCode/GCodeWriter、指令风格、速度流量、后处理及GUI导出路径未改，证据流程不输出G-code。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-19 复核GCode构造的collect_analysis仅传解析器，不修改写入器、速度/挤出/冷却/后处理。正文补默认false的内部导出边界，CLI40组指令/配置/统计严格等价，原GCode七项回归通过；GUI待用户兼容验证。 2026-10-22仅共享Print运行时模式选择上游模型路径；GCodeWriter/冷却/速度/导出后处理无差异。默认恢复原路径，显式开启才消费修正后分段与E，报告保持独立只读；真实模型指令/参数对照见实施记录。 2026-10-22复核新增CLI层高边界只改变显式计划的输入层；原G-code生成/后处理未改，新增验收在导出前。报告不改有效参数/执行指令的回归另记录。 2026-10-23仅collect_analysis显式开启时在既有循环汇总小轮廓选择，finalize后发布；原速度决策、路径、指令、GUI默认未改。正文区分选择值与最终输出，正/负命中及报告开关回归见质量策略记录。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。 2026-10-30：复核本次共享PrintConfig.cpp差异仅在CLI配置区新增model_inspection_mode（默认full），由独立check-model入口读取；本模块使用的打印配置、默认值及执行路径均未改，不新增计算，正文无需改动。 2026-10-30末轮：PrintConfig 仅修正已有 CLI basic 检查范围帮助文字（去除七类全检误述），键/类型/默认值及本模块读取规则未改，已核对逐行差异；同步中英文。ModelCheckWorkflow 头仅更正范围注释，详细说明及测试见模型修复记录。 2026-10-30本模块仅因watch的PrintConfig.cpp中App检查帮助改为原生未连接边而更新指纹；无配置键/默认值/有效值或本模块算法变化，正文无需变更。 2026-10-30补合master c0ccf31b22：Cura V1真实垫层接触锚点只修正计划首层空层误报，保留真实缺层保护和发布分支只读小轮廓分析；未更改实际路径、参数、普通修复或Linux打包配置。正文与测试说明按目标源码合并，目标回归见App发布记录。"
 }
 -->
 
@@ -29,6 +29,10 @@ GCode 消费 Print 的层和挤出集合，协调工具顺序、接缝、回抽�
 `total_layer_count`、导出总层数与按层进度使用实际将输出的层组数：工具顺序建立后，以 `process_layer` 相同的“extruders 非空”条件计数，在展开启动代码前完成。复用 `collect_layers_to_print` 的真实层组与 Z 合并规则；逐层按全盘合并、逐对象按各对象实例数累加。不能只看模型层 `has_extrusions`，否则会漏掉支撑、筏层或擦料塔独占的层。空组仍留在原输出管线，不通过删层改变几何、冷却或已有空层检查；逐对象缓存层组，避免对每个副本重复收集/校验。
 
 文件头层数仍由 GCodeProcessor 解析实际换层标签后填入；本次修正上游计数，不在后处理里搜索替换用户机器代码。`max_z_height` 保留原有计划最高模型层语义，不把它当作实际最后一个挤出层，也不调整尺寸或安全抬升。
+
+Cura V1 的首层间隙校验保留实际垫层接触面锚点：层号与计划顶面一致、来源标记对应的路径有挤出体积，或接触层已由合并垫层覆盖。即使普通支撑先打印到气隙中，也可允许有实际路径且位于 `raft_contact_top_z + gap_raft_object + first_object_layer_height` 的模型首层通过。该条件不扩大后续层、错位首层、无接触路径或 legacy 的允许间隙，不用额外容差掩盖缺层。
+
+GUI 的处理阶段（`Print::process` 内 psSkirtBrim）与 GUI/CLI 导出均调用同一 `collect_layers_to_print`；两阶段一起覆盖。具体正反例及 GUI 实测见[底部空层修复](../validation/2026-10-27-raft-bottom-empty-layers.md)。
 
 ## 配置与约束
 

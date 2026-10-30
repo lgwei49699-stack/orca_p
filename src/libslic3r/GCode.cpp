@@ -1221,9 +1221,11 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
     std::vector<std::pair<double, double>> warning_ranges;
 
     // Pair the object layers with the support layers by z.
-    size_t idx_object_layer = 0;
-    size_t idx_support_layer = 0;
-    const LayerToPrint* last_extrusion_layer = nullptr;
+    size_t                   idx_object_layer            = 0;
+    size_t                   idx_support_layer           = 0;
+    const LayerToPrint*      last_extrusion_layer        = nullptr;
+    const SlicingParameters& slicing_params              = object.slicing_parameters();
+    bool                     has_cura_raft_contact_paths = false;
     while (idx_object_layer < object.layers().size() || idx_support_layer < object.support_layers().size()) {
         LayerToPrint layer_to_print;
         double print_z_min = std::numeric_limits<double>::max();
@@ -1253,6 +1255,20 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
         bool has_extrusions = (layer_to_print.object_layer && layer_to_print.object_layer->has_extrusions()) ||
                               (layer_to_print.support_layer && (layer_to_print.support_layer->has_extrusions() ||
                                                                 layer_to_print.support_layer->raft_covered_by_shared_paths));
+
+        // Keep the actual Cura raft contact as an anchor even if ordinary
+        // supports print above it before the first object layer.
+        if (slicing_params.cura_raft_mode && slicing_params.has_raft() && layer_to_print.support_layer != nullptr) {
+            const SupportLayer& support = *layer_to_print.support_layer;
+            if (support.id() + 1 == slicing_params.raft_layers() &&
+                std::abs(support.print_z - slicing_params.raft_contact_top_z) <= EPSILON) {
+                has_cura_raft_contact_paths = support.raft_covered_by_shared_paths;
+                if (support.has_raft_provenance())
+                    for (size_t i = 0; i < support.raft_entity_flags.size() && !has_cura_raft_contact_paths; ++i)
+                        has_cura_raft_contact_paths = support.raft_entity_flags[i] != 0 &&
+                                                      support.support_fills.entities[i]->total_volume() > 0.;
+            }
+        }
 
         // Check that there are extrusions on the very first layer. The case with empty
         // first layer may result in skirt/brim in the air and maybe other issues.
@@ -1322,7 +1338,6 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
             // Only the final raft contact directly below the first object layer
             // may use the resolved raft gap. Ordinary support layers continue
             // to use the top support distance.
-            const SlicingParameters &slicing_params = object.slicing_parameters();
             const bool crosses_raft_gap = last_extrusion_layer != nullptr && last_extrusion_layer->support_layer != nullptr &&
                 layer_to_print.object_layer != nullptr && slicing_params.has_raft() &&
                 slicing_params.is_first_object_layer_id(layer_to_print.object_layer->id()) &&
@@ -1330,13 +1345,22 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
             if (crosses_raft_gap) {
                 extra_gap = std::max(extra_gap, double(slicing_params.gap_raft_object));
             }
-            double maximal_print_z = (last_extrusion_layer ? last_extrusion_layer->print_z() : 0.)
-                + layer_to_print.layer()->height
-                + std::max(0., extra_gap);
+            double maximal_print_z = (last_extrusion_layer ? last_extrusion_layer->print_z() : 0.) + layer_to_print.layer()->height +
+                                     std::max(0., extra_gap);
+            if (has_cura_raft_contact_paths && layer_to_print.object_layer != nullptr && layer_to_print.object_layer->has_extrusions() &&
+                slicing_params.is_first_object_layer_id(layer_to_print.object_layer->id())) {
+                const double planned_first_z = slicing_params.raft_contact_top_z + slicing_params.gap_raft_object +
+                                               slicing_params.first_object_layer_height;
+                // Only the planned first layer may bridge the raft air gap;
+                // missing contact/model paths and later gaps retain the normal check.
+                if (std::abs(layer_to_print.object_layer->print_z - planned_first_z) <= 2. * EPSILON)
+                    maximal_print_z = std::max(maximal_print_z, planned_first_z);
+            }
             // Negative support_contact_z is not taken into account, it can result in false positives in cases
 
             if (has_extrusions && layer_to_print.print_z() > maximal_print_z + 2. * EPSILON)
-                warning_ranges.emplace_back(std::make_pair((last_extrusion_layer ? last_extrusion_layer->print_z() : 0.), layers_to_print.back().print_z()));
+                warning_ranges.emplace_back(
+                    std::make_pair((last_extrusion_layer ? last_extrusion_layer->print_z() : 0.), layers_to_print.back().print_z()));
         }
         // Remember last layer with extrusions.
         if (has_extrusions)

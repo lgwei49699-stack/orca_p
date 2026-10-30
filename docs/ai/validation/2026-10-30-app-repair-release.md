@@ -1,6 +1,23 @@
 # App 模型检查与高级修复合入 Linux 发布分支
 
-## 当前执行状态
+## 当前执行状态：补合 Cura V1 首层空层误报修复
+
+- 用户已授权推送全部已审核提交，并将遗漏的 Cura V1 修复合入发布分支后重新打包。Orca `master/c0ccf31b22` 已推送 Codeup，Slicer `0f8191b`、主服务 `9edc40acc` 已推送各自测试集成分支；本轮未合并服务 develop/master，也未部署。
+- 发布目录仍为 `orca-slicer`，基准 `linux/release2_3_2 / 2b7c2b197`；由最新 `origin/master / c0ccf31b22` 合入一笔已审核提交。原有未跟踪文档保留；master 工作区的 OBJ 解析修改不纳入。
+- 业务范围仅补入 `GCode::collect_layers_to_print` 的 Cura V1 实际垫层接触锚点与计划首层判断，以及对应测试。共享 GUI/CLI 规则一致；真实缺路径和后续空层保护保留，不修改支撑、模型路径或打印参数。
+- 当前步骤：业务源码自动合并；6处冲突均为模块审核头，已保留发布说明并按目标指纹更新。OrcaSlicer/fff_print_tests 的当前目录 arm64 Release 构建退出0，35模块全量检查和空白差异检查通过，已完成垫层/层数专项、64场景普通切片、57阶段CLI和海绵宝宝/勺子/向日葵6组正反例；先前 master 的历史通过不代替本次执行。
+- 新证据目录 `build/diagnostics/cura-raft-release-20261030/`。验证通过后推送发布分支，以唯一新标签 `manual-build-linux-20261030-02` 触发构建；旧标签不移动。现有工作流会自动取消仍在运行的上一轮 Linux 打包，以新提交重建。
+- GUI 手工验收本轮待执行：新版 GUI 对 Cura V1 垫层开启/关闭分别切片，检查正常间隙不误报、真实缺层仍提示、保存重开不改变设置；来源 master 的具体模型与步骤见 [Cura V1 修复记录](2026-10-27-raft-bottom-empty-layers.md)。目标 Linux 包及 App 真机验收仍待构建后执行。
+
+### 补合后的实际验证结果
+
+- arm64 Release / MeshLib OFF，当前目录 OrcaSlicer 与 fff_print_tests 构建成功。`[SupportMaterial][Raft],[LayerCount]` 共91用例、52,204断言通过；64普通切片、57阶段CLI全部通过。
+- 海绵宝宝与勺子各自原配置/无垫层对照共4组退出0、有G-code且无空层告警。向日葵0.32/0.4 mm首层仍分别报1.57～1.99 / 1.57～2.07 mm真实缺层，退出156、无G-code。
+- 真实负例首次重放失败是历史 `/tmp` OBJ/配置已丢失（253），未到切片。随后使用已保存GUI 3MF；该自定义工程直接CLI运行因预设兼容元数据失败（239），将嵌入参数直接作为外部预设又因 `from=project` 被CLI拒绝（251）。最终按CLI既有格式显式加载同一机器/工艺/耗材，补齐type/from/system与同名兼容元数据，只分别设置首层厚度0.32/0.4；原3MF几何/变换不改、未使用force-machine/no-check，负例恢复预期。失败日志和最终运行均保留，未修改业务代码绕过检查。
+- 应用SHA256 `cafda9be2e6ce8faa7c8df9f003569e3760a95f8d3d99f007645934527e8ed18`；测试程序SHA256 `d11a11605986fadb1a1df14b590150588bb348f78c8501832f824583133d993d`。命令、日志及源码身份在本轮本地证据目录。
+- 相对合并前仅GCode.cpp的误报判断与对应测试新增；App基础修复、特征分析、局部层高兼容、Linux工作流/版本/依赖保持发布分支内容。6处文档审核头冲突已解决，默认GUI/CLI共用同一判断。本轮未重新执行GUI交互或实印，不宣称目标Linux已验收。
+
+## 上一批 App 合并记录
 
 - 用户授权：将已提交的 Orca App 修复改动合入 `linux/release2_3_2` 并从该分支打包；本轮不推送其他服务。
 - 目标目录：`/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-slicer`，合并前 HEAD `52a60762e`，已 fetch 确认与 `github/linux/release2_3_2` 一致。
