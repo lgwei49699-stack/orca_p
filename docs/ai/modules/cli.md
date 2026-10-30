@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:0525603b3b9ee36182e9c09fc28e8cf650203db3829c8be2574ca0989623633e",
-  "reason": "2026-10-22新增独立CLI opt-in，默认关闭，不由报告启用。逐盘传递Print运行时模式，开启时拒绝无模式身份的切片缓存导入/导出；未改修复、分盘、普通切片参数和默认输出。17场景脚本与真实模型开关对照见实施记录，GUI按用户要求不接入。 2026-10-22有界质量计划新增CLI成对min/max及实际模型层导出前验收；默认双0/旧adaptive/报告独立保持，GUI不接入。正文补参数与失败边界，运行记录另列。 2026-10-23复核共享GCode结果新增仅报告采集的小轮廓选择摘要；CLI入口/默认开关和指令不变。17场景通过，具体模型/GUI边界见有界质量策略记录。 2026-10-23入口源码和参数未改，补显式bounded共享生成器尾部对齐接入说明；普通/报告开关回归证据见本轮记录。 2026-10-23新增CLI局部计划固定姿态透传与输入/有效配置/实际层位校验，省略参数保持旧行为；单STL及冲突限制见正文。31场景当前原生CLI与PDS原模型固定位置对照通过，GUI不新增入口，HTTP/Linux/实印未验。 2026-10-23冗余收敛：移除第二次SHA读取、重复validate和PAM预算常量，保留实际配置/层序验证；32局部计划与17报告CLI通过，普通新旧指令一致，未改共享生成算法或GUI入口。 2026-10-28同步阶段读取geometry-only声明：阶段可读取彩色STL几何、直接重建原限制不变；无新参数，普通切片/分盘未改，相关回归见局部修复记录。 2026-10-29入库复审：新增逻辑限定显式报告，修复算法与普通切片/分盘不变；复核当前源码/程序身份，两个真实模型报告开关各3轮产物完全一致，耗时/内存与平台边界见局部修复记录第九批。"
+  "source_fingerprint": "sha256:e4cc40667677b72f50cf2131a9691aaaeb47ab12a206af48124d26ab89b4383a",
+  "reason": "2026-10-30：App高级恢复安全部件分组，basic阶段透传既有next_action，无新开关；普通切片/分盘和full阶段契约不变，配套服务使用引擎建议。"
 }
 -->
 
@@ -62,6 +62,8 @@
 
 
 ## 配置与约束
+
+App 专用 `--model-inspection-mode basic|full` 仅随 `--check-model` 使用，可组合 `--repair-model cgal`；默认full不变。basic统计五类轻量缺陷，已测阳性不能写passed，自交/非流形顶点仍未请求。开放边、重复面、严格退化面、方向冲突进入一次简化CGAL；仅有几何非流形边而原生邻接闭合则保留unresolved，不自动布尔合并。Slicer重建关闭时同样不为此重复启动高级阶段。App高级使用共享安全分组，完整成功部件保留、失败部件原样保留；嵌套/接触壳留在一组，不按薄片阈值删除、不保存CGAL中间候选。必要数据/闭合及定向前置检查保留。basic阶段报告透传已有 `inspection.next_action=none/advanced_repair` 供服务端分流，不在Slicer重写引擎规则。check/advanced阶段 `change={status:not_requested,reason:app_basic}` 沿用，产物回读/哈希绑定保留，full/重建完整验收不变。无需新CLI参数或App字段；引擎/Slicer需配套。具体证据及GUI未测范围见[App记录](../validation/2026-10-30-app-basic-repair.md)。
 
 `--model-layer-height-plan <JSON>`仅为显式单STL固定姿态切片提供局部Z范围透传，须跟随`--model`。计划版本`regional-slope-v1`绑定输入SHA256、统一缩放、XYZ旋转、贴床后高度、基础/首层/上下界及最多128个区间；文件最多64 KiB。1.25倍细化预算仅由PAM选参，不在CLI重复判断；CLI仍检查实际机型允许范围。加载前仅核对一次源文件SHA，变换后核对实际实例；基础层边界和整分层数必须恢复范围外层位。仅沿原`--model-position/scale/rotate`路径设置原生`layer_config_ranges`，不更换为assemble或修改生成算法。
 

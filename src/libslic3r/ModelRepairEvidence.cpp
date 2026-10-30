@@ -122,14 +122,22 @@ json model_inspection_boundary(const json& inspection)
                    {"printability", "not_assessed"}};
     if (not_run(inspection))
         return result;
-    bool        unknown = false, basic_complete = true;
+    bool        unknown = false, basic_complete = true, repair_needed = false;
+    const bool  basic_scope = text_field(inspection, "inspection_scope") == "basic";
     const auto  incomplete = [&](const std::string& key) { result["incomplete_checks"].push_back(key); };
     const auto* issues     = field(inspection, "issues");
     for (const auto* key : ISSUE_KEYS) {
         const auto* issue       = issues ? field(*issues, key) : nullptr;
+        if (basic_scope && std::string(key) != "boundary" && issue && text_field(*issue, "status") == "not_requested" &&
+            field(*issue, "count") && issue->at("count").is_null() && flag(*issue, "complete", false))
+            continue; // Deliberately outside App scope; never report a zero count.
         uint64_t    value       = 0;
         const bool  valid_count = issue && count_field(*issue, "count", value);
         const bool  complete    = issue && flag(*issue, "complete") && valid_count;
+        // A measured defect remains a defect even when automatic repair has
+        // no applicable operation. Do not report it as passed.
+        if (valid_count && value != 0)
+            repair_needed = true;
         if (!complete) {
             incomplete(key);
             basic_complete = false;
@@ -138,7 +146,8 @@ json model_inspection_boundary(const json& inspection)
         // A truncated self-intersection count still proves the observed pairs;
         // do not erase this evidence merely because the total is unknown.
         if (valid_count && value != 0)
-            result["known_defects"].push_back({{"check", key}, {"count", value}, {"count_complete", complete}});
+            result["known_defects"].push_back(
+                {{"check", key}, {"count", value}, {"count_complete", complete && !flag(*issue, "count_is_lower_bound")}});
     }
     if (!flag(inspection, "basic_checks_complete")) {
         incomplete("basic_checks_complete");
@@ -152,8 +161,11 @@ json model_inspection_boundary(const json& inspection)
         unknown = true;
     }
     const auto* components          = field(inspection, "component_analysis");
-    bool        structural_complete = false;
-    if (!components || !components->is_object()) {
+    bool        structural_complete = basic_scope;
+    if (basic_scope) {
+        result["inspection_scope"]   = "basic";
+        result["component_analysis"] = "not_requested";
+    } else if (!components || !components->is_object()) {
         incomplete("component_analysis");
         unknown = true;
     } else {
@@ -223,7 +235,7 @@ json model_inspection_boundary(const json& inspection)
     result["inspection_complete"]   = complete;
     result["has_geometry_defects"]  = has_defects;
     result["status"]                = unknown                                                       ? "incomplete" :
-                                      has_defects                                                   ? "defects_detected" :
+                                      repair_needed                                                 ? "defects_detected" :
                                       complete && text_field(inspection, "mesh_status") == "passed" ? "passed" :
                                                                                                       "incomplete";
     return result;

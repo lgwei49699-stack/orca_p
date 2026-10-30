@@ -24,6 +24,7 @@ struct ModelCheckWorkflowOptions
     bool allow_boundary_closure = false;
     // Server integration only; defaults preserve the v4 report and workload.
     bool        stage_report = false;
+    std::string inspection_mode = "full"; // basic: lightweight defects and one repair pass; full: all diagnostics.
     std::string reference_file;
     // Check-only capacity is independent of the repair engine's own budgets.
     // Keep bounded geometry and intersection work; never downsample for inspection.
@@ -50,13 +51,15 @@ struct ModelCheckWorkflowReport
 // the last published working model. Advanced repair without a retainable change
 // reports unresolved, not a successful repair. The explicit evidence combination
 // returns normally for that outcome only if its evidence workflow completes;
+// App basic stage reports also retain unresolved results without deep evidence.
 // legacy advanced repair still throws on no progress. Never overwrites the input.
 void run_model_check_workflow(const ModelCheckWorkflowOptions& options, ModelCheckWorkflowReport& report);
 
-// Public schema v4: preserve the six existing fields and seven issue counts.
+// Public schema v4: full preserves six fields and seven issue counts.
+// Explicit basic mode declares its scope and marks unrequested checks.
 // Explicit repair_evidence requests add a versioned boundary evidence object. No artifact path fields;
 // the internal report retains paths and this projection does not change export.
-// Existing field meanings and the internal inspection schema are unchanged;
+// Existing full-mode field meanings and inspection schema are unchanged;
 // ordinary repair JSON separately gains engine-result boundary evidence.
 nlohmann::json model_check_business_result(const nlohmann::json& checks, int return_code, const std::string& error);
 } // namespace Slic3r

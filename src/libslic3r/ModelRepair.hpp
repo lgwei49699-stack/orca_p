@@ -118,6 +118,11 @@ struct ModelRepairOptions
     // Explicitly enabled by GUI/CLI; the core's default remains transactional.
     bool allow_partial = false;
 
+    // App: repair measured basic defects once, without full inspection,
+    // intermediate candidates or geometry-distance acceptance. Failed parts
+    // retain their original mesh when allow_partial is enabled.
+    bool basic_repair = false;
+
     // CGAL does not expose interruption inside a single repair call. These
     // callbacks are therefore observed between volumes and once more before
     // the transaction commits.

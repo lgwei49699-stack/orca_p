@@ -1,5 +1,6 @@
 #include <catch2/catch.hpp>
 #include <libslic3r/Model.hpp>
+#include <libslic3r/ModelInspection.hpp>
 #include <libslic3r/ModelReconstruction.hpp>
 #include <libslic3r/ModelRepairEvidence.hpp>
 #include <libslic3r/ModelStageReport.hpp>
@@ -49,6 +50,96 @@ Model reconstruction_model()
     return model;
 }
 } // namespace
+
+TEST_CASE("Stage readback preserves exact triangles and permits face reordering", "[ModelStageReport][AppBasic]")
+{
+    ReconstructionTempDirectory temp;
+    const auto                  input    = (temp.path / "input.stl").string();
+    const auto                  artifact = (temp.path / "artifact.stl").string();
+    auto                        source   = make_cube(10., 10., 10.);
+    REQUIRE(store_stl(input.c_str(), &source, true));
+    const auto context   = prepare_model_stage_report(input, input, temp.path.string());
+    auto       candidate = source;
+    const int  variation = GENERATE(0, 1, 2, 3, 4, 5);
+    switch (variation) {
+    case 1: std::reverse(candidate.its.indices.begin(), candidate.its.indices.end()); break;
+    case 2: candidate.its.vertices[0].x() += 0.001f; break;
+    case 3: std::swap(candidate.its.indices[0][0], candidate.its.indices[0][1]); break;
+    case 4: candidate.its.indices.pop_back(); break;
+    case 5: candidate.its.indices[0] = candidate.its.indices[1]; break;
+    }
+    REQUIRE(store_stl(artifact.c_str(), &candidate, true));
+    ModelInspectionOptions options;
+    options.analyze_components = false;
+    const auto inspection      = inspect_model_mesh(source, options);
+    const auto write           = [&] {
+        write_model_stage_report(context, temp.path.string(), artifact, source, inspection, "check", "not_requested", {});
+    };
+    if (variation < 2) {
+        REQUIRE_NOTHROW(write());
+        CHECK(boost::filesystem::exists(temp.path / "model-stage.json"));
+    } else {
+        CHECK_THROWS_WITH(write(), "Stage artifact does not match the inspected triangles.");
+        CHECK_FALSE(boost::filesystem::exists(temp.path / "model-stage.json"));
+    }
+}
+
+TEST_CASE("Only App check and advanced skip independent geometry comparison", "[ModelStageReport][AppBasic]")
+{
+    ReconstructionTempDirectory temp;
+    const auto                  input     = (temp.path / "input.stl").string();
+    const auto                  artifact  = (temp.path / "artifact.stl").string();
+    auto                        source    = make_cube(10., 10., 10.);
+    auto                        candidate = source;
+    candidate.translate(1., 0., 0.);
+    REQUIRE(store_stl(input.c_str(), &source, true));
+    REQUIRE(store_stl(artifact.c_str(), &candidate, true));
+    ModelInspectionOptions options;
+    options.analyze_components = GENERATE(false, true);
+    const std::string stage    = GENERATE("check", "advanced", "reconstruction");
+    const auto        context  = prepare_model_stage_report(input, input, temp.path.string());
+    write_model_stage_report(context, temp.path.string(), artifact, candidate, inspect_model_mesh(candidate, options), stage,
+                             "not_requested", {});
+    boost::nowide::ifstream stream((temp.path / "model-stage.json").string());
+    nlohmann::json          report;
+    stream >> report;
+    const auto& change = report.at("change");
+    if (!options.analyze_components && stage != "reconstruction") {
+        CHECK((change == nlohmann::json{{"status", "not_requested"}, {"reason", "app_basic"}}));
+        CHECK(report.at("inspection").at("scope") == "basic");
+    } else {
+        CHECK(change.at("status") == "completed");
+        CHECK(change.at("bbox_deviation_mm") == 1.);
+        CHECK(change.at("sampled_source_to_candidate_mm").get<double>() > 0.25);
+    }
+    CHECK(report.at("artifact").at("readback_verified") == true);
+}
+
+TEST_CASE("Stage component indexing keeps exact edge connectivity", "[ModelStageReport]")
+{
+    ReconstructionTempDirectory temp;
+    indexed_triangle_set        its;
+    its.vertices = {{0.f, 0.f, 0.f}, {2.f, 0.f, 0.f},  {0.f, 2.f, 0.f},   {-0.f, 0.f, -0.f}, {-0.f, 2.f, 0.f}, {-2.f, 0.f, 0.f},
+                    {0.f, 0.f, 0.f}, {0.f, -2.f, 0.f}, {-2.f, -2.f, 0.f}, {4.f, 0.f, 0.f},   {6.f, 0.f, 0.f},  {4.f, 2.f, 0.f}};
+    // First two share an exact edge across signed zero; the third only touches
+    // a vertex. Duplicate/degenerate records sharing an edge add no component.
+    its.indices = {{0, 1, 2}, {3, 4, 5}, {6, 7, 8}, {9, 10, 11}, {2, 1, 0}, {9, 10, 10}};
+    TriangleMesh       source(std::move(its));
+    const auto         input    = (temp.path / "input.stl").string();
+    const auto         artifact = (temp.path / "artifact.stl").string();
+    REQUIRE(store_stl(input.c_str(), &source, true));
+    REQUIRE(store_stl(artifact.c_str(), &source, true));
+    ModelInspectionOptions options;
+    const auto context         = prepare_model_stage_report(input, input, temp.path.string());
+    write_model_stage_report(context, temp.path.string(), artifact, source, inspect_model_mesh(source, options), "check", "not_requested",
+                             {});
+    boost::nowide::ifstream stream((temp.path / "model-stage.json").string());
+    nlohmann::json          report;
+    stream >> report;
+    CHECK(report.at("change").at("reference_components") == 3);
+    CHECK(report.at("change").at("candidate_components") == 3);
+    CHECK(report.at("change").at("components_complete") == true);
+}
 
 TEST_CASE("Local hole evidence preserves original triangles and bounds each cap", "[ModelStageReport][HoleFill]")
 {

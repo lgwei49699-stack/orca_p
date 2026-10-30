@@ -19952,3 +19952,11 @@ msgstr "模型局部层高计划"
 #: src/libslic3r/PrintConfig.cpp
 msgid "Explicit regional layer-height plan JSON for a fixed-pose STL model. Omit to preserve normal slicing."
 msgstr "用于固定姿态 STL 模型的显式局部层高计划 JSON。省略时保持普通切片行为。"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "Model inspection mode"
+msgstr "模型检查模式"
+
+#: src/libslic3r/PrintConfig.cpp
+msgid "With --check-model, basic uses the native open-edge repair check; full keeps all diagnostics."
+msgstr "配合 --check-model 使用：basic 使用原生未连接边修复检查；full 保留全部诊断。"

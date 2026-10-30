@@ -83,6 +83,10 @@ bool empty(const CGALMesh &mesh);
 // low-level repair counters and a human-readable error.
 bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors = nullptr, std::string* error = nullptr);
 
+// App-only single cleanup/orientation/hole-fill pass. No boolean union,
+// intermediate candidates or distance checks; failure leaves mesh unchanged.
+bool repair_basic(TriangleMesh& mesh, std::string* error = nullptr);
+
 // Explicit partial mode, shared by GUI and CLI. Geometric rejection may retain
 // a verified checkpoint; exceptions propagate and do not publish a checkpoint.
 // The strict repair() API above and its callers keep their existing semantics.

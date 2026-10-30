@@ -14,15 +14,27 @@ import tempfile
 ISSUE_KEYS = {"boundary", "nonmanifold_edge", "nonmanifold_vertex", "self_intersection", "degenerate", "duplicate", "orientation"}
 
 
-def validate_issue_summary(issues):
+def validate_issue_summary(issues, *, basic=False):
     assert set(issues) == ISSUE_KEYS, issues
-    for issue in issues.values():
-        assert set(issue) == {"count", "complete"}, issue
+    for key, issue in issues.items():
+        if basic and key in ("nonmanifold_vertex", "self_intersection"):
+            assert issue == {"count": None, "complete": False, "status": "not_requested"}, issue
+            continue
+        expected = {"count", "complete"}
+        if basic and key == "boundary":
+            expected.update(("method", "geometric_count"))
+            assert issue["method"] == "orca_open_edges", issue
+            assert type(issue["geometric_count"]) is int and issue["geometric_count"] >= 0
+        if basic and key == "duplicate":
+            expected.update(("same_winding_extra_faces", "opposite_winding_groups"))
+            for field in ("same_winding_extra_faces", "opposite_winding_groups"):
+                assert type(issue[field]) is int and issue[field] >= 0
+        assert set(issue) == expected, issue
         assert type(issue["count"]) is int and issue["count"] >= 0, issue
         assert isinstance(issue["complete"], bool), issue
 
 
-def validate_business_result(result, *, evidence=False):
+def validate_business_result(result, *, evidence=False, basic=False):
     """Exact public contract: detailed inspections and slicing records stay internal."""
     assert set(result) == {"return_code", "error_string", "model_checks"}, result.keys()
     assert type(result["return_code"]) is int and isinstance(result["error_string"], str)
@@ -31,6 +43,9 @@ def validate_business_result(result, *, evidence=False):
     keys = {"schema_version", "mesh_status", "check_complete", "input_materials_ignored", "repair_status", "issues"}
     if evidence:
         keys.add("boundary")
+    if basic:
+        keys.add("inspection_scope")
+        assert check["inspection_scope"] == "basic", check
     assert set(check) == keys, check.keys()
     assert check["schema_version"] == 4
     assert isinstance(check["check_complete"], bool)
@@ -41,10 +56,11 @@ def validate_business_result(result, *, evidence=False):
         assert not check["check_complete"]
         assert check["mesh_status"] == "unknown"
     else:
-        validate_issue_summary(check["issues"])
+        validate_issue_summary(check["issues"], basic=basic)
         if check["mesh_status"] == "passed":
             assert check["check_complete"]
-            assert all(issue == {"count": 0, "complete": True} for issue in check["issues"].values())
+            assert all(issue["count"] == 0 and issue["complete"] for key, issue in check["issues"].items()
+                       if not (basic and key in ("nonmanifold_vertex", "self_intersection")))
     if evidence:
         validate_boundary(check)
     return check
@@ -58,7 +74,9 @@ def validate_boundary(check):
     assert inspection["status"] in ("not_run", "passed", "defects_detected", "incomplete"), inspection
     assert isinstance(inspection["known_defects"], list) and isinstance(inspection["incomplete_checks"], list), inspection
     assert isinstance(inspection["structural_blockers"], list), inspection
-    expected = {} if check["issues"] is None else {key: value for key, value in check["issues"].items() if value["count"] > 0}
+    expected = {} if check["issues"] is None else {
+        key: {"count": value["count"], "complete": value["complete"] and not value.get("count_is_lower_bound", False)}
+        for key, value in check["issues"].items() if value["count"] is not None and value["count"] > 0}
     known = {item["check"]: {"count": item["count"], "complete": item["count_complete"]}
              for item in inspection["known_defects"]}
     assert known == expected, (known, expected)

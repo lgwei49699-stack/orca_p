@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:b0f214684e130416625de3e3b796ef0e1aed76c07e1ff47abaa085acc972fb35",
-  "reason": "合并云导入预设的gfd-cloud机器子目录、保存/重载与三档旧名称兼容，默认save_current_preset调用保持原公共目录。保留CLI专用默认关闭的repair_evidence/close_boundaries选项，不把其纳入机器/耗材/工艺配置。正文补存储边界，合并后验证见主记录。 10-17 仅CLI misc新增默认关闭model_stage_report及默认空model_reference，不属于工艺/机器/耗材参数，未新增GUI面板或配置覆盖。 10-18 CLIMiscConfigDef仅新增默认false的slice_analysis_report，不加入有效打印参数、预设持久化或GUI面板；既有默认值和覆盖规则未改。 2026-10-22仅CLIMisc新增optimize_model_detail_paths=false，不加入PrintConfig/PrintObjectConfig、预设和工程持久化；GUI按用户要求默认关闭。原云预设、资源默认值及覆盖规则保留，正文补运行时边界。 2026-10-22仅CLIMisc新增variable_layer_height_min/max默认0，未改PrintConfig/PrintObjectConfig有效配置、资源或持久化；正文补显式计划边界。 2026-10-23仅在CLITransform注册默认空的model_layer_height_plan及英文/简中帮助，非普通打印配置，不改预设继承/默认值或GUI面板；CLI契约与回归见进展记录。"
+  "source_fingerprint": "sha256:517de9c7423844e1b2d18ca7103592eb1e79da8d9c789549d7e0e542f6b2d1d6",
+  "reason": "合并云导入预设的gfd-cloud机器子目录、保存/重载与三档旧名称兼容，默认save_current_preset调用保持原公共目录。保留CLI专用默认关闭的repair_evidence/close_boundaries选项，不把其纳入机器/耗材/工艺配置。正文补存储边界，合并后验证见主记录。 10-17 仅CLI misc新增默认关闭model_stage_report及默认空model_reference，不属于工艺/机器/耗材参数，未新增GUI面板或配置覆盖。 10-18 CLIMiscConfigDef仅新增默认false的slice_analysis_report，不加入有效打印参数、预设持久化或GUI面板；既有默认值和覆盖规则未改。 2026-10-22仅CLIMisc新增optimize_model_detail_paths=false，不加入PrintConfig/PrintObjectConfig、预设和工程持久化；GUI按用户要求默认关闭。原云预设、资源默认值及覆盖规则保留，正文补运行时边界。 2026-10-22仅CLIMisc新增variable_layer_height_min/max默认0，未改PrintConfig/PrintObjectConfig有效配置、资源或持久化；正文补显式计划边界。 2026-10-23仅在CLITransform注册默认空的model_layer_height_plan及英文/简中帮助，非普通打印配置，不改预设继承/默认值或GUI面板；CLI契约与回归见进展记录。 2026-10-26 按用户要求撤去 master 已提交的云工艺修复重复副本；Plater/GUI源表/EPONE测试恢复本分支HEAD，相关云头文件及归属移除。核对本模块共享依赖，除云导入退回该分支原实现外，无新的分盘、切片、预设默认值或界面入口变化；本轮验证见模型特征工作进展。 2026-10-30：PrintConfig.cpp仅在CLI配置定义新增model_inspection_mode字符串，缺省full；未改任何机型/耗材/工艺参数及默认值，也不进入GUI面板。正文补独立模型检查用途。 2026-10-30末轮：PrintConfig 仅修正已有 CLI basic 检查范围帮助文字（去除七类全检误述），键/类型/默认值及本模块读取规则未改，已核对逐行差异；同步中英文。ModelCheckWorkflow 头仅更正范围注释，详细说明及测试见模型修复记录。 2026-10-30本模块仅因watch的PrintConfig.cpp中App检查帮助改为原生未连接边而更新指纹；无配置键/默认值/有效值或本模块算法变化，正文无需变更。"
 }
 -->
 
@@ -32,6 +32,8 @@
 `PresetUpdater::sync` 获取更新，`config_update` 处理安装及通知；重新加载前检查未保存预设。AppConfig 保存应用偏好／启用选择，PrintConfig 描述打印参数，两者不是同一份配置。
 
 ## 配置与约束
+
+`model_inspection_mode` 是 CLI 配置定义中的字符串选项，默认 `full`，仅独立模型检查入口允许 `basic/full`；它不加入机型/耗材/工艺预设、不改变打印参数或 GUI 参数面板。用途见[模型修复](model-repair.md)的 App 基础检查模式。
 
 `variable_layer_height_min/max`仅属于CLIMisc，默认0，不是机型/耗材能力标定、不写入工艺/机器/项目配置。显式非零时与adaptive切片配对，原机型上下界仍约束生成器；GUI不新增控件或调用。普通CLI、省略参数的旧adaptive调用与资源默认值不变，实际验收见[质量策略记录](../validation/2026-10-22-bounded-quality-policy.md)。
 

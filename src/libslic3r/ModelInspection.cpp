@@ -3,6 +3,7 @@
 #undef PI
 
 #include <CGAL/Exact_predicates_exact_constructions_kernel.h>
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Intersections_3/Triangle_3_Triangle_3.h>
 #include <CGAL/Kernel/global_functions_3.h>
 #include <CGAL/Polygon_mesh_processing/self_intersections.h>
@@ -26,6 +27,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace Slic3r {
@@ -76,6 +78,104 @@ void validate_mesh(const TriangleMesh& mesh)
         for (int i = 0; i < 3; ++i)
             if (face[i] < 0 || std::size_t(face[i]) >= mesh.its.vertices.size())
                 throw std::runtime_error("Invalid model triangle index.");
+}
+
+// Counts only: flat sorted arrays avoid the full inspector's per-edge maps,
+// vertex links, exact point storage and intersection search. Never edits input.
+json inspect_basic_topology(const indexed_triangle_set& mesh)
+{
+    using PredicateKernel = CGAL::Exact_predicates_inexact_constructions_kernel;
+    struct EdgeUse
+    {
+        int  a, b;
+        bool forward;
+    };
+    struct FaceUse
+    {
+        std::array<int, 3> vertices;
+        int                winding;
+    };
+
+    // Coordinate equality, without a welding tolerance, also covers OBJ seams
+    // and distinct source indices at the same position.
+    std::vector<int> order(mesh.vertices.size()), canonical(mesh.vertices.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+        const auto& x = mesh.vertices[a];
+        const auto& y = mesh.vertices[b];
+        return std::tie(x.x(), x.y(), x.z()) < std::tie(y.x(), y.y(), y.z());
+    });
+    int representative = -1;
+    for (int index : order) {
+        if (representative < 0 || mesh.vertices[index] != mesh.vertices[representative])
+            representative = index;
+        canonical[index] = representative;
+    }
+    std::vector<int>().swap(order);
+
+    std::vector<EdgeUse> edges;
+    std::vector<FaceUse> faces;
+    edges.reserve(mesh.indices.size() * 3);
+    faces.reserve(mesh.indices.size());
+    std::size_t degenerate = 0;
+    for (const auto& face : mesh.indices) {
+        std::array<int, 3> ids{canonical[face[0]], canonical[face[1]], canonical[face[2]]};
+        const auto         point = [&](int id) {
+            const auto& v = mesh.vertices[id];
+            return PredicateKernel::Point_3(v.x(), v.y(), v.z());
+        };
+        // Filtered exact predicate: a very narrow valid triangle is not zero area.
+        const bool flat     = CGAL::collinear(point(face[0]), point(face[1]), point(face[2]));
+        const bool reversed = (ids[0] > ids[1]) ^ (ids[0] > ids[2]) ^ (ids[1] > ids[2]);
+        auto       sorted   = ids;
+        std::sort(sorted.begin(), sorted.end());
+        faces.push_back({sorted, flat ? 0 : reversed ? 2 : 1});
+        if (flat) {
+            ++degenerate;
+            continue;
+        }
+        for (int i = 0; i < 3; ++i) {
+            const int a = ids[i], b = ids[(i + 1) % 3];
+            edges.push_back({std::min(a, b), std::max(a, b), a < b});
+        }
+    }
+    std::vector<int>().swap(canonical);
+    std::sort(faces.begin(), faces.end(), [](const FaceUse& a, const FaceUse& b) { return a.vertices < b.vertices; });
+    std::size_t duplicate = 0, same_winding_extra_faces = 0, opposite_winding_groups = 0;
+    for (std::size_t i = 0, j; i < faces.size(); i = j) {
+        std::array<std::size_t, 3> windings{};
+        for (j = i; j < faces.size() && faces[j].vertices == faces[i].vertices; ++j)
+            ++windings[faces[j].winding];
+        if (j - i > 1)
+            ++duplicate;
+        // Winding has no meaning for zero-area faces; these are counted above.
+        for (int winding : {1, 2})
+            if (windings[winding] > 1)
+                same_winding_extra_faces += windings[winding] - 1;
+        if (windings[1] && windings[2])
+            ++opposite_winding_groups;
+    }
+    std::vector<FaceUse>().swap(faces);
+    std::sort(edges.begin(), edges.end(), [](const EdgeUse& a, const EdgeUse& b) { return std::tie(a.a, a.b) < std::tie(b.a, b.b); });
+    std::size_t boundary = 0, nonmanifold = 0, orientation = 0;
+    for (std::size_t i = 0, j; i < edges.size(); i = j) {
+        for (j = i + 1; j < edges.size() && edges[j].a == edges[i].a && edges[j].b == edges[i].b; ++j) {}
+        if (j - i == 1)
+            ++boundary;
+        else if (j - i > 2)
+            ++nonmanifold;
+        else if (edges[i].forward == edges[i + 1].forward)
+            ++orientation;
+    }
+    return {{"boundary", {{"count", boundary}, {"complete", true}}},
+            {"nonmanifold_edge", {{"count", nonmanifold}, {"complete", true}}},
+            {"orientation", {{"count", orientation}, {"complete", true}}},
+            {"degenerate", {{"count", degenerate}, {"complete", true}}},
+            {"duplicate",
+             {{"count", duplicate},
+              {"complete", true},
+              {"same_winding_extra_faces", same_winding_extra_faces},
+              {"opposite_winding_groups", opposite_winding_groups}}}};
 }
 
 struct IntersectionGeometry
@@ -769,20 +869,65 @@ nlohmann::json inspect_model_mesh(const TriangleMesh& source, const ModelInspect
     if (options.max_intersections == std::numeric_limits<unsigned>::max())
         throw std::invalid_argument("Intersection limit must allow a sentinel result.");
     validate_mesh(source);
+    if (!options.analyze_components) {
+        if (source.its.vertices.size() > options.max_vertices)
+            throw ModelInspectionLimitError("Model inspection vertex limit exceeded.");
+        // Keep native adjacency and all measured lightweight defects actionable.
+        // Expensive intersection and vertex-link searches remain unrequested.
+        const auto open_edges = its_num_open_edges(source.its);
+        const auto started = std::chrono::steady_clock::now();
+        json issues = inspect_basic_topology(source.its);
+        const auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        issues["boundary"]["geometric_count"] = issues["boundary"]["count"];
+        issues["boundary"]["count"] = open_edges;
+        issues["boundary"]["method"] = "orca_open_edges";
+        const bool needs_repair               = std::any_of(issues.begin(), issues.end(),
+                                                            [](const json& issue) { return issue.at("count").get<size_t>() != 0; });
+        // A geometric edge shared by otherwise closed shells is not by itself
+        // a useful soup-repair target. Splitting indices cannot remove the
+        // coordinate overlap, and automatic union would change the geometry.
+        bool repair_target = false;
+        for (const char* key : {"boundary", "duplicate", "degenerate", "orientation"})
+            repair_target |= issues.at(key).at("count").get<size_t>() != 0;
+        for (const char* key : {"nonmanifold_vertex", "self_intersection"})
+            issues[key] = {{"status", "not_requested"}, {"count", nullptr}, {"complete", false}};
+        return {{"schema_version", 1},
+                {"algorithm", "orca_open_edges"},
+                {"coordinate_basis", "decoded_orca_mesh"},
+                {"triangle_count", source.its.indices.size()},
+                {"geometric_vertex_count", nullptr},
+                {"detail_limit", 0},
+                {"topology_statistics_ms", elapsed_ms},
+                {"issues", std::move(issues)},
+                {"inspection_scope", "basic"},
+                {"component_analysis", {{"status", "not_requested"}}},
+                {"basic_checks_complete", true},
+                {"check_complete", true},
+                {"mesh_status", needs_repair ? "needs_repair" : "passed"},
+                {"next_action", repair_target ? "advanced_repair" : "none"},
+                {"printability_verified", false}};
+    }
     Mesh mesh{options};
     mesh.faces.reserve(source.its.indices.size());
+    // Canonicalize each referenced source vertex once. Preserve first-use order
+    // and exact coordinate welding; this is local preparation, not a mesh edit.
+    std::vector<std::size_t> canonical_vertices(source.its.vertices.size(), std::numeric_limits<std::size_t>::max());
     for (const auto& face : source.its.indices) {
         Face canonical;
         for (int i = 0; i < 3; ++i) {
-            const auto& v = source.its.vertices[face[i]];
-            canonical[i]  = mesh.add_point({v.x(), v.y(), v.z()});
+            auto& id = canonical_vertices[face[i]];
+            if (id == std::numeric_limits<std::size_t>::max()) {
+                const auto& v = source.its.vertices[face[i]];
+                id            = mesh.add_point({v.x(), v.y(), v.z()});
+            }
+            canonical[i] = id;
         }
         mesh.faces.push_back(canonical);
     }
     mesh.point_index.clear();
+    std::vector<std::size_t>().swap(canonical_vertices);
     const auto issues           = inspect(mesh);
     const auto proper_crossings = options.classify_proper_crossings ? classify_proper_crossings(mesh, issues[3]) : json(nullptr);
-    const auto components       = inspect_components(mesh, issues);
     json       report           = {{"schema_version", 1},
                                    {"algorithm", "demo_geometry_v1"},
                                    {"coordinate_basis", "decoded_orca_mesh"},
@@ -824,6 +969,7 @@ nlohmann::json inspect_model_mesh(const TriangleMesh& source, const ModelInspect
         }
         report["issues"][issue.key] = std::move(item);
     }
+    const auto  components   = inspect_components(mesh, issues);
     json        supplemental = {{"containment_complete", components.containment_complete},
                                 {"intersections_complete", components.intersections_complete},
                                 {"size_complete", components.size_complete},

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "arrangement",
-  "source_fingerprint": "sha256:6c63ac585575fa424855514e0bac6f2b01229f514568e3012909a9a13cfeb7e4",
-  "reason": "合并master的CLI复制对象ID映射及单/多盘JSON边界，PartPlate几何、数量和GUI ArrangeJob算法未改；保留feature默认关闭的报告参数，其不参与摆盘配置。核对最终盘成员刷新和真实床面状态与报告按盘输出的衔接；实际回归及GUI待验见本轮记录。 2026-10-22共享PrintConfig新增项仅在CLIMisc，Print运行时选择只在CLI取盘后传给模型路径。未改Arrange、PartPlate分盘/摆放或既有参数；默认false不改变原位置与盘选择。保留本模块其他已有文档改动，固定位置/多盘回归见实施记录。 2026-10-22复核PrintConfig新增键仅CLI层高边界，未改变摆盘输入/算法/机型默认值；边界在摆盘后生成层时生效，普通分盘不变。保留本模块其他在途记录。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。"
+  "source_fingerprint": "sha256:1f78cfee4d826996a35b11a02e153926988bcaedeccf45b07ace1141e8cf743e",
+  "reason": "合并master的CLI复制对象ID映射及单/多盘JSON边界，PartPlate几何、数量和GUI ArrangeJob算法未改；保留feature默认关闭的报告参数，其不参与摆盘配置。核对最终盘成员刷新和真实床面状态与报告按盘输出的衔接；实际回归及GUI待验见本轮记录。 2026-10-22共享PrintConfig新增项仅在CLIMisc，Print运行时选择只在CLI取盘后传给模型路径。未改Arrange、PartPlate分盘/摆放或既有参数；默认false不改变原位置与盘选择。保留本模块其他已有文档改动，固定位置/多盘回归见实施记录。 2026-10-22复核PrintConfig新增键仅CLI层高边界，未改变摆盘输入/算法/机型默认值；边界在摆盘后生成层时生效，普通分盘不变。保留本模块其他在途记录。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。 2026-10-30：复核本次共享PrintConfig.cpp差异仅在CLI配置区新增model_inspection_mode（默认full），由独立check-model入口读取；本模块使用的打印配置、默认值及执行路径均未改，不新增计算，正文无需改动。 2026-10-30末轮：PrintConfig 仅修正已有 CLI basic 检查范围帮助文字（去除七类全检误述），键/类型/默认值及本模块读取规则未改，已核对逐行差异；同步中英文。ModelCheckWorkflow 头仅更正范围注释，详细说明及测试见模型修复记录。 2026-10-30本模块仅因watch的PrintConfig.cpp中App检查帮助改为原生未连接边而更新指纹；无配置键/默认值/有效值或本模块算法变化，正文无需变更。"
 }
 -->
 

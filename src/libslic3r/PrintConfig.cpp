@@ -8507,6 +8507,12 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli_params = "0|1";
     def->set_default_value(new ConfigOptionBool(false));
 
+    def          = this->add("model_inspection_mode", coString);
+    def->label   = L("Model inspection mode");
+    def->tooltip = L("With --check-model, basic uses the native open-edge repair check; full keeps all diagnostics.");
+    def->cli     = "model-inspection-mode";
+    def->set_default_value(new ConfigOptionString("full"));
+
     def          = this->add("model_stage_report", coBool);
     def->label   = L("Export model stage report");
     def->tooltip = L("With --check-model or --reconstruct-model, write model-stage.json with artifact identity and sampled changes. "

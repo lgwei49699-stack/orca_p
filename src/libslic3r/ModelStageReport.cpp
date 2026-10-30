@@ -5,14 +5,17 @@
 
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/container_hash/hash.hpp>
 #include <boost/nowide/fstream.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 namespace Slic3r {
@@ -37,17 +40,28 @@ std::size_t raw_component_count(const TriangleMesh& mesh)
         }
         return id;
     };
-    std::map<std::array<float, 3>, std::size_t>                vertices;
-    std::map<std::pair<std::size_t, std::size_t>, std::size_t> first_face;
-    std::size_t                                                components = count;
+    // IDs follow input order; neither table is iterated. Hashing preserves exact
+    // coordinate/edge equality (including signed zero) without tree comparisons.
+    using Vertex = std::array<float, 3>;
+    using Edge   = std::pair<std::size_t, std::size_t>;
+    std::unordered_map<Vertex, std::size_t, boost::hash<Vertex>> vertices;
+    std::unordered_map<Edge, std::size_t, boost::hash<Edge>>     first_face;
+    vertices.reserve(std::min(mesh.its.vertices.size(), count * 3));
+    first_face.reserve(count * 2);
+    std::vector<std::size_t> vertex_ids(mesh.its.vertices.size(), std::numeric_limits<std::size_t>::max());
+    std::size_t              components = count;
     for (std::size_t id = 0; id < count; ++id) {
         std::array<std::size_t, 3> face;
         for (int i = 0; i < 3; ++i) {
             const auto index = mesh.its.indices[id][i];
             if (index < 0 || std::size_t(index) >= mesh.its.vertices.size() || !mesh.its.vertices[index].allFinite())
                 throw std::runtime_error(L("Stage report contains invalid mesh coordinates or indices."));
-            const auto& v = mesh.its.vertices[index];
-            face[i]       = vertices.emplace(std::array<float, 3>{v.x(), v.y(), v.z()}, vertices.size()).first->second;
+            auto& canonical = vertex_ids[index];
+            if (canonical == std::numeric_limits<std::size_t>::max()) {
+                const auto& v = mesh.its.vertices[index];
+                canonical     = vertices.emplace(std::array<float, 3>{v.x(), v.y(), v.z()}, vertices.size()).first->second;
+            }
+            face[i] = canonical;
         }
         for (int i = 0; i < 3; ++i) {
             const auto a = face[i], b = face[(i + 1) % 3];
@@ -83,6 +97,19 @@ std::vector<std::array<float, 9>> physical_triangles(const TriangleMesh& mesh)
     }
     std::sort(triangles.begin(), triangles.end());
     return triangles;
+}
+
+bool same_physical_triangles(const TriangleMesh& first, const TriangleMesh& second)
+{
+    if (first.its.indices.size() != second.its.indices.size())
+        return false;
+    // STL readback normally retains face order. Only pay for two sorted copies
+    // when order differs; changed coordinates/winding must still be rejected.
+    for (std::size_t face = 0; face < first.its.indices.size(); ++face)
+        for (int corner = 0; corner < 3; ++corner)
+            if (first.its.vertices[first.its.indices[face][corner]] != second.its.vertices[second.its.indices[face][corner]])
+                return physical_triangles(first) == physical_triangles(second);
+    return true;
 }
 
 fs::path require_stl(const std::string& file)
@@ -338,35 +365,44 @@ void write_model_stage_report(const ModelStageReportContext& context,
         throw std::runtime_error(L("Stage artifact must be a new file inside its output directory."));
     std::string artifact_sha256;
     const auto  reread = read_bounded_model_stl(artifact.string(), artifact_sha256);
-    if (physical_triangles(reread) != physical_triangles(inspected_mesh))
+    if (!same_physical_triangles(reread, inspected_mesh))
         throw std::runtime_error(L("Stage artifact does not match the inspected triangles."));
-    const auto reference_components = raw_component_count(context.reference_mesh);
-    const auto candidate_components = raw_component_count(reread);
-    const bool inspect_union = stage == "reconstruction" && reference_components > candidate_components &&
-                               inspection.at("mesh_status") == "passed" && inspection.at("check_complete") == true;
-    auto change = compare_model_stage_meshes(context.reference_mesh, reread, inspect_union);
-    // Raw referenced geometry includes zero-area tails excluded from distance
-    // queries. Do not hide a far-away deleted feature in the bounding-box gate.
-    const auto original_bounds     = context.reference_mesh.bounding_box();
-    const auto candidate_bounds    = reread.bounding_box();
-    change["bbox_deviation_mm"]    = std::max((original_bounds.min - candidate_bounds.min).cwiseAbs().maxCoeff(),
-                                              (original_bounds.max - candidate_bounds.max).cwiseAbs().maxCoeff());
-    change["reference_components"] = reference_components;
-    change["candidate_components"] = candidate_components;
-    change["components_complete"]  = true;
-    change["component_method"]     = "exact_position_welded_edge_connected_all_faces";
-    // Exact-coordinate components can join when STL import welds floating-point
-    // cracks. Prove all faces remain; never exempt deleted or merged real parts.
-    if ((stage == "check" || stage == "advanced") && inspection.at("mesh_status") == "passed" &&
-        inspection.at("check_complete") == true && change["reference_components"] != change["candidate_components"])
-        change["numerical_cleanup_preserves_surface"] = model_stage_preserves_surface(context.reference_mesh, reread);
-    if (stage == "advanced" && inspection.at("mesh_status") == "passed" && inspection.at("check_complete") == true)
-        change["hole_fill"] = inspect_model_hole_fill(context.reference_mesh, reread);
-    json issues                    = json::object();
+    const bool basic            = (stage == "check" || stage == "advanced") && inspection.value("inspection_scope", "full") == "basic";
+    const auto candidate_bounds = reread.bounding_box();
+    json       change           = {{"status", "not_requested"}, {"reason", "app_basic"}};
+    if (!basic) {
+        const auto reference_components = raw_component_count(context.reference_mesh);
+        const auto candidate_components = raw_component_count(reread);
+        const bool inspect_union        = stage == "reconstruction" && reference_components > candidate_components &&
+                                   inspection.at("mesh_status") == "passed" && inspection.at("check_complete") == true;
+        change = compare_model_stage_meshes(context.reference_mesh, reread, inspect_union);
+        // Raw referenced geometry includes zero-area tails excluded from distance
+        // queries. Do not hide a far-away deleted feature in the bounding-box gate.
+        const auto original_bounds     = context.reference_mesh.bounding_box();
+        change["bbox_deviation_mm"]    = std::max((original_bounds.min - candidate_bounds.min).cwiseAbs().maxCoeff(),
+                                                  (original_bounds.max - candidate_bounds.max).cwiseAbs().maxCoeff());
+        change["reference_components"] = reference_components;
+        change["candidate_components"] = candidate_components;
+        change["components_complete"]  = true;
+        change["component_method"]     = "exact_position_welded_edge_connected_all_faces";
+        // Exact-coordinate components can join when STL import welds floating-point
+        // cracks. Prove all faces remain; never exempt deleted or merged real parts.
+        if ((stage == "check" || stage == "advanced") && inspection.at("mesh_status") == "passed" &&
+            inspection.at("check_complete") == true && change["reference_components"] != change["candidate_components"])
+            change["numerical_cleanup_preserves_surface"] = model_stage_preserves_surface(context.reference_mesh, reread);
+        if (stage == "advanced" && inspection.at("mesh_status") == "passed" && inspection.at("check_complete") == true)
+            change["hole_fill"] = inspect_model_hole_fill(context.reference_mesh, reread);
+    }
+    json issues = json::object();
     for (const char* key :
          {"boundary", "nonmanifold_edge", "nonmanifold_vertex", "self_intersection", "degenerate", "duplicate", "orientation"}) {
         const auto& issue = inspection.at("issues").at(key);
         issues[key]       = {{"count", issue.at("count")}, {"complete", issue.at("complete")}};
+        if (basic)
+            for (const char* field :
+                 {"status", "method", "count_is_lower_bound", "geometric_count", "same_winding_extra_faces", "opposite_winding_groups"})
+                if (issue.contains(field))
+                    issues[key][field] = issue.at(field);
     }
     json result = {{"schema", "orca_model_stage_v1"},
                    {"status", "completed"},
@@ -383,6 +419,11 @@ void write_model_stage_report(const ModelStageReportContext& context,
                    {"change", std::move(change)},
                    {"geometry", {{"max_extent_mm", candidate_bounds.size().maxCoeff()}}},
                    {"reconstruction", reconstruction}};
+    if (basic) {
+        result["inspection"]["scope"]                  = "basic";
+        result["inspection"]["next_action"]            = inspection.at("next_action");
+        result["inspection"]["topology_statistics_ms"] = inspection.at("topology_statistics_ms");
+    }
     if (model_mesh_file_sha256(context.input_file) != context.input_sha256 ||
         model_mesh_file_sha256(context.reference_file) != context.reference_sha256 ||
         model_mesh_file_sha256(artifact.string()) != artifact_sha256)

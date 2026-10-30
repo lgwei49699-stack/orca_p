@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "support",
-  "source_fingerprint": "sha256:7176ee12830a122d89af9d6a947ac54e362922d2617216aad232bb72da3f85a9",
-  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不被SupportMaterial/TreeSupport消费；支撑阈值、间隙、悬空告警和GUI支撑设置保持，证据流程不生成支撑路径。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-22共享PrintConfig新键仅CLIMisc，未传至SupportMaterial/TreeSupport参数；新Fill内部选择默认false，支撑入口未开启。原支撑类型、阈值、间隙与预设不变；模型路径显式优化后的全流程重算按原Print处理，不宣称全支撑实印验收。 2026-10-22复核共享配置新增项仅CLI层高边界，不改支撑类型、间隙、树算法或GUI默认；有机树/可变层高兼容校验仍使用原规则。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。"
+  "source_fingerprint": "sha256:0d7f3116cb31df398975a500aeb820887b5eda53124ab6d7eec02ab364b8ee7b",
+  "reason": "本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不被SupportMaterial/TreeSupport消费；支撑阈值、间隙、悬空告警和GUI支撑设置保持，证据流程不生成支撑路径。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-22共享PrintConfig新键仅CLIMisc，未传至SupportMaterial/TreeSupport参数；新Fill内部选择默认false，支撑入口未开启。原支撑类型、阈值、间隙与预设不变；模型路径显式优化后的全流程重算按原Print处理，不宣称全支撑实印验收。 2026-10-22复核共享配置新增项仅CLI层高边界，不改支撑类型、间隙、树算法或GUI默认；有机树/可变层高兼容校验仍使用原规则。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。 2026-10-30：复核本次共享PrintConfig.cpp差异仅在CLI配置区新增model_inspection_mode（默认full），由独立check-model入口读取；本模块使用的打印配置、默认值及执行路径均未改，不新增计算，正文无需改动。 2026-10-30末轮：PrintConfig 仅修正已有 CLI basic 检查范围帮助文字（去除七类全检误述），键/类型/默认值及本模块读取规则未改，已核对逐行差异；同步中英文。ModelCheckWorkflow 头仅更正范围注释，详细说明及测试见模型修复记录。 2026-10-30本模块仅因watch的PrintConfig.cpp中App检查帮助改为原生未连接边而更新指纹；无配置键/默认值/有效值或本模块算法变化，正文无需变更。"
 }
 -->
 
