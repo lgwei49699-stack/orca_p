@@ -222,6 +222,11 @@ json model_check_business_result(const json& checks, int return_code, const std:
             summary["boundary"] = check_boundary(check);
         if (inspection.is_object() && inspection.value("inspection_scope", "full") == "basic")
             summary["inspection_scope"] = "basic";
+        if (check.value("app_basic", false)) {
+            summary["next_action"]      = check.value("next_action", "retry_check");
+            summary["repair_committed"] = advanced.value("committed", false);
+            summary["output_file"]      = check.value("app_output_file", json(nullptr));
+        }
         // The default contract still includes structural checks. Explicit basic
         // calls declare their narrower scope; incomplete geometry never passes.
         result["model_checks"].push_back(std::move(summary));
@@ -270,6 +275,9 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
         throw std::invalid_argument("--check-model requires one STL or OBJ input.");
     if (!options.export_format.empty() && options.export_format != "obj" && options.export_format != "stl")
         throw std::invalid_argument("Invalid model check export format.");
+    const bool app_basic = options.inspection_mode == "basic" && !options.stage_report && !options.repair_evidence &&
+                           source_format == ".stl" && options.export_format.empty();
+    report.check["app_basic"] = app_basic;
     if (fs::file_size(options.input_file) > options.max_input_bytes) {
         report.failure_kind = "resource_limit";
         throw std::runtime_error("Model check input exceeds the " + std::to_string(options.max_input_bytes) + " byte limit.");
@@ -308,17 +316,23 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
     const fs::path run = parent / fs::unique_path("model-check-%%%%-%%%%-%%%%");
     if (!fs::create_directory(run))
         throw std::runtime_error("Could not create a private model check output directory.");
-    // Always persist the decoded baseline: import normalization and OBJ color
-    // subdivision mean that an unchanged cleanup count need not equal raw input.
-    report.failure_stage                  = "export";
-    const fs::path baseline               = run / ("prepared" + source_format);
-    report.output_files                   = save_working_model(baseline, model, config);
-    report.check["working_model"]         = baseline.string();
-    report.check["prepared_model"]        = baseline.string();
-    report.check["prepared_output_files"] = report.output_files;
+    // App checks inspect the ordinary imported model without manufacturing a
+    // new file. Explicit exports and stage reports retain their artifact contract.
+    fs::path           baseline = options.input_file;
     DynamicPrintConfig working_config;
     bool               ignored = false;
-    Model              working = load_working_model(baseline.string(), working_config, options.ignore_materials, ignored);
+    Model              working;
+    if (app_basic) {
+        working        = std::move(model);
+        working_config = std::move(config);
+    } else {
+        report.failure_stage                  = "export";
+        baseline                              = run / ("prepared" + source_format);
+        report.output_files                   = save_working_model(baseline, model, config);
+        report.check["prepared_model"]        = baseline.string();
+        report.check["prepared_output_files"] = report.output_files;
+        working = load_working_model(baseline.string(), working_config, options.ignore_materials, ignored);
+    }
     report.failure_stage       = "inspection";
     // Model import recenters float vertices and may lose a few coordinate bits
     // when restoring the volume transform. The stage contract must inspect the
@@ -327,7 +341,7 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
     auto        inspected_baseline  = stage_context ? read_bounded_model_stl(baseline.string(), serialized_sha256) : working.mesh();
     auto        before              = inspect_model_mesh(inspected_baseline, inspection_options);
     report.check["before_advanced"] = before;
-    publish_check(report, before, baseline.string(), "serialized_prepared");
+    publish_check(report, before, baseline.string(), app_basic ? "imported" : "serialized_prepared");
     if (stage_context)
         stage_mesh = std::move(inspected_baseline);
     else
@@ -368,7 +382,7 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
                 report.check["advanced_repair"]["retained_stage"] = "prepared";
                 // App stage reports can retain an unresolved mesh without
                 // requesting reconstruction diagnostics that the App will not use.
-                if (!options.repair_evidence && !(options.stage_report && options.inspection_mode == "basic")) {
+                if (!options.repair_evidence && !app_basic && !(options.stage_report && options.inspection_mode == "basic")) {
                     report.repair_no_progress = true;
                     throw std::runtime_error("Advanced repair produced no retainable change; see the remaining inspection findings.");
                 }
@@ -379,14 +393,15 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
         }
     }
     // Export the advanced result or an explicitly requested format conversion.
-    // Recheck the serialized/reimported artifact, not a different in-memory mesh.
+    // Full paths recheck the export; App only reports basic statistics from the committed in-memory mesh.
     if (report.repair.committed || !options.export_format.empty()) {
         report.failure_stage      = "export";
         const std::string  format = options.export_format.empty() ? source_format.substr(1) : options.export_format;
         const fs::path     output = run / ("result." + format);
         const auto         files  = save_working_model(output, working, working_config);
         DynamicPrintConfig reloaded_config;
-        Model              reloaded = load_working_model(output.string(), reloaded_config, options.ignore_materials, ignored);
+        Model              reloaded = app_basic ? std::move(working) :
+                                      load_working_model(output.string(), reloaded_config, options.ignore_materials, ignored);
         report.failure_stage        = "inspection";
         auto       retained_mesh    = stage_context ? read_bounded_model_stl(output.string(), serialized_sha256) : reloaded.mesh();
         const auto after            = inspect_model_mesh(retained_mesh, inspection_options);
@@ -395,7 +410,8 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
         // Allocate the complete publication before replacing the retained
         // baseline report. An allocation/serialization failure must not mix stages.
         auto accepted = report;
-        publish_check(accepted, after, output.string(), report.repair.committed ? "serialized_advanced" : "serialized_prepared");
+        publish_check(accepted, after, output.string(), app_basic ? "advanced" :
+                          (report.repair.committed ? "serialized_advanced" : "serialized_prepared"));
         accepted.output_files.insert(accepted.output_files.end(), files.begin(), files.end());
         accepted.check["final_output_files"] = files;
         if (report.repair.committed) {
@@ -403,6 +419,8 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
             accepted.check["advanced_repair"]["status"]         = after.at("mesh_status") == "passed" ? "repaired" : "partially_repaired";
             accepted.check["advanced_repair"]["retained_stage"] = "advanced";
         }
+        if (app_basic)
+            accepted.check["app_output_file"] = output.string();
         report = std::move(accepted);
         publish_section_evidence(report, reloaded, &retained_mesh);
         if (stage_context)

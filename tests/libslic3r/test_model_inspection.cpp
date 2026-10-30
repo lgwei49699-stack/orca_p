@@ -1347,3 +1347,49 @@ TEST_CASE("Closed edge contacts remain reported without automatic union", "[Mode
     CHECK(result["next_action"] == "none");
     CHECK(model_inspection_boundary(result)["status"] == "defects_detected");
 }
+
+TEST_CASE("App check keeps the source and only exports committed repairs", "[ModelRepair][Inspection][AppBasicDelivery]")
+{
+    InspectionTempDirectory temp;
+    const auto input = (temp.path / "input.stl").string();
+    auto mesh = make_cube(10., 10., 10.);
+    const bool open = GENERATE(false, true);
+    if (open)
+        mesh.its.indices.erase(mesh.its.indices.begin() + 4, mesh.its.indices.begin() + 6);
+    REQUIRE(store_stl(input.c_str(), &mesh, true));
+    const auto original = inspection_file_bytes(input);
+    ModelCheckWorkflowOptions options;
+    options.input_file = input;
+    options.inspection_mode = "basic";
+    options.output_directory = (temp.path / "check").string();
+    ModelCheckWorkflowReport check;
+    run_model_check_workflow(options, check);
+    REQUIRE(check.output_files.empty());
+    CHECK(check.check["working_model"] == input);
+    CHECK(check.check["checked_stage"] == "imported");
+    CHECK(inspection_file_bytes(input) == original);
+    auto summary = model_check_business_result(nlohmann::json::array({check.check}), 0, "")["model_checks"][0];
+    CHECK(summary["repair_committed"] == false);
+    CHECK(summary["output_file"].is_null());
+    CHECK(summary["next_action"] == (open ? "advanced_repair" : "none"));
+
+    options.advanced_repair = true;
+    options.output_directory = (temp.path / "advanced").string();
+    ModelCheckWorkflowReport repaired;
+    run_model_check_workflow(options, repaired);
+    summary = model_check_business_result(nlohmann::json::array({repaired.check}), 0, "")["model_checks"][0];
+    CHECK(summary["repair_committed"] == open);
+    if (open) {
+        REQUIRE(repaired.output_files.size() == 1);
+        CHECK(summary["output_file"] == repaired.output_files.front());
+        Model reloaded;
+        REQUIRE(load_stl(repaired.output_files.front().c_str(), &reloaded));
+        CHECK(its_num_open_edges(reloaded.mesh().its) == 0);
+    } else {
+        CHECK(repaired.output_files.empty());
+        CHECK(summary["output_file"].is_null());
+    }
+    CHECK(inspection_file_bytes(input) == original);
+    CHECK_FALSE(boost::filesystem::exists(temp.path / "check" / "model-stage.json"));
+    CHECK_FALSE(boost::filesystem::exists(temp.path / "advanced" / "model-stage.json"));
+}
