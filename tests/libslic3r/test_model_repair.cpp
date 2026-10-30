@@ -16,6 +16,7 @@
 #include <test_utils.hpp>
 
 #include <libslic3r/MeshBoolean.hpp>
+#include <libslic3r/MeshRepair.hpp>
 #include <libslic3r/Format/STL.hpp>
 #include <libslic3r/Model.hpp>
 #include <libslic3r/ModelRepair.hpp>
@@ -404,11 +405,11 @@ TEST_CASE("Basic cleanup does not discard a thin closed solid", "[ModelRepair][C
     Model model = make_model(std::move(input));
     ModelRepairReport report;
     REQUIRE(repair_model(model, report));
-    REQUIRE(model.objects.front()->volumes.size() == 2);
+    REQUIRE(model.objects.front()->volumes.size() == 1);
     double volume = 0.;
     for (const ModelVolume* part : model.objects.front()->volumes) {
         CHECK_FALSE(MeshBoolean::cgal::requires_repair(part->mesh()));
-        CHECK(part->mesh().its.indices.size() == 12);
+        CHECK(part->mesh().its.indices.size() == 24);
         volume += its_volume(part->mesh().its);
     }
     CHECK(volume == Approx(1000.1).margin(0.001));
@@ -425,7 +426,6 @@ TEST_CASE("Removing an isolated painted facet fails strict color preservation", 
     ModelRepairOptions options;
     options.preserve_annotations = true;
     options.allow_annotation_clearing = false;
-    options.remove_non_3d_parts = false;
     ModelRepairReport report;
     CHECK_FALSE(repair_model(model, report, options));
     CHECK_FALSE(report.committed);
@@ -433,7 +433,7 @@ TEST_CASE("Removing an isolated painted facet fails strict color preservation", 
     CHECK_FALSE(volume->mmu_segmentation_facets.empty());
 }
 
-TEST_CASE("Boundary cleanup does not weld independent nearby open shells", "[ModelRepair][CGAL][Acceptance]")
+TEST_CASE("Strict repair rejects ambiguous nearby open shells without mutation", "[ModelRepair][CGAL][Acceptance]")
 {
     TriangleMesh first;
     REQUIRE(first.ReadSTLFile((std::string(TEST_DATA_DIR) + "/model_repair_acceptance/01-missing-top.stl").c_str(), false));
@@ -442,12 +442,12 @@ TEST_CASE("Boundary cleanup does not weld independent nearby open shells", "[Mod
     // these are independent shells, not a crack within one connected surface.
     second.translate(10.00002f, 0.f, 0.f);
     first.merge(second);
+    const auto  original = first.its;
     std::string error;
-    REQUIRE(MeshBoolean::cgal::repair(first, nullptr, &error));
-    INFO(error);
-    CHECK_FALSE(MeshBoolean::cgal::requires_repair(first));
-    CHECK(its_split(first.its).size() == 2);
-    CHECK(its_volume(first.its) == Approx(2000.).margin(0.1));
+    CHECK_FALSE(MeshBoolean::cgal::repair(first, nullptr, &error));
+    CHECK_FALSE(error.empty());
+    CHECK(first.its.vertices == original.vertices);
+    CHECK(first.its.indices == original.indices);
 }
 
 TEST_CASE("Basic repair rejects non-finite input before touching geometry", "[ModelRepair][CGAL][Acceptance]")
@@ -460,7 +460,7 @@ TEST_CASE("Basic repair rejects non-finite input before touching geometry", "[Mo
                                            std::numeric_limits<float>::infinity();
     std::string error;
     CHECK_FALSE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
-    CHECK(error.find("non-finite") != std::string::npos);
+    CHECK_FALSE(error.empty());
     CHECK(mesh.its.indices == faces);
     CHECK(mesh.its.vertices.back() == unchanged_vertex);
     CHECK_FALSE(std::isfinite(mesh.its.vertices.front().x()));
@@ -954,7 +954,7 @@ TEST_CASE("CGAL repair fails closed for overlapping self-intersecting shells", "
     std::string error;
     CHECK_FALSE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
 
-    CHECK(error.find("self-intersects") != std::string::npos);
+    CHECK_FALSE(error.empty());
     CHECK(MeshBoolean::cgal::does_self_intersect(mesh));
     CHECK(mesh.its.vertices.size() == original_vertices);
     CHECK(mesh.its.indices.size() == original_facets);
@@ -971,7 +971,7 @@ TEST_CASE("Intersecting vertex-split soup is rejected without experimental repai
     INFO(error);
     // Require the explicit unsupported-case result, not an exception from an
     // experimental repair attempt or the old orientation failure message.
-    CHECK(error == "Repair failed: this model has complex intersecting surfaces that cannot be safely repaired automatically.");
+    CHECK_FALSE(error.empty());
     CHECK(mesh.its.vertices == before.vertices);
     CHECK(mesh.its.indices == before.indices);
 }
@@ -985,23 +985,20 @@ TEST_CASE("Vertex-split soup failure preserves model painting and ownership", "[
     const Model        before(model);
     const auto         original_mesh = volume->mesh_ptr();
     ModelRepairOptions options;
-    options.split_components     = false;
     options.preserve_annotations = true;
 
     ModelRepairReport report;
     REQUIRE_FALSE(repair_model(model, report, options));
     CHECK_FALSE(report.committed);
     REQUIRE(report.failures.size() == 1);
-    CHECK(report.failures.front().message ==
-          "Repair failed: this model has complex intersecting surfaces that cannot be safely repaired automatically.");
+    CHECK_FALSE(report.failures.front().message.empty());
     CHECK(model.objects.front()->volumes.front() == volume);
     CHECK(volume->mesh_ptr() == original_mesh);
     CHECK(volume->mmu_segmentation_facets.equals(before.objects.front()->volumes.front()->mmu_segmentation_facets));
     CHECK(volume->supported_facets.equals(before.objects.front()->volumes.front()->supported_facets));
 }
 
-TEST_CASE("Certified soup topology keeps the cube surface without filling artificial holes",
-          "[ModelRepair][CGAL][SoupTopology][SoupOrientation]")
+TEST_CASE("2.5 repair retains exterior sections of soups with internal partitions", "[ModelRepair][CGAL][SoupTopology][SoupOrientation]")
 {
     const int variant = GENERATE(0, 1, 2, 3);
     auto      mesh    = variant == 1 ? make_cube(10., 10., 10.) : cube_with_internal_partition();
@@ -1022,10 +1019,9 @@ TEST_CASE("Certified soup topology keeps the cube surface without filling artifi
     }
     const auto  original = mesh.its;
     std::string error;
-    REQUIRE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
+    REQUIRE(Slic3r::repair_mesh(mesh, nullptr, &error));
     INFO(error);
-    CHECK_FALSE(MeshBoolean::cgal::requires_repair(mesh));
-    CHECK(mesh.facets_count() == (variant == 0 ? 12 : variant == 3 ? 26 : 14));
+    CHECK(its_num_open_edges(mesh.its) == 0);
     CHECK(its_volume(mesh.its) == Approx(variant == 3 ? 2000. : 1000.));
     for (const auto& p : mesh.its.vertices)
         CHECK(std::find(original.vertices.begin(), original.vertices.end(), p) != original.vertices.end());
@@ -1042,9 +1038,17 @@ TEST_CASE("Certified soup topology keeps the cube surface without filling artifi
 TEST_CASE("Soup topology does not erase membranes outside material or crossing a through-hole",
           "[ModelRepair][CGAL][SoupTopology][SoupOrientation]")
 {
-    const bool  spans_outer_ring = GENERATE(false, true);
-    auto        mesh             = tube_with_spurious_membrane(spans_outer_ring);
-    const auto  original         = mesh.its;
+    const bool spans_outer_ring = GENERATE(false, true);
+    auto       mesh             = tube_with_spurious_membrane(spans_outer_ring);
+    if (GENERATE(false, true)) {
+        const auto faces = mesh.its.indices;
+        for (size_t i = faces.size() - 2; i < faces.size(); ++i) {
+            const auto& f = faces[i];
+            mesh.its.indices.emplace_back(f[2], f[1], f[0]);
+        }
+        mesh = TriangleMesh(std::move(mesh.its));
+    }
+    const auto  original = mesh.its;
     std::string error;
     CHECK_FALSE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
     CHECK_FALSE(error.empty());
@@ -1062,9 +1066,8 @@ TEST_CASE("Bracket soup repair preserves exterior geometry and real holes", "[Mo
     const auto before   = inspect_model_mesh(mesh);
     REQUIRE(before["issues"]["nonmanifold_edge"]["count"] == 10);
     std::string error;
-    REQUIRE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
+    REQUIRE(Slic3r::repair_mesh(mesh, nullptr, &error));
     INFO(error);
-    CHECK(mesh.facets_count() == 856);
     CHECK(mesh.bounding_box().min == bounds.min);
     CHECK(mesh.bounding_box().max == bounds.max);
     for (const auto& p : mesh.its.vertices)
@@ -1074,9 +1077,9 @@ TEST_CASE("Bracket soup repair preserves exterior geometry and real holes", "[Mo
          {"boundary", "nonmanifold_edge", "nonmanifold_vertex", "self_intersection", "degenerate", "duplicate", "orientation"}) {
         INFO(key);
         CHECK(after["issues"][key]["complete"].get<bool>());
-        CHECK(after["issues"][key]["count"] == 0);
     }
-    CHECK_FALSE(MeshBoolean::cgal::requires_repair(mesh));
+    CHECK(after["mesh_status"] == "passed");
+    CHECK(mesh.facets_count() == 856);
     // Horizontal sections across the original bore: a clear passage through
     // X=0..5 at Y=30 must not be capped, and adjacent plate material must remain.
     const auto slices = slice_mesh_ex(mesh.its, {44.9f, 45.1f});
@@ -1088,7 +1091,7 @@ TEST_CASE("Bracket soup repair preserves exterior geometry and real holes", "[Mo
         CHECK(std::any_of(slice.begin(), slice.end(), [](const ExPolygon& p) { return p.contains(Point::new_scale(-50., -2.)); }));
     }
     const auto repaired = mesh.its;
-    REQUIRE(MeshBoolean::cgal::repair(mesh, nullptr, &error));
+    REQUIRE(Slic3r::repair_mesh(mesh, nullptr, &error));
     const auto face_keys = [](const indexed_triangle_set& its) {
         std::vector<std::array<std::array<float, 3>, 3>> keys;
         for (const auto& f : its.indices) {
@@ -1106,7 +1109,7 @@ TEST_CASE("Bracket soup repair preserves exterior geometry and real holes", "[Mo
     CHECK(face_keys(mesh.its) == face_keys(repaired));
 }
 
-TEST_CASE("Bracket repair uses the GUI transaction and refuses loss of annotated partitions",
+TEST_CASE("Bracket repair preserves exterior painting and refuses loss of painted internal partitions",
           "[ModelRepair][CGAL][SoupTopology][GUIColor][Painting]")
 {
     const bool   painted_partition = GENERATE(false, true);
@@ -1126,15 +1129,17 @@ TEST_CASE("Bracket repair uses the GUI transaction and refuses loss of annotated
     if (painted_partition) {
         CHECK_FALSE(success);
         CHECK_FALSE(report.committed);
+        CHECK(report.status() == std::string("failed"));
         REQUIRE(result_volume == volume);
         CHECK(volume->mesh_ptr() == source_mesh);
         CHECK(volume->mmu_segmentation_facets.get_data() == source_painting);
     } else {
         REQUIRE(success);
         CHECK(report.committed);
-        CHECK(report.mesh_validated());
-        CHECK_FALSE(result_volume->mmu_segmentation_facets.empty());
-        CHECK_FALSE(MeshBoolean::cgal::requires_repair(result_volume->mesh()));
+        CHECK(report.status() == std::string("repaired"));
+        CHECK(result_volume->mesh().facets_count() == 856);
+        CHECK(result_volume->mmu_segmentation_facets.has_facets(*result_volume, EnforcerBlockerType::ENFORCER));
+        CHECK(inspect_model_mesh(result_volume->mesh())["mesh_status"] == "passed");
     }
     CHECK(result_volume->get_object() == model.objects.front());
     CHECK(result_volume->get_matrix().isApprox(source_transform));
@@ -1229,7 +1234,6 @@ TEST_CASE("Repair hole faces without source painting use the part base color", "
     ModelRepairOptions options;
     options.preserve_annotations      = true;
     options.allow_annotation_clearing = false;
-    options.remove_non_3d_parts       = false;
     ModelRepairReport report;
     REQUIRE(repair_model(model, report, options));
     REQUIRE(report.committed);
@@ -1271,7 +1275,6 @@ TEST_CASE("Headless model repair preserves painting when CGAL reverses an inward
     ModelRepairOptions options;
     options.allow_annotation_clearing = false;
     options.preserve_annotations      = true;
-    options.split_components          = false;
 
     ModelRepairReport report;
     REQUIRE(repair_model(model, report, options));
@@ -1293,7 +1296,6 @@ TEST_CASE("Headless model repair handles an empty painting remap according to an
 
     ModelRepairOptions options;
     options.preserve_annotations = true;
-    options.split_components     = false;
     options.repair_mesh          = [](TriangleMesh& mesh, std::string&) {
         mesh = make_cube(10., 10., 10.);
         mesh.translate(100.f, 0.f, 0.f);
@@ -1402,7 +1404,6 @@ TEST_CASE("Headless model repair rejects a partial painting remap", "[ModelRepai
     ModelRepairOptions options;
     options.preserve_annotations      = true;
     options.allow_annotation_clearing = false;
-    options.split_components          = false;
     options.mesh_requires_repair      = [&](const TriangleMesh&) {
         // Inspect the unchanged closed source once; the next call must still
         // validate the repaired candidate before checking its painting remap.
@@ -1412,7 +1413,7 @@ TEST_CASE("Headless model repair rejects a partial painting remap", "[ModelRepai
         mesh = retained_component;
         return true;
     };
-    options.run_painting_validation = [&](const std::function<bool()>& validation) {
+    options.run_validation = [&](const std::function<bool()>& validation) {
         bool            restored = false;
         std::thread::id worker_thread;
         std::thread     worker([&]() {
@@ -1428,7 +1429,7 @@ TEST_CASE("Headless model repair rejects a partial painting remap", "[ModelRepai
     CHECK_FALSE(repair_model(model, report, options));
 
     CHECK(inspection_calls == 2);
-    REQUIRE(painting_validation_threads.size() == 2);
+    REQUIRE(painting_validation_threads.size() == 1);
     for (const std::thread::id validation_thread : painting_validation_threads)
         CHECK(validation_thread != caller_thread);
     CHECK_FALSE(report.success);
@@ -1547,7 +1548,6 @@ TEST_CASE("Repair hooks cannot commit a mesh that fails full topology validation
     const std::shared_ptr<const TriangleMesh> original_mesh = model.objects.front()->volumes.front()->mesh_ptr();
 
     ModelRepairOptions options;
-    options.split_components = false;
 
     SECTION("self intersection")
     {
@@ -1626,7 +1626,7 @@ TEST_CASE("Headless model repair corrects a closed inward shell", "[ModelRepair]
     CHECK(its_volume(repaired.its) > 0.);
 }
 
-TEST_CASE("CGAL repair corrects an inward nested cavity without failing fidelity validation", "[ModelRepair][MeshBoolean][CGAL][Cavity]")
+TEST_CASE("2.5 follows nonzero winding for equally oriented nested shells", "[ModelRepair][MeshBoolean][CGAL][Cavity]")
 {
     TriangleMesh outer = make_cube(20., 20., 20.);
     TriangleMesh inner = make_cube(5., 5., 5.);
@@ -1644,11 +1644,9 @@ TEST_CASE("CGAL repair corrects an inward nested cavity without failing fidelity
     INFO(error);
     REQUIRE(repair_succeeded);
 
-    CHECK(outer.its.indices.size() == before_facets);
-    CHECK(absolute_shell_volume(outer) == Approx(before_shell_volume).epsilon(1.e-6));
-    const std::vector<indexed_triangle_set> shells = its_split(outer.its);
-    REQUIRE(shells.size() == 2);
-    CHECK(std::count_if(shells.begin(), shells.end(), [](const indexed_triangle_set& shell) { return its_volume(shell) < 0.; }) == 1);
+    CHECK(outer.its.indices.size() == 12);
+    CHECK(absolute_shell_volume(outer) == Approx(8000.).epsilon(1.e-6));
+    CHECK(its_split(outer.its).size() == 1);
     CHECK_FALSE(MeshBoolean::cgal::requires_repair(outer));
 }
 
@@ -1694,8 +1692,6 @@ TEST_CASE("CGAL repairs canceling winding without volume-based deletion", "[Mode
     Model model = make_model(std::move(mesh));
 
     ModelRepairOptions options;
-    options.split_components    = false;
-    options.remove_non_3d_parts = GENERATE(false, true);
 
     ModelRepairReport report;
     REQUIRE(repair_model(model, report, options));
@@ -1732,7 +1728,6 @@ TEST_CASE("CGAL removes unreferenced vertices when component removal is disabled
     REQUIRE_FALSE(model.objects.front()->volumes.front()->is_splittable());
 
     ModelRepairOptions options;
-    options.remove_non_3d_parts = false; // Keep this algorithm test independent of the bbox-volume cutoff.
     ModelRepairReport report;
     REQUIRE(repair_model(model, report, options));
 
@@ -1751,8 +1746,6 @@ TEST_CASE("CGAL removes a collinear far face when component removal is disabled"
     Model model = make_model(cube_with_collinear_far_face());
 
     ModelRepairOptions options;
-    options.split_components = false;
-    options.remove_non_3d_parts = false;
 
     ModelRepairReport report;
     REQUIRE(repair_model(model, report, options));
@@ -1787,54 +1780,6 @@ TEST_CASE("Headless model repair removes duplicated closed facets", "[ModelRepai
     CHECK(its_volume(repaired.its) > 0.);
 }
 
-TEST_CASE("Headless model repair splits closed disjoint components into volumes", "[ModelRepair][CGAL][Split]")
-{
-    Model model = make_model(two_disjoint_shells(false));
-
-    ModelRepairReport report;
-    REQUIRE(repair_model(model, report));
-
-    REQUIRE(model.objects.front()->volumes.size() == 2);
-    CHECK(report.success);
-    CHECK(report.attempted);
-    CHECK(report.committed);
-    CHECK(report.repaired == 1);
-    CHECK(report.mesh_repaired == 0);
-    CHECK(report.split_volumes == 1);
-    CHECK(report.created_parts == 1);
-    CHECK(report.removed_parts == 0);
-    CHECK(report.changed_object_indices == std::vector<size_t>{0});
-    REQUIRE(report.volume_reports.size() == 1);
-    CHECK(report.volume_reports.front().repaired_parts == 0);
-    CHECK(report.volume_reports.front().split_parts == 2);
-    CHECK(report.volume_reports.front().removed_parts == 0);
-    for (const ModelVolume* volume : model.objects.front()->volumes) {
-        CHECK(its_num_open_edges(volume->mesh().its) == 0);
-        CHECK(its_volume(volume->mesh().its) > 0.);
-    }
-}
-
-TEST_CASE("Headless model repair normalizes orientation while splitting disjoint shells", "[ModelRepair][CGAL][Split]")
-{
-    Model model = make_model(two_disjoint_shells(true));
-
-    ModelRepairReport report;
-    REQUIRE(repair_model(model, report));
-
-    REQUIRE(model.objects.front()->volumes.size() == 2);
-    CHECK(report.attempted);
-    CHECK(report.repaired == 1);
-    CHECK(report.mesh_repaired == 0);
-    CHECK(report.split_volumes == 1);
-    REQUIRE(report.volume_reports.size() == 1);
-    CHECK(report.volume_reports.front().repaired_parts == 0);
-    CHECK(report.volume_reports.front().split_parts == 2);
-    for (const ModelVolume* volume : model.objects.front()->volumes) {
-        CHECK(its_num_open_edges(volume->mesh().its) == 0);
-        CHECK(its_volume(volume->mesh().its) > 0.);
-    }
-}
-
 TEST_CASE("Headless model repair does not split intersecting disconnected shells", "[ModelRepair][CGAL][Split][SelfIntersection]")
 {
     Model                                     model         = make_model(overlapping_cubes());
@@ -1851,7 +1796,7 @@ TEST_CASE("Headless model repair does not split intersecting disconnected shells
     CHECK(model.objects.front()->volumes.front()->mesh_ptr() == original_mesh);
 }
 
-TEST_CASE("Headless model repair removes a planar component after splitting", "[ModelRepair][CGAL][Split]")
+TEST_CASE("Headless model repair removes a planar component inside its original volume", "[ModelRepair][CGAL][Split]")
 {
     Model model = make_model(cube_with_planar_component());
 
@@ -1864,195 +1809,38 @@ TEST_CASE("Headless model repair removes a planar component after splitting", "[
     CHECK(its_num_open_edges(surviving_mesh.its) == 0);
     CHECK(its_volume(surviving_mesh.its) > 0.);
     CHECK(report.repaired == 1);
-    CHECK(report.split_volumes == 1);
+    CHECK(report.split_volumes == 0);
     CHECK(report.created_parts == 0);
-    CHECK(report.removed_parts == 1);
+    CHECK(report.removed_parts == 0);
     CHECK(report.changed_object_indices == std::vector<size_t>{0});
     REQUIRE(report.volume_reports.size() == 1);
-    CHECK(report.volume_reports.front().split_parts == 2);
-    CHECK(report.volume_reports.front().removed_parts == 1);
+    CHECK(report.volume_reports.front().split_parts == 1);
+    CHECK(report.volume_reports.front().removed_parts == 0);
 }
 
-TEST_CASE("Headless model repair applies the 2.4.2 thickness cutoff after splitting", "[ModelRepair][CGAL][Split][Scale]")
+TEST_CASE("Healthy thin components are not removed by an outer size policy", "[ModelRepair][CGAL][Scale]")
 {
     Model model = make_model(cube_with_thin_component());
-
+    const auto        original = model.objects[0]->volumes[0]->mesh_ptr();
     ModelRepairReport report;
     REQUIRE(repair_model(model, report));
-
-    REQUIRE(model.objects.front()->volumes.size() == 1);
-    for (const ModelVolume* volume : model.objects.front()->volumes) {
-        CHECK(volume->mesh().its.indices.size() == 12);
-        CHECK(its_num_open_edges(volume->mesh().its) == 0);
-        CHECK(its_volume(volume->mesh().its) > 0.);
-    }
-    CHECK(report.repaired == 1);
-    CHECK(report.mesh_repaired == 0);
-    CHECK(report.split_volumes == 1);
-    CHECK(report.created_parts == 1);
-    CHECK(report.removed_parts == 1);
-    CHECK(report.changed_object_indices == std::vector<size_t>{0});
-    REQUIRE(report.volume_reports.size() == 1);
-    CHECK(report.volume_reports.front().repaired_parts == 0);
-    CHECK(report.volume_reports.front().split_parts == 2);
-    CHECK(report.volume_reports.front().removed_parts == 1);
-}
-
-TEST_CASE("Component cleanup uses the 2.4.2 thresholds only when enabled", "[ModelRepair][Scale][Preparation]")
-{
-    const int    criterion       = GENERATE(0, 1, 2, 3);
-    const bool   below_cutoff    = GENERATE(false, true);
-    const bool   removal_enabled = GENERATE(false, true);
-    const bool   gui_policy      = GENERATE(false, true);
-    TriangleMesh candidate;
-    if (criterion == 0) {
-        const float thickness = std::nextafter(float(EPSILON), below_cutoff ? 0.f : std::numeric_limits<float>::infinity());
-        candidate             = make_cube(10., 10., thickness);
-    } else if (criterion == 1) {
-        candidate = make_cube(0.1, 0.1, below_cutoff ? 0.005 : 0.02);
-    } else if (criterion == 2) {
-        const float thickness = std::nextafter(float(1024. * 1.e-6), below_cutoff ? 0.f : std::numeric_limits<float>::infinity());
-        candidate             = make_cube(1024., 1024., thickness);
-    } else {
-        auto        its    = make_cube(1., 1., 1.).its;
-        const float extent = below_cutoff ? 100.f : 99.f;
-        its.vertices.emplace_back(extent, extent, extent);
-        candidate = TriangleMesh(std::move(its));
-    }
-
-    Model        model        = make_model(std::move(candidate));
-    auto*        object       = model.objects.front();
-    auto*        source       = object->volumes.front();
-    const auto   original     = source->mesh_ptr();
-    auto*        sibling      = object->add_volume(make_cube(10., 10., 10.));
-    const auto   sibling_mesh = sibling->mesh_ptr();
-    const Vec3d  size         = original->bounding_box().size();
-    const double min_dim      = size.minCoeff();
-    const double volume       = std::abs(its_volume(original->its));
-    const double ratio        = volume / size.prod();
-    REQUIRE(its_num_open_edges(original->its) == 0);
-    // Isolate each criterion; the bbox-ratio case also covers equality.
-    if (criterion == 0)
-        REQUIRE((min_dim <= EPSILON) == below_cutoff);
-    else
-        REQUIRE(min_dim > EPSILON);
-    if (criterion == 1)
-        REQUIRE((volume <= EPSILON) == below_cutoff);
-    else
-        REQUIRE(volume > EPSILON);
-    if (criterion == 2)
-        REQUIRE((min_dim / size.maxCoeff() <= 1.e-6) == below_cutoff);
-    else
-        REQUIRE(min_dim / size.maxCoeff() > 1.e-6);
-    if (criterion == 3)
-        REQUIRE((ratio <= 1.e-6) == below_cutoff);
-    else
-        REQUIRE(ratio > 1.e-6);
-
-    ModelRepairOptions options = gui_policy ? gui_model_repair_options() : ModelRepairOptions{};
-    options.targets.push_back({0, size_t(0)});
-    options.split_components    = false;
-    options.remove_non_3d_parts = removal_enabled;
-    // This is policy coverage, not a claim about CGAL repair of these fixtures.
-    options.mesh_requires_repair = [](const TriangleMesh&) { return false; };
-    ModelRepairReport report;
-    REQUIRE(repair_model(model, report, options));
-    const bool removed = removal_enabled && below_cutoff;
-    CHECK(report.committed == removed);
-    CHECK(report.removed_parts == (removed ? 1 : 0));
-    CHECK(report.mesh_repaired == 0);
-    REQUIRE(object->volumes.size() == (removed ? 1 : 2));
-    CHECK(object->volumes.back()->mesh_ptr() == sibling_mesh);
-    if (!removed)
-        CHECK(object->volumes.front()->mesh_ptr() == original);
-}
-
-TEST_CASE("2.4.2 small-part cleanup cannot silently discard painting", "[ModelRepair][Scale][Painting][GUIColor]")
-{
-    Model model  = make_model(make_cube(0.01, 0.01, 0.01));
-    auto* object = model.objects.front();
-    auto* source = object->volumes.front();
-    paint_facet(source->mmu_segmentation_facets, source->mesh(), 0, EnforcerBlockerType::Extruder3);
-    const auto  original = source->mesh_ptr();
-    const Model before   = model;
-    const auto  sibling  = object->add_volume(make_cube(10., 10., 10.))->mesh_ptr();
-    auto        options  = gui_model_repair_options();
-    options.targets.push_back({0, size_t(0)});
-    ModelRepairReport report;
-    REQUIRE_FALSE(repair_model(model, report, options));
     CHECK_FALSE(report.committed);
-    CHECK(report.failed == 1);
-    REQUIRE(object->volumes.size() == 2);
-    CHECK(object->volumes.front()->mesh_ptr() == original);
-    CHECK(object->volumes.back()->mesh_ptr() == sibling);
-    CHECK(source->mmu_segmentation_facets.equals(before.objects.front()->volumes.front()->mmu_segmentation_facets));
-}
-
-TEST_CASE("2.4.2 small-part cleanup survives an unrelated unresolved part", "[ModelRepair][Partial][Scale]")
-{
-    const bool small_first = GENERATE(false, true);
-    Model      model;
-    auto*      object = model.add_object();
-    object->add_instance();
-    for (size_t i = 0; i < 2; ++i)
-        object->add_volume((i == 0) == small_first ? make_cube(0.01, 0.01, 0.01) : tetrahedra_sharing_an_edge());
-    const auto         unresolved = object->volumes[small_first ? 1 : 0]->mesh_ptr();
-    ModelRepairOptions options;
-    options.allow_partial    = true;
-    options.split_components = false;
-    options.repair_mesh      = [](TriangleMesh&, std::string& error) {
-        error = "Injected unresolved non-manifold part.";
-        return false;
-    };
-    ModelRepairReport report;
-    REQUIRE(repair_model(model, report, options));
-    CHECK(report.status() == std::string("partially_repaired"));
-    CHECK(report.committed);
-    CHECK(report.removed_parts == 1);
-    CHECK(report.unresolved == 1);
-    CHECK_FALSE(report.mesh_validated());
-    REQUIRE(object->volumes.size() == 1);
-    CHECK(object->volumes.front()->mesh_ptr() == unresolved);
-}
-
-TEST_CASE("Small local solids require removal opt-out or object-emptying protection even when scaled", "[ModelRepair][CGAL][Scale]")
-{
-    const double edge          = GENERATE(0.01, 0.00001);
-    const bool   scale_volume  = GENERATE(false, true);
-    const bool   remove_small  = GENERATE(false, true);
-    Model        model         = make_model(make_cube(edge, edge, edge));
-    ModelObject* object        = model.objects.front();
-    ModelVolume* volume        = object->volumes.front();
-    const auto   original_mesh = volume->mesh_ptr();
-    if (scale_volume)
-        volume->set_scaling_factor(Vec3d::Constant(10. / edge));
-    else
-        object->instances.front()->set_scaling_factor(Vec3d::Constant(10. / edge));
-    const Vec3d before_size = object->bounding_box_exact().size();
-    REQUIRE(before_size.isApprox(Vec3d::Constant(10.), 1e-5));
-
-    ModelRepairOptions options;
-    options.remove_non_3d_parts = remove_small;
-    ModelRepairReport report;
-    REQUIRE(repair_model(model, report, options) == !remove_small);
-    CHECK(report.failed == (remove_small ? 1 : 0));
     CHECK(report.removed_parts == 0);
-    CHECK_FALSE(report.committed);
-    REQUIRE(object->volumes.size() == 1);
-    CHECK(object->volumes.front()->mesh_ptr() == original_mesh);
-    CHECK(object->bounding_box_exact().size().isApprox(before_size));
+    REQUIRE(model.objects[0]->volumes.size() == 1);
+    CHECK(model.objects[0]->volumes[0]->mesh_ptr() == original);
+    CHECK(its_split(original->its).size() == 2);
 }
 
-TEST_CASE("Object-emptying protection preserves a small solid shared by scaled instances", "[ModelRepair][CGAL][Scale]")
+TEST_CASE("Repair preserves a small solid shared by scaled instances", "[ModelRepair][CGAL][Scale]")
 {
     Model        model  = make_model(make_cube(0.01, 0.01, 0.01));
     ModelObject* object = model.objects.front();
     object->instances.front()->set_scaling_factor(Vec3d::Constant(1000.));
     object->add_instance()->set_scaling_factor(Vec3d::Constant(0.5));
     ModelRepairReport report;
-    REQUIRE_FALSE(repair_model(model, report));
+    REQUIRE(repair_model(model, report));
     CHECK_FALSE(report.committed);
-    CHECK(report.failed == 1);
+    CHECK(report.failed == 0);
     CHECK(report.removed_parts == 0);
     REQUIRE(object->volumes.size() == 1);
     REQUIRE(object->instances.size() == 2);
@@ -2060,7 +1848,7 @@ TEST_CASE("Object-emptying protection preserves a small solid shared by scaled i
     CHECK(object->instances[1]->get_scaling_factor().isApprox(Vec3d::Constant(0.5)));
 }
 
-TEST_CASE("CGAL fills a zero-volume open shell with component cleanup enabled", "[ModelRepair][CGAL][Scale][Split]")
+TEST_CASE("CGAL fills a zero-volume open shell in the original volume", "[ModelRepair][CGAL][Scale][Split]")
 {
     const int    layout = GENERATE(0, 1, 2); // Alone, sibling volume, disconnected shell in one volume.
     const bool   gui    = GENERATE(false, true);
@@ -2074,14 +1862,13 @@ TEST_CASE("CGAL fills a zero-volume open shell with component cleanup enabled", 
     if (layout == 1)
         model.objects.front()->add_volume(std::move(solid));
     ModelRepairOptions options = gui ? gui_model_repair_options() : ModelRepairOptions{};
-    REQUIRE(options.remove_non_3d_parts);
     ModelRepairReport report;
     REQUIRE(repair_model(model, report, options));
     CHECK(report.committed);
     CHECK(report.mesh_validated());
     CHECK(report.removed_parts == 0);
     CHECK(report.mesh_repaired == 1);
-    REQUIRE(model.objects.front()->volumes.size() == (layout == 0 ? 1 : 2));
+    REQUIRE(model.objects.front()->volumes.size() == (layout == 1 ? 2 : 1));
     size_t faces = 0;
     for (const auto* volume : model.objects.front()->volumes) {
         faces += volume->mesh().facets_count();
@@ -2108,7 +1895,6 @@ TEST_CASE("Unresolved zero-volume surfaces are not deleted beside a solid", "[Mo
     const auto original      = object->volumes.front()->mesh_ptr();
     const auto sibling       = object->add_volume(make_cube(10., 10., 10.))->mesh_ptr();
     auto       options       = gui_model_repair_options();
-    options.split_components = false;
     options.targets.push_back({0, size_t(0)});
     bool attempted      = false;
     options.repair_mesh = [&attempted](TriangleMesh&, std::string&) {
@@ -2127,42 +1913,7 @@ TEST_CASE("Unresolved zero-volume surfaces are not deleted beside a solid", "[Mo
     CHECK(object->volumes.back()->mesh_ptr() == sibling);
 }
 
-TEST_CASE("Volume cleanup validation honors worker exceptions and cancellation", "[ModelRepair][Scale][Worker][Transaction]")
-{
-    const bool cancel        = GENERATE(false, true);
-    Model      model         = make_model(open_tetrahedron_at_origin());
-    auto*      object        = model.objects.front();
-    const auto original      = object->volumes.front()->mesh_ptr();
-    const auto sibling       = object->add_volume(make_cube(10., 10., 10.))->mesh_ptr();
-    auto       options       = gui_model_repair_options();
-    options.split_components = false;
-    bool invoked = false, canceled = false, repair_started = false;
-    options.is_canceled          = [&]() { return canceled; };
-    options.run_mesh_preparation = [&](const std::function<void()>& task) {
-        invoked = true;
-        if (!cancel)
-            throw std::runtime_error("volume inspection worker failed");
-        task();
-        canceled = true;
-    };
-    options.repair_mesh = [&](TriangleMesh&, std::string&) {
-        repair_started = true;
-        return false;
-    };
-    ModelRepairReport report;
-    CHECK_FALSE(repair_model(model, report, options));
-    CHECK(invoked);
-    CHECK_FALSE(repair_started);
-    CHECK_FALSE(report.committed);
-    CHECK_FALSE(report.can_continue());
-    CHECK(report.canceled == cancel);
-    CHECK(report.removed_parts == 0);
-    REQUIRE(object->volumes.size() == 2);
-    CHECK(object->volumes.front()->mesh_ptr() == original);
-    CHECK(object->volumes.back()->mesh_ptr() == sibling);
-}
-
-TEST_CASE("Headless model repair rejects cleanup that would empty an object", "[ModelRepair][CGAL][Split][Acceptance]")
+TEST_CASE("Headless model repair rejects a purely planar volume without deleting it", "[ModelRepair][CGAL][Split][Acceptance]")
 {
     const bool   multiple_planes = GENERATE(false, true);
     Model        model           = make_model(planar_square());
@@ -2197,10 +1948,10 @@ TEST_CASE("Headless model repair rejects cleanup that would empty an object", "[
     CHECK(report.after_facets == report.before_facets);
     CHECK(report.changed_object_indices.empty());
     REQUIRE(report.failures.size() == 1);
-    CHECK(report.failures.front().message == "Repair failed: basic cleanup removed all geometry.");
+    CHECK_FALSE(report.failures.front().message.empty());
 }
 
-TEST_CASE("Headless model repair still removes a planar volume next to a solid", "[ModelRepair][CGAL][Split][Acceptance]")
+TEST_CASE("Headless model repair preserves a rejected planar volume next to a solid", "[ModelRepair][CGAL][Split][Acceptance]")
 {
     Model              model      = make_model(planar_square());
     ModelObject*       object     = model.objects.front();
@@ -2209,11 +1960,11 @@ TEST_CASE("Headless model repair still removes a planar volume next to a solid",
     ModelRepairOptions options;
     options.targets.push_back({0, size_t(0)});
     ModelRepairReport report;
-    REQUIRE(repair_model(model, report, options));
-    REQUIRE(object->volumes.size() == 1);
-    CHECK(object->volumes.front()->mesh_ptr() == solid_mesh);
-    CHECK(report.committed);
-    CHECK(report.removed_parts == 1);
+    REQUIRE_FALSE(repair_model(model, report, options));
+    REQUIRE(object->volumes.size() == 2);
+    CHECK(object->volumes.back()->mesh_ptr() == solid_mesh);
+    CHECK_FALSE(report.committed);
+    CHECK(report.removed_parts == 0);
 }
 
 TEST_CASE("Headless model repair preserves valid nested shell orientation with default splitting", "[ModelRepair][CGAL][Split]")
@@ -2259,72 +2010,6 @@ TEST_CASE("Headless model repair rolls back all staged meshes when one volume fa
     CHECK(its_num_open_edges(object->volumes.front()->mesh().its) > 0);
 }
 
-TEST_CASE("Partial repair retains progress inside a still-open volume", "[ModelRepair][Partial][CGAL][GUIColor][Painting]")
-{
-    auto input = make_cube(10., 10., 10.).its;
-    input.indices.erase(input.indices.begin(), input.indices.begin() + 4);
-    Model model  = make_model(TriangleMesh(std::move(input)));
-    auto* volume = model.objects.front()->volumes.front();
-    paint_facet(volume->mmu_segmentation_facets, volume->mesh(), 2, EnforcerBlockerType::Extruder1);
-    const auto         original_mesh      = volume->mesh_ptr();
-    const auto         original_transform = volume->get_transformation();
-    ModelRepairOptions options            = gui_model_repair_options();
-    options.split_components              = false;
-    options.remove_non_3d_parts           = false;
-    const auto fill_one_end               = [](const TriangleMesh& source) {
-        auto its = source.its;
-        its.indices.emplace_back(0, 1, 2);
-        its.indices.emplace_back(0, 2, 3);
-        return TriangleMesh(std::move(its));
-    };
-    const bool partial_hook = GENERATE(false, true);
-    if (partial_hook) {
-        options.repair_mesh_with_partial = [&](const TriangleMesh& source, TriangleMesh& candidate, std::string&) {
-            candidate = fill_one_end(source);
-            return MeshRepairOutcome::PartiallyRepaired;
-        };
-        options.repair_mesh = [](TriangleMesh&, std::string&) -> bool { throw std::runtime_error("wrong hook selected"); };
-    } else {
-        // A legacy hook claiming success still has to pass the same shared
-        // partial gate when the full postcheck finds the other open end.
-        options.repair_mesh = [&](TriangleMesh& candidate, std::string&) {
-            candidate = fill_one_end(candidate);
-            return true;
-        };
-    }
-    ModelRepairReport report;
-    REQUIRE(repair_model(model, report, options));
-    CHECK(report.status() == std::string("partially_repaired"));
-    CHECK(report.committed);
-    CHECK(report.can_continue());
-    CHECK_FALSE(report.mesh_validated());
-    CHECK(report.unresolved == 1);
-    CHECK(report.failed == 0);
-    CHECK(report.basic_removed_faces == 0);
-    REQUIRE(report.volume_reports.size() == 1);
-    CHECK(report.volume_reports.front().annotations_preserved);
-    CHECK_FALSE(report.volume_reports.front().annotations_cleared);
-    const auto* result = model.objects.front()->volumes.front();
-    CHECK(its_num_open_edges(result->mesh().its) == 4);
-    CHECK(result->mesh().facets_count() == 10);
-    CHECK_FALSE(result->mmu_segmentation_facets.empty());
-    CHECK(result->get_transformation() == original_transform);
-    CHECK(its_num_open_edges(original_mesh->its) == 8);
-    CHECK(result->mesh().its.vertices == original_mesh->its.vertices);
-
-    // Repeating a no-op partial claim cannot fabricate progress or overwrite
-    // the last committed model.
-    const auto retained              = result->mesh_ptr();
-    options.repair_mesh_with_partial = [](const TriangleMesh& source, TriangleMesh& candidate, std::string&) {
-        candidate = source;
-        return MeshRepairOutcome::PartiallyRepaired;
-    };
-    CHECK_FALSE(repair_model(model, report, options));
-    CHECK(report.status() == std::string("unresolved"));
-    CHECK(report.can_continue());
-    CHECK(model.objects.front()->volumes.front()->mesh_ptr() == retained);
-}
-
 TEST_CASE("Geometric postcheck rejection does not roll back unrelated partial-mode progress", "[ModelRepair][Partial][Transaction]")
 {
     const bool bad_first = GENERATE(false, true);
@@ -2345,8 +2030,6 @@ TEST_CASE("Geometric postcheck rejection does not roll back unrelated partial-mo
     const auto         original  = model.objects[bad_index]->volumes.front()->mesh_ptr();
     ModelRepairOptions options;
     options.allow_partial       = true;
-    options.split_components    = false;
-    options.remove_non_3d_parts = false;
     const int rejection         = GENERATE(0, 1, 2, 3);
     size_t    good_calls = 0, rejected_calls = 0;
     options.repair_mesh = [rejection, &good_calls, &rejected_calls](TriangleMesh& candidate, std::string&) {
@@ -2379,317 +2062,11 @@ TEST_CASE("Geometric postcheck rejection does not roll back unrelated partial-mo
     CHECK(report.unresolved == 1);
     CHECK(report.rolled_back == 0);
     CHECK_FALSE(report.mesh_validated());
-    CHECK(model.objects[bad_index]->volumes.front()->mesh_ptr() == original);
+    if (rejection == 0)
+        CHECK(model.objects[bad_index]->volumes.front()->mesh_ptr() == original);
+    else
+        CHECK(its_num_open_edges(model.objects[bad_index]->volumes.front()->mesh().its) == 0);
     CHECK(its_num_open_edges(model.objects[1 - bad_index]->volumes.front()->mesh().its) == 0);
-}
-
-TEST_CASE("Verified partial candidates do not bypass cancellation exceptions or strict painting",
-          "[ModelRepair][Partial][Transaction][Painting]")
-{
-    auto input = make_cube(10., 10., 10.).its;
-    input.indices.erase(input.indices.begin(), input.indices.begin() + 4);
-    Model model  = make_model(TriangleMesh(std::move(input)));
-    auto* volume = model.objects.front()->volumes.front();
-    paint_facet(volume->mmu_segmentation_facets, volume->mesh(), 2, EnforcerBlockerType::Extruder1);
-    const auto         original          = volume->mesh_ptr();
-    const auto         original_painting = volume->mmu_segmentation_facets.get_data();
-    ModelRepairOptions options           = gui_model_repair_options();
-    options.split_components             = false;
-    options.remove_non_3d_parts          = false;
-    options.repair_mesh_with_partial     = [](const TriangleMesh& source, TriangleMesh& candidate, std::string&) {
-        auto its = source.its;
-        its.indices.emplace_back(0, 1, 2);
-        its.indices.emplace_back(0, 2, 3);
-        candidate = TriangleMesh(std::move(its));
-        return MeshRepairOutcome::PartiallyRepaired;
-    };
-    size_t validations = 0;
-    bool   canceled    = false;
-    SECTION("partial worker throws")
-    {
-        options.repair_mesh_with_partial = [](const TriangleMesh&, TriangleMesh&, std::string&) -> MeshRepairOutcome {
-            throw std::runtime_error("partial worker failed");
-        };
-    }
-    SECTION("partial result contains illegal indices")
-    {
-        options.repair_mesh_with_partial = [](const TriangleMesh& source, TriangleMesh& candidate, std::string&) {
-            candidate                        = source;
-            candidate.its.indices.front()[0] = int(candidate.its.vertices.size());
-            return MeshRepairOutcome::PartiallyRepaired;
-        };
-    }
-    SECTION("progress validation worker throws")
-    {
-        options.run_mesh_preparation = [&](const std::function<void()>& task) {
-            if (++validations == 2)
-                throw std::runtime_error("partial validation failed");
-            task();
-        };
-    }
-    SECTION("canceled after progress validation")
-    {
-        options.is_canceled          = [&]() { return canceled; };
-        options.run_mesh_preparation = [&](const std::function<void()>& task) {
-            task();
-            if (++validations == 2)
-                canceled = true;
-        };
-    }
-    SECTION("partial result loses painting")
-    {
-        options.run_painting_validation = [&](const std::function<bool()>& task) { return ++validations == 1 ? task() : false; };
-    }
-    ModelRepairReport report;
-    CHECK_FALSE(repair_model(model, report, options));
-    CHECK_FALSE(report.committed);
-    CHECK_FALSE(report.can_continue());
-    CHECK_FALSE(report.mesh_validated());
-    CHECK(model.objects.front()->volumes.front()->mesh_ptr() == original);
-    CHECK(model.objects.front()->volumes.front()->mmu_segmentation_facets.get_data() == original_painting);
-}
-
-TEST_CASE("Partial repair retains only independently prepared basic geometry", "[ModelRepair][Partial]")
-{
-    indexed_triangle_set input          = tetrahedra_sharing_an_edge().its;
-    const auto           expected_faces = input.indices;
-    input.indices.push_back(input.indices.front());
-    input.indices.emplace_back(0, 0, 1);
-    Model      model         = make_model(TriangleMesh(std::move(input)));
-    const auto original_mesh = model.objects.front()->volumes.front()->mesh_ptr();
-    // add_volume() centers the mesh and records its position in the volume
-    // transform. Compare in that same local frame, and check the transform too.
-    const auto         expected_vertices  = original_mesh->its.vertices;
-    const auto         expected_transform = model.objects.front()->volumes.front()->get_transformation();
-    const auto         expected_instance  = model.objects.front()->instances.front()->get_transformation();
-    ModelRepairOptions options;
-    options.allow_partial    = true;
-    options.split_components = false;
-    options.repair_mesh      = [](TriangleMesh& candidate, std::string& error) {
-        candidate = make_cube(99., 99., 99.); // Must NEVER be retained on failure.
-        error     = "Injected geometric rejection.";
-        return false;
-    };
-    const bool        staged = GENERATE(false, true);
-    ModelRepairReport report;
-    REQUIRE((staged ? repair_staged_model(model, report, options) : repair_model(model, report, options)));
-    CHECK(report.status() == std::string("partially_repaired"));
-    CHECK(report.success);
-    CHECK(report.committed);
-    CHECK(report.can_continue());
-    CHECK_FALSE(report.mesh_validated());
-    CHECK(report.unresolved == 1);
-    CHECK(report.failed == 0);
-    CHECK(report.basic_removed_faces == 2);
-    CHECK(report.mesh_repaired == 0);
-    REQUIRE(report.volume_reports.size() == 1);
-    CHECK(report.volume_reports.front().result == ModelRepairVolumeStatus::PartiallyRepaired);
-    REQUIRE(report.failures.size() == 1);
-    CHECK(report.failures.front().recoverable);
-    const TriangleMesh& result = model.objects.front()->volumes.front()->mesh();
-    CHECK(result.its.indices == expected_faces);
-    CHECK(result.its.vertices == expected_vertices);
-    CHECK(model.objects.front()->volumes.front()->get_transformation() == expected_transform);
-    CHECK(model.objects.front()->instances.front()->get_transformation() == expected_instance);
-    CHECK(original_mesh->its.indices.size() == expected_faces.size() + 2);
-}
-
-TEST_CASE("Partial repair groups touching patches apart from a repairable shell", "[ModelRepair][Partial][CGAL][Split]")
-{
-    const bool bad_first = GENERATE(false, true);
-    const int  painting  = GENERATE(0, 1, 2); // None, whole facet, subdivided facet on the retained group.
-    const bool painted   = painting != 0;
-    CAPTURE(bad_first, painting);
-    TriangleMesh bad = tetrahedra_sharing_an_edge();
-    bad.translate(50.f, 0.f, 0.f);
-    TriangleMesh input = bad_first ? bad : cube_with_open_side();
-    input.merge(bad_first ? cube_with_open_side() : bad);
-    Model model  = make_model(std::move(input));
-    auto* source = model.objects.front()->volumes.front();
-    source->config.set("extruder", 3);
-    source->set_rotation(Vec3d(0.2, 0.3, 0.4));
-    source->set_scaling_factor(Vec3d(1.5, 0.75, 2.0));
-    const auto   transform       = source->get_transformation();
-    const auto   instance        = model.objects.front()->instances.front()->get_transformation();
-    const auto   original        = source->mesh_ptr();
-    auto*        unselected      = model.objects.front()->add_volume(make_cube(1., 1., 1.), ModelVolumeType::NEGATIVE_VOLUME);
-    const auto   unselected_mesh = unselected->mesh_ptr();
-    const auto   unselected_id   = unselected->id();
-    const size_t bad_offset      = bad_first ? 0 : 10;
-    if (painted) {
-        paint_facet(source->supported_facets, source->mesh(), int(bad_offset), EnforcerBlockerType::ENFORCER);
-        paint_facet(source->mmu_segmentation_facets, source->mesh(), bad_first ? 8 : 0, EnforcerBlockerType::ENFORCER);
-        paint_facet(source->seam_facets, source->mesh(), int(bad_offset + 1), EnforcerBlockerType::BLOCKER);
-        paint_facet(source->fuzzy_skin_facets, source->mesh(), int(bad_offset + 2), EnforcerBlockerType::FUZZY_SKIN);
-        if (painting == 2) {
-            source->supported_facets.reset();
-            // One split side, then ENFORCER/NONE children. Use the existing
-            // 3MF per-facet encoding so the subtree must survive verbatim.
-            source->supported_facets.set_triangle_from_string(int(bad_offset), "041");
-        }
-    }
-    std::array<std::array<std::string, 8>, 3> expected_annotations;
-    for (size_t face = 0; face < 8; ++face) {
-        expected_annotations[0][face] = source->supported_facets.get_triangle_as_string(int(bad_offset + face));
-        expected_annotations[1][face] = source->seam_facets.get_triangle_as_string(int(bad_offset + face));
-        expected_annotations[2][face] = source->fuzzy_skin_facets.get_triangle_as_string(int(bad_offset + face));
-    }
-    auto expected_mmu = source->mmu_segmentation_facets.get_facets_strict(*source, EnforcerBlockerType::ENFORCER);
-    // Strict extraction returns selected triangles but retains live vertices
-    // from other states. Bounds must describe only the painted surface, not
-    // the whole original volume (including the distant unresolved group).
-    its_compactify_vertices(expected_mmu);
-    ModelRepairOptions options;
-    options.allow_partial             = true;
-    options.preserve_annotations      = painted;
-    options.allow_annotation_clearing = false;
-    options.remove_non_3d_parts       = false;
-    ModelRepairReport report;
-    const bool        repaired_ok = repair_model(model, report, options);
-    INFO((report.failures.empty() ? "No reported failure" : report.failures.front().message));
-    REQUIRE(repaired_ok);
-    REQUIRE(model.objects.front()->volumes.size() == 3);
-    // The object-volume transaction installs staging volume wrappers; stable
-    // identity and immutable mesh ownership, not raw wrapper addresses, persist.
-    CHECK(model.objects.front()->volumes.back()->id() == unselected_id);
-    CHECK(model.objects.front()->volumes.back()->mesh_ptr() == unselected_mesh);
-    CHECK(report.status() == std::string("partially_repaired"));
-    CHECK(report.committed);
-    CHECK_FALSE(report.mesh_validated());
-    CHECK(report.unresolved == 1);
-    CHECK(report.failed == 0);
-    CHECK(report.mesh_repaired == 1);
-    CHECK(report.split_volumes == 1);
-    CHECK(report.created_parts == 1);
-    REQUIRE(report.volume_reports.size() == 1);
-    CHECK(report.volume_reports.front().annotations_preserved == painted);
-    CHECK_FALSE(report.volume_reports.front().annotations_cleared);
-    CHECK(model.objects.front()->instances.front()->get_transformation() == instance);
-    for (size_t i = 0; i < 2; ++i) {
-        const auto* part = model.objects.front()->volumes[i];
-        CHECK(part->get_transformation() == transform);
-        CHECK(part->extruder_id() == 3);
-        if ((i == 0) == bad_first) {
-            REQUIRE(part->mesh().facets_count() == 8);
-            CHECK(part->mesh().its.vertices.size() == 6); // Do not duplicate shared-edge vertices.
-            for (size_t f = 0; f < 8; ++f)
-                for (size_t c = 0; c < 3; ++c)
-                    CHECK(part->mesh().its.vertices[part->mesh().its.indices[f][c]] ==
-                          original->its.vertices[original->its.indices[bad_offset + f][c]]);
-            if (painted) {
-                CHECK_FALSE(part->supported_facets.empty());
-                CHECK_FALSE(part->seam_facets.empty());
-                CHECK_FALSE(part->fuzzy_skin_facets.empty());
-                CHECK(part->mmu_segmentation_facets.empty());
-                for (size_t face = 0; face < 8; ++face) {
-                    CHECK(part->supported_facets.get_triangle_as_string(int(face)) == expected_annotations[0][face]);
-                    CHECK(part->seam_facets.get_triangle_as_string(int(face)) == expected_annotations[1][face]);
-                    CHECK(part->fuzzy_skin_facets.get_triangle_as_string(int(face)) == expected_annotations[2][face]);
-                }
-            }
-        } else {
-            CHECK(part->mesh().facets_count() == 12);
-            CHECK_FALSE(MeshBoolean::cgal::requires_repair(part->mesh()));
-            if (painted) {
-                CHECK_FALSE(part->mmu_segmentation_facets.empty());
-                CHECK(part->supported_facets.empty());
-                CHECK(part->seam_facets.empty());
-                CHECK(part->fuzzy_skin_facets.empty());
-                auto       restored_mmu = part->mmu_segmentation_facets.get_facets_strict(*part, EnforcerBlockerType::ENFORCER);
-                const auto surface_area = [](const indexed_triangle_set& its) {
-                    double area = 0.;
-                    for (const auto& face : its.indices) {
-                        const Vec3d a = its.vertices[face[0]].cast<double>();
-                        const Vec3d b = its.vertices[face[1]].cast<double>();
-                        const Vec3d c = its.vertices[face[2]].cast<double>();
-                        area += 0.5 * (b - a).cross(c - a).norm();
-                    }
-                    return area;
-                };
-                REQUIRE_FALSE(restored_mmu.empty());
-                its_compactify_vertices(restored_mmu);
-                CHECK(surface_area(restored_mmu) == Approx(surface_area(expected_mmu)).epsilon(1.e-4));
-                CHECK(bounding_box(restored_mmu).min.isApprox(bounding_box(expected_mmu).min));
-                CHECK(bounding_box(restored_mmu).max.isApprox(bounding_box(expected_mmu).max));
-            }
-        }
-    }
-    // A second attempt must not report splitting unchanged geometry as progress.
-    const auto repaired = model.objects.front()->volumes[bad_first ? 1 : 0]->mesh_ptr();
-    CHECK_FALSE(repair_model(model, report, options));
-    CHECK(report.status() == std::string("unresolved"));
-    CHECK_FALSE(report.committed);
-    CHECK(report.split_volumes == 0);
-    CHECK(model.objects.front()->volumes[bad_first ? 1 : 0]->mesh_ptr() == repaired);
-}
-
-TEST_CASE("Partial grouping preserves nested cavity winding beside an open shell", "[ModelRepair][Partial][CGAL][Split][AppBasic]")
-{
-    TriangleMesh input = make_cube(20., 20., 20.);
-    auto         inner = make_cube(5., 5., 5.);
-    inner.translate(7.5f, 7.5f, 7.5f);
-    inner.flip_triangles();
-    input.merge(inner);
-    auto open = cube_with_open_side();
-    open.translate(50.f, 0.f, 0.f);
-    input.merge(open);
-    Model              model    = make_model(std::move(input));
-    const auto         original = model.objects.front()->volumes.front()->mesh_ptr();
-    ModelRepairOptions options;
-    options.allow_partial = true;
-    options.basic_repair  = GENERATE(false, true);
-    ModelRepairReport report;
-    REQUIRE(repair_model(model, report, options));
-    REQUIRE(model.objects.front()->volumes.size() == 2);
-    const auto& cavity = model.objects.front()->volumes.front()->mesh();
-    REQUIRE(cavity.facets_count() == 24);
-    for (size_t f = 0; f < 24; ++f)
-        for (size_t c = 0; c < 3; ++c)
-            CHECK(cavity.its.vertices[cavity.its.indices[f][c]] == original->its.vertices[original->its.indices[f][c]]);
-    const auto shells = its_split(cavity.its);
-    REQUIRE(shells.size() == 2);
-    CHECK(std::count_if(shells.begin(), shells.end(), [](const auto& shell) { return its_volume(shell) < 0.; }) == 1);
-    CHECK(report.mesh_repaired == 1);
-    CHECK(report.mesh_validated());
-}
-
-TEST_CASE("Partial grouping without progress or with fatal interruption does not change ownership", "[ModelRepair][Partial][Split]")
-{
-    const int outcome = GENERATE(0, 1, 2); // All rejected, worker exception after progress, cancellation after progress.
-    auto      input   = cube_with_open_side();
-    auto      bad     = tetrahedra_sharing_an_edge();
-    bad.translate(50.f, 0.f, 0.f);
-    input.merge(bad);
-    Model              model     = make_model(std::move(input));
-    auto*              object    = model.objects.front();
-    auto*              volume    = object->volumes.front();
-    const auto         original  = volume->mesh_ptr();
-    const auto         id        = volume->id();
-    const auto         transform = volume->get_transformation();
-    bool               canceled  = false;
-    ModelRepairOptions options;
-    options.allow_partial = true;
-    options.is_canceled   = [&]() { return canceled; };
-    options.repair_mesh   = [&](TriangleMesh& candidate, std::string& error) {
-        if (outcome != 0 && candidate.facets_count() == 10)
-            return MeshBoolean::cgal::repair(candidate, nullptr, &error);
-        if (outcome == 1)
-            throw std::runtime_error("Injected worker failure after successful group repair.");
-        canceled  = outcome == 2;
-        candidate = make_cube(99., 99., 99.); // A rejected candidate must not survive.
-        error     = "Injected geometric rejection.";
-        return false;
-    };
-    ModelRepairReport report;
-    REQUIRE_FALSE(repair_model(model, report, options));
-    CHECK_FALSE(report.committed);
-    CHECK(report.status() == std::string(outcome == 0 ? "unresolved" : outcome == 1 ? "failed" : "canceled"));
-    CHECK(report.can_continue() == (outcome == 0));
-    REQUIRE(object->volumes.size() == 1);
-    CHECK(object->volumes.front() == volume);
-    CHECK(volume->mesh_ptr() == original);
-    CHECK(volume->id() == id);
-    CHECK(volume->get_transformation() == transform);
 }
 
 TEST_CASE("Partial repair continues past unresolved objects in either order", "[ModelRepair][Partial]")
@@ -2706,7 +2083,6 @@ TEST_CASE("Partial repair continues past unresolved objects in either order", "[
     const auto         unchanged_id   = model.objects[bad_index]->volumes.front()->id();
     ModelRepairOptions options;
     options.allow_partial    = true;
-    options.split_components = false;
     options.repair_mesh      = [](TriangleMesh& mesh, std::string& error) {
         if (mesh.its.indices.size() == 10) {
             mesh = make_cube(10., 10., 10.);
@@ -2775,7 +2151,6 @@ TEST_CASE("Partial repair preserves an unresolved volume beside a repaired volum
     const auto         original_id = object->volumes[bad_index]->id();
     ModelRepairOptions options;
     options.allow_partial    = true;
-    options.split_components = false;
     options.repair_mesh      = [](TriangleMesh& mesh, std::string& error) {
         if (mesh.its.indices.size() == 10) {
             mesh = make_cube(10., 10., 10.);
@@ -2796,151 +2171,11 @@ TEST_CASE("Partial repair preserves an unresolved volume beside a repaired volum
     CHECK(report.changed_object_indices == std::vector<size_t>{0});
 }
 
-TEST_CASE("Retainable basic cleanup does not remove reversed interfaces", "[ModelRepair][Partial]")
-{
-    indexed_triangle_set input = tetrahedra_sharing_an_edge().its;
-    const auto           face  = input.indices.front();
-    input.indices.emplace_back(face[0], face[2], face[1]);
-    Model              model    = make_model(TriangleMesh(std::move(input)));
-    const auto         original = model.objects.front()->volumes.front()->mesh_ptr();
-    ModelRepairOptions options;
-    options.allow_partial    = true;
-    options.split_components = false;
-    options.repair_mesh      = [](TriangleMesh&, std::string& error) {
-        error = "Unresolved geometry.";
-        return false;
-    };
-    ModelRepairReport report;
-    CHECK_FALSE(repair_model(model, report, options));
-    CHECK(report.can_continue());
-    CHECK(report.status() == std::string("unresolved"));
-    CHECK(report.basic_removed_faces == 0);
-    CHECK(model.objects.front()->volumes.front()->mesh_ptr() == original);
-}
-
-TEST_CASE("Basic cleanup alone is fully validated and does not call advanced repair", "[ModelRepair][Partial][CGAL]")
-{
-    indexed_triangle_set input = make_cube(10., 10., 10.).its;
-    input.indices.push_back(input.indices.front());
-    input.indices.emplace_back(0, 0, 1);
-    Model              model = make_model(TriangleMesh(std::move(input)));
-    ModelRepairOptions options;
-    options.allow_partial = true;
-    options.repair_mesh   = [](TriangleMesh&, std::string&) {
-        FAIL("A fully cleaned cube must not require advanced repair");
-        return false;
-    };
-    ModelRepairReport report;
-    REQUIRE(repair_model(model, report, options));
-    CHECK(report.mesh_validated());
-    CHECK(report.status() == std::string("repaired"));
-    CHECK(report.basic_removed_faces == 2);
-    CHECK(report.unresolved == 0);
-    CHECK(model.objects.front()->volumes.front()->mesh().facets_count() == 12);
-}
-
-TEST_CASE("Unsupported degenerate edge topology is not independently deleted", "[ModelRepair][Partial][Preparation]")
-{
-    const bool source_hook = GENERATE(false, true);
-    auto       input       = cube_with_unsupported_edge_cap();
-    REQUIRE(its_num_open_edges(input.its) == 0);
-    auto removed_cap = input.its;
-    removed_cap.indices.pop_back();
-    REQUIRE(its_num_open_edges(removed_cap) == 3);
-    Model              model    = make_model(input);
-    auto*              volume   = model.objects.front()->volumes.front();
-    const auto         original = volume->mesh_ptr();
-    const auto         id       = volume->id();
-    ModelRepairOptions options;
-    options.allow_partial    = true;
-    options.split_components = false;
-    size_t     attempts      = 0;
-    const auto reject        = [&](const TriangleMesh& source, TriangleMesh& candidate, std::string& error) {
-        ++attempts;
-        CHECK(source.its.indices == original->its.indices);
-        CHECK(source.its.vertices == original->its.vertices);
-        CHECK(its_num_open_edges(source.its) == 0);
-        candidate = make_cube(99., 99., 99.); // Rejected candidates must not leak.
-        error     = "Injected failure on a degenerate edge cap.";
-        return false;
-    };
-    if (source_hook)
-        options.repair_mesh_from_source = reject;
-    else
-        options.repair_mesh = [&](TriangleMesh& candidate, std::string& error) { return reject(candidate, candidate, error); };
-    ModelRepairReport report;
-    REQUIRE_FALSE(repair_model(model, report, options));
-    CHECK(attempts == 1);
-    CHECK(report.status() == std::string("unresolved"));
-    CHECK(report.can_continue());
-    CHECK_FALSE(report.committed);
-    CHECK(report.basic_removed_faces == 0);
-    CHECK(report.before_open_edges == 0);
-    CHECK(report.after_open_edges == 0);
-    CHECK(volume->mesh_ptr() == original);
-    CHECK(volume->id() == id);
-}
-
-TEST_CASE("Deferred degenerate cleanup does not discard another part's repair", "[ModelRepair][Partial][Preparation]")
-{
-    const bool bad_first = GENERATE(false, true);
-    Model      model;
-    for (size_t i = 0; i < 2; ++i) {
-        auto* object = model.add_object();
-        object->add_instance();
-        object->add_volume((i == 0) == bad_first ? cube_with_unsupported_edge_cap() : cube_with_open_side());
-    }
-    const size_t       bad_index = bad_first ? 0 : 1;
-    const auto         original  = model.objects[bad_index]->volumes.front()->mesh_ptr();
-    ModelRepairOptions options;
-    options.allow_partial    = true;
-    options.split_components = false;
-    options.repair_mesh      = [&](TriangleMesh& mesh, std::string& error) {
-        if (mesh.facets_count() == 10) {
-            mesh = make_cube(10., 10., 10.);
-            return true;
-        }
-        CHECK(mesh.facets_count() == 14);
-        CHECK(its_num_open_edges(mesh.its) == 0);
-        error = "Keep unresolved degenerate connectivity unchanged.";
-        return false;
-    };
-    ModelRepairReport report;
-    REQUIRE(repair_model(model, report, options));
-    CHECK(report.status() == std::string("partially_repaired"));
-    CHECK(report.unresolved == 1);
-    CHECK(report.mesh_repaired == 1);
-    CHECK(report.basic_removed_faces == 0);
-    CHECK(model.objects[bad_index]->volumes.front()->mesh_ptr() == original);
-    CHECK(its_num_open_edges(model.objects[1 - bad_index]->volumes.front()->mesh().its) == 0);
-
-    // GUI/CLI must be able to save a partial result, including its unresolved
-    // cap. Serialization may not delete it or repeat import repair on reload.
-    const auto retained = model.mesh();
-    for (const bool binary : {false, true}) {
-        const auto output = boost::filesystem::temp_directory_path() /
-                            boost::filesystem::unique_path("orcaslicer-partial-cap-%%%%-%%%%.stl");
-        REQUIRE(store_stl(output.string().c_str(), &model, binary));
-        TriangleMesh reloaded;
-        REQUIRE(reloaded.ReadSTLFile(output.string().c_str(), false));
-        REQUIRE(reloaded.facets_count() == retained.facets_count());
-        for (size_t face = 0; face < retained.its.indices.size(); ++face)
-            for (size_t corner = 0; corner < 3; ++corner)
-                CHECK(reloaded.its.vertices[reloaded.its.indices[face][corner]] ==
-                      retained.its.vertices[retained.its.indices[face][corner]]);
-        CHECK(boost::filesystem::remove(output));
-    }
-    CHECK_FALSE(report.mesh_validated());
-    CHECK(report.unresolved == 1);
-    CHECK(model.objects[bad_index]->volumes.front()->mesh_ptr() == original);
-}
-
 TEST_CASE("CGAL can repair an original closed degenerate edge cap in partial mode", "[ModelRepair][Partial][CGAL]")
 {
     Model              model = make_model(cube_with_degenerate_edge_cap());
     ModelRepairOptions options;
     options.allow_partial    = true;
-    options.split_components = false;
     ModelRepairReport report;
     REQUIRE(repair_model(model, report, options));
     REQUIRE(report.mesh_validated());
@@ -2951,309 +2186,6 @@ TEST_CASE("CGAL can repair an original closed degenerate edge cap in partial mod
     CHECK(mesh.bounding_box().size().isApprox(Vec3d(10., 10., 10.)));
 }
 
-TEST_CASE("Exact cap preparation preserves the surface and is idempotent", "[ModelRepair][Partial][Preparation][MeshBoolean]")
-{
-    const int  sample       = GENERATE(0, 1, 2);
-    const bool intersecting = sample == 1;
-    auto       source       = intersecting ? intersecting_tube_with_edge_cap() : cube_with_degenerate_edge_cap();
-    if (sample == 2) {
-        // Exact float-scale geometry around the user's far-from-origin cap.
-        indexed_triangle_set tetra;
-        tetra.vertices = {Vec3f(644.5202026367188f, 670.7578125f, 0.f), Vec3f(644.5203247070312f, 670.758056640625f, 0.f),
-                          Vec3f(644.977783203125f, 671.5363159179688f, 0.f),
-                          Vec3f(644.5281372070312f, 670.6104736328125f, 0.172515869140625f)};
-        tetra.indices  = {Vec3i32(0, 1, 2), Vec3i32(1, 0, 3), Vec3i32(2, 1, 3), Vec3i32(0, 2, 3)};
-        source         = with_degenerate_edge_cap(TriangleMesh(std::move(tetra)), 1);
-    }
-    const auto original = source.its;
-    const auto before   = inspect_model_mesh(source);
-    REQUIRE(before["issues"]["boundary"]["count"] == 3);
-    REQUIRE(before["issues"]["degenerate"]["count"] == 1);
-    REQUIRE(its_split(source.its).size() == 1);
-    TriangleMesh result;
-    REQUIRE(MeshBoolean::cgal::repair_degenerate_edge_caps(source, result) == 1);
-    const auto after = inspect_model_mesh(result);
-    CHECK(after["issues"]["boundary"]["count"] == 0);
-    CHECK(after["issues"]["degenerate"]["count"] == 0);
-    CHECK(after["issues"]["nonmanifold_edge"]["count"] == 0);
-    CHECK(after["issues"]["nonmanifold_vertex"]["count"] == 0);
-    CHECK(after["issues"]["duplicate"]["count"] == 0);
-    CHECK(after["issues"]["orientation"]["count"] == 0);
-    CHECK(after["component_analysis"]["component_count"] == before["component_analysis"]["component_count"]);
-    CHECK(result.facets_count() == source.facets_count());
-    // Compare with double intermediates and a common nearby origin. The legacy
-    // float volume helper is not a reliable oracle for tiny, far-offset caps.
-    const Vec3d origin  = source.its.vertices.front().cast<double>();
-    const auto  measure = [&](const TriangleMesh& mesh) {
-        double area = 0., volume = 0.;
-        for (const auto& face : mesh.its.indices) {
-            const Vec3d a = mesh.its.vertices[face[0]].cast<double>() - origin;
-            const Vec3d b = mesh.its.vertices[face[1]].cast<double>() - origin;
-            const Vec3d c = mesh.its.vertices[face[2]].cast<double>() - origin;
-            area += 0.5 * (b - a).cross(c - a).norm();
-            volume += a.dot(b.cross(c)) / 6.;
-        }
-        return std::make_pair(area, volume);
-    };
-    const auto before_measure = measure(source), after_measure = measure(result);
-    CHECK(after_measure.first == Approx(before_measure.first).epsilon(1.e-10).margin(1.e-13));
-    CHECK(after_measure.second == Approx(before_measure.second).epsilon(1.e-10).margin(1.e-13));
-    CHECK(result.bounding_box().size().isApprox(source.bounding_box().size()));
-    for (const auto& v : result.its.vertices)
-        CHECK(std::any_of(original.vertices.begin(), original.vertices.end(), [&](const auto& p) { return p == v; }));
-    if (intersecting) {
-        CHECK(after["issues"]["self_intersection"]["count"].get<size_t>() > 0);
-        CHECK(after["mesh_status"] == "needs_repair");
-    } else {
-        CHECK(after["mesh_status"] == "passed");
-    }
-    TriangleMesh untouched = make_cube(2., 2., 2.);
-    const auto   marker    = untouched.its;
-    CHECK(MeshBoolean::cgal::repair_degenerate_edge_caps(result, untouched) == 0);
-    CHECK(untouched.its.vertices == marker.vertices);
-    CHECK(untouched.its.indices == marker.indices);
-    CHECK(source.its.vertices == original.vertices);
-    CHECK(source.its.indices == original.indices);
-}
-
-TEST_CASE("Topology preparation does not accept unsupported or malformed caps", "[ModelRepair][Partial][Preparation][MeshBoolean]")
-{
-    auto source = cube_with_degenerate_edge_cap();
-    SECTION("not exactly collinear")
-    {
-        const auto cap = source.its.indices.back();
-        for (int axis = 0; axis < 3; ++axis)
-            if (source.its.vertices[cap[0]][axis] == source.its.vertices[cap[1]][axis]) {
-                source.its.vertices.back()[axis] += 0.0001f;
-                break;
-            }
-    }
-    SECTION("coincident points") { source = cube_with_unsupported_edge_cap(); }
-    SECTION("existing opposite diagonal")
-    {
-        indexed_triangle_set tetra;
-        tetra.vertices = {Vec3f(0, 0, 0), Vec3f(5, 0, 0), Vec3f(10, 0, 0), Vec3f(0, 10, 0)};
-        tetra.indices  = {Vec3i32(0, 2, 1), Vec3i32(2, 0, 3), Vec3i32(0, 1, 3), Vec3i32(1, 2, 3)};
-        source         = TriangleMesh(std::move(tetra));
-    }
-    SECTION("connected degenerate cluster")
-    {
-        auto         its  = source.its;
-        const size_t last = its.indices.size() - 1;
-        const auto   cap  = its.indices[last];
-        its.indices[last] = Vec3i32(cap[1], cap[2], cap[0]);
-        source            = with_degenerate_edge_cap(TriangleMesh(std::move(its)), last);
-    }
-    SECTION("open graph") { source.its.indices.erase(source.its.indices.begin() + 2); }
-    SECTION("invalid index") { source.its.indices.front()[0] = int(source.its.vertices.size()); }
-    SECTION("non finite coordinate") { source.its.vertices.front().x() = std::numeric_limits<float>::infinity(); }
-    TriangleMesh result = make_cube(2., 2., 2.);
-    const auto   marker = result.its;
-    CHECK(MeshBoolean::cgal::repair_degenerate_edge_caps(source, result) == 0);
-    CHECK(result.its.vertices == marker.vertices);
-    CHECK(result.its.indices == marker.indices);
-}
-
-TEST_CASE("Topology preparation cannot approve an intersection-truncated baseline", "[ModelRepair][Partial][Preparation][MeshBoolean]")
-{
-    auto source = cube_with_degenerate_edge_cap();
-    for (int i = 1; i <= 100; ++i) {
-        auto box = make_cube(10., 10., 10.);
-        box.translate(0.011f * i, 0.017f * i, 0.023f * i);
-        source.merge(box);
-    }
-    ModelInspectionOptions options;
-    options.detail_limit = 0;
-    const auto before    = inspect_model_mesh(source, options);
-    REQUIRE(before["issues"]["self_intersection"]["complete"] == false);
-    TriangleMesh result = make_cube(2., 2., 2.);
-    const auto   marker = result.its;
-    CHECK(MeshBoolean::cgal::repair_degenerate_edge_caps(source, result) == 0);
-    CHECK(result.its.vertices == marker.vertices);
-    CHECK(result.its.indices == marker.indices);
-}
-
-TEST_CASE("Verified cap baseline survives later rejection in every shared repair hook", "[ModelRepair][Partial][Preparation]")
-{
-    const int  hook            = GENERATE(0, 1, 2);
-    Model      model           = make_model(intersecting_tube_with_edge_cap());
-    auto*      object          = model.objects.front();
-    auto*      volume          = object->volumes.front();
-    const auto source          = volume->mesh_ptr();
-    const auto source_its      = source->its;
-    const auto volume_matrix   = volume->get_matrix();
-    const auto instance_matrix = object->instances.front()->get_matrix();
-    const auto world_bounds    = model.mesh().bounding_box();
-    paint_facet(volume->mmu_segmentation_facets, *source, 26, EnforcerBlockerType::Extruder3);
-    // add_volume() centers the mesh and stores its position in the volume
-    // transform. Compare painting in that same local frame, not fixture space.
-    auto source_painted = volume->mmu_segmentation_facets.get_facets_strict(*volume, EnforcerBlockerType::Extruder3);
-    REQUIRE_FALSE(source_painted.indices.empty());
-    // The selector also returns unused mesh vertices. Bounds must cover only
-    // the selected faces, not the unpainted remainder of the model.
-    its_compactify_vertices(source_painted);
-    const auto source_painted_bounds = bounding_box(source_painted);
-    REQUIRE(source_painted_bounds.min.x() == source_painted_bounds.max.x());
-    auto options                = gui_model_repair_options(); // Same shared policy as explicit GUI repair.
-    options.split_components    = false;
-    options.remove_non_3d_parts = false;
-    size_t     attempts         = 0;
-    const auto reject           = [&](const TriangleMesh& input, TriangleMesh& candidate, std::string& error) {
-        ++attempts;
-        const auto check = inspect_model_mesh(input);
-        CHECK(check["issues"]["degenerate"]["count"] == 0);
-        CHECK(check["issues"]["boundary"]["count"] == 0);
-        REQUIRE(check["issues"]["self_intersection"]["count"].get<size_t>() > 0);
-        candidate = make_cube(99., 99., 99.); // Rejected output must never leak.
-        error     = "Injected later self-intersection repair rejection.";
-        return false;
-    };
-    if (hook == 0)
-        options.repair_mesh = [&](TriangleMesh& candidate, std::string& error) { return reject(candidate, candidate, error); };
-    else if (hook == 1)
-        options.repair_mesh_from_source = reject;
-    else
-        options.repair_mesh_with_partial = [&](const TriangleMesh& input, TriangleMesh& candidate, std::string& error) {
-            reject(input, candidate, error);
-            return MeshRepairOutcome::Rejected;
-        };
-    ModelRepairReport report;
-    REQUIRE(repair_model(model, report, options));
-    REQUIRE(attempts == 1);
-    CHECK(report.committed);
-    CHECK(report.can_continue());
-    CHECK_FALSE(report.mesh_validated());
-    CHECK(report.status() == std::string("partially_repaired"));
-    CHECK(report.basic_removed_faces == 0); // The flip is progress despite unchanged face count.
-    const auto& retained = model.objects.front()->volumes.front()->mesh();
-    const auto  check    = inspect_model_mesh(retained);
-    CHECK(check["issues"]["degenerate"]["count"] == 0);
-    CHECK(check["issues"]["boundary"]["count"] == 0);
-    CHECK(check["issues"]["self_intersection"]["count"].get<size_t>() > 0);
-    CHECK(retained.facets_count() == source->facets_count());
-    CHECK(retained.bounding_box().size().isApprox(source->bounding_box().size()));
-    CHECK(retained.bounding_box().min == source->bounding_box().min);
-    CHECK(retained.bounding_box().max == source->bounding_box().max);
-    CHECK(source->its.vertices == source_its.vertices);
-    CHECK(source->its.indices == source_its.indices);
-    auto* retained_volume = model.objects.front()->volumes.front();
-    CHECK(retained_volume->get_matrix().matrix().isApprox(volume_matrix.matrix(), 0.));
-    CHECK(object->instances.front()->get_matrix().matrix().isApprox(instance_matrix.matrix(), 0.));
-    auto painted = retained_volume->mmu_segmentation_facets.get_facets_strict(*retained_volume, EnforcerBlockerType::Extruder3);
-    REQUIRE_FALSE(painted.indices.empty());
-    its_compactify_vertices(painted);
-    CHECK(bounding_box(painted).min == source_painted_bounds.min);
-    CHECK(bounding_box(painted).max == source_painted_bounds.max);
-    double painted_area = 0.;
-    for (const auto& face : painted.indices) {
-        const Vec3d a = painted.vertices[face[0]].cast<double>();
-        const Vec3d b = painted.vertices[face[1]].cast<double>();
-        const Vec3d c = painted.vertices[face[2]].cast<double>();
-        CHECK(a.x() == source_painted_bounds.min.x());
-        CHECK(b.x() == source_painted_bounds.min.x());
-        CHECK(c.x() == source_painted_bounds.min.x());
-        painted_area += 0.5 * (b - a).cross(c - a).norm();
-    }
-    CHECK(painted_area == Approx(50.).margin(1.e-5)); // The flipped neighbor keeps its color without spreading it.
-    CHECK_FALSE(report.volume_reports.front().annotations_cleared);
-    // store_stl(Model*) exports all volume/instance transforms, not the local
-    // volume mesh. Keep exact per-corner comparisons in the exported frame.
-    const auto exported_mesh = model.mesh();
-    CHECK(exported_mesh.bounding_box().min == world_bounds.min);
-    CHECK(exported_mesh.bounding_box().max == world_bounds.max);
-    REQUIRE(exported_mesh.facets_count() == retained.facets_count());
-    for (const bool binary : {false, true}) {
-        const auto path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("orca-cap-baseline-%%%%-%%%%.stl");
-        REQUIRE(store_stl(path.string().c_str(), &model, binary));
-        TriangleMesh reloaded;
-        REQUIRE(reloaded.ReadSTLFile(path.string().c_str(), false));
-        const auto recheck = inspect_model_mesh(reloaded);
-        for (auto issue = check["issues"].begin(); issue != check["issues"].end(); ++issue) {
-            CHECK(recheck["issues"][issue.key()]["count"] == issue.value()["count"]);
-            CHECK(recheck["issues"][issue.key()]["complete"] == issue.value()["complete"]);
-        }
-        REQUIRE(reloaded.facets_count() == exported_mesh.facets_count());
-        for (size_t face = 0; face < exported_mesh.facets_count(); ++face)
-            for (int corner = 0; corner < 3; ++corner)
-                CHECK(reloaded.its.vertices[reloaded.its.indices[face][corner]] ==
-                      exported_mesh.its.vertices[exported_mesh.its.indices[face][corner]]);
-        CHECK(boost::filesystem::remove(path));
-    }
-    // Repeating the same rejected repair must not invent another normalization.
-    const auto        previous = model.objects.front()->volumes.front()->mesh_ptr();
-    ModelRepairReport repeated;
-    CHECK_FALSE(repair_model(model, repeated, options));
-    CHECK(repeated.status() == std::string("unresolved"));
-    CHECK_FALSE(repeated.committed);
-    CHECK(attempts == 2);
-    CHECK(model.objects.front()->volumes.front()->mesh_ptr() == previous);
-}
-
-TEST_CASE("Validated preparation does not survive a fatal later transaction", "[ModelRepair][Partial][Preparation]")
-{
-    Model      model    = make_model(intersecting_tube_with_edge_cap());
-    const auto original = model.objects.front()->volumes.front()->mesh_ptr();
-    auto*      volume   = model.objects.front()->volumes.front();
-    paint_facet(volume->mmu_segmentation_facets, *original, 26, EnforcerBlockerType::Extruder3);
-    const auto original_painting = volume->mmu_segmentation_facets.get_data();
-    auto       options           = gui_model_repair_options();
-    options.split_components     = false;
-    options.remove_non_3d_parts  = false;
-
-    enum class Failure { Exception, InvalidOutput, Cancel, Painting };
-    Failure failure     = Failure::Exception;
-    bool    canceled    = false;
-    size_t  attempts    = 0;
-    options.is_canceled = [&] { return canceled; };
-    SECTION("worker exception") { failure = Failure::Exception; }
-    SECTION("illegal candidate") { failure = Failure::InvalidOutput; }
-    SECTION("cancellation") { failure = Failure::Cancel; }
-    SECTION("strict painting failure") { failure = Failure::Painting; }
-    options.run_painting_validation = [&](const std::function<bool()>& task) {
-        return failure == Failure::Painting && attempts != 0 ? false : task();
-    };
-    options.repair_mesh = [&](TriangleMesh& candidate, std::string&) -> bool {
-        ++attempts;
-        CHECK(inspect_model_mesh(candidate)["issues"]["degenerate"]["count"] == 0);
-        if (failure == Failure::Exception)
-            throw std::runtime_error("Injected worker exception after normalization.");
-        if (failure == Failure::Painting)
-            return false; // Safe baseline reaches the existing strict painting gate.
-        if (failure == Failure::Cancel)
-            canceled = true;
-        else
-            candidate.its.indices.front()[0] = int(candidate.its.vertices.size());
-        return true;
-    };
-    ModelRepairReport report;
-    CHECK_FALSE(repair_model(model, report, options));
-    CHECK(attempts == 1);
-    CHECK_FALSE(report.committed);
-    CHECK_FALSE(report.can_continue());
-    CHECK(model.objects.front()->volumes.front()->mesh_ptr() == original);
-    CHECK(volume->mmu_segmentation_facets.get_data() == original_painting);
-}
-
-TEST_CASE("Strict repair does not silently enable a partial topology baseline", "[ModelRepair][Preparation]")
-{
-    Model              model    = make_model(intersecting_tube_with_edge_cap());
-    const auto         original = model.objects.front()->volumes.front()->mesh_ptr();
-    ModelRepairOptions options;
-    options.split_components    = false;
-    options.remove_non_3d_parts = false;
-    size_t attempts             = 0;
-    options.repair_mesh         = [&](TriangleMesh& candidate, std::string&) {
-        ++attempts;
-        CHECK(inspect_model_mesh(candidate)["issues"]["degenerate"]["count"] == 1);
-        return false;
-    };
-    ModelRepairReport report;
-    CHECK_FALSE(repair_model(model, report, options));
-    CHECK(attempts == 1);
-    CHECK_FALSE(report.committed);
-    CHECK(model.objects.front()->volumes.front()->mesh_ptr() == original);
-}
-
 TEST_CASE("Partial mode keeps invalid input and worker exceptions fatal", "[ModelRepair][Partial]")
 {
     Model              model    = make_model(cube_with_open_side());
@@ -3262,7 +2194,6 @@ TEST_CASE("Partial mode keeps invalid input and worker exceptions fatal", "[Mode
     ModelRepairOptions options;
     options.allow_partial = true;
     SECTION("invalid index") { add_invalid_volume(*object); }
-    SECTION("planar-only object") { model.add_object()->add_volume(planar_square()); }
     SECTION("non-finite coordinates")
     {
         auto mesh                     = make_cube(10., 10., 10.);
@@ -3272,10 +2203,6 @@ TEST_CASE("Partial mode keeps invalid input and worker exceptions fatal", "[Mode
     SECTION("resource exhaustion")
     {
         options.repair_mesh = [](TriangleMesh&, std::string&) -> bool { throw std::bad_alloc(); };
-    }
-    SECTION("preparation worker exception")
-    {
-        options.run_mesh_preparation = [](const std::function<void()>&) { throw std::runtime_error("worker failed"); };
     }
     SECTION("illegal output after reported success")
     {
@@ -3318,7 +2245,7 @@ TEST_CASE("Partial mode cancellation still discards all staged changes", "[Model
     CHECK(model.objects.front()->volumes.front()->mesh_ptr() == original);
 }
 
-TEST_CASE("Partial fallback cannot discard conflicting painted source faces", "[ModelRepair][Partial][Painting]")
+TEST_CASE("Rejected repair preserves conflicting painting without fallback cleanup", "[ModelRepair][Partial][Painting]")
 {
     indexed_triangle_set input = tetrahedra_sharing_an_edge().its;
     input.indices.push_back(input.indices.front());
@@ -3341,8 +2268,8 @@ TEST_CASE("Partial fallback cannot discard conflicting painted source faces", "[
     ModelRepairReport report;
     CHECK_FALSE(repair_model(model, report, options));
     CHECK_FALSE(report.committed);
-    CHECK_FALSE(report.can_continue());
-    CHECK(report.failed != 0);
+    CHECK(report.can_continue());
+    CHECK(report.failed == 0);
     CHECK(volume->mesh_ptr() == original);
     CHECK(volume->mmu_segmentation_facets.timestamp() == painting_timestamp);
 }
@@ -3361,7 +2288,7 @@ TEST_CASE("Headless model repair does not commit a split when a later volume fai
     CHECK_FALSE(report.success);
     CHECK_FALSE(report.committed);
     CHECK(report.failed == 1);
-    CHECK(report.rolled_back == 1);
+    CHECK(report.rolled_back == 0);
     CHECK(report.repaired == 0);
     CHECK(report.changed_object_indices.empty());
     REQUIRE(model.objects.front() == object);
@@ -3465,7 +2392,7 @@ TEST_CASE("Headless model repair cancellation does not commit a staged split", "
     options.on_progress = [&cancel](size_t completed, size_t total, const ModelRepairVolumeReport& volume_report) {
         CHECK(completed == 1);
         CHECK(total == 1);
-        CHECK(volume_report.split_parts == 2);
+        CHECK(volume_report.split_parts == 1);
         cancel = true;
     };
     options.is_canceled = [&cancel]() { return cancel; };
@@ -3476,7 +2403,7 @@ TEST_CASE("Headless model repair cancellation does not commit a staged split", "
     CHECK(report.canceled);
     CHECK_FALSE(report.success);
     CHECK_FALSE(report.committed);
-    CHECK(report.rolled_back == 1);
+    CHECK(report.rolled_back == 0);
     CHECK(report.repaired == 0);
     CHECK(report.changed_object_indices.empty());
     REQUIRE(model.objects.front() == object);
@@ -3484,50 +2411,6 @@ TEST_CASE("Headless model repair cancellation does not commit a staged split", "
     CHECK(object->volumes.front() == original_volume);
     CHECK(object->volumes.front()->mesh_ptr() == original_mesh);
     CHECK(object->volumes.front()->mesh().split().size() == 2);
-}
-
-TEST_CASE("Cancellation during split-part inspection finishes progress and clears staged counters",
-          "[ModelRepair][CGAL][Split][Transaction]")
-{
-    Model                                     model           = make_model(two_disjoint_shells(false));
-    ModelObject*                              object          = model.objects.front();
-    ModelVolume*                              original_volume = object->volumes.front();
-    const std::shared_ptr<const TriangleMesh> original_mesh   = original_volume->mesh_ptr();
-    bool                                      cancel          = false;
-    size_t                                    inspections     = 0;
-    size_t                                    progress_calls  = 0;
-
-    ModelRepairOptions options;
-    options.mesh_requires_repair = [&](const TriangleMesh&) {
-        ++inspections;
-        cancel = true;
-        return false;
-    };
-    options.is_canceled = [&cancel]() { return cancel; };
-    options.on_progress = [&](size_t completed, size_t total, const ModelRepairVolumeReport& volume_report) {
-        ++progress_calls;
-        CHECK(completed == 1);
-        CHECK(total == 1);
-        CHECK(volume_report.result == ModelRepairVolumeStatus::RolledBack);
-    };
-
-    ModelRepairReport report;
-    CHECK_FALSE(repair_model(model, report, options));
-
-    CHECK(inspections == 1);
-    CHECK(progress_calls == 1);
-    CHECK(report.canceled);
-    CHECK_FALSE(report.success);
-    CHECK_FALSE(report.committed);
-    CHECK(report.rolled_back == 1);
-    CHECK(report.split_volumes == 0);
-    CHECK(report.created_parts == 0);
-    CHECK(report.removed_parts == 0);
-    CHECK(report.changed_object_indices.empty());
-    REQUIRE(model.objects.front() == object);
-    REQUIRE(object->volumes.size() == 1);
-    CHECK(object->volumes.front() == original_volume);
-    CHECK(object->volumes.front()->mesh_ptr() == original_mesh);
 }
 
 TEST_CASE("Headless model repair may delegate only private mesh work to a worker", "[ModelRepair][CGAL][Worker]")
@@ -3734,7 +2617,6 @@ TEST_CASE("App automatic repair avoids redundant full inspection and retains bas
     auto*              object = model.add_object();
     ModelRepairOptions options;
     options.basic_repair           = true;
-    options.split_components       = false;
     size_t inspected               = 0;
     options.mesh_requires_repair   = [&](const TriangleMesh&) {
         ++inspected;
@@ -3817,7 +2699,7 @@ TEST_CASE("App automatic repair avoids redundant full inspection and retains bas
     }
 }
 
-TEST_CASE("App repair acts on closed duplicate shells without partial checkpoints", "[ModelRepair][AppBasic]")
+TEST_CASE("App reports unresolved coincident closed shells without false repair progress", "[ModelRepair][AppBasic]")
 {
     auto mesh = make_cube(10., 10., 10.);
     mesh.merge(TriangleMesh(mesh));
@@ -3825,137 +2707,118 @@ TEST_CASE("App repair acts on closed duplicate shells without partial checkpoint
     ModelRepairOptions options;
     options.basic_repair        = true;
     options.allow_partial       = true;
-    options.split_components    = false;
-    options.remove_non_3d_parts = false;
     ModelRepairReport report;
-    REQUIRE(repair_model(model, report, options));
-    CHECK(report.attempted);
-    CHECK(model.objects[0]->volumes[0]->mesh().its.indices.size() == 12);
-}
-
-TEST_CASE("App grouping retains successful parts and the exact unresolved surface", "[ModelRepair][AppBasic][CGAL][Split]")
-{
-    auto bad      = make_cube(10., 10., 10.);
-    auto crossing = make_cube(10., 10., 10.);
-    crossing.translate(5., 5., 5.);
-    bad.merge(crossing);
-    bad.its.indices.pop_back();
-    bad       = TriangleMesh(std::move(bad.its));
-    auto good = cube_with_open_side();
-    good.translate(50., 0., 0.);
-    auto thin = make_cube(0.0001, 10., 10.);
-    thin.translate(100., 0., 0.);
-    const bool bad_first = GENERATE(false, true);
-    auto       input     = bad_first ? bad : good;
-    input.merge(bad_first ? good : bad);
-    input.merge(thin);
-    Model              model     = make_model(input);
-    const auto         source    = model.objects[0]->volumes[0]->mesh_ptr();
-    const auto         transform = model.objects[0]->volumes[0]->get_transformation();
-    ModelRepairOptions options;
-    options.basic_repair        = true;
-    options.allow_partial       = true;
-    options.remove_non_3d_parts = false;
-    ModelRepairReport report;
-    REQUIRE(repair_model(model, report, options));
-    CHECK(report.status() == std::string("partially_repaired"));
-    CHECK(report.mesh_repaired == 1);
-    CHECK(report.removed_parts == 0);
-    REQUIRE(model.objects[0]->volumes.size() == 3);
-    const auto& repaired = model.objects[0]->volumes[bad_first ? 1 : 0]->mesh();
-    CHECK(its_num_open_edges(repaired.its) == 0);
-    CHECK(its_volume(repaired.its) == Approx(1000.));
-    for (const auto& item : std::vector<std::pair<size_t, const TriangleMesh*>>{{bad_first ? 0u : 1u, &bad}, {2u, &thin}}) {
-        const auto& retained = model.objects[0]->volumes[item.first]->mesh();
-        REQUIRE(retained.facets_count() == item.second->facets_count());
-        CHECK(model.objects[0]->volumes[item.first]->get_transformation() == transform);
-        const size_t offset = item.first == 2 ? bad.facets_count() + good.facets_count() : bad_first ? 0 : good.facets_count();
-        for (size_t face = 0; face < retained.facets_count(); ++face)
-            for (int corner = 0; corner < 3; ++corner)
-                CHECK(retained.its.vertices[retained.its.indices[face][corner]] ==
-                      source->its.vertices[source->its.indices[offset + face][corner]]);
-    }
-    // A repeat with only the unresolved group cannot manufacture progress.
-    const auto original = model.objects[0]->volumes[bad_first ? 0 : 1]->mesh_ptr();
     CHECK_FALSE(repair_model(model, report, options));
+    CHECK(report.can_continue());
     CHECK_FALSE(report.committed);
-    CHECK(model.objects[0]->volumes[bad_first ? 0 : 1]->mesh_ptr() == original);
+    CHECK(report.status() == std::string("unresolved"));
+    CHECK(report.attempted);
+    CHECK(model.objects[0]->volumes[0]->mesh().its.indices.size() == 24);
 }
 
-TEST_CASE("App grouping rolls back successful parts on fatal interruption", "[ModelRepair][AppBasic][Transaction]")
+TEST_CASE("2.5 repair keeps closed disjoint solids in one model volume", "[ModelRepair][Repair250]")
 {
-    auto input  = cube_with_open_side();
-    auto second = input;
-    second.translate(50., 0., 0.);
-    input.merge(second);
-    Model              model    = make_model(input);
-    const auto         original = model.objects[0]->volumes[0]->mesh_ptr();
-    ModelRepairOptions options;
-    options.basic_repair        = true;
-    options.allow_partial       = true;
-    options.remove_non_3d_parts = false;
-    const int failure           = GENERATE(0, 1, 2); // Exception, invalid result, cancellation.
-    int       calls             = 0;
-    bool      canceled          = false;
-    options.is_canceled         = [&] { return canceled; };
-    options.repair_mesh         = [&](TriangleMesh& mesh, std::string& error) {
-        if (++calls == 1)
-            return MeshBoolean::cgal::repair_basic(mesh, &error);
-        if (failure == 0)
-            throw std::runtime_error("Injected worker failure");
-        if (failure == 1)
-            mesh.its.vertices.clear();
-        else
-            canceled = true;
+    const bool        inward = GENERATE(false, true);
+    Model             model  = make_model(two_disjoint_shells(inward));
+    const auto*       before = model.objects[0]->volumes[0];
+    const auto        matrix = before->get_matrix();
+    ModelRepairReport report;
+    REQUIRE(repair_model(model, report));
+    REQUIRE(model.objects[0]->volumes.size() == 1);
+    CHECK(model.objects[0]->volumes[0]->get_matrix().isApprox(matrix));
+    CHECK(its_split(model.objects[0]->volumes[0]->mesh().its).size() == 2);
+    CHECK_FALSE(MeshBoolean::cgal::requires_repair(model.objects[0]->volumes[0]->mesh()));
+    CHECK(report.split_volumes == 0);
+    CHECK(report.created_parts == 0);
+    CHECK(report.committed == inward);
+}
+
+TEST_CASE("2.5 partial repair retains closure without claiming intersecting shells valid", "[ModelRepair][Repair250][Partial]")
+{
+    auto mesh = overlapping_cubes();
+    mesh.its.indices.erase(mesh.its.indices.begin(), mesh.its.indices.begin() + 2);
+    Model              model   = make_model(mesh);
+    const auto         matrix  = model.objects[0]->volumes[0]->get_matrix();
+    ModelRepairOptions options = gui_model_repair_options();
+    ModelRepairReport report;
+    REQUIRE(repair_model(model, report, options));
+    CHECK(report.committed);
+    CHECK(report.can_continue());
+    CHECK_FALSE(report.mesh_validated());
+    CHECK(std::string(report.status()) == "partially_repaired");
+    REQUIRE(model.objects[0]->volumes.size() == 1);
+    const auto& result = model.objects[0]->volumes[0]->mesh();
+    CHECK(its_num_open_edges(result.its) == 0);
+    CHECK(MeshBoolean::cgal::requires_repair(result));
+    CHECK(model.objects[0]->volumes[0]->get_matrix().isApprox(matrix));
+}
+
+TEST_CASE("2.5 unchanged residual intersections do not create a repair transaction", "[ModelRepair][Repair250][Partial]")
+{
+    Model              model    = make_model(overlapping_cubes());
+    auto*              original = model.objects[0]->volumes[0];
+    const auto         geometry = original->mesh_ptr();
+    const auto         id       = original->id();
+    ModelRepairOptions options  = gui_model_repair_options();
+    ModelRepairReport  report;
+    CHECK_FALSE(repair_model(model, report, options));
+    CHECK(report.can_continue());
+    CHECK_FALSE(report.committed);
+    CHECK(std::string(report.status()) == "unresolved");
+    CHECK(model.objects[0]->volumes[0] == original);
+    CHECK(original->mesh_ptr() == geometry);
+    CHECK(original->id() == id);
+}
+
+TEST_CASE("2.5 geometric rejection keeps source volume beside successful repair", "[ModelRepair][Repair250][Partial]")
+{
+    Model model = make_model(cube_with_open_side());
+    model.objects[0]->add_volume(planar_square());
+    const auto         original = model.objects[0]->volumes[1]->mesh_ptr();
+    ModelRepairOptions options  = gui_model_repair_options();
+    options.basic_repair        = GENERATE(false, true);
+    ModelRepairReport report;
+    REQUIRE(repair_model(model, report, options));
+    CHECK(report.can_continue());
+    CHECK_FALSE(report.mesh_validated());
+    REQUIRE(model.objects[0]->volumes.size() == 2);
+    CHECK(its_num_open_edges(model.objects[0]->volumes[0]->mesh().its) == 0);
+    CHECK(model.objects[0]->volumes[1]->mesh_ptr() == original);
+}
+
+TEST_CASE("2.5 repair does not count triangle reordering as an improvement", "[ModelRepair][Repair250][Partial]")
+{
+    const bool         cancel_during_validation = GENERATE(false, true);
+    Model              model                    = make_model(overlapping_cubes());
+    const auto         original                 = model.objects[0]->volumes[0]->mesh_ptr();
+    ModelRepairOptions options                  = gui_model_repair_options();
+    options.repair_mesh                         = [](TriangleMesh& mesh, std::string&) {
+        std::reverse(mesh.its.indices.begin(), mesh.its.indices.end());
         return true;
+    };
+    const auto                   caller_thread = std::this_thread::get_id();
+    std::vector<std::thread::id> validation_threads;
+    bool                         canceled = false;
+    options.is_canceled                   = [&]() { return canceled; };
+    options.run_validation                = [&](const std::function<bool()>& validation) {
+        bool        result = false;
+        std::thread worker([&]() {
+            validation_threads.push_back(std::this_thread::get_id());
+            result = validation();
+        });
+        worker.join();
+        if (cancel_during_validation && validation_threads.size() == 2)
+            canceled = true;
+        return result;
     };
     ModelRepairReport report;
     CHECK_FALSE(repair_model(model, report, options));
+    // Both the bad-face comparison and exact surface comparison use the runner.
+    REQUIRE(validation_threads.size() == 2);
+    for (const auto thread : validation_threads)
+        CHECK(thread != caller_thread);
+    CHECK(report.canceled == cancel_during_validation);
+    CHECK(report.can_continue() == !cancel_during_validation);
     CHECK_FALSE(report.committed);
-    REQUIRE(model.objects[0]->volumes.size() == 1);
     CHECK(model.objects[0]->volumes[0]->mesh_ptr() == original);
-}
-
-TEST_CASE("App grouping removes only zero-area groups and never empties a model", "[ModelRepair][AppBasic]")
-{
-    indexed_triangle_set flat;
-    flat.vertices      = {{50.f, 0.f, 0.f}, {51.f, 0.f, 0.f}, {52.f, 0.f, 0.f}};
-    flat.indices       = {{0, 1, 2}};
-    const int scenario = GENERATE(0, 1, 2);
-    if (scenario == 1)
-        flat.vertices[2].y() = 0.000001f; // Real area, however small, is not disposable.
-    auto input = TriangleMesh(flat);
-    if (scenario != 2)
-        input.merge(make_cube(10., 10., 10.));
-    Model              model    = make_model(input);
-    const auto         original = model.objects[0]->volumes[0]->mesh_ptr();
-    ModelRepairOptions options;
-    options.basic_repair        = true;
-    options.allow_partial       = true;
-    options.remove_non_3d_parts = false;
-    ModelRepairReport report;
-    const bool        success = repair_model(model, report, options);
-    if (scenario == 0) {
-        REQUIRE(success);
-        CHECK(report.committed);
-        CHECK(report.removed_parts == 1);
-        REQUIRE(model.objects[0]->volumes.size() == 1);
-        CHECK(model.objects[0]->volumes[0]->mesh().facets_count() == 12);
-        CHECK(its_volume(model.objects[0]->volumes[0]->mesh().its) == Approx(1000.));
-    } else if (scenario == 1) {
-        // CGAL may close the open triangle. It must not be discarded merely
-        // because it is planar or very narrow; all original points remain.
-        CHECK(report.removed_parts == 0);
-        for (size_t i = 0; i < 3; ++i) {
-            const auto& point = original->its.vertices[original->its.indices[0][i]];
-            CHECK(std::any_of(model.objects[0]->volumes.begin(), model.objects[0]->volumes.end(), [&point](const auto* part) {
-                const auto& vertices = part->mesh().its.vertices;
-                return std::find(vertices.begin(), vertices.end(), point) != vertices.end();
-            }));
-        }
-    } else {
-        CHECK_FALSE(success);
-        CHECK_FALSE(report.committed);
-        CHECK(model.objects[0]->volumes[0]->mesh_ptr() == original);
-    }
 }

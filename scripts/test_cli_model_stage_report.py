@@ -415,7 +415,7 @@ def main():
     suite.run("basic-mixed-check", fixtures["mixed"], flags=("--model-inspection-mode", "basic"),
               verify=lambda r: expect_shape(r, status="defects_detected"))
     suite.run("basic-mixed-advanced", fixtures["mixed"], stage="advanced", flags=("--model-inspection-mode", "basic"),
-              verify=lambda r: expect_shape(r, status="defects_detected", repair="partially_repaired"))
+              verify=lambda r: expect_shape(r, status="passed", repair="repaired"))
     suite.run("basic-shifted-reference", cube, reference=fixtures["shifted"],
               flags=("--model-inspection-mode", "basic"))
     suite.run("invalid-inspection-mode", cube, flags=("--model-inspection-mode", "fastest"), success=False)

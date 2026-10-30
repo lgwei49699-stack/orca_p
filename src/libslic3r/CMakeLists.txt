@@ -305,7 +305,6 @@ set(lisbslic3r_sources
     MeshReconstruction.hpp
     ReconstructionProcess.cpp
     ReconstructionProcess.hpp
-    MeshRepairOutcome.hpp
     ModelInspection.hpp
     ModelPreparation.cpp
     ModelCheckWorkflow.cpp
@@ -527,6 +526,7 @@ add_library(libslic3r_cgal STATIC
     CutSurface.hpp CutSurface.cpp
     IntersectionPoints.hpp IntersectionPoints.cpp
     MeshBoolean.hpp MeshBoolean.cpp
+    MeshRepair.hpp MeshRepair.cpp
     MeshReconstruction.cpp
     ModelInspection.cpp
     TryCatchSignal.hpp TryCatchSignal.cpp
@@ -550,7 +550,8 @@ if (_opts)
     target_compile_options(libslic3r_cgal PRIVATE "${_opts_bad}")
 endif()
 
-target_link_libraries(libslic3r_cgal PRIVATE ${_cgal_tgt} eigen admesh libigl mcut boost_libs)
+target_link_libraries(libslic3r_cgal PRIVATE ${_cgal_tgt} eigen admesh libigl mcut boost_libs TBB::tbb)
+set_source_files_properties(MeshRepair.cpp PROPERTIES COMPILE_DEFINITIONS CGAL_LINKED_WITH_TBB)
 
 if (MSVC AND "${CMAKE_SIZEOF_VOID_P}" STREQUAL "4") # 32 bit MSVC workaround
     target_compile_definitions(libslic3r_cgal PRIVATE CGAL_DO_NOT_USE_MPZF)

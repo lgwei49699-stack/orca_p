@@ -1,8 +1,6 @@
 #ifndef libslic3r_ModelRepair_hpp_
 #define libslic3r_ModelRepair_hpp_
 
-#include "MeshRepairOutcome.hpp"
-
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -106,21 +104,13 @@ struct ModelRepairOptions
     // all MODEL_PART volumes belonging to that object.
     std::vector<ModelRepairTarget> targets;
 
-    // Keep independently safe basic cleanup, verified CGAL checkpoints within
-    // a part, and other successfully repaired parts on geometric rejection.
-    // Invalid data, inspection/worker exceptions, annotation failures and
-    // cancellation remain fatal.
-    // Deletion that opens connections is not retained. Isolated collinear caps
-    // may instead form an independently certified, surface-preserving topology
-    // baseline, retained on later geometric rejection but never exceptions. Callers
-    // must distinguish partial success from mesh_validated(); no improvement
-    // returns false but can_continue() may permit a separate slicing attempt.
-    // Explicitly enabled by GUI/CLI; the core's default remains transactional.
+    // Keep successful 2.5 repair results even when independent inspection still
+    // finds residual defects. Failed volumes retain their source. Invalid data,
+    // worker exceptions, lost painting and cancellation roll back the transaction.
+    // Strict callers require full validation; GUI/CLI explicitly allow partial.
     bool allow_partial = false;
 
-    // App: repair measured basic defects once, without full inspection,
-    // intermediate candidates or geometry-distance acceptance. Failed parts
-    // retain their original mesh when allow_partial is enabled.
+    // App uses the basic inspection scope; the repair algorithm is shared.
     bool basic_repair = false;
 
     // CGAL does not expose interruption inside a single repair call. These
@@ -154,23 +144,12 @@ struct ModelRepairOptions
     // worker before returning.
     std::function<bool(const TriangleMesh& source, TriangleMesh& result, std::string& error)> repair_mesh_from_source;
 
-    // Optional partial-aware source-to-result worker. Used only in partial
-    // mode, with precedence over the legacy bool hooks. Rejected outputs are
-    // ignored; partial outputs must pass the shared read-only progress gate.
-    // As with the legacy hooks, all workers must join before returning.
-    std::function<MeshRepairOutcome(const TriangleMesh& source, TriangleMesh& result, std::string& error)> repair_mesh_with_partial;
-
-    // Optional synchronous runner for the read-only SavedPainting coverage
-    // check. The supplied task only reads immutable painting snapshots and the
+    // Optional synchronous runner for read-only surface comparisons and painting
+    // coverage checks. The supplied task only reads mesh/painting snapshots and the
     // private staging volumes. GUI callers may execute it on a worker while the
     // main thread services progress and cancellation. The runner must not
     // retain the task and must join every worker before returning.
-    std::function<bool(const std::function<bool()>& task)> run_painting_validation;
-
-    // Optional synchronous worker for basic face filtering, certified topology
-    // preparation and read-only volume-cleanup / partial-candidate validation.
-    // Only private mesh copies are modified; never touches Model IDs/state.
-    std::function<void(const std::function<void()>& task)> run_mesh_preparation;
+    std::function<bool(const std::function<bool()>& task)> run_validation;
 
     // Permit topology-indexed annotations that cannot or should not be remapped
     // to be cleared. Geometry-only CLI repair enables this explicitly.
@@ -180,23 +159,6 @@ struct ModelRepairOptions
     // facets. Exterior-facet annotations are not supported by SavedPainting;
     // they still require allow_annotation_clearing when present.
     bool preserve_annotations = false;
-
-    // Split disconnected shells that can be proven spatially separate into
-    // individual volumes before repair. Nested, touching, or intersecting
-    // shells stay together so cavity orientation is not destroyed. Empty and
-    // small/degenerate parts may then be removed using the Orca 2.4.2 policy.
-    // Both operations participate in the same transaction.
-    // Partial mode may also separate independent groups while retaining all
-    // touching/nested patches within each group. That fallback preserves winding
-    // and transforms and only retains the split when actual repair/cleanup changes
-    // are accepted; grouping alone is not progress on an unresolved model.
-    bool split_components    = true;
-    // Legacy name; includes 2.4.2's source-local size/volume heuristics:
-    // min dimension or abs(volume) <= EPSILON, min/max dimension <= 1e-6,
-    // or abs(volume)/bbox volume <= 1e-6. No instance/volume scaling is applied.
-    // Disabling removal does not disable candidate validation or strict color
-    // protection. Removal must never empty an object or silently lose painting.
-    bool remove_non_3d_parts = true;
 };
 
 // Build the sparse, index-preserving private Model used by repair transactions.
@@ -205,8 +167,8 @@ struct ModelRepairOptions
 // exact same selection and validation rules.
 std::unique_ptr<Model> make_model_repair_staging_copy(const Model& model, const std::vector<ModelRepairTarget>& targets);
 
-// Repairs all selected MODEL_PART volumes. Splitting, non-3D cleanup and CGAL
-// repair are staged on a private model copy; by default, if any volume fails or
+// Repairs selected MODEL_PART volumes in place using the shared 2.5 core.
+// Geometry and painting are staged on a private model copy; by default, if any volume fails or
 // the user cancels, neither geometry nor volume structure is committed.
 // With allow_partial, geometric rejection is recorded without discarding safe
 // changes. A true return may therefore mean partially_repaired, not mesh-valid.

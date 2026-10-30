@@ -19960,3 +19960,15 @@ msgstr "模型检查模式"
 #: src/libslic3r/PrintConfig.cpp
 msgid "With --check-model, basic uses the native open-edge repair check; full keeps all diagnostics."
 msgstr "配合 --check-model 使用：basic 使用原生未连接边修复检查；full 保留全部诊断。"
+
+#: src/libslic3r/MeshRepair.cpp
+msgid "The mesh does not enclose any volume."
+msgstr "网格未围成任何实体。"
+
+#: src/libslic3r/MeshRepair.cpp
+msgid "Repair failed: empty or invalid mesh data."
+msgstr "修复失败：网格为空或包含无效数据。"
+
+#: src/libslic3r/ModelRepair.cpp
+msgid "Repair failed: candidate introduces duplicated or degenerate faces."
+msgstr "修复失败：候选模型新增了重复面或退化面，已保留原模型。"

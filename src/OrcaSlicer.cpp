@@ -4496,9 +4496,6 @@ int CLI::run(int argc, char **argv)
             repair_options.allow_partial             = true;
             repair_options.preserve_annotations      = preserve_model_colors;
             repair_options.allow_annotation_clearing = !preserve_model_colors;
-            // A strict color transaction must not discard a painted planar part
-            // during cleanup before the annotation coverage check can see it.
-            repair_options.remove_non_3d_parts        = !preserve_model_colors;
             const bool               repair_succeeded = repair_model(m_models[model_index], repair_info.cgal_report, repair_options);
             const ModelRepairReport& report           = repair_info.cgal_report;
             BOOST_LOG_TRIVIAL(info)

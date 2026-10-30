@@ -6,7 +6,6 @@
 #include <cstddef>
 
 #include <libslic3r/TriangleMesh.hpp>
-#include "MeshRepairOutcome.hpp"
 #include <Eigen/Geometry>
 
 namespace Slic3r {
@@ -79,31 +78,9 @@ TriangleMesh merge(std::vector<TriangleMesh> meshes);
 bool does_bound_a_volume(const CGALMesh &mesh);
 bool empty(const CGALMesh &mesh);
 
-// Repair a mesh using CGAL. Returns true on success. Optionally returns the
-// low-level repair counters and a human-readable error.
+// Strict adapter over the shared repair core. Residual defects reject the
+// candidate without replacing the source. Legacy ADMesh counters are optional.
 bool repair(TriangleMesh& mesh, RepairedMeshErrors* repaired_errors = nullptr, std::string* error = nullptr);
-
-// App-only single cleanup/orientation/hole-fill pass. No boolean union,
-// intermediate candidates or distance checks; failure leaves mesh unchanged.
-bool repair_basic(TriangleMesh& mesh, std::string* error = nullptr);
-
-// Explicit partial mode, shared by GUI and CLI. Geometric rejection may retain
-// a verified checkpoint; exceptions propagate and do not publish a checkpoint.
-// The strict repair() API above and its callers keep their existing semantics.
-MeshRepairOutcome repair_with_partial(TriangleMesh& mesh, std::string* error = nullptr);
-
-// Read-only validation of actual float geometry, including progress, unchanged
-// residual intersection pairs/boundaries and geometry-fidelity limits. False
-// means unproven/rejected, not necessarily a damaged mesh. Exceptions propagate.
-bool is_safe_partial_repair(const TriangleMesh& source, const TriangleMesh& candidate);
-
-// Independently retainable preparation for explicit partial repair. Only flip
-// isolated, exactly collinear edge caps in a closed manifold graph: the middle
-// vertex is strictly inside the opposite edge, so the two new triangles exactly
-// partition its nondegenerate neighbor with the original winding and positions.
-// Returns repaired cap count (NOT a net face-count reduction). Zero leaves
-// result untouched. Unsupported geometry is deferred; exceptions propagate.
-std::size_t repair_degenerate_edge_caps(const TriangleMesh& source, TriangleMesh& result);
 }
 
 namespace mcut {

@@ -391,11 +391,11 @@ def main():
         plane_baseline, _ = run("unsafe-plane-baseline", fixtures / "10-only-triangle.obj")
         check, _ = run("unsafe-plane", fixtures / "10-only-triangle.obj", "--repair-model", "cgal", success=False, include_evidence=True)
         assert Path(check["working_model"]).name == "prepared.obj"
-        assert check["repair_status"] == "failed"
+        assert check["repair_status"] == "unresolved"
         assert check["issues"] == plane_baseline["issues"]
-        assert check["boundary"]["sections"]["status"] == "not_run"
+        assert check["boundary"]["sections"]["status"] != "completed"
         assert check["boundary"]["reconstruction"]["assessment"] == "blocked"
-        assert check["boundary"]["reconstruction"]["failure_kind"] == "repair_failed"
+        assert check["boundary"]["reconstruction"]["failure_kind"] == "repair_evidence_incomplete"
         check, result = run("unresolved-no-progress", fixtures / "09-nonmanifold-edge.obj", "--repair-model", "cgal",
                             include_evidence=True)
         assert check["repair_status"] == "unresolved" and result["return_code"] == 0
@@ -446,13 +446,15 @@ def main():
         duplicate_bad = evidence / "duplicate-nonmanifold.obj"
         bad_text = (fixtures / "09-nonmanifold-edge.obj").read_text()
         first_face = next(line for line in bad_text.splitlines() if line.startswith("f "))
-        # Two tetrahedra share a non-manifold edge; remove one outer face so
-        # advanced repair retains a genuine open boundary, not a repairable
-        # healthy cube. Enabling this policy changes only the recommendation.
-        open_bad = evidence / "open-nonmanifold.obj"
-        open_lines = bad_text.splitlines()
-        open_lines.pop(max(index for index, line in enumerate(open_lines) if line.startswith("f ")))
-        open_bad.write_text("\n".join(open_lines) + "\n", encoding="utf-8")
+        # A vertical sheet has genuine open edges but cannot enclose a solid.
+        # Keep this policy test independent of fixable internal-partition defects.
+        open_bad = evidence / "residual-open-sheet.obj"
+        open_bad.write_text("v 0 0 0\nv 0 10 0\nv 0 10 10\nv 0 0 10\nf 1 2 3\nf 1 3 4\n", encoding="utf-8")
+        bracket, _ = run("internal-partition-repair", repo / "tests/data/model_repair_topology/bracket.stl",
+                         "--repair-model", "cgal")
+        assert bracket["repair_status"] == "repaired", bracket
+        assert bracket["mesh_status"] == "passed", bracket
+        assert triangle_count(Path(bracket["working_model"])) == 856
         open_default, _ = run("residual-open-default-policy", open_bad, "--repair-model", "cgal", include_evidence=True)
         assert open_default["repair_status"] in ("partially_repaired", "unresolved"), open_default
         assert open_default["issues"]["boundary"]["count"] > 0, open_default

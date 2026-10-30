@@ -296,6 +296,28 @@ TEST_CASE("Open solid reconstruction closes a missing side instead of making a t
     require_unchanged(source, saved);
 }
 
+TEST_CASE("Reconstruction preparation preserves the bore of an uncapped tube", "[MeshReconstruction][BoundaryClosure]")
+{
+    auto  source = square_tube();
+    auto& faces  = source.its.indices;
+    faces.erase(std::remove_if(faces.begin(), faces.end(),
+                               [&](const auto& f) {
+                                   const auto& v = source.its.vertices;
+                                   return v[f[0]].z() == v[f[1]].z() && v[f[1]].z() == v[f[2]].z();
+                               }),
+                faces.end());
+    const auto     original = source.its;
+    TriangleMesh   candidate;
+    nlohmann::json report;
+    REQUIRE(reconstruct_mesh(source, candidate, report));
+    INFO(report.dump());
+    CHECK(report["boundary_closure"]["status"] == "closed_input_ready");
+    CHECK(report["boundary_closure"]["closed_loops"] == 4);
+    CHECK(report["boundary_closure"]["validation"]["metrics"]["signed_volume"].get<double>() == Approx(12.));
+    CHECK(report["metrics"]["output_volume_mm3"].get<double>() < 15.);
+    require_unchanged(source, original);
+}
+
 TEST_CASE("Boundary closure leaves closed geometry on the existing wrap path", "[MeshReconstruction][BoundaryClosure]")
 {
     auto source = make_cube(2., 2., 2.);
@@ -316,6 +338,25 @@ TEST_CASE("Boundary closure leaves closed geometry on the existing wrap path", "
     CHECK(enabled["boundary_closure"]["status"] == "no_open_edges");
     CHECK_FALSE(enabled["metrics"]["open_surface_envelope_warning"].get<bool>());
     require_unchanged(a, b.its);
+}
+
+TEST_CASE("Boundary preparation closes nearby parts without welding their original surfaces", "[MeshReconstruction][BoundaryClosure]")
+{
+    auto source = make_cube(10., 10., 10.);
+    source.its.indices.erase(source.its.indices.begin(), source.its.indices.begin() + 2);
+    auto second = source;
+    second.translate(10.00002f, 0.f, 0.f);
+    source.merge(second);
+    const auto     original = source.its;
+    TriangleMesh   candidate;
+    nlohmann::json report;
+    REQUIRE(reconstruct_mesh(source, candidate, report));
+    INFO(report["boundary_closure"].dump());
+    CHECK(report["boundary_closure"]["status"] == "closed_input_ready");
+    CHECK(report["boundary_closure"]["closed_loops"] == 2);
+    CHECK(report["boundary_closure"]["added_faces"] == 4);
+    CHECK(report["boundary_closure"]["validation"]["metrics"]["component_count"] == 2);
+    require_unchanged(source, original);
 }
 
 TEST_CASE("Boundary closure refuses unsafe or over-budget patches without losing the source", "[MeshReconstruction][BoundaryClosure]")

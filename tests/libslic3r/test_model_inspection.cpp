@@ -450,20 +450,20 @@ TEST_CASE("Workflow separates opt-in completion from legacy repair outcomes", "[
         for (const char* key : {"requested_planes", "planes", "effective_regions", "axes"})
             CHECK(report.check["section_evidence"][key] == observed[key]);
     }
-    SECTION("Fatal advanced repair is blocked without section work")
+    SECTION("Rejected planar repair remains blocked by incomplete evidence")
     {
         options.input_file  = std::string(TEST_DATA_DIR) + "/model_repair_acceptance/10-only-triangle.obj";
         const auto original = inspection_file_bytes(options.input_file);
-        REQUIRE_THROWS_WITH(run_model_check_workflow(options, report), "Advanced repair failed; the prepared working model was retained.");
+        REQUIRE_THROWS_WITH(run_model_check_workflow(options, report), "Repair evidence did not complete; see the boundary details.");
         CHECK_FALSE(report.repair_no_progress);
-        CHECK(report.failure_kind == "repair_failed");
-        CHECK_FALSE(report.check.contains("section_evidence"));
+        CHECK(report.failure_kind == "repair_evidence_incomplete");
+        CHECK(report.check["section_evidence"]["status"] != "completed");
         const auto result = model_check_business_result(nlohmann::json::array({report.check}), -25, "Advanced repair failed");
         CHECK(result["model_checks"][0]["boundary"]["reconstruction"]["assessment"] == "blocked");
-        CHECK(result["model_checks"][0]["boundary"]["reconstruction"]["failure_kind"] == "repair_failed");
+        CHECK(result["model_checks"][0]["boundary"]["reconstruction"]["failure_kind"] == "repair_evidence_incomplete");
         CHECK(inspection_file_bytes(options.input_file) == original);
     }
-    SECTION("App stage report retains unresolved open mesh without reconstruction diagnostics")
+    SECTION("App stage report retains a closed repair within the basic inspection scope without reconstruction diagnostics")
     {
         auto mesh = load_model("model_repair_acceptance/08-intersecting-shells.obj");
         mesh.its.indices.erase(mesh.its.indices.begin());
@@ -475,8 +475,8 @@ TEST_CASE("Workflow separates opt-in completion from legacy repair outcomes", "[
         options.repair_evidence = false;
         run_model_check_workflow(options, report);
         CHECK(report.check["operation_status"] == "completed");
-        CHECK(report.check["advanced_repair"]["status"] == "unresolved");
-        CHECK(report.check["mesh_status"] == "needs_repair");
+        CHECK(report.check["advanced_repair"]["status"] == "repaired");
+        CHECK(report.check["mesh_status"] == "passed");
         CHECK_FALSE(report.check.contains("section_evidence"));
         CHECK_FALSE(report.check.contains("repair_evidence"));
         CHECK(boost::filesystem::exists(report.check["working_model"].get<std::string>()));

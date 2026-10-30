@@ -360,7 +360,6 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
             repair_options.basic_repair              = options.inspection_mode == "basic";
             repair_options.preserve_annotations      = !options.ignore_materials;
             repair_options.allow_annotation_clearing = options.ignore_materials;
-            repair_options.remove_non_3d_parts       = options.ignore_materials && !repair_options.basic_repair;
             const bool ok                            = repair_model(working, report.repair, repair_options);
             if (options.repair_evidence)
                 report.check["repair_evidence"] = model_repair_boundary(report.repair);

@@ -30,6 +30,7 @@ add_executable(${_TEST_NAME}_tests
 	test_mutable_priority_queue.cpp
 	test_stl.cpp
 	test_meshboolean.cpp
+	test_mesh_repair.cpp
 	test_model.cpp
 	test_model_repair.cpp
 	test_model_repair_evidence.cpp

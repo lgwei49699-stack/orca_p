@@ -147,7 +147,10 @@ def main():
                     assert repairs and all(r["load_succeeded"] and r["repair_attempted"] and not r["success"]
                                            and not r["committed"] for r in repairs), \
                         "Single-triangle fixture must fail in mesh repair, not just import/export"
-                    assert all(not r["can_continue"] for r in repairs), report
+                    # A geometrically unrepairable volume is retained as unresolved;
+                    # the export command still rejects it without a usable artifact.
+                    assert all(r["status"] == "unresolved" and r["can_continue"]
+                               and not r["mesh_validated"] for r in repairs), report
                 if source.stem in ("08-intersecting-shells", "09-nonmanifold-edge"):
                     repairs = report["model_repairs"]
                     assert repairs and all(r["status"] == "unresolved" and r["can_continue"]
@@ -205,6 +208,15 @@ def main():
                 run(name + "-slice", source, ["--load-settings", args.load_settings, "--load-filaments", args.load_filaments,
                                              "--arrange", "1", "--slice", "0"], True, slice_job=True)
 
+    if args.load_settings:
+        # Zero is a supported automatic width, not a zero-width color region.
+        # Exercise both the nozzle default and the object's width fallback.
+        for label, width in (("nozzle", "0"), ("object", "110%")):
+            run("colored-auto-width-" + label, fixtures / "11-colored-missing-top.obj",
+                ["--load-settings", args.load_settings, "--load-filaments", args.load_filaments,
+                 "--outer-wall-line-width", "0", "--line-width", width, "--arrange", "1", "--slice", "0"],
+                True, slice_job=True)
+
     # Evidence must not change the repair engine result or exported geometry.
     for stem, success in (("01-missing-top", True), ("09-nonmanifold-edge", False)):
         source = fixtures / (stem + ".obj")
@@ -253,7 +265,9 @@ def main():
         try:
             repair = partial["model_repairs"][0]
             assert repair["status"] == "partially_repaired", repair
-            assert repair["repair_actions"]["basic_removed_faces"] == 1, repair
+            # The 2.5 core owns cleanup; the retired outer preparation counter
+            # remains zero for response compatibility. Check the actual result.
+            assert repair["repair_actions"]["basic_removed_faces"] == 0, repair
             assert repair["before"]["facets"] == 9 and repair["after"]["facets"] == 8, repair
             exported = next(p for p in outputs if p.suffix.lower() == ".obj")
             # Partial output is deliberately NOT a fully repaired roundtrip.

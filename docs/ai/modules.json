@@ -362,7 +362,8 @@
         "src/libslic3r/MeshBoolean.hpp",
         "src/libslic3r/MeshReconstruction.cpp",
         "src/libslic3r/MeshReconstruction.hpp",
-        "src/libslic3r/MeshRepairOutcome.hpp",
+        "src/libslic3r/MeshRepair.cpp",
+        "src/libslic3r/MeshRepair.hpp",
         "src/libslic3r/InProcessReconstructionControl.cpp",
         "src/libslic3r/InProcessReconstructionControl.hpp",
         "src/libslic3r/ModelCheckWorkflow.cpp",
@@ -405,6 +406,7 @@
       "tests": [
         "tests/libslic3r/test_model_repair.cpp",
         "tests/libslic3r/test_meshboolean.cpp",
+        "tests/libslic3r/test_mesh_repair.cpp",
         "tests/libslic3r/test_saved_painting.cpp",
         "tests/libslic3r/test_mesh_reconstruction.cpp",
         "tests/libslic3r/test_model_reconstruction.cpp",

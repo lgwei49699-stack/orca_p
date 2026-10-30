@@ -1,5 +1,6 @@
 #include "MeshReconstruction.hpp"
 #include "I18N.hpp"
+#include "MeshRepair.hpp"
 #include "ModelInspection.hpp"
 #include "TriangleMesh.hpp"
 #undef PI
@@ -14,7 +15,6 @@
 #include <CGAL/Polygon_mesh_processing/measure.h>
 #include <CGAL/Polygon_mesh_processing/orientation.h>
 #include <CGAL/Polygon_mesh_processing/self_intersections.h>
-#include <CGAL/Polygon_mesh_processing/triangulate_hole.h>
 #include <CGAL/Side_of_triangle_mesh.h>
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/alpha_wrap_3.h>
@@ -532,25 +532,11 @@ std::optional<Soup> prepare_closed_input(const Soup& source, const MeshReconstru
         // Preparation is still an input mesh. The smaller reconstructed-output
         // budget must not reject a dense input before wrapping has reduced it.
         const std::size_t face_limit = source.faces.size() + MAX_BOUNDARY_EDGES;
-        for (const auto border : borders) {
-            std::vector<Surface::Face_index> patch;
-            // Use the iterator overload supported by the pinned CGAL on all
-            // platforms; do not enter the unbounded cubic fallback search.
-            PMP::triangulate_hole(surface, border, std::back_inserter(patch),
-                                  CGAL::parameters::use_delaunay_triangulation(true).do_not_use_cubic_algorithm(true));
-            require(!patch.empty() && surface.number_of_faces() <= face_limit, "closure_patch_failed",
-                    L("An open boundary could not be closed within the patch budget."));
-        }
-        // Rebuild from the actual float representation before solid orientation.
-        // This rejects degenerate/duplicate/non-manifold caps and flat sheets.
-        auto closed = to_surface(read_soup(to_triangle_mesh(surface, face_limit), face_limit));
-        require(CGAL::is_closed(closed) && !PMP::does_self_intersect(closed), "closure_invalid",
-                L("The closed input did not form a valid non-intersecting solid."));
-        const double enclosed_volume = double(PMP::volume(closed));
-        require(std::isfinite(enclosed_volume) && std::abs(enclosed_volume) > 0, "closure_invalid",
-                L("The closed input did not form a valid non-intersecting solid."));
-        PMP::orient_to_bound_a_volume(closed);
-        const auto     mesh = to_triangle_mesh(closed, face_limit);
+        // Share only the annular patcher. Full repair may weld nearby parts or
+        // remove shells; boundary preparation must preserve the input surfaces.
+        auto mesh = to_triangle_mesh(surface, face_limit);
+        require(close_mesh_holes(mesh, face_limit), "closure_patch_failed",
+                L("An open boundary could not be closed within the patch budget."));
         nlohmann::json validation;
         if (!validate_reconstruction_mesh(mesh, validation, face_limit)) {
             report["validation"] = validation;

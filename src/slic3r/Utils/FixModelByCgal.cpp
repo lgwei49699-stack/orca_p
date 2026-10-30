@@ -2,6 +2,7 @@
 #include "ModelRepairPolicy.hpp"
 
 #include "libslic3r/MeshBoolean.hpp"
+#include "libslic3r/MeshRepair.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Thread.hpp"
 #include "slic3r/GUI/GUI.hpp"
@@ -35,7 +36,7 @@ private:
 };
 
 template<class Worker>
-bool run_cgal_worker(Worker&& worker_task, GUI::ProgressDialog& progress_dialog, const wxString& message, bool& cancel_requested)
+bool run_cgal_worker(Worker&& worker_task, GUI::ProgressDialog& progress_dialog, const wxString& message, std::atomic_bool& cancel_requested)
 {
     std::mutex              mutex;
     std::condition_variable condition;
@@ -66,8 +67,8 @@ bool run_cgal_worker(Worker&& worker_task, GUI::ProgressDialog& progress_dialog,
                 break;
         }
 
-        // CGAL does not expose interruption inside one inspection or repair
-        // call. Keep the dialog responsive and roll back after the worker joins.
+        // The repair kernel checks cancellation between stages. Individual
+        // CGAL calls and full inspection still finish before the worker joins.
         if (!progress_dialog.Pulse(message))
             cancel_requested = true;
     }
@@ -81,7 +82,7 @@ bool run_cgal_worker(Worker&& worker_task, GUI::ProgressDialog& progress_dialog,
 bool inspect_mesh_on_worker(const TriangleMesh&  source,
                             GUI::ProgressDialog& progress_dialog,
                             const wxString&      message,
-                            bool&                cancel_requested)
+                            std::atomic_bool&    cancel_requested)
 {
     return run_cgal_worker([&source]() { return MeshBoolean::cgal::requires_repair(source); }, progress_dialog, message, cancel_requested);
 }
@@ -91,13 +92,23 @@ bool repair_mesh_on_worker(const TriangleMesh&  source,
                            std::string&         error,
                            GUI::ProgressDialog& progress_dialog,
                            const wxString&      message,
-                           bool&                cancel_requested)
+                           std::atomic_bool&    cancel_requested)
 {
+    struct Canceled
+    {};
     std::string worker_error;
     const bool  success = run_cgal_worker(
         [&]() {
             TriangleMesh working_mesh = source;
-            const bool   repaired_ok  = MeshBoolean::cgal::repair(working_mesh, nullptr, &worker_error);
+            bool         repaired_ok  = false;
+            try {
+                repaired_ok = Slic3r::repair_mesh(working_mesh, nullptr, &worker_error, [&](int) {
+                    if (cancel_requested.load())
+                        throw Canceled{};
+                });
+            } catch (const Canceled&) {
+                return false; // ModelRepair observes the flag and rolls back the transaction.
+            }
             if (repaired_ok)
                 repaired = std::move(working_mesh);
             return repaired_ok;
@@ -130,40 +141,19 @@ bool stage_owned_model_repair_by_cgal_gui(std::shared_ptr<Model>                
     // ObjectBase IDs and timestamps are deliberately main-thread-only. The
     // model transaction remains here; full inspection plus the private
     // TriangleMesh copy and CGAL repair run on workers.
-    bool              cancel_requested = false;
+    std::atomic_bool  cancel_requested{false};
     ModelRepairReport report;
 
     options.targets              = targets;
-    options.is_canceled          = [&cancel_requested]() { return cancel_requested; };
+    options.is_canceled          = [&cancel_requested]() { return cancel_requested.load(); };
     options.mesh_requires_repair = [&](const TriangleMesh& source) {
         return inspect_mesh_on_worker(source, progress_dialog, message_header, cancel_requested);
     };
     options.repair_mesh_from_source = [&](const TriangleMesh& source, TriangleMesh& repaired, std::string& error) {
         return repair_mesh_on_worker(source, repaired, error, progress_dialog, message_header, cancel_requested);
     };
-    options.repair_mesh_with_partial = [&](const TriangleMesh& source, TriangleMesh& repaired, std::string& error) {
-        MeshRepairOutcome outcome = MeshRepairOutcome::Rejected;
-        run_cgal_worker(
-            [&]() {
-                TriangleMesh candidate = source;
-                outcome                = MeshBoolean::cgal::repair_with_partial(candidate, &error);
-                if (outcome != MeshRepairOutcome::Rejected)
-                    repaired = std::move(candidate);
-                return outcome != MeshRepairOutcome::Rejected;
-            },
-            progress_dialog, message_header, cancel_requested);
-        return outcome;
-    };
-    options.run_painting_validation = [&](const std::function<bool()>& validation) {
+    options.run_validation = [&](const std::function<bool()>& validation) {
         return run_cgal_worker(validation, progress_dialog, message_header, cancel_requested);
-    };
-    options.run_mesh_preparation = [&](const std::function<void()>& preparation) {
-        run_cgal_worker(
-            [&]() {
-                preparation();
-                return true;
-            },
-            progress_dialog, message_header, cancel_requested);
     };
     options.on_progress = [&](size_t completed, size_t total, const ModelRepairVolumeReport& volume_report) {
         const int         percent = total == 0 ? 100 : std::min(static_cast<int>((completed * 100) / total), 99);

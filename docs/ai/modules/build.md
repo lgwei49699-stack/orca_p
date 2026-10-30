@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:39be1256729d71c95a92578b1b4584fb758325f24366cf2d9510103692e8fdb0",
-  "reason": "在linux/release2_3_2合入69fe8a45bc：仅移除退休的报告专用SliceAnalysisGeometry源表项；保留发布分支工具链绑定缓存、3G ccache、source_ref、并发控制、180分钟预算、无PCH及MeshLib静态ZLIB/运行库闭包/包内回归。构建脚本与合并前HEAD相同，不移除CGAL/GMP/MeshLib；指纹按最终合并源码重算，当前检查与未重新打包边界见实施记录。 现有 GUI 源清单登记 GFDCloudPreset.hpp，无新目标/依赖/开关；回归仍编入 libslic3r_tests，master 的独立缓存重新构建，记录见 EPONE 云导入文档。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。 2026-10-27复核：既有Linux包内验证复用固定位置夹具补跑局部计划/真实FIFO/精简3MF回归并归档证据；不更改编译选项、缓存、版本或切片算法。"
+  "source_fingerprint": "sha256:8ea15c6e3c2ded3e628f0ffd63869c15a30e0072f09f321f508dad35605ab1ce",
+  "reason": "在linux/release2_3_2合入69fe8a45bc：仅移除退休的报告专用SliceAnalysisGeometry源表项；保留发布分支工具链绑定缓存、3G ccache、source_ref、并发控制、180分钟预算、无PCH及MeshLib静态ZLIB/运行库闭包/包内回归。构建脚本与合并前HEAD相同，不移除CGAL/GMP/MeshLib；指纹按最终合并源码重算，当前检查与未重新打包边界见实施记录。 现有 GUI 源清单登记 GFDCloudPreset.hpp，无新目标/依赖/开关；回归仍编入 libslic3r_tests，master 的独立缓存重新构建，记录见 EPONE 云导入文档。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。 2026-10-27复核：既有Linux包内验证复用固定位置夹具补跑局部计划/真实FIFO/精简3MF回归并归档证据；不更改编译选项、缓存、版本或切片算法。 原工作区历史审核说明（保留原记录时点，不作为当前状态）：2026-10-26 按用户要求撤去 master 已提交的云工艺修复重复副本；Plater/GUI源表/EPONE测试恢复本分支HEAD，相关云头文件及归属移除。核对本模块共享依赖，除云导入退回该分支原实现外，无新的分盘、切片、预设默认值或界面入口变化；本轮验证见模型特征工作进展。 2026-10-30特征分支快进合入发布6fe1189e9，当前行为以合入源码及发布说明为准；本地历史文档、调试脚本仍未提交。 2026-10-30新增MeshRepair.cpp/hpp到libslic3r_cgal及上游核心测试，移除旧Outcome头；仅新核心启用CGAL_LINKED_WITH_TBB并链接现有TBB，CGAL5.6.3和第三方快照不变。macOS arm64应用/测试编译通过，Linux/Windows尚未验。"
 }
 -->
 
@@ -100,6 +100,8 @@ Apple ld 的重复库告警通过链接器探测后才关闭，不重排或删�
 编译成功、链接成功、打包成功和目标系统可运行分开记录；警告不能冒充构建失败，旧二进制也不能证明新源码通过。用户已有新构建时复用；缺少当前验证所需产物时由 AI 补齐必要目标，详见[验证规范](../validation.md)。
 
 Windows GFD 设备选择的循环辅助实现注册在 `src/slic3r/CMakeLists.txt`，仍编入现有 GUI 库。`SLIC3R_GUI_TESTS=ON` 额外注册独立 `gfd_modal_dialog_tests`，仅编译辅助实现并链接 wx core/base；不为测试链接整套切片／云端业务。该开关默认关闭，运行需交互桌面。`.gitattributes` 仅为本次两个 Windows 诊断 CMD 固定 `eol=crlf`，保证同步代码后的启动器换行格式，不改变其他文件的检出规则。
+
+2.5修复核心移植保留CGAL5.6.3；`MeshRepair.cpp`加入libslic3r_cgal并单独启用CGAL_LINKED_WITH_TBB，链接现有TBB::tbb。其余布尔/重建编译宏不变，未升级第三方快照。当前平台构建及跨平台待验证范围见[对齐记录](../validation/2026-10-30-thingi-repair-242-comparison.md)。
 
 ## 修改与验证
 

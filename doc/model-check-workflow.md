@@ -1,5 +1,7 @@
 # STL / OBJ 检测与修复流程
 
+> 2026-10-30 当前实现：GUI/CLI 高级修复共用固定2.5.0 Beta的 `MeshRepair` 核心，保留CGAL5.6.3。下文旧2.4.2拆分、小件删除、repair_with_partial、MeshRepairOutcome及准备候选记录为历史，相关接口已删除；当前入口、部分结果准入和验证边界以[模块正文](../docs/ai/modules/model-repair.md)和[移植记录](../docs/ai/validation/2026-10-30-thingi-repair-242-comparison.md)为准。MeshLib重建、阶段报告及App最小交付协议未因本次核心移植改写。
+
 2026-10-16 当前证据协议 v2：组合 `--check-model --repair-model cgal --repair-evidence` 复用相交对分类，补充有界单侧共面邻接证明和失败原因归因。高级正常结束后，明确的表面穿透，或明确允许封口时的残留开放边，可直接给出重建建议并跳过截面预检；其余保留一次有界 Z 预检。只提供建议，不调用重建或采用候选。封口策略默认关闭，显式 `--repair-evidence-close-boundaries 1` 声明输入应为闭合实体且允许封口；该参数只能用于上述三项组合，不能借此给开放薄片自动加厚。
 
 2026-10-15 组合完成语义：仅上述组合将“流程完成”和“模型修好”分开。高级修复正常无进展、最终检测和证据评估完成时返回 `0`、`error_string=""`，仍报告 `repair_status=unresolved` 与实际缺陷；明确几何依据可以免预检。实际执行的预检异常／超限／未完成仍非零，部分修复也不例外。无此选项、显式 `0`、普通修复及独立重建沿用原语义。
