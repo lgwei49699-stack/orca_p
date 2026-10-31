@@ -27,8 +27,8 @@ struct ModelInspectionOptions
     unsigned    max_intersections    = 20000;
     std::size_t max_solid_components = 128;
     std::size_t detail_limit         = 200;
-    // App basic counts lightweight defects; edge/face targets request one repair.
-    // Full additionally checks vertex links, intersections and components.
+    // App basic counts edge/face defects, then tests vertex/intersection existence
+    // only if needed. Full enumerates all seven defects and analyzes components.
     bool analyze_components = true;
     // Optional existence test on existing intersection pairs; at most one side
     // may use an exact two-face coplanar edge neighborhood. Shared-edge fans
@@ -45,6 +45,10 @@ struct ModelInspectionOptions
 // Exact coordinate canonicalization is diagnostic only; it never edits the mesh.
 // Throws on invalid input/resource failures. An incomplete check is never a pass.
 nlohmann::json inspect_model_mesh(const TriangleMesh& mesh, const ModelInspectionOptions& options = {});
+
+// Counts for the repair transaction's duplicate/degenerate-face comparison.
+// No vertex/intersection searches and no whole-model pass/fail conclusion.
+nlohmann::json inspect_model_mesh_topology(const TriangleMesh& mesh);
 
 struct ModelMeshCleanupPlan
 {

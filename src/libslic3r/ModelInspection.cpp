@@ -7,6 +7,7 @@
 #include <CGAL/Intersections_3/Triangle_3_Triangle_3.h>
 #include <CGAL/Kernel/global_functions_3.h>
 #include <CGAL/Polygon_mesh_processing/self_intersections.h>
+#include <CGAL/Polygon_mesh_processing/polygon_soup_to_polygon_mesh.h>
 #include <CGAL/Polygon_mesh_processing/orientation.h>
 #include <CGAL/Polygon_mesh_processing/measure.h>
 #include <CGAL/Side_of_triangle_mesh.h>
@@ -80,9 +81,9 @@ void validate_mesh(const TriangleMesh& mesh)
                 throw std::runtime_error("Invalid model triangle index.");
 }
 
-// Counts only: flat sorted arrays avoid the full inspector's per-edge maps,
-// vertex links, exact point storage and intersection search. Never edits input.
-json inspect_basic_topology(const indexed_triangle_set& mesh)
+// Flat sorted arrays count edge/face defects. Keep the exact coordinate mapping
+// for conditional existence checks without welding or editing the source.
+json inspect_basic_topology(const indexed_triangle_set& mesh, std::vector<int>& canonical)
 {
     using PredicateKernel = CGAL::Exact_predicates_inexact_constructions_kernel;
     struct EdgeUse
@@ -98,7 +99,8 @@ json inspect_basic_topology(const indexed_triangle_set& mesh)
 
     // Coordinate equality, without a welding tolerance, also covers OBJ seams
     // and distinct source indices at the same position.
-    std::vector<int> order(mesh.vertices.size()), canonical(mesh.vertices.size());
+    std::vector<int> order(mesh.vertices.size());
+    canonical.resize(mesh.vertices.size());
     std::iota(order.begin(), order.end(), 0);
     std::sort(order.begin(), order.end(), [&](int a, int b) {
         const auto& x = mesh.vertices[a];
@@ -139,7 +141,6 @@ json inspect_basic_topology(const indexed_triangle_set& mesh)
             edges.push_back({std::min(a, b), std::max(a, b), a < b});
         }
     }
-    std::vector<int>().swap(canonical);
     std::sort(faces.begin(), faces.end(), [](const FaceUse& a, const FaceUse& b) { return a.vertices < b.vertices; });
     std::size_t duplicate = 0, same_winding_extra_faces = 0, opposite_winding_groups = 0;
     for (std::size_t i = 0, j; i < faces.size(); i = j) {
@@ -176,6 +177,32 @@ json inspect_basic_topology(const indexed_triangle_set& mesh)
               {"complete", true},
               {"same_winding_extra_faces", same_winding_extra_faces},
               {"opposite_winding_groups", opposite_winding_groups}}}};
+}
+
+// Called only after the five edge/face checks pass. At that point, a rejected
+// polygon soup proves a nonmanifold vertex; no face has been filtered out.
+void inspect_basic_existence(const indexed_triangle_set& mesh, const std::vector<int>& canonical, json& issues)
+{
+    using PredicateKernel = CGAL::Exact_predicates_inexact_constructions_kernel;
+    const auto result = [](bool found) -> json {
+        return {{"count", found ? 1 : 0}, {"complete", !found}, {"count_is_lower_bound", found}, {"method", "existence"}};
+    };
+    std::vector<Face> faces;
+    faces.reserve(mesh.indices.size());
+    for (const auto& face : mesh.indices)
+        faces.push_back({std::size_t(canonical[face[0]]), std::size_t(canonical[face[1]]), std::size_t(canonical[face[2]])});
+    const bool nonmanifold = !CGAL::Polygon_mesh_processing::is_polygon_soup_a_polygon_mesh(faces);
+    issues["nonmanifold_vertex"] = result(nonmanifold);
+    if (nonmanifold)
+        return;
+
+    std::vector<PredicateKernel::Point_3> points;
+    points.reserve(mesh.vertices.size());
+    for (const auto& vertex : mesh.vertices)
+        points.emplace_back(vertex.x(), vertex.y(), vertex.z());
+    // CGAL throws internally at the first hit. Negative results search the
+    // whole soup; unlike a Surface_mesh conversion this cannot discard faces.
+    issues["self_intersection"] = result(CGAL::Polygon_mesh_processing::does_triangle_soup_self_intersect(points, faces));
 }
 
 struct IntersectionGeometry
@@ -860,6 +887,18 @@ template<class Range> json sample(const Range& values, std::size_t limit)
 json finite_number(double value) { return std::isfinite(value) ? json(value) : json(nullptr); }
 } // namespace
 
+nlohmann::json inspect_model_mesh_topology(const TriangleMesh& mesh)
+{
+    const ModelInspectionOptions limits;
+    if (mesh.its.indices.empty())
+        throw std::runtime_error("Cannot inspect an empty model.");
+    if (mesh.its.indices.size() > limits.max_triangles || mesh.its.vertices.size() > limits.max_vertices)
+        throw ModelInspectionLimitError("Model inspection topology limit exceeded.");
+    validate_mesh(mesh);
+    std::vector<int> canonical;
+    return inspect_basic_topology(mesh.its, canonical);
+}
+
 nlohmann::json inspect_model_mesh(const TriangleMesh& source, const ModelInspectionOptions& options)
 {
     if (source.its.indices.empty())
@@ -872,25 +911,30 @@ nlohmann::json inspect_model_mesh(const TriangleMesh& source, const ModelInspect
     if (!options.analyze_components) {
         if (source.its.vertices.size() > options.max_vertices)
             throw ModelInspectionLimitError("Model inspection vertex limit exceeded.");
-        // Keep native adjacency and all measured lightweight defects actionable.
-        // Expensive intersection and vertex-link searches remain unrequested.
         const auto open_edges = its_num_open_edges(source.its);
         const auto started = std::chrono::steady_clock::now();
-        json issues = inspect_basic_topology(source.its);
+        std::vector<int> canonical;
+        json issues = inspect_basic_topology(source.its, canonical);
         const auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
         issues["boundary"]["geometric_count"] = issues["boundary"]["count"];
         issues["boundary"]["count"] = open_edges;
         issues["boundary"]["method"] = "orca_open_edges";
-        const bool needs_repair               = std::any_of(issues.begin(), issues.end(),
+        bool needs_repair                     = std::any_of(issues.begin(), issues.end(),
                                                             [](const json& issue) { return issue.at("count").get<size_t>() != 0; });
-        // A geometric edge shared by otherwise closed shells is not by itself
-        // a useful soup-repair target. Splitting indices cannot remove the
-        // coordinate overlap, and automatic union would change the geometry.
-        bool repair_target = false;
-        for (const char* key : {"boundary", "duplicate", "degenerate", "orientation"})
-            repair_target |= issues.at(key).at("count").get<size_t>() != 0;
         for (const char* key : {"nonmanifold_vertex", "self_intersection"})
             issues[key] = {{"status", "not_requested"}, {"count", nullptr}, {"complete", false}};
+        const auto existence_started = std::chrono::steady_clock::now();
+        bool counts_complete = true;
+        if (!needs_repair) {
+            inspect_basic_existence(source.its, canonical, issues);
+            for (const char* key : {"nonmanifold_vertex", "self_intersection"}) {
+                const auto& issue = issues.at(key);
+                needs_repair |= issue.at("count").is_number() && issue.at("count").get<size_t>() > 0;
+                counts_complete &= issue.at("complete").get<bool>();
+            }
+        }
+        const auto existence_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - existence_started).count();
         return {{"schema_version", 1},
                 {"algorithm", "orca_open_edges"},
                 {"coordinate_basis", "decoded_orca_mesh"},
@@ -898,13 +942,14 @@ nlohmann::json inspect_model_mesh(const TriangleMesh& source, const ModelInspect
                 {"geometric_vertex_count", nullptr},
                 {"detail_limit", 0},
                 {"topology_statistics_ms", elapsed_ms},
+                {"existence_checks_ms", existence_ms},
                 {"issues", std::move(issues)},
                 {"inspection_scope", "basic"},
                 {"component_analysis", {{"status", "not_requested"}}},
-                {"basic_checks_complete", true},
-                {"check_complete", true},
+                {"basic_checks_complete", counts_complete},
+                {"check_complete", counts_complete},
                 {"mesh_status", needs_repair ? "needs_repair" : "passed"},
-                {"next_action", repair_target ? "advanced_repair" : "none"},
+                {"next_action", needs_repair ? "advanced_repair" : "none"},
                 {"printability_verified", false}};
     }
     Mesh mesh{options};

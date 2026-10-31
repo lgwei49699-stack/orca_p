@@ -2622,18 +2622,21 @@ TEST_CASE("App automatic repair avoids redundant full inspection and retains bas
         ++inspected;
         return true;
     };
-    SECTION("closed intersecting shells are left to ordinary slicing")
+    SECTION("closed intersecting shells attempt repair once and preserve an unchanged source")
     {
         auto mesh = load_model("model_repair_acceptance/08-intersecting-shells.obj");
         REQUIRE(its_num_open_edges(mesh.its) == 0);
         object->add_volume(mesh);
-        options.repair_mesh = [](TriangleMesh&, std::string&) -> bool {
-            FAIL("Closed mesh must not enter automatic CGAL");
+        size_t attempts = 0;
+        options.repair_mesh = [&](TriangleMesh&, std::string&) -> bool {
+            ++attempts;
             return false;
         };
         ModelRepairReport report;
-        REQUIRE(repair_model(model, report, options));
-        CHECK(report.skipped == 1);
+        CHECK_FALSE(repair_model(model, report, options));
+        CHECK(attempts == 1);
+        CHECK_FALSE(report.committed);
+        CHECK(report.skipped == 0);
         CHECK(inspected == 0);
         CHECK(model.objects.front()->volumes.front()->mesh().its.indices == mesh.its.indices);
     }
@@ -2697,6 +2700,39 @@ TEST_CASE("App automatic repair avoids redundant full inspection and retains bas
         CHECK(inspected > 0);
         CHECK(model.objects.front()->volumes.front()->mesh().its.indices == source.its.indices);
     }
+}
+
+TEST_CASE("App volume admission and residual checks use the same defect rules", "[ModelRepair][AppBasic]")
+{
+    const auto shift = GENERATE(Vec3f(5.f, 5.f, 5.f), Vec3f(10.f, 10.f, 0.f), Vec3f(10.f, 10.f, 10.f));
+    auto mesh = make_cube(10., 10., 10.);
+    auto other = mesh;
+    other.translate(shift);
+    mesh.merge(other);
+    Model model = make_model(mesh);
+    ModelRepairOptions options;
+    options.basic_repair = true;
+    size_t attempts = 0;
+    options.repair_mesh = [&](TriangleMesh& candidate, std::string&) {
+        ++attempts;
+        // Isolate policy/transaction behavior from the geometry algorithm.
+        candidate = make_cube(10., 10., 10.);
+        auto separate = candidate;
+        separate.translate(20.f, 0.f, 0.f);
+        candidate.merge(separate);
+        return true;
+    };
+    options.mesh_requires_repair = [](const TriangleMesh&) -> bool {
+        FAIL("App must not invoke the full inspector");
+        return false;
+    };
+    ModelRepairReport report;
+    REQUIRE(repair_model(model, report, options));
+    CHECK(attempts == 1);
+    CHECK(report.committed);
+    ModelInspectionOptions inspection;
+    inspection.analyze_components = false;
+    CHECK(inspect_model_mesh(model.mesh(), inspection)["mesh_status"] == "passed");
 }
 
 TEST_CASE("App reports unresolved coincident closed shells without false repair progress", "[ModelRepair][AppBasic]")

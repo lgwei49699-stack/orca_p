@@ -18,7 +18,13 @@ def validate_issue_summary(issues, *, basic=False):
     assert set(issues) == ISSUE_KEYS, issues
     for key, issue in issues.items():
         if basic and key in ("nonmanifold_vertex", "self_intersection"):
-            assert issue == {"count": None, "complete": False, "status": "not_requested"}, issue
+            if issue.get("status") == "not_requested":
+                assert issue == {"count": None, "complete": False, "status": "not_requested"}, issue
+            else:
+                assert set(issue) == {"count", "complete", "count_is_lower_bound", "method"}, issue
+                assert issue["method"] == "existence" and issue["count"] in (0, 1), issue
+                assert issue["complete"] is (issue["count"] == 0), issue
+                assert issue["count_is_lower_bound"] is (issue["count"] == 1), issue
             continue
         expected = {"count", "complete"}
         if basic and key == "boundary":
@@ -59,8 +65,7 @@ def validate_business_result(result, *, evidence=False, basic=False):
         validate_issue_summary(check["issues"], basic=basic)
         if check["mesh_status"] == "passed":
             assert check["check_complete"]
-            assert all(issue["count"] == 0 and issue["complete"] for key, issue in check["issues"].items()
-                       if not (basic and key in ("nonmanifold_vertex", "self_intersection")))
+            assert all(issue["count"] == 0 and issue["complete"] for issue in check["issues"].values())
     if evidence:
         validate_boundary(check)
     return check

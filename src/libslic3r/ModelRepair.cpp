@@ -105,11 +105,8 @@ bool has_preservable_annotations(const ModelVolume& volume)
 // counts or a heuristic distance score. This check does not modify either mesh.
 bool adds_invalid_faces(const TriangleMesh& source, const TriangleMesh& candidate)
 {
-    ModelInspectionOptions inspection;
-    inspection.analyze_components = false;
-    inspection.detail_limit       = 0;
-    const auto before             = inspect_model_mesh(source, inspection).at("issues");
-    const auto after              = inspect_model_mesh(candidate, inspection).at("issues");
+    const auto before = inspect_model_mesh_topology(source);
+    const auto after  = inspect_model_mesh_topology(candidate);
     return after.at("duplicate").at("count") > before.at("duplicate").at("count") ||
            after.at("degenerate").at("count") > before.at("degenerate").at("count");
 }

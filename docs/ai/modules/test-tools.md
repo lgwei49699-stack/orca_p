@@ -3,12 +3,12 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:f93cd78c553cf28ac13aeb3e08129a9bb6f4e790ea572e9fe4a8142cd965565c",
-  "reason": "2026-10-26在既有局部计划脚本补真实FIFO读取/收尾、普通修正前后对照、报告/细节/精简3MF组合及带管道非法请求拒绝；不新增依赖、业务开关、线上调用或自动试参。 2026-10-29仅本批修复原生/CLI回归：补洞、清理、内部面与输入兼容正反例，121断言/44CLI按身份复用，当前程序报告开关12次实测见修复记录；普通路径未改。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30补合master c0ccf31b22：Cura V1真实垫层接触锚点只修正计划首层空层误报，保留真实缺层保护和发布分支只读小轮廓分析；未更改实际路径、参数、普通修复或Linux打包配置。正文与测试说明按目标源码合并，目标回归见App发布记录。 2026-10-30 App最小交付：仅basic无显式报告STL路径取消中间导出/回读；高级仅committed导出，默认full/GUI/普通切片分盘不变。更新正文及AppBasicDelivery测试，45原生/56报告CLI和服务真实链路、耗时与未验证边界见App提速记录。 2026-10-31入库复核：仅2.5共享修复、环孔/薄壁与内部膜保护、事务/绘色/取消、重建预封口和自动外墙宽度回归；删除旧外层算法专用断言，保留实际残留与拒绝语义。不包含本地下载工具和参数审计改动，GUI/跨平台待验见修复对照记录。"
+  "source_fingerprint": "sha256:b10431d6ba1b4825404548c11782945b18bbaca06678c1eead53b98cca53e9c3",
+  "reason": "2026-10-26在既有局部计划脚本补真实FIFO读取/收尾、普通修正前后对照、报告/细节/精简3MF组合及带管道非法请求拒绝；不新增依赖、业务开关、线上调用或自动试参。 2026-10-29仅本批修复原生/CLI回归：补洞、清理、内部面与输入兼容正反例，121断言/44CLI按身份复用，当前程序报告开关12次实测见修复记录；普通路径未改。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30补合master c0ccf31b22：Cura V1真实垫层接触锚点只修正计划首层空层误报，保留真实缺层保护和发布分支只读小轮廓分析；未更改实际路径、参数、普通修复或Linux打包配置。正文与测试说明按目标源码合并，目标回归见App发布记录。 2026-10-30 App最小交付：仅basic无显式报告STL路径取消中间导出/回读；高级仅committed导出，默认full/GUI/普通切片分盘不变。更新正文及AppBasicDelivery测试，45原生/56报告CLI和服务真实链路、耗时与未验证边界见App提速记录。 2026-10-31入库复核：仅2.5共享修复、环孔/薄壁与内部膜保护、事务/绘色/取消、重建预封口和自动外墙宽度回归；删除旧外层算法专用断言，保留实际残留与拒绝语义。不包含本地下载工具和参数审计改动，GUI/跨平台待验见修复对照记录。 2026-10-31 App inspection regression: cover seven positive categories, negative and incomplete results, shared volume admission, partial/no-change outcomes and topology-only transaction checks. Basic advanced CLI now mirrors the App command without full evidence; an explicit incomplete-evidence rejection remains. Native 275, check CLI 115, stage CLI 64 and ordinary CLI 64 passed; 37 G-code instruction hashes match baseline. Source and build identity, service mock/real-engine results and pending manual checks are recorded in the six-task review."
 }
 -->
 
-2026-10-30 App 最小交付测试补充：`test_model_inspection.cpp` 的 AppBasicDelivery 用健康/开放方块验证无检查产物、原件不变、仅 committed 导出及实际结果闭合；沿用已有 Inspection 测试验证默认业务报告。Java 真实引擎链路及耗时证据不新增生产调用，见[App 提速记录](../validation/2026-10-30-app-repair-latency.md)。
+2026-10-31 App 检测回归：取消仅非流形边跳过；五项全阴性后的顶点/自交存在性阳性也进入一次高级，保留首次缺陷下界语义。健康反例、输入不变、内部 volume 准入、修后残留、取消及默认 full 隔离均覆盖。阶段 CLI 的 basic 高级用例按 App 实际命令不带 repair-evidence；另保留显式证据不完整时拒绝的用例。闭合但仍自交的原“repaired/passed”断言改为真实 partially_repaired/needs_repair，不以弱化检查维持旧成功。执行与构建身份见[六任务复核](../validation/2026-10-31-app-six-checks-review.md)：275 原生、115 检查 CLI、64 阶段 CLI、64 普通切片/分盘场景通过，37 份普通 G-code 指令与改前一致。历史部分结果/绘色/事务和 GUI 交接仍见[App记录](../validation/2026-10-30-app-basic-repair.md)。
 
 ## 职责与边界
 

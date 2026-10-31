@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:223bb36605f02bef0599cc02a27778e8b77f78880352537e90d577f1712ab013",
-  "reason": "2026-10-26 QA进度管道回归：仅在显式局部计划允许列表增加pipe与min_save，沿用原进度通知/精简3MF导出，模型/姿态/修复/缓存与实际层位约束不变；GUI及无计划CLI不进入该分支，最小构建和真实FIFO组合验证见工作进展。 2026-10-28同步阶段读取geometry-only声明：阶段可读取彩色STL几何、直接重建原限制不变；无新参数，普通切片/分盘未改，相关回归见局部修复记录。 2026-10-29入库复审：新增逻辑限定显式报告，修复算法与普通切片/分盘不变；复核当前源码/程序身份，两个真实模型报告开关各3轮产物完全一致，耗时/内存与平台边界见局部修复记录第九批。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30高级修复接入共享2.5核心，删除旧remove_non_3d_parts赋值及过时注释；CLI参数、App最小交付与普通切片/分盘路由保持。更新basic/full范围及partial/纯平面拒绝说明，配套接口回归通过，真实机型G-code及GUI待验。 2026-10-30共享高级核心补精确内部封盖清理，GUI专用验证runner改名与取消接入不改变CLI调用契约；CLI参数/schema/错误语义、普通切片和分盘入口未改。bracket真实修复成功，保持残留模型语义；346项CLI含两种重建通过，实际机型G-code仍未验证。"
+  "source_fingerprint": "sha256:55f3e5b5bf094c3a3bf278496abc6a621ef54372fbb8c347c9fc92f84a93d077",
+  "reason": "2026-10-26 QA进度管道回归：仅在显式局部计划允许列表增加pipe与min_save，沿用原进度通知/精简3MF导出，模型/姿态/修复/缓存与实际层位约束不变；GUI及无计划CLI不进入该分支，最小构建和真实FIFO组合验证见工作进展。 2026-10-28同步阶段读取geometry-only声明：阶段可读取彩色STL几何、直接重建原限制不变；无新参数，普通切片/分盘未改，相关回归见局部修复记录。 2026-10-29入库复审：新增逻辑限定显式报告，修复算法与普通切片/分盘不变；复核当前源码/程序身份，两个真实模型报告开关各3轮产物完全一致，耗时/内存与平台边界见局部修复记录第九批。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30高级修复接入共享2.5核心，删除旧remove_non_3d_parts赋值及过时注释；CLI参数、App最小交付与普通切片/分盘路由保持。更新basic/full范围及partial/纯平面拒绝说明，配套接口回归通过，真实机型G-code及GUI待验。 2026-10-30共享高级核心补精确内部封盖清理，GUI专用验证runner改名与取消接入不改变CLI调用契约；CLI参数/schema/错误语义、普通切片和分盘入口未改。bracket真实修复成功，保持残留模型语义；346项CLI含两种重建通过，实际机型G-code仍未验证。 2026-10-31 shared App inspection contract: all counted defects trigger advanced, conditional vertex/intersection existence carries lower-bound semantics, and no-change/partial results remain explicit. No new CLI options or default full/GUI/slicing changes. Documented App small-result vs explicit evidence boundaries; 115 inspection, 64 stage and 64 ordinary CLI cases passed with 37 unchanged instruction streams. See the six-task review for build identity and pending manual validation."
 }
 -->
 
@@ -63,7 +63,9 @@
 
 ## 配置与约束
 
-App 专用 `--model-inspection-mode basic|full` 仅随 `--check-model` 使用，可组合 `--repair-model cgal`；默认full不变。basic统计五类轻量缺陷，已测阳性不能写passed，自交/非流形顶点仍未请求。开放边、重复面、严格退化面、方向冲突进入一次共享2.5修复；仅有几何非流形边而原生邻接闭合则保留unresolved，不自动布尔合并。Slicer重建关闭时同样不为此重复启动高级阶段。App高级与GUI/full共用2.5单次整volume核心；成功volume保留，失败volume原样保留，不再外层分组/拆ModelVolume，也不保存CGAL中间候选。basic/full仅控制检测范围；闭合但仍有缺陷的结果明确标partial。必要数据/闭合及定向前置检查保留。basic阶段报告透传已有 `inspection.next_action=none/advanced_repair` 供服务端分流，不在Slicer重写引擎规则。check/advanced阶段 `change={status:not_requested,reason:app_basic}` 沿用，产物回读/哈希绑定保留，full/重建完整验收不变。无需新CLI参数或App字段；引擎/Slicer需配套。具体证据及GUI未测范围见[App记录](../validation/2026-10-30-app-basic-repair.md)。
+App 专用 `--model-inspection-mode basic|full` 仅随 `--check-model` 使用，可组合 `--repair-model cgal`；默认full不变。basic先统计开放边、非流形边、重复面、严格退化面、局部方向冲突，任意阳性允许一次高级；取消仅非流形边直接跳过。五项全阴性再做顶点/自交存在性查询，首次阳性用 `count=1/count_is_lower_bound=true/complete=false` 表示至少一处，不枚举完整数量；未执行项仍为null，不误报0。全部必要项阴性才通过。App高级与GUI/full共用既有单次整volume核心，内部准入与修后状态也共用上述basic规则；成功volume保留，失败volume原样保留，不另加外层分组/拆ModelVolume或CGAL中间候选。闭合但仍有缺陷明确标partial，不自动布尔合并或Mesh重建。
+
+basic通过已有 `inspection.next_action=none/advanced_repair` 供服务端分流，不在Slicer重写白名单。App最小结果不请求阶段报告或repair-evidence，检查不导出原件，高级仅committed导出一次；显式阶段报告仍保留对应回读/身份要求，`change={status:not_requested,reason:app_basic}` 沿用。显式basic+repair-evidence不把存在性下界算完整证据，完整性不足仍拒绝；full/重建原验收不变。没有新增CLI参数/App字段；这批Slicer仅补测试，业务已支持这些结果。115检查CLI、64阶段CLI、64普通切片/分盘及真实服务模拟依赖回归见[本轮检查范围记录](../validation/2026-10-31-app-six-checks-review.md)，GUI/Linux/App手测仍待执行。
 
 `--model-layer-height-plan <JSON>`仅为显式单STL固定姿态切片提供局部Z范围透传，须跟随`--model`。计划版本`regional-slope-v1`绑定输入SHA256、统一缩放、XYZ旋转、贴床后高度、基础/首层/上下界及最多128个区间；文件最多64 KiB。1.25倍细化预算仅由PAM选参，不在CLI重复判断；CLI仍检查实际机型允许范围。加载前仅核对一次源文件SHA，变换后核对实际实例；基础层边界和整分层数必须恢复范围外层位。仅沿原`--model-position/scale/rotate`路径设置原生`layer_config_ranges`，不更换为assemble或修改生成算法。
 

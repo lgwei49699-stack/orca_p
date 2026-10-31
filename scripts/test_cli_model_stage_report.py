@@ -114,13 +114,12 @@ def check_stage_report(report, output, source, reference, stage):
     assert isinstance(inspection["check_complete"], bool), inspection
     validate_issue_summary(inspection["issues"], basic=inspection.get("scope") == "basic")
     if inspection.get("scope") == "basic":
-        expected_action = "advanced_repair" if any(inspection["issues"][key]["count"] > 0
-            for key in ("boundary", "duplicate", "degenerate", "orientation")) else "none"
+        expected_action = "advanced_repair" if any(item["count"] is not None and item["count"] > 0
+            for item in inspection["issues"].values()) else "none"
         assert inspection["next_action"] == expected_action, inspection
     if inspection["status"] == "passed":
         assert inspection["mesh_status"] == "passed" and inspection["check_complete"], inspection
-        assert all(item["count"] == 0 and item["complete"] for key, item in inspection["issues"].items()
-                   if not (inspection.get("scope") == "basic" and key in ("nonmanifold_vertex", "self_intersection"))), inspection
+        assert all(item["count"] == 0 and item["complete"] for item in inspection["issues"].values()), inspection
     elif inspection["status"] == "defects_detected":
         assert any(item["count"] is not None and item["count"] > 0 for item in inspection["issues"].values()), inspection
     assert isinstance(report["repair_status"], str) and report["repair_status"], report
@@ -174,7 +173,9 @@ class Suite:
         else:
             command = [str(self.binary), "--check-model", str(source)]
             if stage == "advanced":
-                command.extend(("--repair-model", "cgal", "--repair-evidence"))
+                command.extend(("--repair-model", "cgal"))
+                if "basic" not in flags:
+                    command.append("--repair-evidence")
         command.extend(("--outputdir", str(output)))
         if sidecar:
             command.append("--model-stage-report")
@@ -211,7 +212,7 @@ class Suite:
             assert not list(output.glob("model-stage-*.tmp")), "Stage report temporary file was not cleaned up"
             if success and stage in ("check", "advanced"):
                 legacy = json.loads((output / "result.json").read_text(encoding="utf-8"))
-                old = validate_business_result(legacy, evidence=stage == "advanced" or "--repair-evidence" in flags,
+                old = validate_business_result(legacy, evidence="--repair-evidence" in command,
                                                basic="basic" in flags)
                 assert legacy["return_code"] == 0 and legacy["error_string"] == "", legacy
                 if report:
@@ -415,7 +416,10 @@ def main():
     suite.run("basic-mixed-check", fixtures["mixed"], flags=("--model-inspection-mode", "basic"),
               verify=lambda r: expect_shape(r, status="defects_detected"))
     suite.run("basic-mixed-advanced", fixtures["mixed"], stage="advanced", flags=("--model-inspection-mode", "basic"),
-              verify=lambda r: expect_shape(r, status="passed", repair="repaired"))
+              verify=lambda r: expect_shape(r, status="incomplete", repair="partially_repaired"))
+    # Explicit full evidence still requires complete diagnostics; App does not request it.
+    suite.run("basic-intersecting-incomplete-evidence", fixtures["intersecting"], stage="advanced",
+              flags=("--model-inspection-mode", "basic", "--repair-evidence"), success=False)
     suite.run("basic-shifted-reference", cube, reference=fixtures["shifted"],
               flags=("--model-inspection-mode", "basic"))
     suite.run("invalid-inspection-mode", cube, flags=("--model-inspection-mode", "fastest"), success=False)
