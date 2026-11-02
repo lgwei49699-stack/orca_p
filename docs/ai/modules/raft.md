@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "raft",
-  "source_fingerprint": "sha256:59df68c888df50178c394e3ddc58c1adc2a452ce617b930fa282bde00aacfab3",
-  "reason": "新增 Cura V1 接触面锚点校验，普通支撑插入气隙时只允许真实计划首层通过；不改 RaftPlan、气隙、路径生成及模板。正文链接 18 组 RaftGap 正反例、91 用例回归和 GUI 实测；master 偏心垫层旧修复已复验，无重复改动。"
+  "source_fingerprint": "sha256:a8f4f5a325377aee3f27255076e60606bf0689f7e7b16b08d54198b903e42fd2",
+  "reason": "共享Print.cpp仅增加擦料塔矩阵/工具索引检查；筏层计划、接触面和路径生成未改，本模块正文无需调整，未重跑筏层专项。"
 }
 -->
 

@@ -4,6 +4,8 @@
 #include "Layer.hpp"
 #include "ClipperUtils.hpp"
 #include "ParameterUtils.hpp"
+#include "Exception.hpp"
+#include "I18N.hpp"
 
 // #define SLIC3R_DEBUG
 
@@ -28,6 +30,15 @@ const static bool g_wipe_into_objects = false;
 // Shortest hamilton path problem
 static std::vector<unsigned int> solve_extruder_order(const std::vector<std::vector<float>>& wipe_volumes, std::vector<unsigned int> all_extruders, std::optional<unsigned int> start_extruder_id) 
 {
+    if (all_extruders.empty())
+        return {};
+    const auto valid_tool = [&wipe_volumes](unsigned int tool) {
+        return tool < wipe_volumes.size() && wipe_volumes[tool].size() == wipe_volumes.size();
+    };
+    if ((start_extruder_id && !valid_tool(*start_extruder_id)) ||
+        std::any_of(all_extruders.begin(), all_extruders.end(), [&valid_tool](unsigned int tool) { return !valid_tool(tool); }))
+        throw Slic3r::SlicingError(
+            _u8L("The flushing volumes matrix does not match the filament assignments. Please check the filament mapping."));
     bool add_start_extruder_flag = false;
 
     if (start_extruder_id) {

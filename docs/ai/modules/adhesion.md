@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "adhesion",
-  "source_fingerprint": "sha256:e6ba749e548e5278da029e974af13e395696e27371b4e5728569cdd42fe6f2fb",
-  "reason": "本次共享 test_support_material.cpp 新增 RaftGap 回归，验证 psSkirtBrim 调用共享空层检查的结果；未改 Brim/Skirt 几何、参数或床面裁剪，无需调整附着业务正文。完整筏层和 LayerCount 专项通过。"
+  "source_fingerprint": "sha256:8e5c73962a8bda7c6e6caaa45f873368c0d458a3052a824749c1e15e61cd4eca",
+  "reason": "共享Print.cpp仅增加擦料塔边界检查，Brim/Skirt生成、参数和床面裁剪均未改，正文无需调整。"
 }
 -->
 

@@ -75,7 +75,8 @@
         "scripts/test_cli_model_reconstruction.py",
         "scripts/test_cli_model_check.py",
         "scripts/test_cli_oversized_arrange.py",
-        "scripts/test_cli_fixed_position_slice.py"
+        "scripts/test_cli_fixed_position_slice.py",
+        "scripts/test_cli_multi_obj_palette.py"
       ],
       "test_note": "修改动作路由优先检查 run/export_models 和结果序列化；验证无参数启动、模型导出、分盘→切片和不合法参数。使用隔离输出目录；共享业务按 validation.md 与 GUI 的有效配置、结果及失败语义对照。"
     },
@@ -804,11 +805,13 @@
         "src/libslic3r/MultiMaterialSegmentation.cpp",
         "src/libslic3r/FlushVolCalc.cpp",
         "src/libslic3r/GCode/ToolOrdering.cpp",
-        "src/libslic3r/GCode/WipeTower.cpp"
+        "src/libslic3r/GCode/WipeTower.cpp",
+        "src/libslic3r/GCode/WipeTower2.cpp"
       ],
       "tests": [
         "tests/fff_print/test_gcode.cpp",
-        "tests/libslic3r/test_texture_painting.cpp"
+        "tests/libslic3r/test_texture_painting.cpp",
+        "scripts/test_cli_multi_obj_palette.py"
       ],
       "test_note": "改换色策略要核对 ToolOrdering、塔生成、G-code T 指令及分盘预留。验证单色、多色、多盘、冲刷量和颜色保留；本轮不做设备下发或实机。"
     },
@@ -1731,6 +1734,7 @@
         "scripts/orca_filament_lib.py",
         "scripts/test_cli_model_check.py",
         "scripts/test_cli_model_color.py",
+        "scripts/test_cli_multi_obj_palette.py",
         "scripts/test_cli_meshlib_reconstruction.py",
         "scripts/test_cli_model_reconstruction.py",
         "scripts/test_cli_oversized_arrange.py",

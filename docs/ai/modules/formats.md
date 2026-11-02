@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "formats",
-  "source_fingerprint": "sha256:2b7e8cf2d038b99ff11084153e86ed2afadb22df0f86a0d006bf6a8332b5aba6",
-  "reason": "objparser 按上游方式接受可选第三纹理分量，仍只存二维 UV；OBJ.cpp 的索引校验不改。补充混合维数/正负索引和越界回归，master 原始 EP7KE.obj 完整切片通过，GUI 步骤另记。 2026-10-30在master c0ccf31b22基准重审：仅OBJ可选纹理w兼容，二维UV和有效负索引保留；41项OBJ/5900断言、58普通CLI通过，真实原文件与去w副本12221条运动/状态指令相同。GUI及其他平台待验；本轮证据见OBJ修复记录。"
+  "source_fingerprint": "sha256:8c96b58eeeb851be4dc5671e62b380f46df0ff8b06e5bf2118729b2fe8da7112",
+  "reason": "MTL读色改为明确Kd优先，逐材质记录存在标记；缺Kd回退Ka。共享GUI/CLI路径，43个OBJ用例/5987断言、15例多OBJ及原EP7黑白逐面对照通过；纹理与显式绑定保持，GUI手工待验。"
 }
 -->
 
@@ -23,6 +23,8 @@
 ## 核心流程
 
 Model 导入分派 STL/OBJ/3MF/STEP 等格式；bbs_3mf 读写工程模型、配置、盘及切片数据，OBJ 保留材质或颜色映射，STL 主要保存网格。GCodeThumbnails 把渲染或读入的图片压缩写入 G-code；PNGReadWrite 是公共图片解码入口。
+
+GUI/CLI 共用的 MTL 读色以明确的 `Kd` 为准，不再累加 `Ka`；显式全零 Kd 保持黑色，缺 Kd 的旧材质才回退 Ka。`ObjNewMtl::has_kd` 区分字段缺失与黑色，Ka/Kd 缺省为零；材质声明顺序、透明度、UV/纹理及显式绑定保持。原任务黑色32面恢复及 `[MTLColor]` 回归见[EP7记录](../validation/2026-11-02-ep7-multi-obj-wipe-tower-crash.md#追加-mtl-黑色解析验证)。
 
 ## 配置与约束
 

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gcode-preview",
-  "source_fingerprint": "sha256:2c69c9964b2e0338af0ee10e222eb9d7ad4ab438b79144680e889a94b21cc883",
-  "reason": "补充本分支实际入口职责并精简重复规则；业务源码未修改，运行验证范围见验收记录。"
+  "source_fingerprint": "sha256:333e246a883031672ce5960c70d7aa308b900db26eba2c75ae2eb9fc1920bee2",
+  "reason": "共享test_gcode.cpp增加坏颜色表的真实切片/导出及排序前置检查；预览解析和渲染未改。134断言通过，保留GUI手工待验范围。"
 }
 -->
 

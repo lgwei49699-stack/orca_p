@@ -463,9 +463,10 @@ static bool        mtl_parseline(const char *line, MtlData &data)
                 line = endptr;
                 EATWS();
                 if (data.new_mtl_unmap.find(cur_mtl_name) != data.new_mtl_unmap.end()) {
-                    data.new_mtl_unmap[cur_mtl_name]->Kd[0] = x;
-                    data.new_mtl_unmap[cur_mtl_name]->Kd[1] = y;
-                    data.new_mtl_unmap[cur_mtl_name]->Kd[2] = z;
+                    data.new_mtl_unmap[cur_mtl_name]->Kd[0]  = x;
+                    data.new_mtl_unmap[cur_mtl_name]->Kd[1]  = y;
+                    data.new_mtl_unmap[cur_mtl_name]->Kd[2]  = z;
+                    data.new_mtl_unmap[cur_mtl_name]->has_kd = true;
                 }
             } else if (cur_char == 's') {
                 EATWS();

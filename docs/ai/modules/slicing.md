@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "slicing",
-  "source_fingerprint": "sha256:f27cc0c94d62499111e6949647412eda50100b129c67b9c197f51b004156a36b",
-  "reason": "共享原有Polygons到ExPolygons转换，一次切层同时得到诊断和有效区域；保留正常slice_mesh_ex参数语义，补模式/变换/孔洞/空层及实际PrintObject对照。将现有全空层异常检查移到brim首层访问前，避免空列表访问；预检不生成墙填充支撑或G-code。本次共享PrintConfig变化仅增加CLI repair_evidence_close_boundaries及证据帮助；已有直接重建依据时由模型检测工作流跳过预检，不更改本模块层高、区域构造、切片参数和GUI/CLI正常切片行为。"
+  "source_fingerprint": "sha256:a754acda51f6e591aca211625c644685e912b050231beb9e3535fed5e2dfd261",
+  "reason": "旧矩阵维度兼顾颜色表与真实耗材参数，避免坏颜色表绕过兼容；保留手调配对/倍率和绑定。10种完整Print生命周期场景及两份历史崩溃工程通过，重复apply保持。"
 }
 -->
 
@@ -41,6 +41,12 @@ Print::apply 将 Model 和完整配置拆成 PrintObject／PrintRegion，检测�
 PrintTryCancel 与步骤状态配合，异常／取消不得标为完成。只使 posSlice 失效而漏掉依赖阶段会造成重切与首次切片不一致；修改依赖应验证新建和重用 Print 两条路径。
 
 ## 修改与验证
+
+用户要求优先兼容旧配置：`Print::apply` 在配置差异计算之前，按已配置耗材数补齐缺失、空白、非方阵或过小的冲刷矩阵。完整旧方阵的已有配对值原样保留（含手动0），缺项沿用GUI增减耗材时的 `flush_volumes_vector` 换出+换入规则；对应项缺失时回退第一槽同项，再回退140。非方阵无法确定行步长，按预设换色量重建；倍率、温度、颜色映射不变。补齐写入本次有效配置副本，使预览、切片、G-code及重复apply一致；完整且足够大的矩阵不变，无法识别的耗材引用仍由擦料塔边界检查保护。
+
+槽数取颜色表与 `filament_diameter` 数量的较大值，旧工程缺少颜色时仍能识别已配置耗材；不扩写颜色表或重绑定模型。换料排序自身也在首次读取矩阵前校验工具索引，不能只依赖排序结束后的擦料塔检查。新增空/1色/2色表与4份真实耗材的生命周期用例，验证工具0/3、完整配置和重复apply；CLI旧项目的原项目元数据仍保留输入值，实际切片/G-code使用 `Print::apply` 补齐后的配置，再打开会重新兼容。
+
+`Print::_make_wipe_tower` 在工具排序确认需要擦料塔后、创建擦料塔前校验冲刷矩阵为 N×N，且覆盖实际使用的工具。异常抛出可读 `SlicingError`，GUI 后台切片与 CLI 共享；不改层计划、墙/填充/支撑生成、正常冲刷量和步骤失效规则。原 EP7 139 复现及修后验证见[EP7 多 OBJ 修复记录](../validation/2026-11-02-ep7-multi-obj-wipe-tower-crash.md)。
 
 关注 invalidate_state_by_config_options、apply 差异和完整 process 链。`[PrintApplyCache]` 覆盖仅换网格、同时落床/Z缩放/倾斜/绕Z旋转，有无分层覆盖、未改体积缓存与新建 Print 的边界对照，以及完整切片/G-code 后重复 apply 稳定。真实参数或位置改变仍须失效。GUI 后台刷新和 CLI 切片共用此核心；具体执行结果、真实龙模型修前修后证据见[验证记录](../validation/2026-10-04-smart-print-engine.md)，GUI 首次导出按交接清单另验。
 

@@ -17,6 +17,12 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 "X-Generator: Poedit 3.2.2\n"
 
+msgid "The flushing volumes matrix does not match the filament assignments. Please check the filament mapping."
+msgstr "冲刷量矩阵与耗材分配不匹配，请检查耗材槽位映射。"
+
+msgid "Too many colors in automatic multi-OBJ filament mapping (maximum 16 slots)."
+msgstr "多个 OBJ 自动配色所需的耗材槽位过多，最多支持 16 个槽位。"
+
 msgid "The raft has no printable area on the bed. Move the object or check the printer's printable area."
 msgstr "筏层在打印平台内没有可打印区域。请移动模型或检查打印机的可打印区域设置。"
 

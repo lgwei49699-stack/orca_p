@@ -231,6 +231,71 @@ struct ObjImportFixture
 
 } // namespace
 
+TEST_CASE("OBJ diffuse color takes precedence over ambient without losing Ka-only materials", "[OBJ][MTLColor]")
+{
+    const std::vector<std::pair<std::string, RGBA>> cases = {
+        {"Ka 1 1 1\nKd 0 0 0\n", {0.f, 0.f, 0.f, 0.65f}},
+        {"Kd 0 0 0\nKa 1 1 1\n", {0.f, 0.f, 0.f, 0.65f}},
+        {"Ka 0.2 0.2 0.2\nKd 0.3 0.3 0.3\n", {0.3f, 0.3f, 0.3f, 0.65f}},
+        {"Ka 1 1 1\nKd 1 0 0\n", {1.f, 0.f, 0.f, 0.65f}},
+        {"Ka 0 0.5 1\n", {0.f, 0.5f, 1.f, 0.65f}},
+        {"Kd 0 0 0\n", {0.f, 0.f, 0.f, 0.65f}},
+        {"Ka 0 0 0\nKd -0.1 0.5 1.2\n", {0.f, 0.5f, 1.f, 0.65f}},
+        {"", {0.f, 0.f, 0.f, 0.65f}},
+    };
+    ObjImportFixture fixture;
+    // Multiple materials in one file also check that Kd presence is not carried over.
+    std::string mtl, obj = "mtllib palette.mtl\nv 0 0 0\nv 10 0 0\nv 0 10 0\nvt 0 0\nvt 1 0\nvt 0 1\n";
+    for (size_t i = 0; i < cases.size(); ++i) {
+        const std::string name = "color" + std::to_string(i);
+        mtl += "newmtl " + name + "\n" + cases[i].first + "Tr 0.65\nmap_Kd texture.png\n";
+        obj += "usemtl " + name + "\nf 1/1 2/2 3/3\n";
+    }
+    fixture.write("palette.mtl", mtl);
+    fixture.write("input.obj", obj);
+    TriangleMesh mesh;
+    ObjInfo      info;
+    std::string  message;
+    REQUIRE(fixture.load(mesh, info, message));
+    REQUIRE(info.face_colors.size() == cases.size());
+    CHECK(mesh.facets_count() == cases.size());
+    CHECK(info.has_uv_png);
+    REQUIRE(info.uvs.size() == cases.size());
+    REQUIRE(info.uv_map_pngs.size() == cases.size());
+    for (size_t i = 0; i < cases.size(); ++i) {
+        CAPTURE(i, cases[i].first);
+        for (size_t channel = 0; channel < 4; ++channel)
+            CHECK(info.face_colors[i][channel] == Approx(cases[i].second[channel]));
+        CHECK(info.uv_map_pngs.at(i) == "texture.png");
+        CHECK(info.uvs[i][1] == Vec2f(1.f, 0.f));
+    }
+}
+
+TEST_CASE("OBJ GUI color callback receives distinct black and white from MTL", "[OBJ][GUIColor][MTLColor]")
+{
+    ObjImportFixture fixture;
+    fixture.write("palette.mtl", "newmtl black\nKa 1 1 1\nKd 0 0 0\nnewmtl white\nKa 1 1 1\nKd 1 1 1\n");
+    fixture.write("input.obj", "mtllib palette.mtl\nv 0 0 0\nv 10 0 0\nv 0 10 0\nv 0 0 10\n"
+                               "usemtl black\nf 1 3 2\nf 1 2 4\nusemtl white\nf 1 4 3\nf 2 3 4\n");
+    bool             callback_called = false;
+    ObjImportColorFn callback = [&](std::vector<RGBA>& colors, bool single, std::vector<unsigned char>& slots, unsigned char& first) {
+        callback_called = true;
+        CHECK_FALSE(single);
+        REQUIRE(colors.size() == 4);
+        for (size_t i = 0; i < colors.size(); ++i)
+            for (size_t channel = 0; channel < 3; ++channel)
+                CHECK(colors[i][channel] == (i < 2 ? 0.f : 1.f));
+        slots = {1, 1, 2, 2};
+        first = 1;
+    };
+    Model model = fixture.read_model(false, nullptr, nullptr, callback);
+    CHECK(callback_called);
+    REQUIRE(model.objects.size() == 1);
+    REQUIRE(model.objects.front()->volumes.size() == 1);
+    CHECK(model.objects.front()->volumes.front()->mesh().facets_count() == 4);
+    CHECK_FALSE(model.objects.front()->volumes.front()->mmu_segmentation_facets.empty());
+}
+
 TEST_CASE("OBJ material import tolerates faces with omitted UV coordinates", "[OBJ][CLI][Import]")
 {
     ObjImportFixture fixture;

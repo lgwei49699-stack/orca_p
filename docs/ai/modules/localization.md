@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:b7981f3469b83cae11f5cc6ab7254b6bbfc2b2a52fdff540d6b61116a3a694f1",
-  "reason": "保留MeshLib同进程CLI、协作预算及内存帮助的中英文说明；合并云预设跨机型替换保护和未绑定机型两条提示，不删除任一侧翻译，不新增修复GUI菜单。占位符/msgfmt与真实界面排版分开验证，见主记录。"
+  "source_fingerprint": "sha256:4c4fa0f625428c01982f399f157faffdd68ed63db79e06d9d9a13020299a8960",
+  "reason": "新增矩阵不匹配和超过16槽两条英文/简中，用_u8L参与提取；msgfmt及译文读取通过，生成本地简中MO，GUI待验。"
 }
 -->
 
@@ -51,6 +51,8 @@ MeshLib 本机评估 CLI 帮助移除worker路径，说明同进程SDK、协作�
 缺翻译通常回退英文，格式占位符不匹配则可能运行出错；fuzzy 条目不代表翻译一定被发布。不能批量覆盖无关语言消除检查噪声。
 
 ## 修改与验证
+
+多 OBJ 自动配色超过 16 槽、冲刷矩阵与耗材分配不匹配新增英文源串及简中翻译，使用 `_u8L` 参与现有 gettext 提取；共享核心沿用翻译回调。仅编译简中 MO 并验证两条翻译，实际 GUI 错误提示仍待验，见[EP7 多 OBJ 修复记录](../validation/2026-11-02-ep7-multi-obj-wipe-tower-crash.md)。
 
 改文案检查原文/zh_CN 对应及占位符，按需运行已有不触发业务构建的校验。gettext 脚本可能改大量条目，执行前审范围。独立重建只生成 zh_CN 的本地 mo 并执行 msgfmt 格式检查；不批量更新其他语言或提交生成物，界面可读性另按 GUI 清单验证。
 
