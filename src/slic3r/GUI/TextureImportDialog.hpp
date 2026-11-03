@@ -34,6 +34,7 @@ namespace Slic3r { namespace GUI {
 wxDECLARE_EVENT(EVT_TEXTURE_COMPUTE_DONE, wxCommandEvent);
 wxDECLARE_EVENT(EVT_TEXTURE_COMPUTE_PROGRESS, wxCommandEvent);
 wxDECLARE_EVENT(EVT_TEXTURE_COMPUTE_ERROR, wxCommandEvent);
+wxDECLARE_EVENT(EVT_TEXTURE_MESH_REPAIR_DECISION, wxCommandEvent);
 
 enum class TextureImportState {
     Idle,
@@ -197,6 +198,7 @@ private:
     void on_computation_complete(wxCommandEvent& evt);
     void on_computation_progress(wxCommandEvent& evt);
     void on_computation_error(wxCommandEvent& evt);
+    void on_mesh_repair_decision_required(wxCommandEvent& evt);
 
     void rebuild_mapping_rows();
     void do_auto_match();
@@ -262,6 +264,8 @@ private:
     std::function<bool()>              m_initial_cancel_callback;
     std::function<bool(int)>           m_initial_progress_callback;
     bool                               m_current_computation_initial = false;
+    bool                               m_current_computation_auto_color = false;
+    tex2color::MeshRepairDecision      m_mesh_repair_decision           = tex2color::MeshRepairDecision::Ask;
     bool                               m_initial_computation_pending = false;
     bool                               m_initial_computation_cancelled = false;
     bool                               m_initial_computation_failed = false;

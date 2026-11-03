@@ -36,6 +36,7 @@
 #include <CGAL/Polygon_mesh_processing/self_intersections.h>
 #include <CGAL/Polygon_mesh_processing/shape_predicates.h>
 #include <CGAL/boost/graph/helpers.h>
+#include <CGAL/boost/graph/border.h>
 #include <CGAL/version.h>
 // BBS: for segment
 #include <CGAL/mesh_segmentation.h>
@@ -339,7 +340,7 @@ void segment(CGALMesh& src, std::vector<CGALMesh>& dst, double smoothing_alpha =
         // fill holes
         typedef boost::graph_traits<_EpicMesh>::halfedge_descriptor halfedge_descriptor;
         std::vector<halfedge_descriptor>                            border_cycles;
-        CGAL::Polygon_mesh_processing::extract_boundary_cycles(out, std::back_inserter(border_cycles));
+        CGAL::extract_boundary_cycles(out, std::back_inserter(border_cycles));
         for (halfedge_descriptor h : border_cycles) {
             std::vector<face_descriptor> patch_facets;
 #if defined(_WIN32) && CGAL_VERSION_NR < 1060000000

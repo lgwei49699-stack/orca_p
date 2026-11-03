@@ -9,6 +9,11 @@ namespace Slic3r {
 
 class TriangleMesh;
 
+// Explicit reconstruction input only; caller validates storage and works on a
+// private copy. Keep one exact coincident face and orient it with its neighbors.
+// No caps, proximity welding, remeshing or vertex movement. Returns removed faces.
+std::size_t normalize_reconstruction_duplicates(TriangleMesh& mesh);
+
 struct MeshRepairStats
 {
     std::size_t welded_vertices    = 0;
@@ -28,11 +33,5 @@ bool repair_mesh(TriangleMesh&                   mesh,
                  MeshRepairStats*                stats    = nullptr,
                  std::string*                    error    = nullptr,
                  const std::function<void(int)>& progress = {});
-
-// Boundary preparation for an already validated oriented manifold. Reuse the
-// annular patcher without welding, removing faces/shells or remeshing. Orient
-// the closed result to bound a volume; the caller still validates float output.
-// A refused patch/budget leaves mesh unchanged; engine exceptions propagate.
-bool close_mesh_holes(TriangleMesh& mesh, std::size_t max_faces);
 
 } // namespace Slic3r

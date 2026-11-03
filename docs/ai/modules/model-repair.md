@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model-repair",
-  "source_fingerprint": "sha256:8454f0e8d522899f2105a571023bd46c28d7beb68a7e0970bce539df8d2ca319",
-  "reason": "MeshLib从独立sidecar改为内部C++20适配库，私有网格/配置、SDK回调异常收口与协作RSS/超时/取消、后台join后再交付。保持独立完整网格/变换/STL回读验收及形状未确认语义；默认OFF、AlphaWrap和GUI路径不变，保留已提交证据规则。新增平台配置与运行库身份、移除旧worker和累计RSS，Mac实测与Windows/Linux待验分别记录。 10-17 新增单次业务交付报告：只读原始STL基准、实际回读产物/哈希、双向采样/完整共享边部件数；部分高级成果可比较，重建验收不放宽，不在Orca做阈值采用。 10-17 本轮仅调整可选macOS运行库准备目录、构建RPATH和说明；运行身份哈希仍针对最终库内容，默认AlphaWrap/GUI入口、修复业务和CLI参数不变。与已有模型阶段报告及分盘改动一起构建；真实包内MeshLib42项通过，平台配置23项通过不等于跨平台运行验收。 10-18 仅同步后端单一修复流程说明，去掉业务版本/开关，Orca共享核心及GUI/CLI行为和源码指纹未变。10-19仅修Linux ON链接参数穿过静态依赖及构建树RPATH，向打包模板导出SDK目录；不改算法、准入、报告或GUI/CLI业务入口。真实Linux容器SDK适配/迁移7项及配置/打包50项通过，完整Orca/GUI/普通切片分盘未验，MR原字节哈希规则不变。 10-19复审修正阶段报告STL按重复角点计顶点预算的问题：仅显式阶段读取精确共享顶点，面/顺序/坐标/文件哈希不变，普通重建与GUI默认路径不改；补真实百万面读取到截面预算回归。新Mac构建213原生/34阶段CLI/10报告CLI通过，默认G-code跨补丁一致；Linux静态zlib完整配置成功，最终包状态以本轮记录为准。 Linux ON增补TBB头定义局部隐藏，普通高级修复与GUI不引入新入口；配置级合成ELF通过，完整包与动态绑定结果见Linux记录。 默认时钟 lambda 使用完整 std::chrono::steady_clock 名称，修复 MSVC 对类内 Clock 别名的解析失败；补充跨平台编译约束及验证记录。时钟类型、注入接口、GUI/CLI 入口和预算语义均不变；诊断阶段最小 MSVC 对照已通过，按用户要求完整应用由用户编译。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。 2026-10-28：显式 advanced 报告增加只读原面保留/边界圆盘补洞证明；共享CGAL/MeshLib算法、普通切片/分盘和GUI无改动。原生51断言/2例、34项CLI及PDS本地链路见局部修复采用记录，异常薄片仍未解决。 2026-10-28第二批：复用只读阶段比较的精确共线清理结果，以非退化三角面一致性证明基础清理；不改原修复/重建/切片算法。零面积尾巴误拒已在真实PDS链路复现并修正，60原生断言/3例、37CLI与13模型场景见同一进行中记录。 2026-10-28真实原件修正：显式阶段报告新增逐面1e-6mm坐标量化保留证明、最长边摘要，并允许彩色STL只读几何；直接重建原入口不变。PDS仅完整check/advanced允许数值裂缝计数变化，重建前一次选择有界体素，原验收仍生效。15真实原件9→11采用且完整通过、4未解决，成本/默认路径及平台边界见进行中记录。 2026-10-28第五批：仅显式完整重建且部件减少时补原始闭合实体内部面/平整接缝采样依据，PDS按外表面和证明的合并组数采用；0.25mm预算与一次触发不变。87原生断言/5例、40CLI、57服务回归与15真实原件11→12采用见局部修复记录，反例保留、普通路径和GUI不调用。 2026-10-28第六批：真实ASCII原件NaN法向造成阶段入口误拒，仅geometry_only报告读取允许NaN/Inf法向字面量；有限顶点/语法/大小限制保留，独立重建与普通切片/GUI不改。121原生断言、44CLI、真实2件修前后及80次切片对照见进行中记录；资源和未解决样本按实测记录，不提高生产预算。 2026-10-29入库复审：新增逻辑限定显式报告，修复算法与普通切片/分盘不变；复核当前源码/程序身份，两个真实模型报告开关各3轮产物完全一致，耗时/内存与平台边界见局部修复记录第九批。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30 App最小交付：仅basic无显式报告STL路径取消中间导出/回读；高级仅committed导出，默认full/GUI/普通切片分盘不变。更新正文及AppBasicDelivery测试，45原生/56报告CLI和服务真实链路、耗时与未验证边界见App提速记录。 2026-10-30移植固定2.5.0 Beta共享修复核心，删除旧外层拆分/准备候选/basic专用算法，保留事务/绘色/取消。新增精确共线前清理和坏候选重复/退化门槛，面重排不计收益；更新实际残留及frame/bracket/clubbot限制，237原生和267CLI结果及GUI/平台待验见本轮记录。 2026-10-30全入口续接：基础ADMesh与固定2.5仅差统计，保持原样；共享重复面清理按整片周边连接区分真实孔壁/内部界面。Alpha Wrap预封口复用共享环形补洞，预算及完整验收保留；MeshLib不强制换算法。frame实孔验证通过，bracket仍保留原件，更新边界/GUI交接；最终262原生/345CLI通过。 2026-10-30方案补齐：内部封盖延后至扁壳清理后，初始去重仅去重副本；复用精确内部面证明/预算，保留孔内与跨孔膜拒绝，恢复bracket完整修好与孔道/绘色。GUI阶段原子取消、只读比较共用验证worker，事务和普通入口不变；264原生/346CLI及20实际产物见本轮记录，GUI/Linux待验。 2026-10-30再次续接：原闭壳用精确共面判零厚度，补洞/重网格残片保留上游阈值，防止误删独立薄实体；Alpha Wrap预封口仅调用共享补洞，不再借完整高级修复焊接/删壳，保留最终完整检查与异常传播。268原生/346CLI及20份不变产物见续接记录，GUI/Linux待验。 2026-10-30 extended validation: annular repair tested across density, oblique/mirrored placement and duplicate inner walls; repair algorithms unchanged. Added real repair-to-G-code coverage and isolated worker/SDK recovery. The discovered automatic-width slicing defect is fixed in shared multimaterial code, not by altering repaired geometry. See the active comparison record. 2026-10-31 App inspection: all five counted defects now request one advanced repair; when they pass, CGAL tests vertex/self-intersection existence with explicit lower-bound semantics. Transaction duplicate/degenerate comparison remains topology-only, preserving full/GUI cost and policy. Shared repair algorithms and slicing/arrangement are unchanged. Native 275, check CLI 115, stage CLI 64, ordinary CLI 64 and 37 command-identical G-code controls passed; see the six-task review for timing, partial dragon findings and pending Linux/App/GUI validation."
+  "source_fingerprint": "sha256:5cc7e3b00846338ea5395c7299e761c834a2d13f3c00e4256e3dca197b875b32",
+  "reason": "2026-11-03 Linux 2.3.2 合并。保留打包线已有的 App 快速检查，核对 CGAL 6.2.1 和 MeshLib 的修复入口。"
 }
 -->
 
@@ -16,16 +16,45 @@
 
 - [ModelRepair.cpp](../../../src/libslic3r/ModelRepair.cpp)：repair_model/repair_staged_model；私有候选与事务提交。
 - [MeshBoolean.cpp](../../../src/libslic3r/MeshBoolean.cpp)：网格布尔、分割与 CGAL／Mcut 适配；保留全项检测及严格修复兼容入口。
-- [MeshRepair.cpp](../../../src/libslic3r/MeshRepair.cpp)：固定上游 2.5.0 Beta 的单次修复核心，GUI/CLI 共用；与 MeshLib/Alpha Wrap 重建分离。
+- [MeshRepair.cpp](../../../src/libslic3r/MeshRepair.cpp)：固定上游 2.5.0 Beta 的单次高级修复核心，GUI/CLI 共用；与 MeshLib 重建分离。
 - [FixModelByCgal.cpp](../../../src/slic3r/Utils/FixModelByCgal.cpp)：GUI 修复与工作线程/主模型之间的桥接。
 - [ModelCheckWorkflow.cpp](../../../src/libslic3r/ModelCheckWorkflow.cpp)：run_model_check_workflow 与业务结果投影。
 - [ModelInspection.cpp](../../../src/libslic3r/ModelInspection.cpp)：inspect_model_mesh 及受限基础清理计划。
 - [ModelRepairEvidence.cpp](../../../src/libslic3r/ModelRepairEvidence.cpp)／[ModelRepairEvidence.hpp](../../../src/libslic3r/ModelRepairEvidence.hpp)：只读投影检测、修复与重建结果，并按需提供一次 Z 截面/有效区域观察；不调度修复、不生成或采用候选。
-- [ModelReconstruction.cpp](../../../src/libslic3r/ModelReconstruction.cpp)：独立重建的适用性、源身份、稀疏候选副本、物理毫米变换、worker 协议及单文件 CLI；GUI／CLI 共用 `reconstruct_model_candidate`，此接口不采用候选。
-- [MeshReconstruction.cpp](../../../src/libslic3r/MeshReconstruction.cpp)：三角形汤基础清理、最多三档 CGAL Alpha Wrap、最终浮点网格完整七项检测与双向采样距离告警；不接入旧保形修复验收。
-- [ReconstructionProcess.cpp](../../../src/libslic3r/ReconstructionProcess.cpp)：直接启动当前应用的专用 worker、取消／超时／内存监测及退出回收，不复用 GUI 的 detached 启动路径。
+- [ModelReconstruction.cpp](../../../src/libslic3r/ModelReconstruction.cpp)：GUI/CLI 共用的 MeshLib 候选生成、物理毫米变换、源身份和单文件 CLI；接口只生成候选，不自动采用。
+- [MeshReconstruction.cpp](../../../src/libslic3r/MeshReconstruction.cpp)：共享的完整浮点网格验收、双向采样距离及阶段比较；保留 CGAL 检查，不再实现 Alpha Wrap。
+- [InProcessReconstructionControl.cpp](../../../src/libslic3r/InProcessReconstructionControl.cpp)：同进程协作取消、时间/进程内存预算和体素准入估算；不是子进程隔离或硬内存上限。
+
+此前性能筛选只扩大穹盖回归至16/20/24/28/32/48/64边；实体/空腔/闭壳数与原件不变的验收不放宽。52用例1421断言通过，产品核心恢复到已验证基线；加速实验未采用，详见[当前验证记录](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 ## 核心流程
+
+2026-11-03 入库前复核：CLI重建帮助统一为120/180/300秒和“整个进程内存”，避免把macOS physical footprint误写为RSS；同步完整简中翻译键。删除已移除Alpha Wrap函数遗留的孤立注释，不恢复CGAL重建。当前Mac构建及共享核心/CLI回归通过，GUI行为未改，完整审核与发布边界见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
+2026-11-03 真实孔槽复核未要求新增业务规则：conduit普通路径已完整通过，应保留，不以显式重建替换；其极薄隔壁在0.1mm重建中仍有损失。radio普通／高级路径仍仅部分修复，0.1mm重建保留本批已测圆凹槽、槽底及面板空腔；手动0.075mm对照没有足够收益支持统一加细。检查有效、局部结构保持与打印质量分别记录，不互相替代。CLI七份试切片及Mac GUI采用／撤销／重开通过，尚有亚体素孔槽与85549床面STL量化限制，见[当前验证记录](../validation/2026-10-31-cgal-621-upgrade.md)。本段仅补证据，不新增自动选择或重试。
+
+2026-11-03 显式重建报告的 `structure_preservation` 增加闭合流形拓扑对比：仅原件和候选均完成完整有效网格检查时，从现有精确几何顶点/三角面数计算 Euler 特征 V−F/2，并比较连通组件数；任一不同置 `topology_changed=true`。原件无效或检查未完成时 `topology_comparison_complete=false`、`topology_changed=null`，不推断孔道变化。相同数值不能证明局部孔槽/内腔保持，`verified`仍为false。无新增扫描、自动拒绝、重试或采用；GUI/CLI共用，不改MeshLib候选生成、体素、普通修复/切片/导出。conduit有效导入件虽采样距离未超0.25mm，仍能提示连通结构变化，见[当前验证记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
+2026-11-03 重建坐标验收仅复用同一次调用内已经完成的完整检查：候选、本地网格及旋转缩放往返网格以已有 `mesh_identity` 核对全部顶点和三角索引的存储身份；相同才复用，不按包围盒、面数或近似距离判断相等。实际坐标发生变化仍独立完整检查，凸包检查、1e-4mm往返误差上限及取消/预算检查保持。GUI/CLI共用该私有流程，没有跨任务缓存或新增公开开关。85549的实际3MF和STL出口结果不同，不能以候选有效推断任意导出有效；验证见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
+2026-11-02 私有输入清理副本只存活到跨SDK值数组转换完成，随后释放，再调用MeshLib；清理、坐标/面序和完整检查不变，不再让无后续用途的Orca模型副本伴随整个SDK计算。GUI/CLI共用，不引入新配置或改动普通切片。此生命周期缩短不保证进程物理峰值等量下降，实际回归和资源结果见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
+2026-11-02 私有SDK输入构造改用`MeshBuilder::addTriangles`串行入口，按独立三角面的`6×面数`预留半边，避免`Mesh::fromTriangles`对大输入的并行分块/拼接副本。仍使用每面3个独立顶点，不焊接、不改变坐标/绕序/输入清理，保留实际载入面数、跳面数和前后取消检查；SDK构造期间仍是协作停止边界，不保证即时取消。GUI/CLI共用，普通导入/切片/高级修复不经过此私有表示。隔离199万面输入ABBA约819→522MB，构造约65→129ms；18份完整候选逐字节相同。正式构建、测试和GUI当前状态见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)，不把输入阶段节省当成简化峰值问题已解决。
+
+2026-11-02 网格提取取消：`MeshLibAdapter` 将已有 Progress 接入 `MarchingCubesParams.cb`，补齐分块 addPart 和 finalize 内部协作停止点。采样独立报告进度，finalize 映射到 0.72–0.8；同一无异常回调继续处理取消/资源停止，返回后原有 checkpoint 区分取消与回调异常。阶段变量只在同步 SDK 调用返回后改变，回调生命周期不越过其作用域。没有新增线程、公开开关或重试；GUI/CLI共用，普通切片/分盘/高级修复不调用该路径。新回归先复现四种提取阶段停止拖到简化的失败，再验证修复；最终构建和 Mac 取消、再用、采用/撤销及几何核验见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。这仍是协作停止，不是任意内部函数可硬中断，也不降低重建峰值内存。
+
+2026-11-02 去除重复输出整理：SDK简化后关闭`packMesh`，继续由`copy_candidate`遍历有效面、生成紧凑顶点索引；输出面/顶点上限不变，顶点数量按有效拓扑计数，避免把简化删除的存储槽误算成输出。没有几何策略、资源预算或GUI/CLI入口变化；候选一致性、数量边界及最终构建验证见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。这项清理没有明显内存收益，不替代尚未解决的细结构与GUI宿主内存问题。
+
+2026-11-02 历史边界：2.5.0 Beta高级修复移植提交`c8c45c8557`没有修改MeshLib适配层；GUI由Alpha Wrap改为MeshLib、原三角面/beta4/受约束简化是后续独立变更（本批再调整为beta3）。旧MeshLib策略同条件六模型对照3份网格通过，当前6份通过，但frame/light/clubbot原本通过且现耗时更高，不能把全部额外开销视为已证明必要。两项接缝内存实验均因真实几何失败否决；详见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
+2026-11-02 中间拓扑内存：共享适配层直接编排同一SDK距离采样和`MarchingCubesByParts`，提取三角面后释放mesher，调用SDK串行`MeshBuilder::addTriangles`并预留`3×面数`的半边容量；构造添加数必须完整，不能以漏面换取内存。固定原三角面、体素、0.5阈值、beta3、受约束简化、协作预算和最终复检保持。移除不再需要的虚拟绕数适配层，只有一条采样路径，不修改SDK快照；引擎显示名称统一为MeshLib，不再冒称直接调用rebuildMesh封装。输入网格在采样引用销毁后、简化前释放。编号变化可影响简化，不能保证旧新STL相同。最终包252175 GUI在默认预算下三次完成，采用/撤销/保留/运行中取消及取消后复用通过，候选与已有673截面检查的诊断候选逐面一致；首次预算余量仅24.12MiB，不能外推任意工程。最终回归状态见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。此前有接缝缺陷的分块简化/拼接方案仍未采用。
+
+2026-11-02 停止原因：`ModelReconstruction` 根据已有协作控制结果分别写取消、超时、整个应用内存超限和资源监测失败的固定英文消息，GUI沿用gettext翻译。状态键、退出码、预算、准入估算和候选算法不变。内存预算包含GUI宿主占用，CLI成功不代表GUI一定能在相同预算下完成；早期252175在0.1mm GUI超限，原件保留且同进程可继续处理radio；后续拓扑优化在最终Mac包三次完成，取消后仍能复用，但不保证任意GUI宿主占用均可运行。具体证据和未解决项见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
+2026-11-02 分块重建：显式请求向 MeshLib 的 `MarchingCubesByParts` 提供 Z 分块距离场，原 SDK FunctionVolume 采样及绕数参数保持，交界重复一层并复用共享采样，由 SDK 合并网格。目标32MiB浮点块（至少两层XY平面，另存共享层）不是进程硬预算；保留现有协作取消、资源拒绝和完整候选复检。闭合输入也分块，以减少 SDK 每线程完整 XY 切片缓存，同时仍只在窄表面带求距离/绕数，不开启补洞远场。眼镜框0.075mm隔离对照峰值约降低35%，墙钟约增加8%；不宣称没有开销或0.05mm必然可运行，SDK仍保留全网格位集。没有添加外部开关、自动重试、粗化或模型ID特例。GUI/CLI共享适配层，普通切片/分盘和高级修复不调用此路径。开口/闭合长管贯通回归、真实模型截面和Mac验证见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
+2026-10-31孔槽专项：`normalize_reconstruction_duplicates` 只用于显式重建的私有输入，复用 `MeshRepair.cpp` 的精确重复面清理及邻面定向；不调用高级修复的补孔/容差焊接/曲面生成。相反重复面保留一个物理面，封闭内腔保持原方向，避免frame GUI导入后孔壁抵消导致封孔。原件比较、完整候选检查与撤销保持。SDK取消预细分以修复radio人工空腔，clubbot重建耗时增加与默认预算120秒见下文；普通切片不调用此清理。当前Mac证据见[孔槽专项记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
 
 ### App 基础检查模式
 
@@ -35,7 +64,7 @@
 
 五项任一阳性写 `mesh_status=needs_repair / next_action=advanced_repair`，不再排除仅非流形边；后续顶点/自交保留 `not_requested/count=null/complete=false`。五项全阴性时，在同坐标精确归并的原面上使用 CGAL `is_polygon_soup_a_polygon_mesh` 判断顶点流形性，再使用 `does_triangle_soup_self_intersect` 判断自交。任一阳性即停止；不构建可能丢面拒面的 Surface_mesh，不枚举全部相交对或计算部件/包含关系。阴性必须完成整次搜索。阳性报告 `method=existence,count=1,count_is_lower_bound=true,complete=false`，表示至少一处缺陷而非精确总数；总体计数完整性为 false，但明确 needs_repair，不误报 unknown 或 passed。全部必要项完整阴性才通过；异常/预算拒绝仍进入原失败路径。
 
-Slicer 继续只按引擎 `none/advanced_repair` 分流；检查、高级 volume 准入及修后复检共用该判断。`topology_statistics_ms` 和 `existence_checks_ms` 是内部检查计时，不等于文件读取/修复/网络总时间，不扩展 App DTO。修复事务用于防止新增重复/退化面的比较改调用 `inspect_model_mesh_topology`，保持原五项计数，不在 full/GUI 内增加存在性搜索。显式 basic + repair-evidence 仍遵守完整证据要求；App 不请求该组合，不能把存在性下界视为完整重建证据。
+Slicer 继续只按引擎 `none/advanced_repair` 分流；检查、高级 volume 准入及修后复检共用该判断。`topology_statistics_ms` 和 `existence_checks_ms` 是内部检查计时，不等于文件读取/修复/网络总时间，不扩展 App DTO。修复事务用于防止新增重复/退化面的比较改调用 `inspect_model_mesh_topology`，保持原五项计数，不在 full/GUI 内增加存在性搜索。显式 basic + repair-evidence 仍遵守完整证据要求；App 不请求该组合，不能把存在性下界视为完整重建证据。 组合版本验收见[合并记录](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 App高级设置内部 `basic_repair=true`，与 full/GUI 共用 `repair_mesh`（2.5.0 Beta）。basic 只决定前后检测范围，不另维护一套修复算法。整 volume 一次清理、定向、焊接、T形连接处理、局部补洞及有界自交处理；内部保留有效闭壳，按非零绕数处理嵌套关系。不在 ModelRepair 外层拆分新 ModelVolume 或按旧2.4.2阈值删除部件；没有中间候选回退。无法形成闭合结果时该 volume 保留原件，其他独立 volume 的成功结果可在 partial 模式保留。
 
@@ -80,25 +109,29 @@ Slicer 仅 basic 且重建关闭时使用这个两阶段小结果；检查零上
 
 源面只存排序索引/位集；补面边与局部拓扑信息有10万新增面预算，在进程内释放，仅输出状态、方法和面/区域/边数量。不是服务端区域坐标或数据库新表。PDS 对有证明且完整通过的高级补洞只豁免 candidate→source 的阈值；原表面距离、包围盒、部件数量及身份约束继续生效。MeshLib 重建与普通切片/分盘不使用此豁免，不扩大自动重建条件。实际兔子缺口、误改反例、费用与剩余异常薄片见[局部修复采用记录](../validation/2026-10-28-local-repair-adoption.md)。
 
-默认不传参数时不加载额外基准、不比较、不输出sidecar，v4六字段、普通修复及默认Alpha Wrap行为保持。原生GUI无此报告入口，不增加GUI参数或自动选用；共享修复/重建验收规则未改变。新增契约回归 `scripts/test_cli_model_stage_report.py`，包含前后端固定的距离采样与部件统计口径断言；运行结果与未验平台见[执行记录](../validation/2026-10-17-model-repair-staged-gui.md)。
+默认不传报告参数时不加载额外基准、不比较、不输出 sidecar；v4 六字段及普通修复路由不变。独立重建现统一为 MeshLib，普通切片不自动重建。原生 GUI 无业务阶段报告开关。契约回归为 `scripts/test_cli_model_stage_report.py`，当前结果见[升级记录](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 `test_model_reconstruction.cpp` 的 `[ModelStageReport]` 覆盖二进制/ASCII 的文件哈希、每面坐标/角点顺序、相邻浮点数、重复/反向/退化面的保留；其中 `[slow]` 百万面夹具仅验证有界读取至单层截面预算链，对照旧未共享表示的 `input_limit`，不代表百万面完整高级修复或重建通过。新增测试当前运行状态由本轮统一构建/验证记录给出。
 
-### MeshLib 本机评估后端（仅 CLI）
+### MeshLib 重建后端（GUI/CLI）
 
-独立重建保留 `--reconstruct-model`；显式 `--reconstruction-engine meshlib --reconstruction-voxel-mm <毫米>` 选择固定 SDK 3.1.3.429。默认仍为 Alpha Wrap，原生 GUI 没有 MeshLib 选择项；普通检测/高级修复/证据流程不自动调用 SDK。体素必须有限正数且能表示为正 float，不设通用默认、不自动粗化或回退；Alpha Wrap 的 alpha/offset/预封口关闭参数不能混入 MeshLib。MeshLib 改为同进程调用，旧 `--reconstruction-worker-path` 已移除并按未知参数拒绝，不另维护修复程序。
+独立重建保留 `--reconstruct-model`，GUI/CLI 唯一引擎为 MeshLib 3.1.3.429。CLI 显式给出 `--reconstruction-voxel-mm`，兼容服务端的 `--reconstruction-engine meshlib`；GUI 显示可编辑的 0.1 mm 初始值。体素须为有限正数且能表示为正 float；不自动粗化或回退，旧 Alpha 引擎和参数明确拒绝。SDK-OFF 构建提示不可用；普通检测/高级修复/切片不自动调用 SDK。
 
-Orca CLI → 当前进程后台线程 → 内部 C++20 静态适配库的 `rebuildMesh` → CGAL 复检/比较/回变换/凸包 → 独立目录的 STL 与报告。适配接口只传普通数组/标量/报告字符串，SDK类型不泄漏到Orca；有界内存STL维持原加载语义（每面50字节＋84字节），无中间文件或IPC。关闭加载telemetry，记录跳面/复制顶点和实际参数；加载漏面拒绝。MR网格/临时转换缓冲先离开作用域，再进行独立复检；库内部缓存可能驻留。最终STL回读逐三角形精确比较，不能以SDK成功替代网格验收。
+Orca CLI → 当前进程后台线程 → 内部 C++20 静态适配库的单次 SDK marching-cubes提取/预留容量串行拓扑与四区域及全网格交界受约束简化 → CGAL 复检/比较/回变换/凸包 → 独立目录的 STL 与报告。适配接口只传普通数组/标量/报告字符串，SDK类型不泄漏到Orca。SDK输入由 `MeshBuilder::addTriangles` 串行建立：每面三个独立顶点，坐标/绕序/面数保持，不经内存STL编码解码和再次焊接。Thingi10K 100727及6面抽象顶点扇揭示旧SDK装载可能跳面；独立三角面仅改变私有SDK表示，不改变源模型拓扑/属性。仍记录实际面数、跳面数并拒绝漏面，`input_mode=independent_triangles`，旧复制顶点计数为0。没有中间文件、IPC或装载telemetry；内存可能随独立顶点增加，原准入和整个进程协作预算继续适用。MR网格/临时数组先离开作用域，再进行独立复检；库内部缓存可能驻留。最终STL回读逐三角形精确比较，不能以SDK成功替代网格验收。
 
-复用重建独占槽、私有输入及选项快照。`InProcessReconstructionControl` 由调用线程每20ms采样进程RSS、截止时间与取消；SDK回调只读原子停止状态，不调用GUI/外部回调。先做有溢出/体素网格范围检查的启发式准入估算，未知RSS失败关闭；估算不是峰值上界，采样预算也不是硬内存限制。SDK取消、CGAL/凸包阶段检查共享预算，不重置时钟；不可中断阶段可能延迟取消。任何回调异常先取消并join，不detach、不在主进程使用WorkerGuard/RLIMIT/kill。同进程无法隔离SDK崩溃。旧Alpha Wrap进程监督保持；已移除不再使用的嵌套sidecar累计RSS选项。
+重建使用去除摆放平移的旋转/缩放毫米坐标，避免 float 输入随打印床位置丢失细边；原体积/实例变换保持，输出局部网格及撤销/恢复旋转缩放后的毫米网格均须完整复检，往返误差不得超过1e-4mm。摆放平移仍保存在原double变换中，不额外烘焙到float校验副本，以免有效细边仅因床面位置量化而被误拒；`coordinate_validation.includes_placement_translation=false`明确此检查范围。这不是已验证任意摆放下的切片或导出，另行导出的实际float产物仍按对应出口检查。`reconstruction_coordinates` 记录未叠加的平移向量，比较指标使用这一共同毫米坐标系；placement 最小 Z/抬升提示换回打印床坐标。简化保留四个顶点坐标互异的最小四面体闭壳；若顶点坐标精确重合、壳体已塌陷，则允许已有 SDK 简化清理，不引入按体积/尺寸删除小件。折叠前检查新面之间及新面与固定邻面之间的共面覆盖和非共面相交；另对5顶点完整闭壳缩成四面体保持有向体积符号/非零，避免小内腔翻转。只阻止不安全折叠，不按模型ID、大小删壳或事后反向；不是全局防相交算法，完整CGAL结果检查保持。完整模型检查默认组件预算统一为256（原128），直接检测、重建验收与导出后复检共用；超过仍明确未完成并拒绝交付，不能跳过包含关系或方向判断来批准候选。
+
+复用重建独占槽、私有输入及选项快照。`InProcessReconstructionControl` 由调用线程每20ms采样进程内存、截止时间与取消；SDK回调只读原子停止状态，不调用GUI/外部回调。先做有溢出/体素网格范围检查的启发式准入估算：包括输入/候选/表面工作量、SDK逐层保留的全网格invalid/sign位集，以及至少两层XY距离块和共享层；避免大包围盒/较细体素仅按表面积估算而漏掉体积相关开销。位集按两份预留，部分空层可能实际更小；这是保守估算，不是测量值或峰值上界，采样预算也不是硬内存限制。未知内存占用失败关闭，预算值不变，失败请求不自动粗化重试。SDK取消、CGAL/凸包阶段检查共享预算，不重置时钟；不可中断阶段可能延迟取消。任何回调异常先取消并join，不detach、不在主进程使用WorkerGuard/RLIMIT/kill。同进程无法隔离SDK崩溃。旧 Alpha Wrap 及其进程监督已删除，不再使用嵌套 sidecar 累计 RSS 选项。
+
+macOS 使用 `TASK_VM_INFO.phys_footprint` 计量 dirty/compressed 等实际负担，不把可回收 clean 页计入，也不因页面压缩而低估；Windows/Linux 保持原有 working set/RSS。共享准入公式不变，不清空分配器、不重试。Mac GUI 在 RAM≥8 GiB时将自动整应用预算下限设为2 GiB，为编辑器和图形内存留出空间，仍不超过RAM四分之一；CLI、低内存Mac及Win/Linux默认预算不变。同一有效预算下仍共用相同拒绝规则。报告 `budget_mode=cooperative_process_memory`、`memory_metric` 明示 `physical_footprint/working_set/resident_set`，峰值为 `observed_peak_memory_bytes`，避免把 footprint 误称 RSS。字段配套 CLI 合同同步；GUI/CLI 均由共享控制器执行，普通切片不调用此监视器。重复调用诊断与 GUI 验证进度见[升级记录](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 默认时钟回调直接使用 `std::chrono::steady_clock::now()`，避免 MSVC 14.44 在构造函数默认参数的 lambda 中无法解析类内 `Clock` 别名；时钟类型、注入接口及超时规则不变。该头文件在关闭 MeshLib 时仍参与主程序构建，验证范围见 [Windows 编译修复记录](../validation/2026-10-24-msvc-reconstruction-clock.md)。
 
-MeshLib报告保留 `model_reconstruction_v1`，增加 backend/sdk_version、输入/候选SHA256、`engine.sdk`原报告、输入缺陷、独立输出复检和分阶段耗时；`execution`记录同进程PID、非硬超时/无崩溃隔离，`admission`及`resource_limits`记录估算、预算模式和观测峰值RSS。SDK身份哈希不是原生代码沙箱。双向距离复用AlphaWrap的同一有界采样函数，只作偏差告警，不是最大误差证明。候选通过仍需确认间隙、薄壁和独立部件，`shape_confirmation=not_confirmed`、`print_ready=false`、`applied=false`。不按“只留最大部件”或样本专用阈值删除碎片，不硬编码7部件；Q对照79,400面/7部件包含额外删壳，不是无删除后端必达值。无效/取消/超时结果不导出成功STL，原件保留。
+MeshLib报告保留 `model_reconstruction_v1`，增加 backend/sdk_version、输入/候选SHA256、`engine.sdk`原报告、输入缺陷、独立输出复检和分阶段耗时；`execution`记录同进程PID、非硬超时/无崩溃隔离，`admission`及`resource_limits`记录估算、预算模式、内存计量口径和观测峰值。SDK身份哈希不是原生代码沙箱。双向距离复用共享的有界采样函数，只作偏差告警，不是最大误差证明。候选通过仍需确认间隙、薄壁和独立部件，`shape_confirmation=not_confirmed`、`print_ready=false`、`applied=false`。不按“只留最大部件”或样本专用阈值删除碎片，不硬编码7部件；Q对照79,400面/7部件包含额外删壳，不是无删除后端必达值。无效/取消/超时结果不导出成功STL，原件保留。
 
 同一个Orca构建管理适配层，不单独发布它。源码不含 SDK；macOS 构建脚本为用户已配置的 SDK 制作本地 arm64 / 14.0+ 包，副本重定位和签名后才编译其身份哈希，运行期校验不弱化。外部商业发布与公证不在本轮范围。默认OFF不依赖SDK；ON配置覆盖macOS14+/arm64、Windows MSVC x64及Linux x64/arm64，后两者仍为待原生验证的实验适配，须满足静态宿主依赖及对应ABI限制。实际MRMesh/MRVoxels内容哈希校验允许路径迁移，Windows用宽字符模块定位并输出UTF-8路径；缺库仍可在系统加载阶段阻止程序启动，不保证JSON。不把配置级测试当跨平台运行通过。构建方式见[内部适配层说明](../../../src/meshlib/README.md)和[构建模块](build.md)；实际结果见[执行记录](../validation/2026-10-04-smart-print-engine.md)。
 
-2026-10-19 Linux ON 补齐静态依赖链路参数传播、静态ZLIB选择和包内依赖加载，业务边界不变。完整包进一步审计发现TBB头定义抢占，已补仅Linux ON的局部符号隐藏；修正版重链后，隐藏SDK、原字节解包并搬迁的真实程序通过42项MeshLib／34项阶段报告／10项切片分析及AppRun重建，实际绑定不再由SDK使用主程序TBB定义，普通切片G-code与修前一致。固定Ubuntu24 x64 SDK与MR原字节身份用于测试包，必要的第三方副本可重定位。本机amd64仿真无法直接启动原AppImage外壳，原生Linux入口、目标服务器及GUI手测仍待验；不能把包内程序通过写成全平台或GUI通过。GUI没有MeshLib入口，但同一ON应用启动会加载这些动态库，边界及证据见[Linux验证与交接](../validation/2026-10-19-linux-github-packaging-review.md)。
+2026-10-19 Linux ON 补齐静态依赖链路参数传播、静态ZLIB选择和包内依赖加载，业务边界不变。完整包进一步审计发现TBB头定义抢占，已补仅Linux ON的局部符号隐藏；修正版重链后，隐藏SDK、原字节解包并搬迁的真实程序通过42项MeshLib／34项阶段报告／10项切片分析及AppRun重建，实际绑定不再由SDK使用主程序TBB定义，普通切片G-code与修前一致。固定Ubuntu24 x64 SDK与MR原字节身份用于测试包，必要的第三方副本可重定位。本机amd64仿真无法直接启动原AppImage外壳，原生Linux入口、目标服务器及GUI手测仍待验；不能把包内程序通过写成全平台或GUI通过。当时 GUI 没有 MeshLib 入口（本轮已统一接入），同一 ON 应用启动会加载这些动态库，边界及证据见[Linux验证与交接](../validation/2026-10-19-linux-github-packaging-review.md)。
 
 ### 既有检测与修复路径
 
@@ -134,19 +167,21 @@ GUI 修复入口经 FixModelByCgal 调用模型修复核心。repair_model 创�
 
 2.5核心日志记录焊接顶点、删面、补洞、翻转/删除壳体和检查的相交面对数；相交计数不是成功消除数量。不再输出旧候选检查点/距离门槛日志。阶段报告及独立检测继续以实际保留结果为准。
 
-本次移植固定 `v2.5.0-beta` 的 `345efec64c7b95a05ce5cf96df0dde66a158835c`，保留当前CGAL5.6.3，仅适配头/API名称；新文件单独启用CGAL的TBB宏，不改变已有布尔编译宏。上游的局部自交5%面数、0.1%体积变化限制不等于整模保形证明。官方路径中反向重合孔壁可能被清除后封口（frame已实际复现）；本地按下节保留物理孔壁并验证删除界面，仍不能从网格全项通过推导任意孔洞/结构完整。
+本次移植固定 `v2.5.0-beta` 的 `345efec64c7b95a05ce5cf96df0dde66a158835c`，本分支升级为 CGAL 6.2.1，适配头/API名称；新文件单独启用CGAL的TBB宏，不改变已有布尔编译宏。上游的局部自交5%面数、0.1%体积变化限制不等于整模保形证明。官方路径中反向重合孔壁可能被清除后封口（frame已实际复现）；本地按下节保留物理孔壁并验证删除界面，仍不能从网格全项通过推导任意孔洞/结构完整。
 
-独立重建由用户明确发起：先验证对象适用性并冻结源身份，复制选中对象，按 `instance × volume` 变换到毫米空间，再交给受限子进程。worker 清除精确零面积／重复三角形，直接对缺陷三角形汤生成近似外包表面；不要求输入先成为闭合、单壳、方向一致的实体。输出必须闭合、流形、无自交、围成方向正确的正体积，并通过共享 `inspect_model_mesh` 的完整七项检测；合法把手、分离实体及正确朝向的内腔不是输出缺陷。逆变换后的模型局部网格和重新变换到物理空间的浮点网格也须通过同样复检。父进程只接收大小受限、任务身份和校验值一致的候选。原模型保留，GUI 显式确认后才用既有原子提交／Undo／备份机制采用；CLI 仅保存新产物。
+独立重建由用户明确发起：验证适用性与源身份，复制选中对象，按 `instance × volume` 转到毫米空间，交现有 MeshLib 适配层单次重建。候选及逆变换后的局部/重新变换的物理浮点网格均须通过闭合、流形、方向、体积、自交及共享完整检查。合法把手、分离实体及正确朝向内腔允许存在；这些检查仍不能证明设计结构保留。原件保留，GUI 确认后用既有提交/Undo 机制采用，CLI 只保存新产物。
 
-开放面直接包裹可能只得到不可打印的薄壳。重建默认启用 `close_open_boundaries`：在私有副本上尝试封闭边界，必须先可转换为非自交流形、全部补面成功，再对实际 float 网格进行闭合、体积/壳体方向及完整七项检查，成功才替代包裹输入。最多 64 环、每环 512 边、合计 2048 边；准备网格上限为清理后输入面数加 2048，受同一 worker 的时间/内存预算限制，不能用较低的最终输出上限拒绝高密度输入。补洞仅复用2.5共享核心的环形补洞算法（`close_mesh_holes`），不再调用会焊接、删壳、重网格的完整高级修复；平面嵌套环先做环形三角化，其他环按原生大小阈值选择补洞；大于200边禁用 cubic 搜索，原worker时间/内存限制继续覆盖。闭合输入不补面；失败的受控几何/预算检查回到原汤，检查引擎异常则停止，不伪装成可继续的几何缺陷。
+Alpha Wrap 算法、预封口、自动粗化、专用子进程和通信协议已删除。只被预封口使用的 `close_mesh_holes` 包装已移除；高级修复内部的 `fill_holes` 和环形补洞实现保留。
 
-该步骤可能填上有意保留的开口，GUI 明确提示并可关闭，CLI 使用 `--reconstruction-no-close-open-boundaries` 关闭。`engine.boundary_closure` 记录边数、环数、补面数、是否采用及退出原因；原输入有开边但未采用封闭副本时，`engine.metrics.open_surface_envelope_warning=true`，提示候选可能仍是薄壳、需检查墙和实体路径。尺寸和双向距离仍与原汤比较，不用封口副本掩盖形状差异；这不是自动识别设计意图或自动可打印性验收。
 
-候选的 3D 凸包也在 worker 内计算、复检并以有界协议返回，主线程只验收和安装，不再执行 QHull；安装后清除体积二维投影及实例轮廓缓存，避免沿用原模型的排布范围。计时／内存预算覆盖 worker 的重建、严格几何检查和凸包处理，不包括主进程的有界读写、预览截面和导出，不能称整个 UI 操作具有同一个硬截止时间。
 
-以上受限子进程、预封口和协议传输描述仅适用于默认 Alpha Wrap。MeshLib 的生成、坐标验收和凸包在同进程后台任务中完成，其协作预算从准入估算前开始，覆盖输入检测、SDK、候选/坐标验收和凸包；初始 STL 读取/工作副本准备及最终 CLI 导出/回读/哈希不在此预算内。两端复用几何验收规则，不共用停止机制。
+候选凸包、坐标验收和缓存准备在同进程后台任务内完成，主线程只安装候选并清除旧体积投影/实例轮廓缓存。调用方轮询取消并等待任务结束；不 detach，不强制结束主进程。
+
+协作预算从准入前开始，覆盖输入检测、SDK、候选/坐标验收和凸包；初始 STL 读取/私有副本准备及最终 CLI 导出/回读/哈希不在此预算内。不支持取消的 SDK/CGAL 阶段可能延迟返回，不声称整个操作具有硬截止时间或崩溃隔离。
 
 ## 配置与约束
+
+闭合输入性能：`reconstruct_with_meshlib` 复用已有完整网格检查，边界、非流形边、方向冲突、重复和退化项均完成且为0时，向适配层传 `close_holes=false`。SDK继续使用绕数处理相交及封闭内腔，只省去填补开放边界所需的远场计算。其他输入保持默认true，不新增扫描、算法切换、公开开关或重试；GUI/CLI共享选择。验证及conduit亚体素薄壁限制见升级记录2026-11-02续接。
 
 是否需要高级修复、是否允许部分结果、是否允许清除绘制与能否保色是独立政策。GUI／CLI 的默认策略必须分别查看调用处；共享核心不能被理解为允许丢弃材质。外层拆分/小件删除已移除，正常导入仍使用原ADMesh基础修复，不自动升级到CGAL或重建。
 
@@ -154,21 +189,23 @@ GUI 修复入口经 FixModelByCgal 调用模型修复核心。repair_model 创�
 
 重建首版限一个普通 `MODEL_PART` 和一个实例；阻断附加体积／负体积／修改器、面级颜色与支撑／接缝／绒毛绘制、变层高、手工裙边点、SLA 点位／排液孔、切割关联及可编辑文字／浮雕／纹理。只读拒绝，不清除属性后再继续。健康模型允许用户手动尝试；单个网格内的开放边界、非流形边、自交、方向冲突、多壳／嵌套壳和贯通孔允许进入重建，不与多个 ModelVolume 混淆。孤立非退化面可生成有厚度的壳，但不保证厚度可打印；全退化、越界索引、非有限坐标仍拒绝。清理计数写入报告，仅由已保留三角形计算包围盒，不让废弃顶点影响度量。
 
-默认细节半径 `alpha=0.5 mm`、表面偏移 `offset=0.05 mm`、偏差告警阈值 `0.25 mm`，GUI/CLI/worker/引擎共享 `RECONSTRUCTION_MAX_INPUT_FACES=3000000`，输出仍最多 100 万面；独立 STL 文件大小最多 256 MiB。没有为通过输入限制进行自动减面。三参数须有限正值，offset 不超过 alpha 的四分之一。`max_deviation_mm`／CLI 旧参数名保留，含义明确改为告警而非拒绝，报告 `deviation_policy=warning_only`。先尝试用户参数；估计／中间细分超限或候选几何不合格时，最多再尝试 alpha 与 offset 同时乘 2、4，并记录每轮结果及有效参数，不降低最终七项检查要求。
+偏差告警阈值默认 0.25 mm，CLI 旧参数名 `--reconstruction-max-deviation` 保留，含义为告警而非否决。共享输入上限 300 万面、输出 100 万面，独立 STL 最多 256 MiB。体素采用调用方明确输入值，不为通过验收自动减面、粗化或重试。
 
-三次尝试共用同一 worker 预算。共享 `model_reconstruction_process_options` 依据未清理输入面数分档：不超过 20 万面为 60 秒/1024 MiB，20 万至 100 万面为 180 秒/2048 MiB，100 万以上为 300 秒/4096 MiB；自动内存再取物理 RAM 四分之一上限（最低 128 MiB，未知 RAM 回退 1024 MiB）。这不是可用内存探测或完成时间保证。`ModelReconstructionOptions.process` 的零值表示自动，正值保持调用方选择，包括显式 CLI 超时；通用进程 API 不接受零预算，调用前必须解析。GUI 显示生效值，父级报告 `resource_limits` 在成功或 worker 失败时均保留生效预算和面数上限。macOS 为采样 RSS watchdog，不是硬分配上限；Linux 使用 worker 内 RLIMIT_AS 加 RSS 监测，Windows 使用受内存限制并可整组结束的 Job。父进程监督之外，worker 内也监测父进程身份／存活、资源和截止时间，避免父进程退出或 GUI 事件回调停滞后无限运算；Linux 另设父进程退出信号保护。POSIX 父进程 RSS 查询失败时复查子进程退出状态，最多等待两个 20 ms 周期；连续第三次失败仍返回监测失败，不把未知内存当零，各周期仍检查取消／截止时间。平台实现存在不代表均已运行验收。
+MeshLib 现用 HoleWindingNumber 进行一次闭实体重建，保留体素和0.5 绕数阈值，绕数近似系数统一为3，关闭预细分，按原三角面计算，避免本轮 radio/开放穹盖重现的额外空腔和通道；不再依赖 Auto 的 ProjectionNormal 分支。关闭重建内建简化及角度翻边，随后在同一完整网格上按初始面ID分四区串行简化，再全网格处理保留的交界；所有阶段共用初始QEM及累计误差，保持已有顶点位置、不强制折叠小边；边两端度数均为 3 且四顶点坐标互异时禁止塌缩，避免最小闭壳变成重合双面；仅对已有坐标精确重合的塌陷壳放行已有简化。简化沿用 `0.25×体素` 的误差指标及 `1e-5` stabilizer，串行执行并共用原有预算/取消；不是全局表面距离保证。报告继续写实际设置并增加 simplify 耗时，不增加外部参数或自动重试。原生/CLI 已验证三个原失败样本改善及孔道、内腔、薄壁、小件对照，仍有局部偏差告警；人工确认及完整网格检查没有放宽。Mac GUI 已补验 radio 放弃/采用/撤销/重做/保存重开及处理中取消后重用，独立 0.5 mm 小件保留；clubbot 的摆放平移精度与 SDK 跳面问题已修正并完成 Mac 回归；本轮孔槽/内腔结果、重建耗时取舍与未覆盖范围见记录，其他目标平台包待验。失败坐标检查保留局部和物理往返的完整详情，未运行的一项为 null，不把失败证据丢弃；普通切片不进入此计算。见[当前核心优化记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
+`model_reconstruction_limits` 按输入面数选择默认预算：不超过 20 万面为 120 秒/1024 MiB，20 万至 100 万面为 180 秒/2048 MiB，以上为 300 秒/4096 MiB；自动内存取物理 RAM 四分之一上限，至少 128 MiB，未知 RAM 回退 1024 MiB。关闭预细分使部分显式重建变慢，120秒默认值用于容纳本机clubbot约92秒的正常计算；不是性能上界。`ModelReconstructionOptions.limits` 零值表示自动，正值保留调用方选择。统计整个 Orca 的进程内存（macOS footprint、Windows working set、Linux RSS），不是 SDK 增量；GUI 显示生效预算，报告保留实际值，不自动探测容器额度。
 
 双向距离为采样估计，不能表述为最大误差保证；超过阈值只告警。缺陷优先重建不以输入代数体积／内部见证点证明结构保持，`interior_check_status=not_preserved`、`reference_interior_check_complete=false`；原有孔、空腔和薄壁可能被填充、合并或加厚，GUI 必须提示并确认。独立 `model_reconstruction_v1` 区分 `candidate_ready`、几何检测、人工确认、采用与试切片；首版 `trial_slice=not_run`、`print_ready=false`，GUI 可明确采用为待试切片候选。网格七项通过不意味着无悬空或能生成首层路径；外部诊断试切片结果单独记录，不伪装为自动流程已执行。check-model v4 原字段和退出码保留，仅显式 --repair-evidence 时附加上述 boundary；旧普通 repair JSON 和高级修复策略不变。
 
-Alpha Wrap 的预封口、三档粗化和 worker 平台限制不适用于 MeshLib；MeshLib 不粗化/回退，使用上文同进程协作控制。面数限制及自动预算分档共用，但 MeshLib 统计整个 Orca 进程的 RSS，不是仅 SDK 增量内存。
 
-CLI可用`--reconstruction-memory-mb`显式传128–4096的整数MiB，复用`options.process.memory_limit_mb`并保持调用者预算优先，不再次按物理RAM缩小；不传则默认行为不变。此为服务调用配置，不是新修复策略；没有容器cgroup/Job自动探测，应用外多个作业的总资源由调用方管理。GUI无新增资源输入框，两端核心处理同一预算的规则相同。
+
+CLI可用`--reconstruction-memory-mb`显式传128–4096的整数MiB，复用`options.limits.memory_limit_mb`并保持调用者预算优先，不再次按物理RAM缩小；不传则默认行为不变。此为服务调用配置，不是新修复策略；没有容器cgroup/Job自动探测，应用外多个作业的总资源由调用方管理。GUI无新增资源输入框，两端核心处理同一预算的规则相同。
 
 ## 失败与取消
 
 GUI接入新核心各阶段的原子取消信号，返回前join并回滚整个事务；CGAL单次内部调用和完整检测不保证即时可中断。坏面计数比较、表面重排比较和绘色覆盖复用同一只读验证worker，Model/ID修改仍在主线程。单体积执行异常仍可导致整个事务回退。检查函数抛错不能转换成“需要修复”继续更重操作。成功写文件也不证明修复后的网格正确。
 
-上述线程取消约束属于高级修复；Alpha Wrap 重建通过终止并回收专用子进程处理取消／超时。启动失败、内存预算、进程崩溃、引擎异常、报告／网格截断或校验不匹配均不得交付候选，不自动重启 worker。只有 Alpha Wrap worker 内受控的细分预算／候选不合格允许上述有界粗化尝试。MeshLib 在停止请求后等待后台线程返回，不能承诺硬截止或隔离原生崩溃。GUI 等待／审阅期间源网格、体积元数据、变换或相关配置变化后丢弃旧候选，不覆盖现场。
+高级修复和 MeshLib 重建均采用协作取消，各自保留原件/事务。重建停止后必须等待后台线程返回再退出；不自动重启或重试。不支持中断的 SDK/CGAL 阶段可能延迟取消，同进程原生库崩溃无法由该机制隔离。
 
 2026-10-30 的2.5核心采用规则：闭合候选仍可能有相交等缺陷，full/GUI 必须保留 partially_repaired 状态。partial 候选若新增精确重复面或退化面则拒绝并保留原件；只重排面序不计修复。纯平面无法形成实体时为普通几何拒绝，不再把该情况等同于执行异常；非法数据、worker异常、取消及严格绘色失败仍回滚。旧 split_volumes/created_parts/removed_parts/basic_removed_faces 响应字段为兼容零值。
 
@@ -181,16 +218,22 @@ GUI接入新核心各阶段的原子取消信号，返回前join并回滚整个�
 | 普通导入基础修复 | 原ADMesh；与固定2.5.0 Beta算法一致，只多本地统计 | 原默认开关及切片/分盘路径保持 |
 | GUI/CLI高级修复、App basic高级 | 一次共享MeshRepair核心 | full/GUI完整检测、basic明确范围；允许部分收益但不误报全修，新增坏面候选保留原件 |
 | 严格CGAL兼容/切割修复调用 | 同一核心 | 仍要求完整通过，不采用partial |
-| Alpha Wrap显式重建 | 有界预封口→包覆→完整浮点验收 | 预封口仅复用环形补洞，不焊接/删除原表面，原边界/环/面预算不变；不逐环封盘堵管孔，失败保留原汤继续原包覆策略 |
-| MeshLib显式重建 | 原SDK与固定输入参数 | 保留单次SDK、资源/取消限制和同一独立完整验收；不强行替换为2.5或混入Alpha Wrap |
+
+| GUI/CLI 显式 MeshLib 重建 | 固定体素的单次 SDK 调用 | 完整独立验收与协作取消，保留源模型；不粗化、回退或自动采用 |
 
 共享输入去重只保留一份物理面，包括反向重复孔壁；原先提前删除双面内部界面的路径也延后到可证明阶段。补洞和原有扁壳清理之后，仅对需要修复的壳复用精确重合面清理，提前提取的健康闭壳不参与合并。候选必须闭合、流形、无交叉；要完整删除的物理面，其开放内部必须位于候选实体内，与候选外表面的精确相交只能落在该面的边上。沿用旧内部隔板证明的2048面/20000接触预算，不能证明则保留未清理候选，外层继续拒绝新增坏面。双面孔壁、孔内薄片及跨孔薄片、健康闭壳、相邻实体、bracket均有反例/正例；不是按重心或三面边数单独判定，也没有重新运行整套修复。
 
 原本已闭合的壳（包括汤转换后不需补洞的壳）只按精确共面排除零厚度面，不按全模型包围盒比例删除真实薄实体；补洞和自交重网格产生的残片仍沿用上游体积/面积阈值。区分两者避免修好一处开口却丢失另一薄件，也保留radio补洞残片的清理能力。
 
-Alpha Wrap预封口由`prepare_closed_input`完成有限数据、流形、定向、自交和环预算检查后，调用`close_mesh_holes`只添加封盖并整理壳体方向；不调用完整高级修复。补面超限/不能闭合/补面自交时不改传入网格，未预期的CGAL异常继续传到worker错误处理；转换为float后的完整复检仍由调用方执行。保留输入拒绝、最大2048边/512边每环/64环及增面预算；候选必须通过原完整重建网格检查，失败按原受控拒绝使用源汤。重建包覆本身仍近似，密封后的开口/内部设计意图需要核验；MeshLib与GUI重建仍以显式候选形式交付，不自动覆盖源模型。GUI共享重建入口无新选项，MeshLib仍是CLI后端。
+本次 CGAL 6.2.1 升级同时移除了 Alpha Wrap 专有代码和测试。基础/高级修复、孔壁保留、双向采样比较及最终网格检查仍使用各自现有实现，不能把重建替换理解为删除 CGAL。
 
 ## 修改与验证
+
+2026-11-02：MeshLib 绕数系数统一为 3，并扩充密集/旋转穹盖回归。原系数 4 在新增反例中产生微小内腔；不是通过删除闭壳消除，输入体素、阈值、简化与完整检查保持。精度系数不提供严格误差保证，实验对照、Mac 构建与 GUI 状态见[升级记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
+纹理“修复后导入”现在也直接复用 `repair_mesh`，颜色映射留在 TextureToColor；默认跳过高级修复，基础三角汤兼容步骤保留。当前盘/全部盘高级修复复用 ModelRepair staging/提交语义；没有新增 MeshLib 参数、自交布尔合并或自动重建。原件/失败保护与孔壁修正继续保留，本轮[验证记录](../validation/2026-10-31-cgal-621-upgrade.md)区分新入口测试与历史回归。
+
+CGAL 6.2.1 适配边界环 API、std::variant 和 AABB 类型，保留高级修复策略。Alpha Wrap 及其 visitor、预封口、worker 和测试已删除；GUI/CLI 共用现有 MeshLib。执行结果、已知拒绝及平台/GUI边界见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 `test_model_repair_evidence.cpp` 覆盖检测完整性与缺陷投影、未执行/失败/取消的区别、残留截面证据与无法确定重建必要性、只读原件保留及预算边界。`test_mesh_slice_diagnostics.cpp` 的 `[MeshSliceDiagnostics]` 对照普通切层输出，覆盖开放链、补隙、未焊接重合点、水平缺盖、变换/模式与取消。现有 `scripts/test_cli_model_check.py` 扩展 v4 `boundary` 断言，核对旧字段/退出码、只检测不运行断面和显式组合修复的实际证据。测试范围不等于已运行；没有新增自动编排集成或自动采用测试，实际构建、CLI、GUI、跨平台与实机结果分别记录。
 
@@ -202,9 +245,9 @@ Alpha Wrap预封口由`prepare_closed_input`完成有限数据、流形、定向
 
 后续环形孔回归覆盖不同网格密度、倾斜、镜像和部分双面导出；实际修复后G-code验收同时暴露并修正了分色中“自动线宽0被当作零宽度”的既有问题（见多材料模块），不改变修复算法或采用规则。该轮274原生/集成、88修复CLI、64普通切片CLI通过；工艺为隔离合成配置，实际机型与GUI仍需验收。
 
-重建专项为 `[MeshReconstruction],[ModelReconstruction],[ReconstructionProcess],[ReconstructionWorkerGuard]`，对应 `test_mesh_reconstruction.cpp`、`test_model_reconstruction.cpp`、`test_reconstruction_process.cpp`；覆盖各类缺陷汤、清理计数、三档尝试、偏差只告警、最终七项完整通过、合法内腔与反向独立壳、浮点塌陷及快速进程退出。隐藏 `[ReconstructionIntegration]` 需指定当前应用的 `ORCA_RECONSTRUCTION_BINARY`，验证真实 worker 及已预热轮廓缓存的更新。CLI 用 `scripts/test_cli_model_reconstruction.py` 核对独立 schema、失败原件不变、中文路径、文件边界、实际导出网格及告警语义；自交样例通过网格检查仍不能升级成可打印结论。具体结果、压力测试异常及真实失败模型／试切片结果归同一[主记录](../validation/2026-10-04-smart-print-engine.md)，GUI 对比／采用／撤销／保存重开与待试切片边界见[重建 GUI 交接](../validation/2026-10-05-reconstruction-gui.md)。测试源码存在不表示已通过，不能以人工方块候选替代真实失败模型与打印流程验收。
+重建专项为 `[MeshReconstruction],[ModelReconstruction],[InProcessReconstruction]`，显式集成为 `[ReconstructionIntegration],[MeshLibInProcessIntegration]`。覆盖完整网格/坐标验收、源身份/事务、协作停止和已知内腔/薄壁，不保留 Alpha 算法或子进程测试。CLI 使用 MeshLib 和阶段报告脚本，GUI 按当前交接另验。
 
-`[BoundaryClosure]` 专项覆盖正/反向缺面方块、关闭后薄壳复现、闭合方块/贯通孔/相交闭壳结果不变，以及平面、自交开放面和超预算环的回退。CLI 验证同一策略传至 worker；同一 GUI 工程配置的外部诊断切片验证墙、填充及顶底面，不只检查“层非空”。
+MeshLib 实际集成测试覆盖带内腔方块和 0.1 mm 薄壁，验证体积/壳数/厚度、原件不变及候选状态；只证明这些固定样例。新入口、SDK-OFF 和普通切片对照见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 ## 分支现状
 

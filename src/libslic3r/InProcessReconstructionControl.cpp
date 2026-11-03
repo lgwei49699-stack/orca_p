@@ -14,7 +14,7 @@
 #include <windows.h>
 #include <psapi.h>
 #elif defined(__APPLE__)
-#include <libproc.h>
+#include <mach/mach.h>
 #include <unistd.h>
 #elif defined(__linux__)
 #include <unistd.h>
@@ -41,7 +41,27 @@ const char* inprocess_reconstruction_stop_name(InProcessReconstructionStop reaso
     return "monitor_failed";
 }
 
-bool current_reconstruction_resident_bytes(uint64_t& bytes) noexcept
+uint64_t current_reconstruction_process_id() noexcept
+{
+#ifdef _WIN32
+    return GetCurrentProcessId();
+#else
+    return static_cast<uint64_t>(getpid());
+#endif
+}
+
+const char* reconstruction_memory_metric() noexcept
+{
+#if defined(__APPLE__)
+    return "physical_footprint";
+#elif defined(_WIN32)
+    return "working_set";
+#else
+    return "resident_set";
+#endif
+}
+
+bool current_reconstruction_memory_bytes(uint64_t& bytes) noexcept
 {
     bytes = 0;
 #ifdef _WIN32
@@ -51,10 +71,14 @@ bool current_reconstruction_resident_bytes(uint64_t& bytes) noexcept
         return false;
     bytes = counters.WorkingSetSize;
 #elif defined(__APPLE__)
-    proc_taskinfo info{};
-    if (proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, &info, sizeof(info)) != sizeof(info))
+    // Footprint includes dirty/compressed pages, excluding reclaimable clean
+    // caches. RSS can both overcount those caches and miss compressed memory.
+    task_vm_info_data_t    info{};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS ||
+        count < TASK_VM_INFO_REV1_COUNT)
         return false;
-    bytes = info.pti_resident_size;
+    bytes = info.phys_footprint;
 #elif defined(__linux__)
     const long page_size = sysconf(_SC_PAGESIZE);
     if (page_size <= 0)
@@ -74,13 +98,13 @@ bool current_reconstruction_resident_bytes(uint64_t& bytes) noexcept
     return bytes != 0;
 }
 
-InProcessReconstructionControl::InProcessReconstructionControl(unsigned    timeout_ms,
-                                                               size_t      memory_limit_mb,
-                                                               RssReader   rss_reader,
-                                                               ClockReader clock_reader)
-    : m_timeout_ms(timeout_ms), m_memory_limit_bytes(0), m_rss_reader(std::move(rss_reader)), m_clock_reader(std::move(clock_reader))
+InProcessReconstructionControl::InProcessReconstructionControl(unsigned     timeout_ms,
+                                                               size_t       memory_limit_mb,
+                                                               MemoryReader memory_reader,
+                                                               ClockReader  clock_reader)
+    : m_timeout_ms(timeout_ms), m_memory_limit_bytes(0), m_memory_reader(std::move(memory_reader)), m_clock_reader(std::move(clock_reader))
 {
-    if (timeout_ms == 0 || timeout_ms > 300000 || !valid_memory_budget(memory_limit_mb) || !m_rss_reader || !m_clock_reader)
+    if (timeout_ms == 0 || timeout_ms > 300000 || !valid_memory_budget(memory_limit_mb) || !m_memory_reader || !m_clock_reader)
         throw std::invalid_argument("Invalid cooperative reconstruction budget or monitoring reader.");
     m_memory_limit_bytes = uint64_t(memory_limit_mb) * BYTES_PER_MIB;
     try {
@@ -109,12 +133,12 @@ void InProcessReconstructionControl::poll() noexcept
         if (uint64_t(elapsed) >= m_timeout_ms)
             request_stop(InProcessReconstructionStop::TimedOut);
         uint64_t bytes = 0;
-        if (!m_rss_reader(bytes) || bytes == 0) {
+        if (!m_memory_reader(bytes) || bytes == 0) {
             request_stop(InProcessReconstructionStop::MonitorFailed);
             return;
         }
-        m_resident_bytes.store(bytes, std::memory_order_relaxed);
-        m_peak_resident_bytes.store(std::max(bytes, m_peak_resident_bytes.load(std::memory_order_relaxed)), std::memory_order_relaxed);
+        m_memory_bytes.store(bytes, std::memory_order_relaxed);
+        m_peak_memory_bytes.store(std::max(bytes, m_peak_memory_bytes.load(std::memory_order_relaxed)), std::memory_order_relaxed);
         if (bytes > m_memory_limit_bytes)
             request_stop(InProcessReconstructionStop::MemoryLimitExceeded);
     } catch (...) {
@@ -126,11 +150,8 @@ void InProcessReconstructionControl::request_cancel() noexcept { request_stop(In
 bool InProcessReconstructionControl::keep_running() const noexcept { return stop_reason() == InProcessReconstructionStop::None; }
 InProcessReconstructionStop InProcessReconstructionControl::stop_reason() const noexcept { return m_stop.load(std::memory_order_relaxed); }
 uint64_t InProcessReconstructionControl::elapsed_ms() const noexcept { return m_elapsed_ms.load(std::memory_order_relaxed); }
-uint64_t InProcessReconstructionControl::resident_bytes() const noexcept { return m_resident_bytes.load(std::memory_order_relaxed); }
-uint64_t InProcessReconstructionControl::peak_resident_bytes() const noexcept
-{
-    return m_peak_resident_bytes.load(std::memory_order_relaxed);
-}
+uint64_t InProcessReconstructionControl::memory_bytes() const noexcept { return m_memory_bytes.load(std::memory_order_relaxed); }
+uint64_t InProcessReconstructionControl::peak_memory_bytes() const noexcept { return m_peak_memory_bytes.load(std::memory_order_relaxed); }
 
 InProcessReconstructionEstimate estimate_inprocess_reconstruction(const InProcessReconstructionEstimateInput& input)
 {
@@ -142,32 +163,40 @@ InProcessReconstructionEstimate estimate_inprocess_reconstruction(const InProces
         !std::isfinite(input.voxel_mm) || input.voxel_mm <= 0. || input.voxel_mm > std::numeric_limits<float>::max() ||
         float(input.voxel_mm) <= 0.)
         return result;
-    if (input.resident_bytes == 0) {
-        result.reason = "resident_memory_unknown";
+    if (input.memory_bytes == 0) {
+        result.reason = "process_memory_unknown";
         return result;
     }
 
-    bool any_extent = false;
+    bool                       any_extent = false;
+    std::array<long double, 3> grid;
     // Use the SDK's actual float voxel, not the decimal double requested by CLI.
     const long double voxel = float(input.voxel_mm);
-    for (double extent : input.extent_mm) {
+    for (size_t axis = 0; axis < grid.size(); ++axis) {
+        const double extent = input.extent_mm[axis];
         if (!std::isfinite(extent) || extent < 0.)
             return result;
         any_extent = any_extent || extent > 0.;
-        // Reserve padding for the sparse-grid neighborhood. This checks integer
-        // representability only; the estimate below is not a dense-grid bound.
+        // SDK calcOriginAndDimensions pads both ends by two voxels.
         if (static_cast<long double>(extent) / voxel > std::numeric_limits<int32_t>::max() - 16) {
             result.reason = "voxel_grid_dimension_limit";
             return result;
         }
+        grid[axis] = std::ceil(static_cast<long double>(extent) / voxel) + 5;
     }
     if (!any_extent)
         return result;
     const long double cells       = std::ceil(static_cast<long double>(input.surface_area_mm2) / voxel / voxel);
-    const long double incremental = std::ceil(
-        32 * static_cast<long double>(BYTES_PER_MIB) + 256 * static_cast<long double>(input.input_faces) +
-        48 * static_cast<long double>(input.input_vertices) + 128 * static_cast<long double>(input.max_output_faces) + 64 * cells);
-    const long double total = std::ceil(incremental + input.resident_bytes);
+    const long double plane_cells = grid[0] * grid[1];
+    // SDK marching cubes retains per-layer invalid/sign masks until finalization.
+    // Reserve both masks; some layers may be empty. The distance slab also needs
+    // at least two XY planes plus the shared plane, even when that exceeds 32 MiB.
+    const long double grid_masks    = 2 * std::ceil(plane_cells / 64) * 8 * grid[2];
+    const long double distance_slab = std::max(32 * static_cast<long double>(BYTES_PER_MIB), 8 * plane_cells) + 4 * plane_cells;
+    const long double incremental   = std::ceil(grid_masks + distance_slab + 256 * static_cast<long double>(input.input_faces) +
+                                                48 * static_cast<long double>(input.input_vertices) +
+                                                128 * static_cast<long double>(input.max_output_faces) + 64 * cells);
+    const long double total         = std::ceil(incremental + input.memory_bytes);
     // Compare strictly below 2^64, avoiding an out-of-range integer cast even on
     // platforms where long double has only double precision.
     const long double uint64_end = std::ldexp(1.L, 64);

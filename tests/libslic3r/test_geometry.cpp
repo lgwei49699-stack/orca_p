@@ -10,6 +10,8 @@
 #include "libslic3r/Geometry/ConvexHull.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/ShortestPath.hpp"
+#include "libslic3r/CutSurface.hpp"
+#include "libslic3r/TriangleMesh.hpp"
 
 //#include <random>
 //#include "libnest2d/tools/benchmark.h"
@@ -20,6 +22,37 @@
 #include <unordered_set>
 
 using namespace Slic3r;
+
+TEST_CASE("Surface emboss keeps the outline and holes after CGAL property lookup", "[Geometry][Emboss]")
+{
+    const bool with_hole = GENERATE(false, true);
+    ExPolygon  shape(Polygon(Points{{2, 2}, {8, 2}, {8, 8}, {2, 8}}));
+    if (with_hole)
+        shape.holes.emplace_back(Points{{4, 4}, {4, 6}, {6, 6}, {6, 4}});
+    const double expected_area = with_hole ? 32. : 36.;
+    const auto   cube          = make_cube(10., 10., 10.);
+    Transform3d  transform     = Transform3d::Identity();
+    transform.translate(Vec3d(0., 0., -2.));
+    const Emboss::OrthoProject projection(transform, Vec3d(0., 0., 14.));
+    const auto                 cut = cut_surface({shape}, {cube.its}, projection, 0.85f);
+    REQUIRE_FALSE(cut.indices.empty());
+    REQUIRE(cut.contours.size() == (with_hole ? 2 : 1));
+    double area = 0.;
+    for (const auto& face : cut.indices) {
+        const Vec3d a = cut.vertices.at(face[0]).cast<double>();
+        const Vec3d b = cut.vertices.at(face[1]).cast<double>();
+        const Vec3d c = cut.vertices.at(face[2]).cast<double>();
+        CHECK(a.z() == Approx(10.));
+        CHECK(b.z() == Approx(10.));
+        CHECK(c.z() == Approx(10.));
+        area += (b - a).cross(c - a).norm() / 2.;
+    }
+    CHECK(area == Approx(expected_area));
+    const auto embossed = cut2model(cut, Emboss::OrthoProject3d(Vec3d(0., 0., 1.)));
+    CHECK(std::abs(TriangleMesh(embossed).volume()) == Approx(expected_area));
+    const auto flat = Emboss::polygons2model({shape}, Emboss::ProjectZ(2.));
+    CHECK(std::abs(TriangleMesh(flat).volume()) == Approx(2. * expected_area));
+}
 
 TEST_CASE("Line::parallel_to", "[Geometry]"){
     Line l{ { 100000, 0 }, { 0, 0 } };

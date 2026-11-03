@@ -5,7 +5,7 @@
 #include "TriangleMesh.hpp"
 
 #include <CGAL/AABB_face_graph_triangle_primitive.h>
-#include <CGAL/AABB_traits.h>
+#include <CGAL/AABB_traits_3.h>
 #include <CGAL/AABB_tree.h>
 #include <CGAL/Bbox_3.h>
 #include <CGAL/boost/graph/helpers.h>
@@ -29,7 +29,7 @@
 #include <CGAL/number_utils.h>
 #include <CGAL/Origin.h>
 #include <CGAL/Polygon_mesh_processing/bbox.h>
-#include <CGAL/Polygon_mesh_processing/border.h>
+#include <CGAL/boost/graph/border.h>
 #include <CGAL/Polygon_mesh_processing/connected_components.h>
 #include <CGAL/Polygon_mesh_processing/internal/Snapping/snap.h>
 #include <CGAL/Polygon_mesh_processing/manifoldness.h>
@@ -54,7 +54,7 @@
 #include <CGAL/Triangulation_vertex_base_with_info_2.h>
 
 #include <boost/log/trivial.hpp>
-#include <boost/variant/get.hpp>
+#include <variant>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_sort.h>
@@ -90,7 +90,7 @@ using Vertex   = Mesh::Vertex_index;
 using Halfedge = Mesh::Halfedge_index;
 using Face     = Mesh::Face_index;
 using Triangle = std::array<std::size_t, 3>;
-using Tree     = CGAL::AABB_tree<CGAL::AABB_traits<Kernel, CGAL::AABB_face_graph_triangle_primitive<Mesh>>>;
+using Tree     = CGAL::AABB_tree<CGAL::AABB_traits_3<Kernel, CGAL::AABB_face_graph_triangle_primitive<Mesh>>>;
 using Box      = CGAL::Box_intersection_d::Box_with_info_d<double, 3, std::size_t>;
 
 constexpr std::size_t NONE = std::size_t(-1);
@@ -826,7 +826,7 @@ void fill_with_fan(Mesh& mesh, const BorderLoop& loop)
 std::size_t fill_holes(Mesh& mesh, double tolerance)
 {
     std::vector<Halfedge> borders;
-    PMP::extract_boundary_cycles(mesh, std::back_inserter(borders));
+    CGAL::extract_boundary_cycles(mesh, std::back_inserter(borders));
     std::vector<BorderLoop> loops(borders.size());
     for (std::size_t i = 0; i < borders.size(); ++i) {
         BorderLoop& loop = loops[i];
@@ -1189,9 +1189,9 @@ bool caps_are_internal(const std::vector<Kernel::Triangle_3>& removed, const Mes
             bool boundary_only = false;
             for (int j = 0; j < 3; ++j) {
                 const ExactKernel::Segment_3 edge(triangle.vertex(j), triangle.vertex((j + 1) % 3));
-                if (const auto* p = boost::get<ExactKernel::Point_3>(&*contact))
+                if (const auto* p = std::get_if<ExactKernel::Point_3>(&*contact))
                     boundary_only = boundary_only || edge.has_on(*p);
-                else if (const auto* s = boost::get<ExactKernel::Segment_3>(&*contact))
+                else if (const auto* s = std::get_if<ExactKernel::Segment_3>(&*contact))
                     boundary_only = boundary_only || (edge.has_on(s->source()) && edge.has_on(s->target()));
             }
             if (!boundary_only)
@@ -1406,27 +1406,34 @@ bool repair_its(const indexed_triangle_set&     its,
 
 } // namespace
 
-bool close_mesh_holes(TriangleMesh& mesh, std::size_t max_faces)
+std::size_t normalize_reconstruction_duplicates(TriangleMesh& mesh)
 {
-    // The reconstruction caller has already checked finite storage, manifold
-    // orientation, intersections, and boundary/loop budgets before this call.
     std::vector<Kernel::Point_3> points;
     std::vector<Triangle>        triangles;
-    for (const auto& p : mesh.its.vertices)
-        points.emplace_back(p.x(), p.y(), p.z());
+    points.reserve(mesh.its.vertices.size());
+    triangles.reserve(mesh.its.indices.size());
+    for (const auto& v : mesh.its.vertices)
+        points.emplace_back(v.x(), v.y(), v.z());
     for (const auto& f : mesh.its.indices)
         triangles.push_back({std::size_t(f[0]), std::size_t(f[1]), std::size_t(f[2])});
-    Mesh surface;
-    PMP::polygon_soup_to_polygon_mesh(points, triangles, surface);
-    fill_holes(surface, 1e-4 * bbox_diagonal(points));
-    if (surface.number_of_faces() > max_faces || !CGAL::is_closed(surface) || PMP::does_self_intersect(surface))
-        return false;
-    PMP::orient_to_bound_a_volume(surface);
-    surface.collect_garbage();
+    clean_soup(points, triangles);
+    const std::size_t removed = mesh.its.indices.size() - triangles.size();
+    if (removed == 0)
+        return 0;
+    // Reuse the advanced repair's surface-only cleanup. Do not invoke its
+    // hole filling or turn a nested cavity shell outward.
+    std::size_t reversed = 0;
+    if (triangles.empty() || !orient_soup(points, triangles, reversed))
+        throw std::runtime_error(_u8L("The input does not define a valid surface graph."));
     indexed_triangle_set result;
-    append_mesh_to_its(surface, result);
+    result.vertices.reserve(points.size());
+    result.indices.reserve(triangles.size());
+    for (const auto& p : points)
+        result.vertices.emplace_back(float(p.x()), float(p.y()), float(p.z()));
+    for (const auto& f : triangles)
+        result.indices.emplace_back(int(f[0]), int(f[1]), int(f[2]));
     mesh = TriangleMesh(std::move(result));
-    return true;
+    return removed;
 }
 
 bool repair_mesh(TriangleMesh& mesh, MeshRepairStats* stats_out, std::string* error, const std::function<void(int)>& progress)

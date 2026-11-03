@@ -25,7 +25,7 @@ struct ModelInspectionOptions
     std::size_t max_triangles        = 3000000;
     std::size_t max_vertices         = 3000000;
     unsigned    max_intersections    = 20000;
-    std::size_t max_solid_components = 128;
+    std::size_t max_solid_components = 256;
     std::size_t detail_limit         = 200;
     // App basic counts edge/face defects, then tests vertex/intersection existence
     // only if needed. Full enumerates all seven defects and analyzes components.

@@ -1549,14 +1549,9 @@ int CLI::run(int argc, char **argv)
         return CLI_INVALID_PARAMS;
     }
 
-    // Independent, headless reconstruction protocol. Never enter legacy repair,
-    // profile migration or GUI initialization in a resource-limited worker.
-    if (argc == 3 && std::string(argv[1]) == "--reconstruction-worker")
-        return Slic3r::run_model_reconstruction_worker(argv[2]);
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--reconstruct-model")
-            return Slic3r::run_model_reconstruction_cli(boost::dll::program_location().string(),
-                                                       std::vector<std::string>(argv + 1, argv + argc));
+            return Slic3r::run_model_reconstruction_cli(std::vector<std::string>(argv + 1, argv + argc));
     }
 
     if (!this->setup(argc, argv))
@@ -2185,6 +2180,15 @@ int CLI::run(int argc, char **argv)
         boost::nowide::cerr << error_message << std::endl;
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, error_message, sliced_info);
         flush_and_exit(CLI_INVALID_PARAMS);
+    }
+    if (const auto* option = m_config.option<ConfigOptionBool>("texture_repair"); option && option->value) {
+        if (!export_texture_obj_requested) {
+            const std::string error_message = "--texture-repair requires --export-texture-obj.";
+            boost::nowide::cerr << error_message << std::endl;
+            record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, error_message, sliced_info);
+            flush_and_exit(CLI_INVALID_PARAMS);
+        }
+        texture_painting_settings.mesh_repair_decision = tex2color::MeshRepairDecision::RepairAndImport;
     }
     texture_painting_settings.target_colors_num = 0;
     if (ConfigOptionInt* option = m_config.option<ConfigOptionInt>("texture_color_count"))

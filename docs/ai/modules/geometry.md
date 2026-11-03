@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "geometry",
-  "source_fingerprint": "sha256:710fd11268d06553d3b50acf98d4f245e6af0d4c86fc5c563dba97ef422be4d7",
-  "reason": "本批Voronoi.cpp仅补原生LinesIt迭代器模板显式实例化，供同岛平行边只读观察使用；不改变生成/修复几何算法或原Arachne入口。复核空洞、非平行边与非法图未知边界，调用方真值及真实CLI结果归切片报告记录，不将此项称为任意曲颈/三维宽度或实物公差。"
+  "source_fingerprint": "sha256:8c353c5b89f04de7489d3c34f78fdcf229f9ec36706ff294d8c0ea1d6d429eab",
+  "reason": "2026-10-31：CutSurface 适配 CGAL 6.2.1 optional 属性映射，按值保存避免临时 optional 悬空；AABB 改 _3。新增带孔/无孔真实浮雕几何测试通过，显式 Voronoi 标签通过；既有凸凹角同基线失败保留记录，不宣称全库通过。"
 }
 -->
 
@@ -34,6 +34,8 @@ Point/Polygon/ExPolygon 及 ClipperUtils 为偏移、布尔裁剪和路径几何
 退化点集、共线、空多边形、细薄区域需要明确处理；第三方断言失败应定位实际调用与前置条件，不能放宽业务断言隐藏越界。底层未提供取消的函数由外层阶段控制。
 
 ## 修改与验证
+
+CGAL 6.2.1 中 CutSurface 的属性查询返回 optional，读取取 value 并按值持有映射，不能保存临时查询结果的引用。AABB 类型使用 _3 名称。新增 Emboss 回归覆盖带孔/无孔轮廓、实际曲面投影面积、浮雕和独立三角化体积，40 项断言通过。扩展几何回归中的既有凸凹角用例在新旧二进制同样失败；详见[升级记录](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 修改公共几何先运行对应 polygon/geometry/clipper/AABB 单元用例，再按调用方扩大；凸包测试必须覆盖同输入的实际凸包实现，二维算法差异不直接等同生产崩溃。
 

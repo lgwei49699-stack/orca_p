@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "multimaterial",
-  "source_fingerprint": "sha256:5d86a0ef8fe63501c296d1ef276cdc34d8c3b0e20092b7720f597402b5843545",
-  "reason": "保留发布分支ColorUtils/TextureToColor的boost/next_prior.hpp显式头依赖。合入的模型细节路径开关属于CLI运行时选择，不新增材料/打印配置，不改分色、材料映射、冲刷参数或擦料塔算法；切换Print模式沿用步骤失效机制，默认关闭。正文无需新增多材料行为，本次仅解决审核头冲突并核对合并指纹，未运行多材料实印。 本轮复核共享PrintConfig.cpp只增加默认关闭的CLI repair_evidence选项，未改打印参数定义、预设或本模块消费者逻辑；正文无需调整，未以此宣称该模块全量运行验证。本次追加CLI repair_evidence_close_boundaries及帮助，不进入分色、工具排序或擦料塔生成；多材料映射、冲刷参数及GUI颜色配置保持，不因建议策略丢弃绘制。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 2026-10-22新CLI开关不是打印/材料配置，无分色、材料映射、冲刷参数及擦料塔算法修改。Print模式切换使对象及整盘步骤失效，防止擦料塔沿用旧输出；默认模式不增加失效，不宣称多材料实印通过。 2026-10-22复核min/max只为CLI临时计划，不增加耗材/工具映射参数；仍受有效机型边界约束，未修改冲刷/擦料塔算法，未声称多材料实印通过。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。 2026-10-26合入f9bcf0afe：保留master修复、Linux打包与特征CLI边界，当前组合验证另记。 2026-10-26发布分支最终复核：共享PrintConfig的CLI计划注册不更改换料/颜色参数；显式计划单STL限制不扩展至普通多材料流程。 构建/回归及GUI待验见发布合并记录。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30: resolve only zero outer-wall width through existing PrintRegion::flow before color-region spacing. This honors object/nozzle automatic width without changing explicit nonzero handling, configuration defaults, repair or purge policies. Reproduced on a healed OBJ without repair; explicit G-code is unchanged across the fix, automatic/object fallback matches resolved explicit output. Local CLI passed; GUI and physical printing pending. 合入 master 修复记录：本轮共享换料/矩阵实现未再改；CLI对不同普通耗材保留原槽位，新增4组回归核对对象/面及实际G-code，25项通过。补充自动合并仅适用于同默认配置的范围。"
+  "source_fingerprint": "sha256:2e88466daf6538dec8af8fccdbf5cb8449151a647459b1664a739d7081f19d8b",
+  "reason": "2026-11-03 Linux 2.3.2 合并。合并 OBJ 颜色槽、耗材绑定及纹理修复后的面颜色映射。"
 }
 -->
 
@@ -27,6 +27,10 @@
 
 MTL 读色后续修正位于 formats 共享层：明确 Kd 优先，缺失才回退 Ka。原 EP7 的黑色恢复后默认槽加四种材质为5槽/25项冲刷矩阵；这是恢复真实材质后的结果，不是额外耗材业务规则。显式映射仍为4槽，换料指令保持；未改冲刷算法。
 
+纹理导入由 GUI `TextureImportDialog` 和 CLI 共用 `TexturePainting::texture_to_painting` → `TextureToColor`。按 2.5.0 Beta 提供 Ask/跳过高级修复/修复后导入，后者直接调用共享 `repair_mesh`。新面按最近原三角表面取色，替换旧面中心距离。GUI 异步询问并保留本次选择；CLI 显式 `--texture-repair` 配合 `--export-texture-obj`，默认跳过高级修复。半边不兼容的基础三角汤整理仍保留，与官方一致。
+
+转换成功只表示绘色完成，不代表缺陷全部修好。明确请求修复而失败/取消时不发布候选，不静默降级成原几何导入；没有选修复的历史几何导入回退不变。平滑同步官方门控：拓扑区域平滑仅在强度 ≥0.3，几何平滑仅在强度 >1e-6，两个颜色/标签接口共用实现；强度0不再额外改色。新入口、正常模型开关一致和 3 mm 孔壁回归、GUI 中英文清单见[当前实施记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
 ## 配置与约束
 
 外部颜色、内部挤出机索引和设备槽位不是同一编号。flush 矩阵、单喷嘴多材料、塔位置和各盘耗材集合共同决定占地与输出；同色模型不能直接代表无需塔。
@@ -38,6 +42,8 @@ MTL 读色后续修正位于 formats 共享层：明确 Kd 优先，缺失才回
 缺材质／映射越界应在导入或配置校验阶段暴露；预览可打开不等于所有换刀指令可执行。取消不得保留部分换刀计划，塔冲突需按实际包络验证。
 
 ## 修改与验证
+
+CGAL 6.2.1 升级仅将 ColorUtils 的 AABB_traits 改为 AABB_traits_3 并显式包含对应头；颜色分区、自动墙宽和冲刷策略不变。本机构建、绘色及彩色 OBJ 切片回归见[升级记录](../validation/2026-10-31-cgal-621-upgrade.md)，GUI 操作另行验收。
 
 Linux 发布分支在 `ColorUtils.cpp` 与 `TextureToColor.cpp` 显式包含 `boost/next_prior.hpp`，补齐无预编译头构建所需的头依赖，不改纹理转颜色算法。此次合并保留该编译修正；实际构建和多材料 GUI 验收分别记录，见[Linux记录](../validation/2026-10-19-linux-github-packaging-review.md)。
 

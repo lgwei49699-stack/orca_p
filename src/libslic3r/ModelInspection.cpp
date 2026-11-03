@@ -14,7 +14,7 @@
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/boost/graph/helpers.h>
 #include <CGAL/number_utils.h>
-#include <boost/variant/get.hpp>
+#include <variant>
 
 #include <algorithm>
 #include <array>
@@ -224,16 +224,16 @@ IntersectionGeometry intersection_geometry(const Mesh& mesh, const FacePair& pai
         throw std::runtime_error("CGAL reported a pair without intersection geometry.");
     IntersectionGeometry    geometry;
     std::vector<ExactPoint> points;
-    if (const auto* point = boost::get<ExactPoint>(&*result)) {
+    if (const auto* point = std::get_if<ExactPoint>(&*result)) {
         geometry.kind = "point";
         points.push_back(*point);
-    } else if (const auto* segment = boost::get<Kernel::Segment_3>(&*result)) {
+    } else if (const auto* segment = std::get_if<Kernel::Segment_3>(&*result)) {
         geometry.kind = "segment";
         points        = {segment->source(), segment->target()};
-    } else if (const auto* area = boost::get<Kernel::Triangle_3>(&*result)) {
+    } else if (const auto* area = std::get_if<Kernel::Triangle_3>(&*result)) {
         geometry.kind = "area";
         points        = {area->vertex(0), area->vertex(1), area->vertex(2)};
-    } else if (const auto* polygon = boost::get<std::vector<ExactPoint>>(&*result)) {
+    } else if (const auto* polygon = std::get_if<std::vector<ExactPoint>>(&*result)) {
         geometry.kind = "area";
         points        = *polygon; // CGAL supplies cyclic order, not a bag of vertices.
     }
@@ -367,7 +367,7 @@ json classify_proper_crossings(const Mesh& mesh, const Issue& intersections)
         const auto intersection = CGAL::intersection(triangle(pair[0]), triangle(pair[1]));
         if (!intersection)
             throw std::runtime_error("CGAL reported a pair without intersection geometry.");
-        const auto* segment = boost::get<Kernel::Segment_3>(&*intersection);
+        const auto* segment = std::get_if<Kernel::Segment_3>(&*intersection);
         if (!segment || segment->source() == segment->target())
             continue;
         set_witness(pair, *segment, "triangle_interiors", "intersection_pair", {{{pair[0]}, {pair[1]}}});
@@ -407,7 +407,7 @@ json classify_proper_crossings(const Mesh& mesh, const Issue& intersections)
         const auto intersection = CGAL::intersection(triangle(pair[0]), triangle(pair[1]));
         if (!intersection)
             throw std::runtime_error("CGAL reported a pair without intersection geometry.");
-        const auto* segment = boost::get<Kernel::Segment_3>(&*intersection);
+        const auto* segment = std::get_if<Kernel::Segment_3>(&*intersection);
         if (!segment || segment->source() == segment->target())
             continue;
         if (candidates.size() >= candidate_limit)

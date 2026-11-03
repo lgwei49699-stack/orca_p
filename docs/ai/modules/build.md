@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:8ea15c6e3c2ded3e628f0ffd63869c15a30e0072f09f321f508dad35605ab1ce",
-  "reason": "在linux/release2_3_2合入69fe8a45bc：仅移除退休的报告专用SliceAnalysisGeometry源表项；保留发布分支工具链绑定缓存、3G ccache、source_ref、并发控制、180分钟预算、无PCH及MeshLib静态ZLIB/运行库闭包/包内回归。构建脚本与合并前HEAD相同，不移除CGAL/GMP/MeshLib；指纹按最终合并源码重算，当前检查与未重新打包边界见实施记录。 现有 GUI 源清单登记 GFDCloudPreset.hpp，无新目标/依赖/开关；回归仍编入 libslic3r_tests，master 的独立缓存重新构建，记录见 EPONE 云导入文档。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。 2026-10-27复核：既有Linux包内验证复用固定位置夹具补跑局部计划/真实FIFO/精简3MF回归并归档证据；不更改编译选项、缓存、版本或切片算法。 原工作区历史审核说明（保留原记录时点，不作为当前状态）：2026-10-26 按用户要求撤去 master 已提交的云工艺修复重复副本；Plater/GUI源表/EPONE测试恢复本分支HEAD，相关云头文件及归属移除。核对本模块共享依赖，除云导入退回该分支原实现外，无新的分盘、切片、预设默认值或界面入口变化；本轮验证见模型特征工作进展。 2026-10-30特征分支快进合入发布6fe1189e9，当前行为以合入源码及发布说明为准；本地历史文档、调试脚本仍未提交。 2026-10-30新增MeshRepair.cpp/hpp到libslic3r_cgal及上游核心测试，移除旧Outcome头；仅新核心启用CGAL_LINKED_WITH_TBB并链接现有TBB，CGAL5.6.3和第三方快照不变。macOS arm64应用/测试编译通过，Linux/Windows尚未验。"
+  "source_fingerprint": "sha256:011716e3a4746f147b8910e242e60fe31d9c6b0f13c63261fcbd0decec94164c",
+  "reason": "2026-10-31：CGAL 固定 6.2.1 官方 URL/SHA256 并同步 Flatpak，CMake 下限 3.22，源码目标删除 Alpha worker；保留 SDK OFF/ON 适配分支。arm64 Release 构建/回归通过，OFF 仅 Stub 重链探针；CI 缓存依赖 deps 哈希，无需改键。Linux/Windows/Flatpak 实际构建未验。"
 }
 -->
 
@@ -32,7 +32,7 @@
 
 ON要求64位和Orca静态依赖：macOS arm64显式最低14.0；Windows MSVC x64使用匹配工具集的官方非IteratorDebug SDK、Release系配置及/MD，拒绝/MT、/MDd和非零iterator ABI；Linux x64/arm64支持官方include/MeshLib及lib/MeshLib布局，针对已知静态依赖archive隐藏导出，防止旧符号干扰SDK，但此配置不证明ELF绑定安全。Windows/Linux输出实验提示，需目标平台编译运行验收，不能将配置测试写成原生通过。OFF保留原平台/最低版本。
 
-SDK版本校验：Unix读固定config_cmake.h，Windows读完整发行目录app/Release/mr.version；MRMesh/MRVoxels运行库内容哈希进入私有模板，不再固化构建机绝对路径。Windows运行期使用宽字符WinAPI按函数地址定位DLL；Unix使用dladdr，适配层启用PIC。哈希不覆盖所有传递依赖，也不是加载沙箱。直接 CMake 的 Unix 评估构建使用构建树 SDK RPATH，Windows运行需要在受控DLL搜索路径提供配套依赖；缺库仍可能早于CLI解析失败。macOS 发布脚本现在支持用户已配置 SDK 的本地测试包：先处理库副本，再链接及记录最终哈希，不修改原始 SDK、不下载/安装 SDK、不创建服务端镜像。打包成功不代表商业授权或公证完成。具体构建/迁移边界见[适配层说明](../../../src/meshlib/README.md)。仍由同一Orca调用SDK，无额外修复程序；默认Alpha Wrap不变。
+SDK版本校验：Unix读固定config_cmake.h，Windows读完整发行目录app/Release/mr.version；MRMesh/MRVoxels运行库内容哈希进入私有模板，不再固化构建机绝对路径。Windows运行期使用宽字符WinAPI按函数地址定位DLL；Unix使用dladdr，适配层启用PIC。哈希不覆盖所有传递依赖，也不是加载沙箱。直接 CMake 的 Unix 评估构建使用构建树 SDK RPATH，Windows运行需要在受控DLL搜索路径提供配套依赖；缺库仍可能早于CLI解析失败。macOS 发布脚本现在支持用户已配置 SDK 的本地测试包：先处理库副本，再链接及记录最终哈希，不修改原始 SDK、不下载/安装 SDK、不创建服务端镜像。打包成功不代表商业授权或公证完成。具体构建/迁移边界见[适配层说明](../../../src/meshlib/README.md)。当前分支由 Orca 直接调用 MeshLib，重建入口和 SDK-OFF 行为见下文。
 
 Linux ON 的 RPATH/静态 archive 符号隐藏通过 INTERFACE 链接条目穿过 PRIVATE STATIC 依赖，兼容既有 CMP0099 行为；`--disable-new-dtags` 使构建树间接 SDK 库也能解析。仅将 SDK 前缀和库目录传给 Linux 打包模板，OFF 提前返回。`package_meshlib_linux.py` 从两份 MR 库递归收集真实依赖至 `lib/meshlib`，保留 SONAME 与许可；glibc/加载器/编译器基础库仍由目标系统提供。仅主程序及带路径的非 MR 副本重定位，两份 MR 内容不变；清单校验哈希及实际加载路径。支持服务器直接执行 `bin/orca-slicer`，不只依赖 AppRun；ON 不再对 ELF 做全局 `/usr` 字节替换，OFF 保留旧处理。封装失败直接退出，不继续发布残缺包。
 
@@ -46,9 +46,11 @@ ZLIB 配置回归单独覆盖 Linux 系统 `FindZLIB` 的真实导入目标：ON
 
 根 CMake 配置依赖与目标，src 子目标链接 libslic3r、GUI 和开发工具；平台脚本组织依赖、应用与打包，dev-utils/platform 提供图标、manifest、plist 和桌面集成。deps/deps_src 是供应链边界。
 
-独立重建的 ModelReconstruction、MeshReconstruction、ReconstructionProcess 注册到 `src/libslic3r/CMakeLists.txt` 的现有库目标，候选参数／对比窗口注册到 `src/slic3r/CMakeLists.txt`。worker 直接启动当前应用并走内部命令分流，没有另一个常驻服务或新插件，也不复用 `open`／detached GUI 启动。Alpha Wrap 使用现有 CGAL 头文件依赖；CGAL 版本未变，GMP 平台定向修正如下。
+独立重建保留 ModelReconstruction、MeshReconstruction 和 InProcessReconstructionControl，统一接现有 MeshLib 适配目标。Alpha Wrap、ReconstructionProcess 及 worker 测试目标删除。SDK-OFF 仍可构建普通应用，重建明确不可用；SDK-ON 提供 GUI/CLI 重建。CGAL 升至 6.2.1，继续用于检查/高级修复/布尔/浮雕等几何消费者，不改变普通切片路由。
 
 10-06 缺陷优先重建压力测试复现 GMP 6.2.1/macOS arm64 汇编 x18 兼容异常。获用户授权后，[GMP 配方](../../../deps/GMP/GMP.cmake)仅针对 macOS arm64 目标固定使用官方 GMP 6.3.0 源码，SHA-256 `a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898`。按 `CMAKE_OSX_ARCHITECTURES` 选择，未指定时才取 `CMAKE_SYSTEM_PROCESSOR`，因此 Intel→arm64 也升级、arm64→Intel 不升级。Linux 和 macOS x86_64 仍为原 6.2.1 URL/hash/GCC15 补丁，Windows MSVC 仍复制原 `.lib/.dll`；不升级系统 Homebrew、不复制其库到项目，也不改变几何策略。6.3.0 在当前 Apple Clang/static 配置下使用未打补丁的上游源码；未泛化到其他编译器或 universal 构建。复现、正式构建和回归状态见[主记录](../validation/2026-10-04-smart-print-engine.md)最新节。
+
+CGAL 6.2.1 的包 URL/SHA256 同步到 deps 和 Flatpak 清单。Linux CI 缓存键包含 `hashFiles('deps/**')`，因此依赖升级会失效旧缓存；本轮未触发发布或验证 Flatpak 构建。
 
 ## 配置与约束
 
@@ -105,6 +107,8 @@ Windows GFD 设备选择的循环辅助实现注册在 `src/slic3r/CMakeLists.tx
 
 ## 修改与验证
 
+当前独立升级分支固定 CGAL 6.2.1，应用和依赖工程均要求 CMake 3.22 或更新版本。主体仍使用 C++17，MeshLib 适配层仍私有 C++20；不顺带升级 Boost、Eigen、GMP、MPFR、TBB 或 MeshLib。实际编译命令使用独立 6.2.1 前缀及与旧版一致的 GMPXX 精确数值后端。下文保留的 5.6.3 说明属于之前移植阶段；当前构建及验证见[升级记录](../validation/2026-10-31-cgal-621-upgrade.md)。
+
 `GFDCloudPreset.hpp` 登记到现有 GUI 源清单；工艺合成没有 GUI 依赖，EPONE 和真实 3MF 回归编入已有 `libslic3r_tests`。无新增构建目标/依赖，当前 master 的应用/测试构建身份见 [EPONE 记录](../validation/2026-10-24-epone-cloud-preset-roundtrip.md)。
 
 `test_macos_build_compatibility.py` 以小型原生 Mach-O 测构建入口、缓存、校验工具、双架构与签名，
@@ -117,7 +121,7 @@ Clang 支持/不支持及非 Clang 拒绝分支；模拟选项不用于编译，
 
 现有测试/工具范围：`scripts/tests/test_bundle_macos_zstd.py`、`scripts/tests/test_gmp_platform_selection.py`。GMP 测试调用真实配方的条件分支，只替换构建注册函数，覆盖 native/cross Apple、Linux 和 MSVC，不下载或编译依赖；运行时稳定性另由项目库自检和重新链接后的几何/修复回归证明。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
 
-重建当前使用本仓库 `build/arm64` 的 Release 配置；交接以 `build/arm64/src/Release/OrcaSlicer.app` 的实际新链接产物和匹配资源为准，不能启动尚未更新的 `build/arm64/OrcaSlicer/OrcaSlicer.app` 打包副本。编译／测试状态和 hash 在[主记录](../validation/2026-10-04-smart-print-engine.md)，GUI 启动命令在[交接清单](../validation/2026-10-05-reconstruction-gui.md)。本轮不因为增加 worker 就宣称 Windows/Linux 打包、进程限制、中文路径或商业发行已经验收。
+本轮隔离工作区实际程序为 `build/arm64/src/Release/OrcaSlicer`，测试为 `build/arm64/tests/libslic3r/Release/libslic3r_tests`。使用新链接产物和匹配资源，不打开原工作区旧 `.app` 证明新代码。构建/源码身份和 SDK-OFF 探针边界见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 ## 分支现状
 

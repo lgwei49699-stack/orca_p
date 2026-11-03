@@ -3,6 +3,7 @@
 
 #include "Model.hpp"
 #include "ModelInspection.hpp"
+#include "MeshRepair.hpp"
 #include "ModelRepairEvidence.hpp"
 #include "ModelStageReport.hpp"
 #include "InProcessReconstructionControl.hpp"
@@ -38,7 +39,7 @@ constexpr size_t  MAX_REPORT_BYTES  = 256 * 1024;
 constexpr size_t  MAX_FILE_BYTES    = 256 * 1024 * 1024;
 constexpr size_t  INPUT_FACE_LIMIT  = RECONSTRUCTION_MAX_INPUT_FACES;
 constexpr size_t  OUTPUT_FACE_LIMIT = RECONSTRUCTION_MAX_OUTPUT_FACES;
-constexpr char    MESH_MAGIC[8]     = {'O', 'R', 'C', 'A', 'R', 'C', '0', '1'};
+constexpr char    MESH_IDENTITY_DOMAIN[8] = {'O', 'R', 'C', 'A', 'R', 'C', '0', '1'};
 std::atomic<bool> reconstruction_running{false};
 
 std::string sha256_bytes(const void* bytes, size_t size)
@@ -81,23 +82,6 @@ std::string sha256_file(const fs::path& path)
     return out.str();
 }
 
-json reconstruction_backend(const ModelReconstructionOptions& options)
-{
-    if (options.engine == "alpha-wrap") {
-        if (options.voxel_mm != 0.)
-            throw std::invalid_argument(L("Voxel size requires the meshlib reconstruction engine."));
-        return {{"engine", "alpha-wrap"}};
-    }
-    if (options.engine != "meshlib")
-        throw std::invalid_argument(L("Reconstruction engine must be alpha-wrap or meshlib."));
-    if (!std::isfinite(options.voxel_mm) || options.voxel_mm <= 0. || options.voxel_mm > std::numeric_limits<float>::max() ||
-        float(options.voxel_mm) <= 0.)
-        throw std::invalid_argument(L("MeshLib requires an explicit finite positive --reconstruction-voxel-mm."));
-    if (!OrcaMeshLib::available())
-        throw std::invalid_argument(L("This Orca build does not include the MeshLib SDK backend."));
-    return {{"engine", "meshlib"}, {"sdk_version", "3.1.3.429"}, {"voxel_mm", options.voxel_mm}};
-}
-
 std::string digest(boost::uuids::detail::sha1& hash)
 {
     unsigned int words[5];
@@ -113,7 +97,7 @@ std::string mesh_identity(const TriangleMesh& mesh)
 {
     boost::uuids::detail::sha1 hash;
     const uint64_t             nv = mesh.its.vertices.size(), nf = mesh.its.indices.size();
-    hash.process_bytes(MESH_MAGIC, sizeof(MESH_MAGIC));
+    hash.process_bytes(MESH_IDENTITY_DOMAIN, sizeof(MESH_IDENTITY_DOMAIN));
     hash.process_bytes(&nv, sizeof(nv));
     hash.process_bytes(&nf, sizeof(nf));
     for (const auto& vertex : mesh.its.vertices)
@@ -138,76 +122,6 @@ void validate_mesh_storage(const TriangleMesh& mesh, size_t face_limit)
                 throw std::runtime_error(L("Reconstruction mesh contains an invalid face index."));
 }
 
-// Fixed-size, same-executable local protocol. File size/counts are checked
-// before allocation; STL importers are never used to interpret worker output.
-void write_mesh(const fs::path& path, const TriangleMesh& mesh, size_t limit)
-{
-    validate_mesh_storage(mesh, limit);
-    boost::nowide::ofstream out(path.string(), std::ios::binary | std::ios::trunc);
-    const uint64_t          nv = mesh.its.vertices.size(), nf = mesh.its.indices.size();
-    out.write(MESH_MAGIC, sizeof(MESH_MAGIC));
-    out.write(reinterpret_cast<const char*>(&nv), sizeof(nv));
-    out.write(reinterpret_cast<const char*>(&nf), sizeof(nf));
-    for (const auto& v : mesh.its.vertices)
-        out.write(reinterpret_cast<const char*>(v.data()), 3 * sizeof(float));
-    for (const auto& f : mesh.its.indices)
-        out.write(reinterpret_cast<const char*>(f.data()), 3 * sizeof(int32_t));
-    out.close();
-    if (!out)
-        throw std::runtime_error(L("Could not write the reconstruction mesh."));
-}
-
-TriangleMesh read_mesh(const fs::path& path, size_t limit)
-{
-    if (!fs::is_regular_file(fs::symlink_status(path)))
-        throw std::runtime_error(L("Reconstruction mesh is missing or is not a regular file."));
-    const auto bytes = fs::file_size(path);
-    if (bytes < 24 || bytes > 24 + uint64_t(limit) * 48)
-        throw std::runtime_error(L("Reconstruction mesh file exceeds its size limit."));
-    boost::nowide::ifstream in(path.string(), std::ios::binary);
-    char                    magic[8];
-    uint64_t                nv = 0, nf = 0;
-    in.read(magic, sizeof(magic));
-    in.read(reinterpret_cast<char*>(&nv), sizeof(nv));
-    in.read(reinterpret_cast<char*>(&nf), sizeof(nf));
-    if (!in || std::memcmp(magic, MESH_MAGIC, sizeof(magic)) || nf == 0 || nf > limit || nv == 0 || nv > limit * 3 ||
-        bytes != 24 + 12 * (nv + nf))
-        throw std::runtime_error(L("Invalid or truncated reconstruction mesh protocol."));
-    indexed_triangle_set its;
-    its.vertices.resize(size_t(nv));
-    its.indices.resize(size_t(nf));
-    for (auto& v : its.vertices)
-        in.read(reinterpret_cast<char*>(v.data()), 3 * sizeof(float));
-    for (auto& f : its.indices)
-        in.read(reinterpret_cast<char*>(f.data()), 3 * sizeof(int32_t));
-    if (!in)
-        throw std::runtime_error(L("Could not read the complete reconstruction mesh."));
-    // TriangleMesh's constructor computes volume using face indices. Validate
-    // raw storage before that constructor can dereference untrusted indices.
-    for (const auto& v : its.vertices)
-        if (!v.allFinite())
-            throw std::runtime_error(L("Reconstruction mesh contains non-finite coordinates."));
-    for (const auto& f : its.indices)
-        for (int i = 0; i != 3; ++i)
-            if (f[i] < 0 || size_t(f[i]) >= its.vertices.size())
-                throw std::runtime_error(L("Reconstruction mesh contains an invalid face index."));
-    TriangleMesh mesh(std::move(its));
-    validate_mesh_storage(mesh, limit);
-    return mesh;
-}
-
-json read_json(const fs::path& path)
-{
-    if (!fs::is_regular_file(fs::symlink_status(path)) || fs::file_size(path) > MAX_REPORT_BYTES)
-        throw std::runtime_error(L("Reconstruction report is missing or exceeds its size limit."));
-    boost::nowide::ifstream in(path.string());
-    json                    data;
-    in >> data;
-    if (!in || !data.is_object())
-        throw std::runtime_error(L("Invalid reconstruction report."));
-    return data;
-}
-
 void write_json(const fs::path& path, const json& data)
 {
     const auto encoded = data.dump(2);
@@ -222,50 +136,18 @@ void write_json(const fs::path& path, const json& data)
     fs::rename(temporary, path);
 }
 
-json parameters(const MeshReconstructionOptions& o)
+void validate_reconstruction_options(const ModelReconstructionOptions& options)
 {
-    return {{"alpha_mm", o.alpha_mm},
-            {"offset_mm", o.offset_mm},
-            {"max_deviation_mm", o.max_deviation_mm},
-            {"close_open_boundaries", o.close_open_boundaries},
-            {"deviation_policy", "warning_only"},
-            {"max_input_faces", o.max_input_faces},
-            {"max_output_faces", o.max_output_faces}};
-}
-
-MeshReconstructionOptions parse_parameters(const json& j)
-{
-    MeshReconstructionOptions o;
-    o.alpha_mm              = j.at("alpha_mm").get<double>();
-    o.offset_mm             = j.at("offset_mm").get<double>();
-    o.max_deviation_mm      = j.at("max_deviation_mm").get<double>();
-    o.close_open_boundaries = j.value("close_open_boundaries", true);
-    o.max_input_faces       = j.at("max_input_faces").get<size_t>();
-    o.max_output_faces      = j.at("max_output_faces").get<size_t>();
+    const auto& o = options.mesh;
     if (o.max_input_faces == 0 || o.max_input_faces > INPUT_FACE_LIMIT || o.max_output_faces == 0 ||
-        o.max_output_faces > OUTPUT_FACE_LIMIT || !std::isfinite(o.alpha_mm) || !std::isfinite(o.offset_mm) ||
-        !std::isfinite(o.max_deviation_mm) || o.alpha_mm <= 0 || o.offset_mm <= 0 || o.max_deviation_mm <= 0 ||
-        o.offset_mm > o.alpha_mm * 0.25)
+        o.max_output_faces > OUTPUT_FACE_LIMIT || !std::isfinite(o.max_deviation_mm) || o.max_deviation_mm <= 0)
         throw std::invalid_argument(L("Invalid reconstruction parameters or unsupported resource limits."));
-    return o;
+    if (!std::isfinite(options.voxel_mm) || options.voxel_mm <= 0. || options.voxel_mm > std::numeric_limits<float>::max() ||
+        float(options.voxel_mm) <= 0.)
+        throw std::invalid_argument(L("MeshLib requires an explicit finite positive --reconstruction-voxel-mm."));
+    if (!OrcaMeshLib::available())
+        throw std::invalid_argument(L("This Orca build does not include the MeshLib SDK backend."));
 }
-
-struct TaskDirectory
-{
-    fs::path path;
-    TaskDirectory()
-    {
-        path = fs::temp_directory_path() / fs::unique_path("orca-reconstruction-%%%%-%%%%-%%%%-%%%%");
-        if (!fs::create_directory(path))
-            throw std::runtime_error(L("Could not create a private reconstruction directory."));
-        fs::permissions(path, fs::owner_all);
-    }
-    ~TaskDirectory()
-    {
-        boost::system::error_code ec;
-        fs::remove_all(path, ec);
-    }
-};
 
 struct RunningGuard
 {
@@ -280,6 +162,8 @@ struct RunningGuard
 json base_report()
 {
     return {{"schema", "model_reconstruction_v1"},
+            {"backend", "meshlib"},
+            {"sdk_version", "3.1.3.429"},
             {"status", "failed"},
             {"mesh_validated", false},
             {"shape_confirmation", "not_confirmed"},
@@ -289,8 +173,10 @@ json base_report()
             {"requires_manual_confirmation", true}};
 }
 
-TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot_sha256 = nullptr, bool share_exact_vertices = false,
-                                    bool geometry_only = false)
+TriangleMesh read_reconstruction_stl(const fs::path& path,
+                                     std::string*    snapshot_sha256      = nullptr,
+                                     bool            share_exact_vertices = false,
+                                     bool            geometry_only        = false)
 {
     if (!fs::is_regular_file(path))
         throw std::invalid_argument(L("STL input is missing or is not a regular file."));
@@ -389,8 +275,8 @@ TriangleMesh read_reconstruction_stl(const fs::path& path, std::string* snapshot
             if (unused_normal) {
                 for (char& c : token)
                     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                if (token == "nan" || token == "+nan" || token == "-nan" || token == "inf" || token == "+inf" ||
-                    token == "-inf" || token == "infinity" || token == "+infinity" || token == "-infinity")
+                if (token == "nan" || token == "+nan" || token == "-nan" || token == "inf" || token == "+inf" || token == "-inf" ||
+                    token == "infinity" || token == "+infinity" || token == "-infinity")
                     return 0.f;
             }
             number.clear();
@@ -481,19 +367,35 @@ bool reconstruct_with_meshlib(const TriangleMesh&               source,
     OrcaMeshLib::Result sdk;
     {
         // Only bounded value arrays cross the C++17/C++20 adapter boundary.
-        // No files, subprocess, MR types or Orca scene pointers enter the SDK.
+        // Release the private cleanup copy before the SDK allocates its meshes.
         OrcaMeshLib::Mesh input;
-        input.vertices.reserve(source.its.vertices.size());
-        input.faces.reserve(source.its.indices.size());
-        for (const auto& v : source.its.vertices)
-            input.vertices.push_back({v.x(), v.y(), v.z()});
-        for (const auto& f : source.its.indices)
-            input.faces.push_back({f.x(), f.y(), f.z()});
+        {
+            TriangleMesh input_mesh = source;
+            report["input_preparation"]["removed_redundant_faces"] = normalize_reconstruction_duplicates(input_mesh);
+            checkpoint();
+            input.vertices.reserve(input_mesh.its.vertices.size());
+            input.faces.reserve(input_mesh.its.indices.size());
+            for (const auto& v : input_mesh.its.vertices)
+                input.vertices.push_back({v.x(), v.y(), v.z()});
+            for (const auto& f : input_mesh.its.indices)
+                input.faces.push_back({f.x(), f.y(), f.z()});
+        }
         checkpoint();
         OrcaMeshLib::Options sdk_options;
-        sdk_options.voxel_mm             = requested.voxel_mm;
-        sdk_options.max_input_faces      = options.max_input_faces;
-        sdk_options.max_output_faces     = options.max_output_faces;
+        sdk_options.voxel_mm         = requested.voxel_mm;
+        sdk_options.max_input_faces  = options.max_input_faces;
+        sdk_options.max_output_faces = options.max_output_faces;
+        // Closed oriented surfaces need no distant hole-closing surface. Keep
+        // winding-number signs (including intersections and nested cavities),
+        // but let the SDK restrict distance evaluation to the surface band.
+        // Reuse the complete input inspection; never infer closure from face count.
+        const auto& issues         = report["input_inspection"]["issues"];
+        bool        closed_surface = true;
+        for (const char* key : {"boundary", "nonmanifold_edge", "orientation", "duplicate", "degenerate"}) {
+            const auto& issue = issues.at(key);
+            closed_surface &= issue.at("complete").get<bool>() && issue.at("count") == 0;
+        }
+        sdk_options.close_holes          = !closed_surface;
         sdk_options.progress             = [&](float) { return control.keep_running(); };
         const auto sdk_started           = elapsed_ms();
         sdk                              = OrcaMeshLib::rebuild(input, sdk_options);
@@ -545,7 +447,7 @@ bool reconstruct_with_meshlib(const TriangleMesh&               source,
     }
     const auto comparison_started               = elapsed_ms();
     report["metrics"]                           = compare_reconstruction_meshes(source, candidate, options);
-    report["metrics"]["engine"]                 = "MeshLib rebuildMesh";
+    report["metrics"]["engine"]                 = "MeshLib";
     report["metrics"]["engine_version"]         = "3.1.3.429";
     report["metrics"]["voxel_mm"]               = requested.voxel_mm;
     report["metrics"]["effective_voxel_mm"]     = double(float(requested.voxel_mm));
@@ -562,6 +464,25 @@ bool reconstruct_with_meshlib(const TriangleMesh&               source,
          {"component_correspondence", "not_verified"},
          {"message", L("No additional small-component filtering was performed. Reconstruction may still lose or merge small features; "
                        "clearances, thin walls and separate parts require shape review.")}};
+    auto&       structure = report["structure_preservation"];
+    const auto& input_check = report.at("input_inspection");
+    const bool  topology_comparable = input_check.at("check_complete").get<bool>() && input_check.at("mesh_status") == "passed";
+    structure["topology_comparison_complete"] = topology_comparable;
+    structure["topology_changed"]             = nullptr;
+    if (topology_comparable) {
+        // Both surfaces passed full manifold/closure checks. For closed triangle
+        // meshes E = 3F/2, so existing exact vertex/face counts give V-E+F.
+        // Equal Euler/component counts do not prove local shape preservation.
+        const auto euler = [](const json& inspection) {
+            return inspection.at("geometric_vertex_count").get<int64_t>() - inspection.at("triangle_count").get<int64_t>() / 2;
+        };
+        const auto before                        = euler(input_check);
+        const auto after                         = euler(validation.at("inspection"));
+        structure["input_euler_characteristic"]  = before;
+        structure["output_euler_characteristic"] = after;
+        structure["topology_changed"]            = before != after ||
+                                        structure.at("input_connected_components") != structure.at("output_connected_components");
+    }
     report["validation"]["complete"]          = true;
     report["validation"]["geometry_complete"] = true;
     report["status"]                          = "candidate_ready";
@@ -570,7 +491,8 @@ bool reconstruct_with_meshlib(const TriangleMesh&               source,
     return true;
 }
 
-// Same geometric acceptance for both engines. The caller owns its resource and
+// Validate the stored local mesh and its rotation/scale round trip. Placement stays
+// in the model's double-precision transform, not in float vertices. The caller owns
 // cancellation strategy; this helper never changes process limits or kills work.
 void prepare_candidate_coordinates(const TriangleMesh&              candidate,
                                    const Transform3d&               to_mm,
@@ -589,27 +511,44 @@ void prepare_candidate_coordinates(const TriangleMesh&              candidate,
         !to_mm.matrix().row(3).isApprox(Eigen::RowVector4d(0, 0, 0, 1)))
         throw std::runtime_error(L("Invalid reconstruction transform."));
     local = candidate;
-    local.transform(to_mm.inverse(), true);
+    // Placement is kept out of the float reconstruction mesh; only undo rotation/scale.
+    local.transform(Matrix3d(to_mm.linear().inverse()), true);
     TriangleMesh round_trip = local;
-    round_trip.transform(to_mm, true);
+    round_trip.transform(Matrix3d(to_mm.linear()), true);
     double max_round_trip = 0;
     for (size_t i = 0; i < candidate.its.vertices.size(); ++i)
-        max_round_trip = std::max(max_round_trip, (candidate.its.vertices[i] - round_trip.its.vertices[i]).cast<double>().norm());
-    if (!std::isfinite(max_round_trip) || max_round_trip > std::min(1e-4, options.offset_mm * 0.01))
+        max_round_trip = std::max(max_round_trip,
+                                  (candidate.its.vertices[i].cast<double>() - round_trip.its.vertices[i].cast<double>()).norm());
+    if (!std::isfinite(max_round_trip) || max_round_trip > 1e-4)
         throw std::runtime_error(L("The model transform loses too much precision for reconstruction."));
-    json local_check, round_trip_check;
-    if (!validate_reconstruction_mesh(local, local_check, options.max_output_faces))
+    // Baking placement into a float copy can collapse valid faces that remain
+    // distinct in the stored mesh. Such a copy is not a coordinate round trip.
+    // Keep the failed check in the report as well as successful checks.
+    report["coordinate_validation"]["includes_placement_translation"] = false;
+    auto& local_check                                                 = report["coordinate_validation"]["local"];
+    auto& round_trip_check                                            = report["coordinate_validation"]["physical_round_trip"];
+    // This helper is reached only after the candidate passed its complete check.
+    // Reuse that result only for the identical float storage, never by bounds or
+    // face count: inverse rotation/scale may change representability.
+    const auto  candidate_identity  = mesh_identity(candidate);
+    const auto  local_identity      = mesh_identity(local);
+    const auto  round_trip_identity = mesh_identity(round_trip);
+    const auto& candidate_check     = report.at("engine").at("final_mesh_check");
+    if (local_identity == candidate_identity)
+        local_check = candidate_check;
+    else if (!validate_reconstruction_mesh(local, local_check, options.max_output_faces))
         throw std::runtime_error(L("Reconstruction geometry became invalid after transforming to model coordinates."));
     check();
-    // For the identity-transform CLI this is exactly the same float mesh.
+    // For identity rotation/scale this is exactly the same float mesh.
     // Reuse the validated result only when its full storage identity matches.
-    if (mesh_identity(local) == mesh_identity(round_trip))
+    if (local_identity == round_trip_identity)
         round_trip_check = local_check;
+    else if (round_trip_identity == candidate_identity)
+        round_trip_check = candidate_check;
     else if (!validate_reconstruction_mesh(round_trip, round_trip_check, options.max_output_faces))
         throw std::runtime_error(L("Reconstruction geometry became invalid after transforming to model coordinates."));
     check();
     report["metrics"]["transform_round_trip_error_mm"] = max_round_trip;
-    report["coordinate_validation"]                    = {{"local", local_check}, {"physical_round_trip", round_trip_check}};
     hull                                               = local.convex_hull_3d();
     check();
     json hull_check;
@@ -619,24 +558,23 @@ void prepare_candidate_coordinates(const TriangleMesh&              candidate,
     report["convex_hull_validation"] = std::move(hull_check);
 }
 
-bool run_meshlib_in_process(const TriangleMesh&                 source,
-                            const Transform3d&                  to_mm,
-                            const ModelReconstructionOptions&   options,
-                            const ReconstructionProcessOptions& limits,
-                            TriangleMesh&                       candidate,
-                            TriangleMesh&                       local,
-                            TriangleMesh&                       hull,
-                            json&                               report)
+bool run_meshlib_in_process(const TriangleMesh&               source,
+                            const Transform3d&                to_mm,
+                            const ModelReconstructionOptions& options,
+                            const ReconstructionLimits&       limits,
+                            TriangleMesh&                     candidate,
+                            TriangleMesh&                     local,
+                            TriangleMesh&                     hull,
+                            json&                             report)
 {
     InProcessReconstructionControl control(limits.timeout_ms, limits.memory_limit_mb);
-    report["backend"]                              = "meshlib";
-    report["sdk_version"]                          = "3.1.3.429";
     report["execution"]                            = {{"mode", "in_process"},
-                                                      {"process_id", reconstruction_process_id()},
+                                                      {"process_id", current_reconstruction_process_id()},
                                                       {"hard_timeout", false},
                                                       {"crash_isolation", false}};
-    report["resource_limits"]["budget_mode"]       = "cooperative_process_rss";
+    report["resource_limits"]["budget_mode"]       = "cooperative_process_memory";
     report["resource_limits"]["hard_memory_limit"] = false;
+    report["resource_limits"]["memory_metric"]     = reconstruction_memory_metric();
     report["parameters"]                           = {{"engine", "meshlib"},
                                                       {"voxel_mm", options.voxel_mm},
                                                       {"max_deviation_mm", options.mesh.max_deviation_mm},
@@ -644,11 +582,25 @@ bool run_meshlib_in_process(const TriangleMesh&                 source,
                                                       {"max_input_faces", options.mesh.max_input_faces},
                                                       {"max_output_faces", options.mesh.max_output_faces}};
     const auto update_stop                         = [&] {
-        report["resource_limits"]["observed_peak_rss_bytes"] = control.peak_resident_bytes();
-        report["resource_limits"]["cooperative_elapsed_ms"]  = control.elapsed_ms();
+        report["resource_limits"]["observed_peak_memory_bytes"] = control.peak_memory_bytes();
+        report["resource_limits"]["cooperative_elapsed_ms"]     = control.elapsed_ms();
         if (!control.keep_running()) {
-            report["status"]  = inprocess_reconstruction_stop_name(control.stop_reason());
-            report["message"] = L("In-process reconstruction stopped; an uninterruptible SDK or validation phase may delay cancellation.");
+            report["status"] = inprocess_reconstruction_stop_name(control.stop_reason());
+            switch (control.stop_reason()) {
+            case InProcessReconstructionStop::Canceled:
+                report["message"] = L("Reconstruction was canceled. The original model was kept.");
+                break;
+            case InProcessReconstructionStop::TimedOut:
+                report["message"] = L("Reconstruction exceeded its time budget. The original model was kept.");
+                break;
+            case InProcessReconstructionStop::MemoryLimitExceeded:
+                report["message"] = L("Reconstruction exceeded the memory budget for the whole application. The original model was kept.");
+                break;
+            case InProcessReconstructionStop::MonitorFailed:
+                report["message"] = L("Reconstruction stopped because resource monitoring failed. The original model was kept.");
+                break;
+            case InProcessReconstructionStop::None: break;
+            }
             report["mesh_validated"] = false;
         }
     };
@@ -662,7 +614,7 @@ bool run_meshlib_in_process(const TriangleMesh&                 source,
     estimate_input.input_vertices   = source.its.vertices.size();
     estimate_input.max_output_faces = options.mesh.max_output_faces;
     estimate_input.voxel_mm         = options.voxel_mm;
-    estimate_input.resident_bytes   = control.resident_bytes();
+    estimate_input.memory_bytes     = control.memory_bytes();
     estimate_input.memory_limit_mb  = limits.memory_limit_mb;
     const auto extent               = source.bounding_box().size();
     for (int i = 0; i < 3; ++i)
@@ -791,18 +743,18 @@ TriangleMesh read_bounded_model_stl(const std::string& path, std::string& sha256
 
 std::string model_mesh_file_sha256(const std::string& path) { return sha256_file(fs::path(path)); }
 
-ReconstructionProcessOptions model_reconstruction_process_options(size_t                              input_faces,
-                                                                  const ReconstructionProcessOptions& requested,
-                                                                  size_t                              physical_memory_bytes)
+bool model_reconstruction_available() noexcept { return OrcaMeshLib::available(); }
+
+ReconstructionLimits model_reconstruction_limits(size_t input_faces, const ReconstructionLimits& requested, size_t physical_memory_bytes)
 {
     auto resolved = requested;
     if (resolved.timeout_ms == 0)
-        resolved.timeout_ms = input_faces > 1000000 ? 300000 : (input_faces > 200000 ? 180000 : 60000);
+        resolved.timeout_ms = input_faces > 1000000 ? 300000 : (input_faces > 200000 ? 180000 : 120000);
     if (resolved.memory_limit_mb == 0) {
         const size_t target_mb = input_faces > 1000000 ? 4096 : (input_faces > 200000 ? 2048 : 1024);
         // Leave RAM for the caller's model, UI, other applications and the OS.
-        // Unknown RAM must not silently select the largest worker budget.
-        const size_t host_mb = physical_memory_bytes == 0 ? 1024 : physical_memory_bytes / (4 * 1024 * 1024);
+        // Unknown RAM must not silently select the largest memory budget.
+        const size_t host_mb     = physical_memory_bytes == 0 ? 1024 : physical_memory_bytes / (4 * 1024 * 1024);
         resolved.memory_limit_mb = std::min(target_mb, std::max(size_t(128), host_mb));
     }
     if (resolved.timeout_ms > 300000 || resolved.memory_limit_mb < 128 || resolved.memory_limit_mb > 4096)
@@ -899,16 +851,12 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
     try {
         if (!running.acquired)
             throw std::runtime_error(L("Another reconstruction is already running."));
-        if (options.process.is_canceled && options.process.is_canceled()) {
+        if (options.limits.is_canceled && options.limits.is_canceled()) {
             result.status = "canceled";
             throw std::runtime_error(L("Reconstruction was canceled."));
         }
-        const auto mesh_options = parse_parameters(parameters(options.mesh));
-        reconstruction_backend(options);
-        if (options.engine == "meshlib") {
-            result.report["backend"]     = "meshlib";
-            result.report["sdk_version"] = "3.1.3.429";
-        }
+        validate_reconstruction_options(options);
+        const auto& mesh_options = options.mesh;
         if (object_index >= model.objects.size() || !model.objects[object_index])
             throw std::invalid_argument(L("No model object selected for reconstruction."));
         const auto& source_object = *model.objects[object_index];
@@ -918,104 +866,45 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
             throw std::invalid_argument(error);
         }
         validate_mesh_storage(source_object.volumes.front()->mesh(), mesh_options.max_input_faces);
-        const auto process_options = model_reconstruction_process_options(source_object.volumes.front()->mesh().its.indices.size(),
-                                                                          options.process, total_physical_memory());
+        const auto process_options = model_reconstruction_limits(source_object.volumes.front()->mesh().its.indices.size(), options.limits,
+                                                                 total_physical_memory());
         result.report["resource_limits"] = {{"timeout_ms", process_options.timeout_ms},
-                                             {"memory_limit_mb", process_options.memory_limit_mb},
-                                             {"max_input_faces", mesh_options.max_input_faces},
-                                             {"max_output_faces", mesh_options.max_output_faces}};
-        const auto source_identity = model_reconstruction_source_identity(source_object);
+                                            {"memory_limit_mb", process_options.memory_limit_mb},
+                                            {"max_input_faces", mesh_options.max_input_faces},
+                                            {"max_output_faces", mesh_options.max_output_faces}};
+        const auto source_identity       = model_reconstruction_source_identity(source_object);
         // All source object access is before the synchronous runner pumps GUI
         // events. After that, only the private staging copy is used.
         auto              staged    = std::shared_ptr<Model>(model.make_object_staging_copy({object_index}));
         auto&             object    = *staged->objects[object_index];
         auto&             volume    = *object.volumes.front();
         const Transform3d to_mm     = object.instances.front()->get_matrix() * volume.get_matrix();
-        const auto        matrix    = to_mm.matrix().eval();
         TriangleMesh      source_mm = volume.mesh();
         validate_mesh_storage(source_mm, mesh_options.max_input_faces);
-        source_mm.transform(to_mm, true);
+        // Adding bed coordinates to float vertices can collapse tiny valid edges.
+        // Keep physical rotation/scale and validate the actual placement on the output.
+        source_mm.transform(Matrix3d(to_mm.linear()), true);
         validate_mesh_storage(source_mm, mesh_options.max_input_faces);
-        if (options.engine == "meshlib") {
-            TriangleMesh candidate_mm, candidate_local, candidate_hull;
-            result.report["source_identity"] = source_identity;
-            const bool generated        = run_meshlib_in_process(source_mm, to_mm, options, process_options, candidate_mm, candidate_local,
-                                                                 candidate_hull, result.report);
-            result.status               = result.report.value("status", "failed");
-            result.message              = result.report.value("message", "");
-            result.report["elapsed_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started)
-                                              .count();
-            if (!generated || result.status != "candidate_ready" || !result.report.value("mesh_validated", false))
-                return result;
-            const auto before_box      = source_mm.bounding_box();
-            const auto after_box       = candidate_mm.bounding_box();
-            result.report["placement"] = {{"before_min_z_mm", before_box.min.z()},
-                                          {"after_min_z_mm", after_box.min.z()},
-                                          {"suggested_lift_mm", std::max(0.0, double(-after_box.min.z()))},
-                                          {"automatically_moved", false}};
-            volume.set_mesh(std::move(candidate_local));
-            volume.set_convex_hull(std::move(candidate_hull));
-            object.instances.front()->invalidate_convex_hull_2d();
-            volume.set_new_unique_id();
-            volume.exterior_facets.reset();
-            object.invalidate_bounding_box();
-            result.candidate_model = std::move(staged);
-            return result;
-        }
-        TaskDirectory task;
-        auto          request = json{{"schema", "reconstruction_worker_v1"},
-                                     {"source_identity", source_identity},
-                                     {"mesh_identity", mesh_identity(source_mm)},
-                                     {"parameters", parameters(mesh_options)},
-                                     {"to_mm", std::vector<double>(matrix.data(), matrix.data() + 16)},
-                                     {"parent_pid", reconstruction_process_id()},
-                                     {"timeout_ms", process_options.timeout_ms},
-                                     {"memory_limit_mb", process_options.memory_limit_mb}};
-        write_mesh(task.path / "input.mesh", source_mm, mesh_options.max_input_faces);
-        write_json(task.path / "request.json", request);
-        const auto process = run_reconstruction_process(options.executable, {"--reconstruction-worker", task.path.string()},
-                                                        process_options);
-        if (process.status != ReconstructionProcessStatus::Success) {
-            result.status = reconstruction_process_status_name(process.status);
-            throw std::runtime_error(process.message.empty() ? L("Reconstruction worker failed.") : process.message);
-        }
-        auto report = read_json(task.path / "report.json");
-        if (report.value("schema", "") != "model_reconstruction_v1" || report.value("source_identity", "") != source_identity ||
-            report.value("input_mesh_identity", "") != request.at("mesh_identity"))
-            throw std::runtime_error(L("Reconstruction worker returned a mismatched report."));
-        report["resource_limits"]   = result.report.at("resource_limits");
-        result.status               = report.value("status", "failed");
-        result.message              = report.value("message", "");
-        result.report               = std::move(report);
+        TriangleMesh candidate_mm, candidate_local, candidate_hull;
+        result.report["reconstruction_coordinates"] = {{"units", "mm"},
+                                                       {"placement_translation_mm",
+                                                        {to_mm.translation().x(), to_mm.translation().y(), to_mm.translation().z()}},
+                                                       {"includes_placement_translation", false}};
+        result.report["source_identity"]            = source_identity;
+        const bool generated        = run_meshlib_in_process(source_mm, to_mm, options, process_options, candidate_mm, candidate_local,
+                                                             candidate_hull, result.report);
+        result.status               = result.report.value("status", "failed");
+        result.message              = result.report.value("message", "");
         result.report["elapsed_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started)
                                           .count();
-        if (result.status != "candidate_ready" || !result.report.value("mesh_validated", false)) {
+        if (!generated || result.status != "candidate_ready" || !result.report.value("mesh_validated", false))
             return result;
-        }
-        auto candidate_mm = read_mesh(task.path / "candidate.mesh", mesh_options.max_output_faces);
-        if (mesh_identity(candidate_mm) != result.report.at("output_mesh_identity").get<std::string>())
-            throw std::runtime_error(L("Reconstruction output checksum does not match the validated candidate."));
-        if (options.process.is_canceled && options.process.is_canceled()) {
-            result.status = "canceled";
-            throw std::runtime_error(L("Reconstruction was canceled before candidate delivery."));
-        }
         const auto before_box      = source_mm.bounding_box();
         const auto after_box       = candidate_mm.bounding_box();
-        result.report["placement"] = {{"before_min_z_mm", before_box.min.z()},
-                                      {"after_min_z_mm", after_box.min.z()},
-                                      {"suggested_lift_mm", std::max(0.0, double(-after_box.min.z()))},
+        result.report["placement"] = {{"before_min_z_mm", before_box.min.z() + to_mm.translation().z()},
+                                      {"after_min_z_mm", after_box.min.z() + to_mm.translation().z()},
+                                      {"suggested_lift_mm", std::max(0.0, -double(after_box.min.z()) - to_mm.translation().z())},
                                       {"automatically_moved", false}};
-        auto candidate_local       = read_mesh(task.path / "candidate.local.mesh", mesh_options.max_output_faces);
-        if (mesh_identity(candidate_local) != result.report.at("local_mesh_identity").get<std::string>())
-            throw std::runtime_error(L("Reconstruction output checksum does not match the validated candidate."));
-        auto candidate_hull = read_mesh(task.path / "candidate.hull.mesh", mesh_options.max_output_faces);
-        if (mesh_identity(candidate_hull) != result.report.at("convex_hull_mesh_identity").get<std::string>() ||
-            !result.report.at("convex_hull_validation").at("validation").value("complete", false))
-            throw std::runtime_error(L("Reconstruction convex hull does not match the validated candidate."));
-        // Replace only the private mesh; deleting/re-adding a lone volume would
-        // collapse its transform into the instance and change assembly metadata.
-        // All hull computation stays in the limited worker. Installing its
-        // matching hull also invalidates the copied source's 2D footprint cache.
         volume.set_mesh(std::move(candidate_local));
         volume.set_convex_hull(std::move(candidate_hull));
         object.instances.front()->invalidate_convex_hull_2d();
@@ -1050,96 +939,16 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
     }
 }
 
-int run_model_reconstruction_worker(const std::string& task_directory)
-{
-    const fs::path task(task_directory);
-    auto           report = base_report();
-    try {
-        const auto started = std::chrono::steady_clock::now();
-        const auto request = read_json(task / "request.json");
-        if (request.at("schema") != "reconstruction_worker_v1")
-            throw std::runtime_error(L("Unsupported reconstruction protocol."));
-        const size_t memory_limit = request.at("memory_limit_mb").get<size_t>();
-        if (memory_limit < 128 || memory_limit > 4096)
-            throw std::runtime_error(L("Unsupported reconstruction memory limit."));
-        std::string limit_error;
-        if (!apply_reconstruction_worker_limits(memory_limit, limit_error))
-            throw std::runtime_error(limit_error);
-        const unsigned timeout_ms = request.at("timeout_ms").get<unsigned>();
-        if (timeout_ms == 0 || timeout_ms > 300000)
-            throw std::runtime_error(L("Unsupported reconstruction time limit."));
-        ReconstructionWorkerGuard worker_guard(request.at("parent_pid").get<uint64_t>(), timeout_ms, memory_limit);
-        const auto                options = parse_parameters(request.at("parameters"));
-        report["source_identity"]         = request.at("source_identity");
-        report["input_mesh_identity"]     = request.at("mesh_identity");
-        report["parameters"]              = parameters(options);
-        auto source                       = read_mesh(task / "input.mesh", options.max_input_faces);
-        if (mesh_identity(source) != report.at("input_mesh_identity").get<std::string>())
-            throw std::runtime_error(L("Reconstruction input checksum mismatch."));
-        TriangleMesh candidate;
-        json         engine_report;
-        if (request.contains("backend"))
-            throw std::runtime_error(L("MeshLib is not available through the reconstruction worker protocol."));
-        const bool generated = reconstruct_mesh(source, candidate, engine_report, options);
-        report["engine"]     = engine_report;
-        report["status"]     = engine_report.value("status", generated ? "candidate_ready" : "failed");
-        report["message"]    = engine_report.value("message", "");
-        report["metrics"]    = engine_report.value("metrics", json::object());
-        if (generated) {
-            const auto transform_values = request.at("to_mm").get<std::vector<double>>();
-            if (transform_values.size() != 16)
-                throw std::runtime_error(L("Invalid reconstruction transform."));
-            Transform3d to_mm;
-            std::copy(transform_values.begin(), transform_values.end(), to_mm.matrix().data());
-            TriangleMesh local, hull;
-            prepare_candidate_coordinates(candidate, to_mm, options, local, hull, report);
-            write_mesh(task / "candidate.mesh", candidate, options.max_output_faces);
-            auto serialized = read_mesh(task / "candidate.mesh", options.max_output_faces);
-            if (mesh_identity(serialized) != mesh_identity(candidate))
-                throw std::runtime_error(L("Reconstruction output did not round-trip exactly."));
-            report["output_mesh_identity"] = mesh_identity(serialized);
-            write_mesh(task / "candidate.local.mesh", local, options.max_output_faces);
-            auto local_serialized = read_mesh(task / "candidate.local.mesh", options.max_output_faces);
-            if (mesh_identity(local_serialized) != mesh_identity(local))
-                throw std::runtime_error(L("Reconstruction output did not round-trip exactly."));
-            report["local_mesh_identity"] = mesh_identity(local_serialized);
-            write_mesh(task / "candidate.hull.mesh", hull, options.max_output_faces);
-            auto hull_serialized = read_mesh(task / "candidate.hull.mesh", options.max_output_faces);
-            if (mesh_identity(hull_serialized) != mesh_identity(hull))
-                throw std::runtime_error(L("Reconstruction convex hull did not round-trip exactly."));
-            report["convex_hull_mesh_identity"] = mesh_identity(hull_serialized);
-            report["mesh_validated"]            = true;
-        }
-        write_json(task / "report.json", report);
-        // A completed rejection is a valid worker response, not process failure.
-        return 0;
-    } catch (const std::exception& error) {
-        report["status"]         = "failed";
-        report["message"]        = error.what();
-        report["mesh_validated"] = false;
-        try {
-            write_json(task / "report.json", report);
-            return 0;
-        } catch (...) {
-            return 1;
-        }
-    } catch (...) {
-        return 1;
-    }
-}
-
-int run_model_reconstruction_cli(const std::string& executable, const std::vector<std::string>& args)
+int run_model_reconstruction_cli(const std::vector<std::string>& args)
 {
     ModelReconstructionOptions options;
-    options.executable = executable;
-    std::string input, output, reference;
-    bool        stage_report        = false;
-    bool        confirmed           = false;
-    bool        repair_evidence     = false;
-    bool        alpha_options_given = false;
-    std::string input_sha256;
-    fs::path    output_path;
-    bool        output_owned = false;
+    std::string                input, output, reference;
+    bool                       stage_report    = false;
+    bool                       confirmed       = false;
+    bool                       repair_evidence = false;
+    std::string                input_sha256;
+    fs::path                   output_path;
+    bool                       output_owned = false;
     try {
         for (size_t i = 0; i < args.size(); ++i) {
             const auto& arg = args[i];
@@ -1177,53 +986,33 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
                 confirmed = true;
                 continue;
             }
-            if (arg == "--reconstruction-no-close-open-boundaries") {
-                alpha_options_given                = true;
-                options.mesh.close_open_boundaries = false;
-                continue;
-            }
             if (arg == "--reconstruction-engine") {
                 if (++i >= args.size() || args[i].empty())
                     throw std::invalid_argument(L("Missing reconstruction option value."));
-                options.engine = args[i];
+                if (args[i] != "meshlib")
+                    throw std::invalid_argument(L("Only the meshlib reconstruction engine is supported."));
                 continue;
             }
             if (arg == "--help") {
                 boost::nowide::cout << L(
-                    "Usage: --reconstruct-model INPUT.stl --outputdir NEW_DIRECTORY --accept-reconstruction-risk\n"
-                    "Options: --reconstruction-alpha MM --reconstruction-offset MM --reconstruction-max-deviation MM\n"
-                    "         --reconstruction-timeout SECONDS --reconstruction-no-close-open-boundaries\n"
-                    "         --repair-evidence [0|1] (optional read-only boundary evidence, disabled by default)\n"
-                    "Generates an approximate candidate only. Original input is never overwritten.\n"
-                    "STL units are millimeters. Shape, holes and cavities may change; colored STL is unsupported.\n"
-                    "Maximum deviation is a warning threshold, not a rejection limit. Up to three bounded wrap attempts.\n"
-                    "Open boundaries are closed before wrapping when a validated solid can be formed; this may fill intended openings.\n"
-                    "Use --reconstruction-no-close-open-boundaries to keep the original surface-wrapping behavior.\n"
+                    "Usage: --reconstruct-model INPUT.stl --reconstruction-voxel-mm MM --outputdir NEW_DIRECTORY "
+                    "--accept-reconstruction-risk\n"
+                    "MeshLib is the only reconstruction engine. --reconstruction-engine meshlib is optional.\n"
+                    "Options: --reconstruction-max-deviation MM --reconstruction-timeout SECONDS (1 to 300)\n"
+                    "         --reconstruction-memory-mb INTEGER (128 to 4096 MiB) --repair-evidence [0|1]\n"
+                    "Optional business report: --model-stage-report [0|1] --model-reference ORIGINAL.stl\n"
+                    "Generates an approximate candidate only. The original is never overwritten. No automatic retries or fallback.\n"
+                    "STL units are millimeters. Holes, cavities and fine details may change; colored STL is unsupported.\n"
+                    "Maximum deviation is a warning threshold, not a rejection limit.\n"
                     "Input limits: 3000000 faces, 256 MiB STL. Output limit: 1000000 faces.\n"
-                    "Automatic worker budgets: 60/180/300 seconds and up to 1024/2048/4096 MiB by input size.\n"
-                    "Automatic memory is capped at one quarter of physical RAM; explicit timeout overrides the default.\n"
-                    "Candidate requires shape confirmation and a separate slice; this command never prints.\n");
-                boost::nowide::cout << L(
-                    "Optional local-evaluation backend: --reconstruction-engine meshlib --reconstruction-voxel-mm MM\n"
-                    "MeshLib 3.1.3.429 is called inside this Orca process when enabled at build time. No worker path is required.\n"
-                    "Limits are cooperative: SDK cancellation and process RSS sampling are not hard timeout or memory isolation.\n"
-                    "Uninterruptible SDK or validation phases may delay cancellation; SDK crashes are not isolated.\n"
-                    "Default engine is alpha-wrap. MeshLib requires an explicit voxel size; no automatic coarsening or fallback.\n"
-                    "Alpha, offset and no-close-open-boundaries apply only to alpha-wrap, not MeshLib.\n"
-                    "MeshLib may close openings, merge parts or lose small features. No additional small-component filtering is "
-                    "performed.\n"
-                    "MeshLib SDK is not bundled; commercial distribution requires separate licensing.\n");
-                boost::nowide::cout << L(
-                    "Optional memory budget: --reconstruction-memory-mb INTEGER (128 to 4096 MiB). Overrides the automatic budget.\n"
-                    "For MeshLib this is the whole Orca process RSS, not additional SDK memory or a hard allocation limit.\n"
-                    "Container limits are not detected automatically; leave headroom for other processes and runtime overhead.\n");
-                boost::nowide::cout << L("Optional business report: --model-stage-report [0|1] --model-reference ORIGINAL.stl\n"
-                                         "Writes model-stage.json in the output directory. Reference defaults to the input; no automatic adoption.\n");
+                    "Automatic budgets: 120/180/300 seconds and up to 1024/2048/4096 MiB by input size.\n"
+                    "Automatic memory is capped at one quarter of physical RAM; explicit budgets override the defaults.\n"
+                    "MeshLib runs inside Orca. Time and whole-process memory limits are cooperative, not hard isolation.\n"
+                    "Cancellation waits for SDK and validation work to return. Candidate confirmation and trial slicing are separate.\n");
                 return 0;
             }
-            if (arg == "--outputdir" || arg == "--reconstruction-alpha" || arg == "--reconstruction-offset" ||
-                arg == "--reconstruction-max-deviation" || arg == "--reconstruction-timeout" || arg == "--reconstruction-voxel-mm" ||
-                arg == "--reconstruction-memory-mb") {
+            if (arg == "--outputdir" || arg == "--reconstruction-max-deviation" || arg == "--reconstruction-timeout" ||
+                arg == "--reconstruction-voxel-mm" || arg == "--reconstruction-memory-mb") {
                 if (++i >= args.size())
                     throw std::invalid_argument(L("Missing reconstruction option value."));
                 if (arg == "--outputdir") {
@@ -1236,41 +1025,32 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
                     const auto value = std::stoul(args[i]);
                     if (value < 128 || value > 4096)
                         throw std::invalid_argument(L("Reconstruction memory budget must be an integer from 128 to 4096 MiB."));
-                    options.process.memory_limit_mb = size_t(value);
+                    options.limits.memory_limit_mb = size_t(value);
                     continue;
                 }
                 size_t       end   = 0;
                 const double value = std::stod(args[i], &end);
                 if (end != args[i].size() || !std::isfinite(value) || value <= 0)
                     throw std::invalid_argument(L("Reconstruction options require finite positive numbers."));
-                if (arg == "--reconstruction-alpha") {
-                    alpha_options_given   = true;
-                    options.mesh.alpha_mm = value;
-                } else if (arg == "--reconstruction-offset") {
-                    alpha_options_given    = true;
-                    options.mesh.offset_mm = value;
-                } else if (arg == "--reconstruction-voxel-mm")
+                if (arg == "--reconstruction-voxel-mm")
                     options.voxel_mm = value;
                 else if (arg == "--reconstruction-max-deviation")
                     options.mesh.max_deviation_mm = value;
                 else {
                     if (value < 1 || value > 300)
                         throw std::invalid_argument(L("Reconstruction timeout must be 1 to 300 seconds."));
-                    options.process.timeout_ms = unsigned(value * 1000);
+                    options.limits.timeout_ms = unsigned(value * 1000);
                 }
             } else if (!arg.empty() && arg.front() != '-' && input.empty())
                 input = arg;
             else
                 throw std::invalid_argument(L("Unsupported reconstruction option or extra input: ") + arg);
         }
-        parse_parameters(parameters(options.mesh));
         if (!confirmed || input.empty() || output.empty())
             throw std::invalid_argument(L("Reconstruction requires one STL, a new --outputdir, and --accept-reconstruction-risk."));
         if (!stage_report && !reference.empty())
             throw std::invalid_argument(L("--model-reference requires --model-stage-report."));
-        if (options.engine == "meshlib" && alpha_options_given)
-            throw std::invalid_argument(L("Alpha, offset and no-close-open-boundaries cannot be used with MeshLib."));
-        reconstruction_backend(options);
+        validate_reconstruction_options(options);
         fs::path input_path = fs::absolute(input);
         auto     extension  = input_path.extension().string();
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return char(std::tolower(c)); });
@@ -1279,7 +1059,7 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
         std::optional<ModelStageReportContext> stage_context;
         if (stage_report)
             stage_context = prepare_model_stage_report(input_path.string(), reference, output);
-        TriangleMesh mesh = read_reconstruction_stl(input_path, options.engine == "meshlib" ? &input_sha256 : nullptr);
+        TriangleMesh mesh = read_reconstruction_stl(input_path, &input_sha256);
         output_path       = fs::absolute(output);
         if (fs::exists(output_path) || !fs::is_directory(output_path.parent_path()))
             throw std::invalid_argument(L("Reconstruction output must be a new directory under an existing parent."));
@@ -1292,13 +1072,9 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
         object->name = input_path.filename().string();
         object->add_volume(std::move(mesh), ModelVolumeType::MODEL_PART, false);
         object->add_instance();
-        auto result = reconstruct_model_candidate(model, 0, options);
-        if (options.engine == "meshlib") {
-            result.report["backend"]                   = "meshlib";
-            result.report["sdk_version"]               = "3.1.3.429";
-            result.report["artifacts"]["input_sha256"] = input_sha256;
-            result.report["input_file"]                = input_path.string();
-        }
+        auto result                                = reconstruct_model_candidate(model, 0, options);
+        result.report["artifacts"]["input_sha256"] = input_sha256;
+        result.report["input_file"]                = input_path.string();
         if (result.candidate_model) {
             auto       candidate      = result.candidate_model->objects[0]->volumes.front()->mesh();
             const auto candidate_path = output_path / "candidate.stl";
@@ -1323,10 +1099,9 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
             };
             if (triangles(candidate) != triangles(reread))
                 throw std::runtime_error(L("Exported reconstruction STL changed its validated triangles."));
-            result.report["candidate_file"]    = "candidate.stl";
-            result.report["export_round_trip"] = "passed";
-            if (options.engine == "meshlib")
-                result.report["artifacts"]["candidate_sha256"] = sha256_file(candidate_path);
+            result.report["candidate_file"]                = "candidate.stl";
+            result.report["export_round_trip"]             = "passed";
+            result.report["artifacts"]["candidate_sha256"] = sha256_file(candidate_path);
             if (stage_context) {
                 const auto& inspection = result.report.at("coordinate_validation").at("local").at("inspection");
                 write_model_stage_report(*stage_context, output_path.string(), candidate_path.string(), candidate, inspection,
@@ -1341,12 +1116,8 @@ int run_model_reconstruction_cli(const std::string& executable, const std::vecto
     } catch (const std::exception& error) {
         auto report       = base_report();
         report["message"] = error.what();
-        if (options.engine == "meshlib") {
-            report["backend"]     = "meshlib";
-            report["sdk_version"] = "3.1.3.429";
-            if (!input_sha256.empty())
-                report["artifacts"]["input_sha256"] = input_sha256;
-        }
+        if (!input_sha256.empty())
+            report["artifacts"]["input_sha256"] = input_sha256;
         if (repair_evidence)
             report["boundary"] = model_reconstruction_boundary(report);
         if (output_owned) {

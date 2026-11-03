@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "render-ui",
-  "source_fingerprint": "sha256:3541af378073c23b3b876a305b794a9c17d7e364612af43f7049a1d7cbb7c746",
-  "reason": "实例级越界汇总原先绕过体积printable过滤，现仅启用打印的体积升级整体状态，保留禁用对象的几何显示状态。与CLI筛选及Print::apply核对，Plater使用汇总结果更新盘就绪状态。Mac应用编译通过，GUI实际切片/开关恢复/保存重开待按记录手测。"
+  "source_fingerprint": "sha256:fcb466b27fd1fa9fdd8e482054e45085b77efad4aac4d680d175d9a635731ea9",
+  "reason": "2026-10-31：依赖的 GUI_Factories 只增加两个盘修复菜单及委托，未改渲染、绘制顺序或控件机制；入口正文在 scene-editing，本模块无需新增业务说明。"
 }
 -->
 

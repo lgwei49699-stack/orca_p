@@ -19,7 +19,7 @@ import tempfile
 import time
 
 from test_cli_model_check import triangle_count, validate_business_result, validate_issue_summary
-from test_cli_model_reconstruction import FACES, VERTICES, binary_stl, digest, save_json
+from reconstruction_test_helpers import FACES, VERTICES, binary_stl, digest, save_json
 
 
 SCHEMA = "orca_model_stage_v1"

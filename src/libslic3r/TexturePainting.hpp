@@ -1,5 +1,7 @@
 #pragma once
 
+#include "TextureToColor/Callbacks.hpp"
+
 #include <array>
 #include <cstddef>
 #include <functional>
@@ -49,6 +51,9 @@ struct TexturePaintingSettings {
     std::size_t target_colors_num  = 4;
     double      smooth_weight      = 0.5;
     std::size_t oversampling_iters = 0;
+    tex2color::MeshRepairDecision mesh_repair_decision = tex2color::MeshRepairDecision::ImportWithoutRepair;
+    // Ask returns false with this flag set; no painted result is published.
+    bool* mesh_repair_decision_required = nullptr;
 };
 
 struct FilamentMatch {

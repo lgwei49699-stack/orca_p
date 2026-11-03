@@ -8383,6 +8383,12 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli = "variable-layer-height-keep-min";
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("texture_repair", coBool);
+    def->label = L("Repair Texture Mesh");
+    def->tooltip = L("Run advanced mesh repair before converting GLB/GLTF textures. Requires --export-texture-obj.");
+    def->cli = "texture-repair";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("texture_color_count", coInt);
     def->label = L("Texture Color Count");
     def->tooltip = L("Target color count used when converting GLB/GLTF textures. 0 detects the count automatically.");

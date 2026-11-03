@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "slicing",
-  "source_fingerprint": "sha256:87d3bc82a0bbe5e57f6f03bd8cd89bf342cc7e46246c689e3178e8006e8c4441",
-  "reason": "2026-10-23本续轮显式bounded优先仅修末层，合法时保留所有先前层位；原5层分配为后备，不改普通/GUI/旧adaptive。11项1635断言与坡面G-code对照通过，原复杂模型同程序重复波动如实记录，见质量策略记录。 共享原有Polygons到ExPolygons转换，一次切层同时得到诊断和有效区域；保留正常slice_mesh_ex参数语义，补模式/变换/孔洞/空层及实际PrintObject对照。将现有全空层异常检查移到brim首层访问前，避免空列表访问；预检不生成墙填充支撑或G-code。本次共享PrintConfig变化仅增加CLI repair_evidence_close_boundaries及证据帮助；已有直接重建依据时由模型检测工作流跳过预检，不更改本模块层高、区域构造、切片参数和GUI/CLI正常切片行为。 10-17 复核本次共享PrintConfig差异仅CLI misc的model_stage_report/reference及帮助；不进入本模块有效打印配置/GUI参数，相关算法、默认值和消费者未改，正文无需调整，不宣称本模块全量运行验证。 10-18 复核共享PrintConfig差异仅在CLIMiscConfigDef新增默认关闭的slice_analysis_report；本模块打印参数、算法、GUI消费者和默认行为均未改，正文无需变动，不宣称本模块全量运行验证。 10-19新增两个const Brim访问器仅暴露已有整板路径，未修改Print步骤、配置覆盖、缓存失效、筏层/模型首层规则；报告几何计算仍独立。普通入口与新报告入口的实际对照见本轮记录。 2026-10-19 复核Print.hpp/.cpp只给export_gcode增加末尾默认false的内部统计采集参数并构造GCode实例；Print::process/apply、层状态/路径和配置不变，正文补导出边界。LayerCount/PrintApplyCache和40CLI实际验证见本轮记录。 2026-10-22新增默认false、非持久化Print运行时模式及切换失效；LayerRegion和Layer Fill透传，原process/apply顺序与默认参数保持。GUI不启用，CLI只显式开启；关闭与修正前基线、模式切换缓存及开关报告的核查见实施记录。 2026-10-22新增有界adaptive封装，复制参数求交并拒绝分层冲突；旧重载与默认算法未改。5项653断言通过，CLI另校验最终普通模型层，实物尚未验收。 2026-10-23仅显式bounded增加尾部受限顶高对齐，最多补1层且保留此前层位；旧adaptive/GUI不调用，普通切片对照和10项1375断言见本轮记录。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。 2026-10-30：复核本次共享PrintConfig.cpp差异仅在CLI配置区新增model_inspection_mode（默认full），由独立check-model入口读取；本模块使用的打印配置、默认值及执行路径均未改，不新增计算，正文无需改动。 2026-10-30末轮：PrintConfig 仅修正已有 CLI basic 检查范围帮助文字（去除七类全检误述），键/类型/默认值及本模块读取规则未改，已核对逐行差异；同步中英文。ModelCheckWorkflow 头仅更正范围注释，详细说明及测试见模型修复记录。 2026-10-30本模块仅因watch的PrintConfig.cpp中App检查帮助改为原生未连接边而更新指纹；无配置键/默认值/有效值或本模块算法变化，正文无需变更。 合入 master 修复记录：旧矩阵维度兼顾颜色表与真实耗材参数，避免坏颜色表绕过兼容；保留手调配对/倍率和绑定。10种完整Print生命周期场景及两份历史崩溃工程通过，重复apply保持。"
+  "source_fingerprint": "sha256:d7c441874f73e7d9de710c2ef6ea9dff69f7d7b6bc50e69a0cf8184adbbbd31d",
+  "reason": "2026-11-03 Linux 2.3.2 合并。核对 Print、PrintApply 耗材槽修复与 CGAL 6.2.1 适配。"
 }
 -->
 

@@ -11,6 +11,9 @@ struct TextureToColorSettings {
 
     double smooth_weight = 0.5;  // 光顺权重, 范围[0, 1], 0表示不进行光顺, 1表示完全光顺
 
+    MeshRepairDecision mesh_repair_decision          = MeshRepairDecision::ImportWithoutRepair;
+    bool*              mesh_repair_decision_required = nullptr;
+
     // 当超采样迭代次数大于0时, 进行指定迭代次数的超采样; 否则, 自适应超采样
     std::size_t oversampling_iters = 0;  // 超采样迭代次数
     std::size_t oversampling_min_face_count = 10000;  // 自适应采样: 当face_count小于oversampling_min_face_count时, 进行超采样
