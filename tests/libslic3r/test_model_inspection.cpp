@@ -29,8 +29,15 @@ TEST_CASE("Basic inspection includes native open edges and declares skipped chec
         CHECK(basic["issues"]["boundary"]["count"] == its_num_open_edges(mesh.its));
         CHECK(basic["issues"]["boundary"]["method"] == "orca_open_edges");
         for (const char* key : {"nonmanifold_vertex", "self_intersection"}) {
-            CHECK(basic["issues"][key]["status"] == "not_requested");
-            CHECK(basic["issues"][key]["count"].is_null());
+            if (open) {
+                CHECK(basic["issues"][key]["status"] == "not_requested");
+                CHECK(basic["issues"][key]["count"].is_null());
+            } else {
+                CHECK(basic["issues"][key]["method"] == "existence");
+                CHECK(basic["issues"][key]["count"] == 0);
+                CHECK(basic["issues"][key]["complete"] == true);
+                CHECK(basic["issues"][key]["count_is_lower_bound"] == false);
+            }
         }
         for (const char* key : {"nonmanifold_edge", "degenerate", "duplicate", "orientation"}) {
             CHECK(basic["issues"][key]["count"] == 0);
@@ -65,7 +72,7 @@ TEST_CASE("App conclusion includes every measured basic defect without changing 
     for (const auto& issue : basic["issues"])
         has_defect |= issue["count"].is_number() && issue["count"].get<size_t>() != 0;
     CHECK(basic["mesh_status"] == (has_defect ? "needs_repair" : "passed"));
-    CHECK(model_inspection_boundary(basic)["status"] != "incomplete");
+    CHECK(basic["next_action"] == (has_defect ? "advanced_repair" : "none"));
     const auto full = inspect_model_mesh(mesh);
     for (const char* key : {"nonmanifold_edge", "degenerate", "duplicate", "orientation"})
         CHECK(basic["issues"][key]["count"] == full["issues"][key]["count"]);
@@ -73,7 +80,10 @@ TEST_CASE("App conclusion includes every measured basic defect without changing 
     if (std::string(fixture) == "08-intersecting-shells") {
         CHECK(open_edges == 0);
         CHECK(inspect_model_mesh(mesh)["issues"]["self_intersection"]["count"].get<size_t>() > 0);
-        CHECK(basic["issues"]["self_intersection"]["count"].is_null());
+        CHECK(basic["issues"]["self_intersection"]["count"] == 1);
+        CHECK(basic["issues"]["self_intersection"]["count_is_lower_bound"] == true);
+        CHECK(basic["issues"]["self_intersection"]["complete"] == false);
+        CHECK(basic["check_complete"] == false);
     }
     CHECK(mesh.its.vertices == vertices);
     CHECK(mesh.its.indices == faces);
@@ -475,8 +485,9 @@ TEST_CASE("Workflow separates opt-in completion from legacy repair outcomes", "[
         options.repair_evidence = false;
         run_model_check_workflow(options, report);
         CHECK(report.check["operation_status"] == "completed");
-        CHECK(report.check["advanced_repair"]["status"] == "repaired");
-        CHECK(report.check["mesh_status"] == "passed");
+        CHECK(report.check["advanced_repair"]["status"] == "partially_repaired");
+        CHECK(report.check["mesh_status"] == "needs_repair");
+        CHECK(report.check["inspection"]["issues"]["self_intersection"]["count_is_lower_bound"] == true);
         CHECK_FALSE(report.check.contains("section_evidence"));
         CHECK_FALSE(report.check.contains("repair_evidence"));
         CHECK(boost::filesystem::exists(report.check["working_model"].get<std::string>()));
@@ -740,8 +751,12 @@ TEST_CASE("Inspection distinguishes point contacts from edge-connected component
     ModelInspectionOptions basic_options;
     basic_options.analyze_components = false;
     const auto basic                 = inspect_model_mesh(mesh, basic_options);
-    CHECK(basic["mesh_status"] == "passed");
-    CHECK(model_inspection_boundary(basic)["status"] == "passed");
+    CHECK(basic["mesh_status"] == "needs_repair");
+    CHECK(basic["next_action"] == "advanced_repair");
+    CHECK(basic["issues"]["nonmanifold_vertex"]["count"] == 1);
+    CHECK(basic["issues"]["nonmanifold_vertex"]["count_is_lower_bound"] == true);
+    CHECK(basic["issues"]["self_intersection"]["status"] == "not_requested");
+    CHECK(model_inspection_boundary(basic)["has_geometry_defects"] == true);
 }
 
 TEST_CASE("Whole shell direction no longer affects the public inspection conclusion", "[ModelRepair][Inspection]")
@@ -1332,20 +1347,26 @@ TEST_CASE("Business JSON never substitutes zero findings for an inspection that 
     CHECK(model_check_business_result(json::array({check}), -27, "Invalid model") == result);
 }
 
-TEST_CASE("Closed edge contacts remain reported without automatic union", "[ModelInspection][AppBasic]")
+TEST_CASE("App repairs nonmanifold edges even when every other counted defect is absent", "[ModelInspection][AppBasic]")
 {
-    auto mesh   = make_cube(10., 10., 10.);
-    auto second = make_cube(10., 10., 10.);
-    second.translate(10., 10., 0.);
-    mesh.merge(second);
+    auto mesh = make_cube(10., 10., 10.);
+    auto other = mesh;
+    other.translate(10.f, 10.f, 0.f);
+    mesh.merge(other);
     ModelInspectionOptions options;
     options.analyze_components = false;
-    const auto result          = inspect_model_mesh(mesh, options);
-    CHECK(result["issues"]["boundary"]["count"] == 0);
-    CHECK(result["issues"]["nonmanifold_edge"]["count"].get<size_t>() > 0);
-    CHECK(result["mesh_status"] == "needs_repair");
-    CHECK(result["next_action"] == "none");
-    CHECK(model_inspection_boundary(result)["status"] == "defects_detected");
+    const auto report = inspect_model_mesh(mesh, options);
+    for (const char* key : {"boundary", "duplicate", "degenerate", "orientation"})
+        CHECK(report["issues"][key]["count"] == 0);
+    CHECK(report["issues"]["nonmanifold_edge"]["count"] == 1);
+    CHECK(report["issues"]["nonmanifold_vertex"]["status"] == "not_requested");
+    CHECK(report["issues"]["self_intersection"]["status"] == "not_requested");
+    CHECK(report["next_action"] == "advanced_repair");
+    CHECK(model_inspection_boundary(report)["status"] == "defects_detected");
+    const auto topology = inspect_model_mesh_topology(mesh);
+    CHECK(topology.size() == 5);
+    for (const char* key : {"nonmanifold_edge", "duplicate", "degenerate", "orientation"})
+        CHECK(topology[key] == report["issues"][key]);
 }
 
 TEST_CASE("App check keeps the source and only exports committed repairs", "[ModelRepair][Inspection][AppBasicDelivery]")

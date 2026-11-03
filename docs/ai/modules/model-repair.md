@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model-repair",
-  "source_fingerprint": "sha256:3b0b809855757c5c0917378a7419c23ef71d73e7f44c1abbe6659e9a2431b084",
-  "reason": "2026-11-03 整批入库前复核共享修复/重建、CGAL 6.2.1 API适配及失败/取消事务；本批只纠正CLI帮助的进程内存口径并删除Alpha Wrap残留注释，不改算法/参数/普通流程。当前Mac构建、93例3208断言、42重建CLI、63阶段CLI和7纹理CLI通过；GUI沿用上一批已验证且未变的入口，发布包及跨平台状态另列。"
+  "source_fingerprint": "sha256:5cc7e3b00846338ea5395c7299e761c834a2d13f3c00e4256e3dca197b875b32",
+  "reason": "2026-11-03 从现有打包线接回 basic 缺陷触发和提前停止的顶点／自交检查；复核完整检查容量、CGAL 6.2.1 及独立 MeshLib 路由未变。"
 }
 -->
 
@@ -60,7 +60,9 @@
 
 `--check-model --model-inspection-mode basic` 仅作用于独立检查及其高级修复组合；省略或 `full` 保持完整检查。原生导入后检查非空、有限坐标、合法索引、资源限制和五类轻量缺陷：原生未配对边、非流形边、严格零面积面、重复面及局部方向冲突。`boundary.count/method=orca_open_edges` 为原生邻接未配对边；`geometric_count` 为单面几何边界数，二者不可混称。同坐标精确归并、紧凑排序数组及过滤精确共线谓词保留，不将极窄有效面当作退化面。重复面区分同向多余面与反向重合组。
 
-所有已测阳性均写 `needs_repair/defects_detected`，不因没有自动处理操作就声称无缺陷。开放边、重复面、退化面或局部方向冲突触发一次高级处理；只有非流形几何边而原生邻接闭合时 `next_action=none`：简单拆索引不能消除坐标重合，自动布尔合并会改变模型，因此保留残留问题，不重复运行CGAL。阶段报告透传已有 `inspection.next_action`；Slicer basic且重建关闭时依据 `none/advanced_repair` 直接分流，不再重复维护四项计数规则。非流形边如由重复面引起，仍随重复面清理处理。`nonmanifold_vertex/self_intersection` 继续 `not_requested/count=null/complete=false`，不做顶点link、自交全面搜索或部件诊断；`topology_statistics_ms` 只计新增轻量统计，非任务总时长。
+App basic 任一边／面缺陷均返回 `needs_repair / next_action=advanced_repair`，包括仅有非流形边的闭合输入。五项均正常时，再用 CGAL 在原三角面上依次判断是否有非流形顶点或自交；首次阳性即停，`count=1/count_is_lower_bound=true/complete=false` 表示至少一处，未执行项仍为 null。全部必要项阴性才通过；不统计所有相交对或计算部件包含关系。阴性自交查询仍需搜完整个网格。
+
+检查、每个 volume 的高级修复准入和修后复检共用这套规则。Slicer 最多进入一次高级修复，无进展时保留原件，不强制合并相交壳，也不自动做 MeshLib 重建。事务比较新增重复面／退化面时只取拓扑计数，GUI/full 不因此增加存在性查询。`topology_statistics_ms` 与 `existence_checks_ms` 分别记录两段检查耗时。见[本轮 Mac 验证](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 App高级设置内部 `basic_repair=true`，与 full/GUI 共用 `repair_mesh`（2.5.0 Beta）。basic 只决定前后检测范围，不另维护一套修复算法。整 volume 一次清理、定向、焊接、T形连接处理、局部补洞及有界自交处理；内部保留有效闭壳，按非零绕数处理嵌套关系。不在 ModelRepair 外层拆分新 ModelVolume 或按旧2.4.2阈值删除部件；没有中间候选回退。无法形成闭合结果时该 volume 保留原件，其他独立 volume 的成功结果可在 partial 模式保留。
 

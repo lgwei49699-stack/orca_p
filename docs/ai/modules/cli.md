@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:d62a063f4d6dffbff5efd4ef3fef780f059018fe8ab4eba9701ea75989169d4a",
-  "reason": "2026-10-31：纹理导出新增默认关闭的 texture-repair，仅显式转换时调用共享修复；参数互斥及失败原件保留。普通切片/分盘对照和新 CLI 场景分列当前记录。"
+  "source_fingerprint": "sha256:67c950605e7468666d32efe412573d6841f822d13160e8b47718451240856e94",
+  "reason": "2026-11-03 核对 App basic 最小结果与显式阶段报告对本次触发规则的表达；CLI 参数、默认 full 和普通切片命令不变。"
 }
 -->
 
@@ -63,7 +63,7 @@
 
 ## 配置与约束
 
-App 专用 `--model-inspection-mode basic|full` 仅随 `--check-model` 使用，可组合 `--repair-model cgal`；默认full不变。basic统计五类轻量缺陷，已测阳性不能写passed，自交/非流形顶点仍未请求。开放边、重复面、严格退化面、方向冲突进入一次共享2.5修复；仅有几何非流形边而原生邻接闭合则保留unresolved，不自动布尔合并。Slicer重建关闭时同样不为此重复启动高级阶段。App高级与GUI/full共用2.5单次整volume核心；成功volume保留，失败volume原样保留，不再外层分组/拆ModelVolume，也不保存CGAL中间候选。basic/full仅控制检测范围；闭合但仍有缺陷的结果明确标partial。必要数据/闭合及定向前置检查保留。basic阶段报告透传已有 `inspection.next_action=none/advanced_repair` 供服务端分流，不在Slicer重写引擎规则。check/advanced阶段 `change={status:not_requested,reason:app_basic}` 沿用，产物回读/哈希绑定保留，full/重建完整验收不变。无需新CLI参数或App字段；引擎/Slicer需配套。具体证据及GUI未测范围见[App记录](../validation/2026-10-30-app-basic-repair.md)。
+App 专用 `--model-inspection-mode basic` 仅用于 `--check-model` 及其高级修复组合；默认 full、GUI 和普通切片入口不变。发现非流形边等轻量缺陷即建议一次高级；边面正常才检查非流形顶点／自交是否存在。阳性只报下界，未执行项不写零。无报告的 App 请求使用原有 `next_action`，不新增参数或字段；检查不导出模型，只有已采用的高级结果才导出。当显式要求完整证据时，存在性下界不能作为完整计数。见[本轮 Mac 验证](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 `--model-layer-height-plan <JSON>`仅为显式单STL固定姿态切片提供局部Z范围透传，须跟随`--model`。计划版本`regional-slope-v1`绑定输入SHA256、统一缩放、XYZ旋转、贴床后高度、基础/首层/上下界及最多128个区间；文件最多64 KiB。1.25倍细化预算仅由PAM选参，不在CLI重复判断；CLI仍检查实际机型允许范围。加载前仅核对一次源文件SHA，变换后核对实际实例；基础层边界和整分层数必须恢复范围外层位。仅沿原`--model-position/scale/rotate`路径设置原生`layer_config_ranges`，不更换为assemble或修改生成算法。
 
