@@ -192,6 +192,14 @@ jobs:
         echo "Building OrcaSlicer and AppImage with $(nproc) parallel jobs and ccache..."
         # -p 关闭预编译头，提高后续 ccache 命中率；缺失的直接 include 会在诊断日志中集中暴露。
         time ./build_linux.sh -sip
+
+    - name: Verify winding tile signs against the Linux MeshLib SDK
+      # Manual cache warmups can check out older source refs without this feature.
+      if: hashFiles('src/meshlib/WindingTile.hpp') != ''
+      run: |
+        CMAKE_POLICY_VERSION_MINIMUM=3.5 cmake -S . -B build -DBUILD_TESTS=ON
+        cmake --build build --config Release --target meshlib_winding_tile_tests
+        ctest --test-dir build -C Release -R '^meshlib_winding_tile_parity$' --no-tests=error --output-on-failure
     
     - name: Get version info
       id: version

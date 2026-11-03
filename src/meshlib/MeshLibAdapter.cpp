@@ -1,6 +1,8 @@
 #include "MeshLibAdapter.hpp"
+#include "WindingTile.hpp"
 #include "runtime_identity.hpp"
 
+#include <MRMesh/MRMeshProject.h>
 #include <MRMesh/MRBitSet.h>
 #include <MRMesh/MRMesh.h>
 #include <MRMesh/MRMeshDecimate.h>
@@ -255,6 +257,8 @@ MR::Expected<void> sample_distance_parts(const MR::Mesh& mesh, float voxel, cons
     constexpr size_t CHUNK_VALUES = 8 * 1024 * 1024;
     const size_t     plane_size   = size_t(dims.x) * size_t(dims.y);
     const int        depth        = std::max(2, int(std::min<size_t>(dims.z, CHUNK_VALUES / plane_size)));
+    const auto&        tree         = mesh.getAABBTree();
+    const auto&        dipoles      = mesh.getDipoles();
     std::vector<float> overlap_values;
     for (int z = 0; z < dims.z;) {
         const int          count = std::min(depth, dims.z - z);
@@ -262,13 +266,49 @@ MR::Expected<void> sample_distance_parts(const MR::Mesh& mesh, float voxel, cons
         std::copy(overlap_values.begin(), overlap_values.end(), values.begin());
         const auto part_progress = MR::subprogress(progress, float(z + int(overlap_values.size() / plane_size)) / dims.z,
                                                    float(z + count) / dims.z);
-        if (!MR::ParallelFor(
-                overlap_values.size(), values.size(),
-                [&](size_t i) {
-                    const MR::Vector3i p(int(i % size_t(dims.x)), int((i / size_t(dims.x)) % size_t(dims.y)), z + int(i / plane_size));
-                    values[i] = volume.data(p);
-                },
-                part_progress))
+        // The near-surface path already skips distant samples inside the SDK.
+        if (!options.nullOutsideMinMax) {
+            constexpr int side        = 8; // 512 samples per full tile
+            const int     first_layer = int(overlap_values.size() / plane_size);
+            const int     nx = (dims.x + side - 1) / side, ny = (dims.y + side - 1) / side;
+            const size_t  tiles  = size_t(nx) * ny * ((count - first_layer + side - 1) / side);
+            const auto    center = [&](const MR::Vector3i& p) {
+                return params.vol.origin + MR::mult(params.vol.voxelSize, MR::Vector3f(p) + MR::Vector3f::diagonal(0.5f));
+            };
+            if (!MR::ParallelFor(
+                    size_t(0), tiles,
+                    [&](size_t i) {
+                        const MR::Vector3i        start(int(i % nx) * side, int(i / nx % ny) * side,
+                                                        first_layer + int(i / (size_t(nx) * ny)) * side);
+                        const MR::Vector3i        end(std::min(dims.x, start.x + side), std::min(dims.y, start.y + side),
+                                                      std::min(count, start.z + side));
+                        const detail::WindingTile tile{mesh, tree, dipoles, center({start.x, start.y, z + start.z}),
+                                                       center({end.x - 1, end.y - 1, z + end.z - 1}), options.windingNumberBeta};
+                        const int                 sign = tile.certified_sign(options.windingNumberThreshold);
+                        for (int k = start.z; k < end.z; ++k)
+                            for (int y = start.y; y < end.y; ++y)
+                                for (int x = start.x; x < end.x; ++x) {
+                                    const MR::Vector3i pos(x, y, z + k);
+                                    const size_t       index = size_t(k) * plane_size + size_t(y) * dims.x + x;
+                                    if (sign) {
+                                        const auto projection = MR::findProjection(center(pos), mesh, options.maxDistSq, nullptr,
+                                                                                   options.minDistSq);
+                                        values[index]         = sign * std::sqrt(projection.distSq);
+                                    } else {
+                                        values[index] = volume.data(pos);
+                                    }
+                                }
+                    },
+                    part_progress, 1024 / (side * side * side)))
+                return MR::unexpectedOperationCanceled();
+        } else if (!MR::ParallelFor(
+                       overlap_values.size(), values.size(),
+                       [&](size_t i) {
+                           const MR::Vector3i p(int(i % size_t(dims.x)), int((i / size_t(dims.x)) % size_t(dims.y)),
+                                                z + int(i / plane_size));
+                           values[i] = volume.data(p);
+                       },
+                       part_progress))
             return MR::unexpectedOperationCanceled();
         if (z + count < dims.z)
             overlap_values.assign(values.end() - plane_size, values.end());

@@ -3,10 +3,12 @@
 <!-- module-review
 {
   "id": "model-repair",
-  "source_fingerprint": "sha256:5cc7e3b00846338ea5395c7299e761c834a2d13f3c00e4256e3dca197b875b32",
-  "reason": "2026-11-03 Linux 2.3.2 合并。保留打包线已有的 App 快速检查，核对 CGAL 6.2.1 和 MeshLib 的修复入口。"
+  "source_fingerprint": "sha256:9642c22595661783bd6d4331a8d42a8617eb5d0e8a2083ca55c1005f58bdf1b6",
+  "reason": "2026-11-03 复核分块绕数边界、SDK 回退、七模型重建与跨版本核验。"
 }
 -->
+
+显式 MeshLib 补洞路径用分块绕数范围判定共享符号。临界块回到 SDK；体素中心、距离投影、后处理与完整网格验收保持原语义。 新增临界点和薄壁专项。跨版本核验同时检查 SDK 身份、最终七项网格检查和实际候选文件。 [Mac 验证记录](../validation/2026-10-31-cgal-621-upgrade.md)
 
 ## 职责与边界
 

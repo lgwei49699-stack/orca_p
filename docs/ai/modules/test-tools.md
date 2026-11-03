@@ -3,10 +3,12 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:bb9f3fd4e3134c5c703b0a6553f25f72329db93fea979655d40442f20bc3b5a7",
-  "reason": "2026-11-03 Linux 2.3.2 合并。合并纹理坐标、耗材绑定、擦料塔、MeshLib 重建与 App 快速检查回归。"
+  "source_fingerprint": "sha256:c32f96d23f6d5e07cb4f25c4479df620d1a31f346e5e8cb5082c40c2047c44fc",
+  "reason": "2026-11-03 复核临界用例与同机双版本命令、结果校验和错误证据保留。"
 }
 -->
+
+meshlib_winding_tile_parity 逐点对照已分类的内外块，并覆盖开口、临界及回退；七份真实输入另用诊断构建比较完整带符号距离位模式。 同机对照工具按 A/B/B/A 复测首个 STL，为后续模型各生成一对候选和耗时。执行方法见验证记录。 [Mac 验证记录](../validation/2026-10-31-cgal-621-upgrade.md)
 
 2026-10-31 App 检测回归：取消仅非流形边跳过；五项全阴性后的顶点/自交存在性阳性也进入一次高级，保留首次缺陷下界语义。健康反例、输入不变、内部 volume 准入、修后残留、取消及默认 full 隔离均覆盖。阶段 CLI 的 basic 高级用例按 App 实际命令不带 repair-evidence；另保留显式证据不完整时拒绝的用例。闭合但仍自交的原“repaired/passed”断言改为真实 partially_repaired/needs_repair，不以弱化检查维持旧成功。执行与构建身份见[六任务复核](../validation/2026-10-31-app-six-checks-review.md)：275 原生、115 检查 CLI、64 阶段 CLI、64 普通切片/分盘场景通过，37 份普通 G-code 指令与改前一致。历史部分结果/绘色/事务和 GUI 交接仍见[App记录](../validation/2026-10-30-app-basic-repair.md)。
 
