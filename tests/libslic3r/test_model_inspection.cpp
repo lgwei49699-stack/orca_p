@@ -477,6 +477,12 @@ TEST_CASE("Workflow separates opt-in completion from legacy repair outcomes", "[
     {
         auto mesh = load_model("model_repair_acceptance/08-intersecting-shells.obj");
         mesh.its.indices.erase(mesh.its.indices.begin());
+        const bool residual = GENERATE(false, true);
+        if (residual) {
+            auto pair = load_model("model_repair_acceptance/08-intersecting-shells.obj");
+            pair.translate(30.f, 0.f, 0.f);
+            mesh.merge(pair);
+        }
         const auto input = (temp.path / "open-crossing.stl").string();
         REQUIRE(store_stl(input.c_str(), &mesh, true));
         options.input_file = input;
@@ -485,9 +491,9 @@ TEST_CASE("Workflow separates opt-in completion from legacy repair outcomes", "[
         options.repair_evidence = false;
         run_model_check_workflow(options, report);
         CHECK(report.check["operation_status"] == "completed");
-        CHECK(report.check["advanced_repair"]["status"] == "partially_repaired");
-        CHECK(report.check["mesh_status"] == "needs_repair");
-        CHECK(report.check["inspection"]["issues"]["self_intersection"]["count_is_lower_bound"] == true);
+        CHECK(report.check["advanced_repair"]["status"] == (residual ? "partially_repaired" : "repaired"));
+        CHECK(report.check["mesh_status"] == (residual ? "needs_repair" : "passed"));
+        CHECK(report.check["inspection"]["issues"]["self_intersection"]["count_is_lower_bound"] == residual);
         CHECK_FALSE(report.check.contains("section_evidence"));
         CHECK_FALSE(report.check.contains("repair_evidence"));
         CHECK(boost::filesystem::exists(report.check["working_model"].get<std::string>()));

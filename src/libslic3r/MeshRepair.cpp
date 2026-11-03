@@ -39,6 +39,7 @@
 #include <CGAL/Polygon_mesh_processing/orient_polygon_soup.h>
 #include <CGAL/Polygon_mesh_processing/orientation.h>
 #include <CGAL/Polygon_mesh_processing/polygon_soup_to_polygon_mesh.h>
+#include <CGAL/Polygon_mesh_processing/remesh_planar_patches.h>
 #include <CGAL/Polygon_mesh_processing/repair.h>
 #include <CGAL/Polygon_mesh_processing/repair_degeneracies.h>
 #include <CGAL/Polygon_mesh_processing/repair_self_intersections.h>
@@ -65,10 +66,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdint>
 #include <exception>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -913,6 +914,11 @@ double signed_volume(const Mesh& mesh)
     return vol / 6.;
 }
 
+template<class Surface> std::int64_t euler_characteristic(const Surface& mesh)
+{
+    return std::int64_t(mesh.number_of_vertices() + mesh.number_of_faces()) - std::int64_t(mesh.number_of_edges());
+}
+
 // The local remesher only checks its working faces. If its patch crosses a previously
 // unaffected neighbor, split along the remaining intersection instead of remeshing another patch.
 void trim_residual_crossings(Mesh& shell, double& remaining_volume_change)
@@ -933,11 +939,8 @@ void trim_residual_crossings(Mesh& shell, double& remaining_volume_change)
     if (!PMP::experimental::autorefine_and_remove_self_intersections(candidate) || candidate.is_empty())
         return;
     candidate.collect_garbage();
-    const auto euler = [](const Mesh& m) {
-        return std::int64_t(m.number_of_vertices() + m.number_of_faces()) - std::int64_t(m.number_of_edges());
-    };
-    if (!CGAL::is_valid_polygon_mesh(candidate) || !CGAL::is_closed(candidate) || euler(candidate) != euler(shell) ||
-        PMP::bbox(candidate) != PMP::bbox(shell))
+    if (!CGAL::is_valid_polygon_mesh(candidate) || !CGAL::is_closed(candidate) ||
+        euler_characteristic(candidate) != euler_characteristic(shell) || PMP::bbox(candidate) != PMP::bbox(shell))
         return;
 
     std::vector<std::size_t> parts(candidate.number_of_faces());
@@ -1015,8 +1018,115 @@ Point inner_sample(const Mesh& shell)
     return CGAL::centroid(shell.point(shell.source(h)), shell.point(shell.target(h)), shell.point(shell.target(shell.next(h))));
 }
 
-// Orients and filters the shells by the nonzero winding rule of slicing. Crossing shells stay apart, as parts do.
-void resolve_shells(std::vector<Mesh>& shells, MeshRepairStats& stats, const std::function<void(int)>& progress)
+using CapFace                        = std::array<Point, 3>;
+constexpr std::size_t MAX_JOIN_FACES = 8192;
+
+CapFace face_points(const Mesh& mesh, Face f)
+{
+    const auto h = mesh.halfedge(f);
+    return {mesh.point(mesh.source(h)), mesh.point(mesh.target(h)), mesh.point(mesh.target(mesh.next(h)))};
+}
+
+CapFace face_key(CapFace points)
+{
+    std::sort(points.begin(), points.end());
+    return points;
+}
+
+// A newly capped attachment can cross the original wall. Union only positive solids
+// with a real volume overlap. Keep the result private until its exported coordinates
+// describe the same connected, closed surface topology as the exact union.
+bool joined_solid(const std::vector<Mesh>&        shells,
+                  std::size_t                     host,
+                  const std::vector<std::size_t>& leaves,
+                  Mesh&                           output,
+                  const std::function<void(int)>& progress)
+{
+    using Exact     = CGAL::Exact_predicates_exact_constructions_kernel;
+    using ExactMesh = CGAL::Surface_mesh<Exact::Point_3>;
+    ExactMesh solid;
+    CGAL::copy_face_graph(shells[host], solid);
+    auto volume = PMP::volume(solid);
+    for (std::size_t leaf : leaves) {
+        progress(95);
+        ExactMesh addition, merged;
+        CGAL::copy_face_graph(shells[leaf], addition);
+        const auto added_volume = PMP::volume(addition);
+        if (!PMP::corefine_and_compute_union(solid, addition, merged) || merged.number_of_faces() > 2 * MAX_JOIN_FACES ||
+            merged.is_empty() || !CGAL::is_closed(merged))
+            return false;
+        const auto total = PMP::volume(merged);
+        if (!(total > volume && total > added_volume && total < volume + added_volume))
+            return false;
+        solid  = std::move(merged);
+        volume = total;
+    }
+
+    // Eliminate subdivisions inside exactly coplanar patches before conversion to STL precision.
+    ExactMesh planar;
+    PMP::remesh_planar_patches(solid, planar);
+    if (planar.is_empty() || !CGAL::is_triangle_mesh(planar) || !CGAL::is_closed(planar) || PMP::volume(planar) != volume)
+        return false;
+    planar.collect_garbage();
+    std::vector<std::size_t> exact_parts(planar.number_of_faces());
+    if (PMP::connected_components(planar, CGAL::make_property_map(exact_parts)) != 1)
+        return false;
+
+    std::map<Point, std::size_t> ids;
+    std::vector<Point>           points;
+    std::vector<Triangle>        triangles;
+    for (auto f : planar.faces()) {
+        Triangle face;
+        int      k = 0;
+        for (auto v : CGAL::vertices_around_face(planar.halfedge(f), planar)) {
+            const auto& p = planar.point(v);
+            const Point rounded(float(CGAL::to_double(p.x())), float(CGAL::to_double(p.y())), float(CGAL::to_double(p.z())));
+            auto [it, inserted] = ids.emplace(rounded, points.size());
+            if (inserted)
+                points.push_back(rounded);
+            face[k++] = it->second;
+        }
+        if (!CGAL::collinear(points[face[0]], points[face[1]], points[face[2]]))
+            triangles.push_back(face);
+    }
+    if (triangles.empty() || !PMP::is_polygon_soup_a_polygon_mesh(triangles))
+        return false;
+    PMP::polygon_soup_to_polygon_mesh(points, triangles, output);
+    PMP::remove_isolated_vertices(output);
+    // Boolean cuts may leave a sliver narrower than the coordinate roundoff after placement.
+    // Protect source vertices, and limit both edge collapse and diagonal flips to float precision.
+    std::set<Point> original;
+    auto            remember = [&](const Mesh& m) {
+        for (auto v : m.vertices())
+            original.insert(m.point(v));
+    };
+    remember(shells[host]);
+    for (auto i : leaves)
+        remember(shells[i]);
+    auto fixed = output.add_property_map<Vertex, bool>("v:source", false).first;
+    for (auto v : output.vertices())
+        fixed[v] = original.count(output.point(v)) != 0;
+    const double resolution = 8 * std::numeric_limits<float>::epsilon() * bbox_diagonal(points);
+    PMP::remove_almost_degenerate_faces(output, CGAL::parameters::vertex_is_constrained_map(fixed)
+                                                    .collapse_length_threshold(resolution)
+                                                    .flip_triangle_height_threshold(resolution));
+    output.remove_property_map(fixed);
+    output.collect_garbage();
+    std::vector<std::size_t> parts(output.number_of_faces());
+    // Keep the same solid, even if a near-coplanar diagonal changed at float precision.
+    if (!CGAL::is_valid_polygon_mesh(output) || !CGAL::is_closed(output) ||
+        std::abs(signed_volume(output) - CGAL::to_double(volume)) > resolution * PMP::area(output))
+        return false;
+    return PMP::connected_components(output, CGAL::make_property_map(parts)) == 1 &&
+           euler_characteristic(output) == euler_characteristic(planar) && !PMP::does_self_intersect(output);
+}
+
+// Orients and filters the shells by the nonzero winding rule of slicing.
+void resolve_shells(std::vector<Mesh>&              shells,
+                    MeshRepairStats&                stats,
+                    const std::function<void(int)>& progress,
+                    std::size_t                     preserved,
+                    const std::set<CapFace>&        caps)
 {
     const std::size_t         n = shells.size();
     std::vector<CGAL::Bbox_3> bbox(n);
@@ -1078,6 +1188,67 @@ void resolve_shells(std::vector<Mesh>& shells, MeshRepairStats& stats, const std
         drop[j]                  = solid_outside == solid_inside;
         target[j]                = solid_inside ? 1 : -1;
     });
+    // Only a repaired leaf touching exactly one preserved shell may join it.
+    // A separate inward shell can be a cavity whose filling depends on the winding sum.
+    if (!caps.empty() && std::find(target.begin(), target.end(), -1) == target.end()) {
+        std::vector<std::size_t> degree(n, 0), neighbor(n, n);
+        for (std::size_t i = 0; i < overlaps.size(); ++i)
+            if (hit[i]) {
+                const auto [a, b] = overlaps[i];
+                ++degree[a];
+                ++degree[b];
+                neighbor[a] = b;
+                neighbor[b] = a;
+            }
+        std::map<std::size_t, std::vector<std::size_t>> groups;
+        for (std::size_t leaf = preserved; leaf < n; ++leaf) {
+            const auto host = neighbor[leaf];
+            if (degree[leaf] != 1 || host >= preserved || sign[host] < 0 || sign[leaf] < 0)
+                continue;
+            if (!trees[host])
+                trees[host] = std::make_unique<Tree>(shells[host].faces().begin(), shells[host].faces().end(), shells[host]);
+            for (Face f : shells[leaf].faces()) {
+                const auto t = face_points(shells[leaf], f);
+                if (caps.count(face_key(t)) && trees[host]->do_intersect(Kernel::Triangle_3(t[0], t[1], t[2]))) {
+                    groups[host].push_back(leaf);
+                    break;
+                }
+            }
+        }
+        for (const auto& [host, leaves] : groups) {
+            const auto total = std::accumulate(leaves.begin(), leaves.end(), shells[host].number_of_faces(),
+                                               [&](std::size_t count, std::size_t i) { return count + shells[i].number_of_faces(); });
+            if (leaves.size() > 16 || total > MAX_JOIN_FACES || PMP::does_self_intersect(shells[host]) ||
+                std::any_of(leaves.begin(), leaves.end(), [&](std::size_t i) { return PMP::does_self_intersect(shells[i]); }))
+                continue;
+            // Bound broad-phase pairs as well as input size before an exact Boolean can grow.
+            std::size_t pairs = 0;
+            for (auto i : leaves) {
+                for (Face f : shells[i].faces()) {
+                    const auto t = face_points(shells[i], f);
+                    pairs += trees[host]->number_of_intersected_primitives(t[0].bbox() + t[1].bbox() + t[2].bbox());
+                    if (pairs > 4 * MAX_JOIN_FACES)
+                        break;
+                }
+                if (pairs > 4 * MAX_JOIN_FACES)
+                    break;
+            }
+            if (pairs > 4 * MAX_JOIN_FACES)
+                continue;
+            // This tree refers to the original host's graph. Release it before replacing the graph.
+            trees[host].reset();
+            Mesh joined;
+            try {
+                if (joined_solid(shells, host, leaves, joined, progress)) {
+                    shells[host] = std::move(joined);
+                    for (auto i : leaves)
+                        drop[i] = 1;
+                }
+            } catch (const CGAL::Failure_exception&) {
+                // Keep the individually repaired shells on a failed Boolean operation.
+            }
+        }
+    }
     trees.clear();
 
     for (std::size_t i = 0; i < n; ++i)
@@ -1141,6 +1312,7 @@ std::vector<std::vector<std::size_t>> soup_units(const std::vector<Point>&    po
 
 struct UnitResult
 {
+    std::vector<CapFace> caps;
     std::vector<Mesh> shells;
     std::size_t       reversed     = 0;
     std::size_t       filled       = 0;
@@ -1152,7 +1324,8 @@ UnitResult repair_unit(const std::vector<Point>&       points,
                        const std::vector<Triangle>&    triangles,
                        const std::vector<std::size_t>& faces,
                        const SoupTopology&             topology,
-                       double                          tolerance)
+                       double                          tolerance,
+                       bool                            track_caps)
 {
     std::vector<Point>    unit_points;
     std::vector<Triangle> unit_triangles;
@@ -1189,7 +1362,17 @@ UnitResult repair_unit(const std::vector<Point>&       points,
     if (!CGAL::is_closed(mesh)) {
         // Rejoin vertices the orientation split where holes break their fan, so each gap is one loop.
         PMP::merge_duplicated_vertices_in_boundary_cycles(mesh);
+        std::vector<bool> original_faces;
+        if (track_caps) {
+            original_faces.resize(mesh.num_faces());
+            for (Face f : mesh.faces())
+                original_faces[f] = true;
+        }
         result.filled = fill_holes(mesh, tolerance);
+        if (track_caps)
+            for (Face f : mesh.faces())
+                if (f >= original_faces.size() || !original_faces[f])
+                    result.caps.push_back(face_key(face_points(mesh, f)));
         PMP::remove_degenerate_faces(mesh);
     }
     PMP::remove_isolated_vertices(mesh);
@@ -1295,6 +1478,8 @@ bool repair_soup(std::vector<Point>&             points,
                  MeshRepairStats&                stats,
                  const std::function<void(int)>& progress)
 {
+    std::set<CapFace> caps;
+    const bool        small_input           = triangles.size() <= MAX_JOIN_FACES;
     const double tolerance             = 1e-4 * bbox_diagonal(points);
     shells                             = take_closed_shells(points, triangles);
     const auto        preserved_shells = shells.size();
@@ -1322,12 +1507,15 @@ bool repair_soup(std::vector<Point>&             points,
         // Independent parts of the soup are repaired in parallel.
         const std::vector<std::vector<std::size_t>> units = soup_units(points, triangles, topology, tolerance);
         std::vector<UnitResult>                     results(units.size());
-        parallel_for_each(units.size(), [&](std::size_t i) { results[i] = repair_unit(points, triangles, units[i], topology, tolerance); });
+        parallel_for_each(units.size(), [&](std::size_t i) {
+            results[i] = repair_unit(points, triangles, units[i], topology, tolerance, small_input && preserved_shells > 0);
+        });
         for (UnitResult& result : results) {
             if (!result.closed)
                 return false;
             stats.reversed_shells += result.reversed;
             stats.filled_holes += result.filled;
+            caps.insert(result.caps.begin(), result.caps.end());
             for (Mesh& shell : result.shells) {
                 closed_inputs.push_back(result.closed_input);
                 shells.emplace_back(std::move(shell));
@@ -1386,9 +1574,10 @@ bool repair_soup(std::vector<Point>&             points,
     }
     if (stats.filled_holes > 0 && !repaired_shells.empty())
         clean_repaired_caps(repaired_shells, stats);
+    const std::size_t preserved = shells.size();
     std::move(repaired_shells.begin(), repaired_shells.end(), std::back_inserter(shells));
     progress(90);
-    resolve_shells(shells, stats, progress);
+    resolve_shells(shells, stats, progress, preserved, caps);
 
     stats.modified = stats.modified || stats.removed_shells > 0 || stats.reversed_shells > 0 || stats.self_intersections > 0;
     return !shells.empty();

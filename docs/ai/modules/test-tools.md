@@ -3,10 +3,12 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:5bf9497cbd90b63c4113b40e6a183b5aa0cc98f28f877dc462a2c23d70f75b7f",
-  "reason": "2026-11-03 复核折叠面板同壳交叉回归、合成来源以及 GUI 与 CLI 结果。"
+  "source_fingerprint": "sha256:8e349e3de18b0a4927ece6b69616e4224f6abc5dc4ac1f83784570722665dace",
+  "reason": "复核实际补面参与并集时的体积、仅接触、多壳与内腔反例，以及 basic 和完整检查对部分修复的报告。"
 }
 -->
+
+补面附件测试同时覆盖实交、仅接触、补面不在交界、多主体和内腔。事务与 basic 工作流各以有无其他相交闭壳两种输入，核对采用后的实体与报告。真实模型另做三方向实体截面、摆放精度以及 GUI 保存与撤销对照。 [Mac 扩样记录](../validation/2026-10-31-cgal-621-upgrade.md)
 
 合成折叠面板覆盖局部修补面与相邻面发生交叉的情况。测试验证完整网格检查、包围盒和组件数，实测集另核对实际导出和 GUI 撤销。 [Mac 扩样记录](../validation/2026-10-31-cgal-621-upgrade.md)
 

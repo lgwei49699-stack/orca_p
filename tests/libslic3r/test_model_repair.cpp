@@ -2783,10 +2783,17 @@ TEST_CASE("2.5 repair keeps closed disjoint solids in one model volume", "[Model
     CHECK(report.committed == inward);
 }
 
-TEST_CASE("2.5 partial repair retains closure without claiming intersecting shells valid", "[ModelRepair][Repair250][Partial]")
+TEST_CASE("Closure reports success only when all crossing shells were resolved", "[ModelRepair][Repair250][Partial]")
 {
     auto mesh = overlapping_cubes();
     mesh.its.indices.erase(mesh.its.indices.begin(), mesh.its.indices.begin() + 2);
+    // The cap intersects its only host. Another pair of already closed cubes is outside that local repair.
+    const bool residual = GENERATE(false, true);
+    if (residual) {
+        auto pair = overlapping_cubes();
+        pair.translate(30.f, 0.f, 0.f);
+        mesh.merge(pair);
+    }
     Model              model   = make_model(mesh);
     const auto         matrix  = model.objects[0]->volumes[0]->get_matrix();
     ModelRepairOptions options = gui_model_repair_options();
@@ -2794,12 +2801,14 @@ TEST_CASE("2.5 partial repair retains closure without claiming intersecting shel
     REQUIRE(repair_model(model, report, options));
     CHECK(report.committed);
     CHECK(report.can_continue());
-    CHECK_FALSE(report.mesh_validated());
-    CHECK(std::string(report.status()) == "partially_repaired");
+    CHECK(report.mesh_validated() == !residual);
+    CHECK(std::string(report.status()) == (residual ? "partially_repaired" : "repaired"));
     REQUIRE(model.objects[0]->volumes.size() == 1);
     const auto& result = model.objects[0]->volumes[0]->mesh();
     CHECK(its_num_open_edges(result.its) == 0);
-    CHECK(MeshBoolean::cgal::requires_repair(result));
+    CHECK(MeshBoolean::cgal::requires_repair(result) == residual);
+    CHECK(its_split(result.its).size() == (residual ? 3 : 1));
+    CHECK(its_volume(result.its) == Approx(residual ? 3500. : 1500.));
     CHECK(model.objects[0]->volumes[0]->get_matrix().isApprox(matrix));
 }
 
