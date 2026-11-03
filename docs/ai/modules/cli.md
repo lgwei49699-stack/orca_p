@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:223bb36605f02bef0599cc02a27778e8b77f78880352537e90d577f1712ab013",
-  "reason": "2026-10-26 QA进度管道回归：仅在显式局部计划允许列表增加pipe与min_save，沿用原进度通知/精简3MF导出，模型/姿态/修复/缓存与实际层位约束不变；GUI及无计划CLI不进入该分支，最小构建和真实FIFO组合验证见工作进展。 2026-10-28同步阶段读取geometry-only声明：阶段可读取彩色STL几何、直接重建原限制不变；无新参数，普通切片/分盘未改，相关回归见局部修复记录。 2026-10-29入库复审：新增逻辑限定显式报告，修复算法与普通切片/分盘不变；复核当前源码/程序身份，两个真实模型报告开关各3轮产物完全一致，耗时/内存与平台边界见局部修复记录第九批。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30高级修复接入共享2.5核心，删除旧remove_non_3d_parts赋值及过时注释；CLI参数、App最小交付与普通切片/分盘路由保持。更新basic/full范围及partial/纯平面拒绝说明，配套接口回归通过，真实机型G-code及GUI待验。 2026-10-30共享高级核心补精确内部封盖清理，GUI专用验证runner改名与取消接入不改变CLI调用契约；CLI参数/schema/错误语义、普通切片和分盘入口未改。bracket真实修复成功，保持残留模型语义；346项CLI含两种重建通过，实际机型G-code仍未验证。"
+  "source_fingerprint": "sha256:d62a063f4d6dffbff5efd4ef3fef780f059018fe8ab4eba9701ea75989169d4a",
+  "reason": "2026-10-31：纹理导出新增默认关闭的 texture-repair，仅显式转换时调用共享修复；参数互斥及失败原件保留。普通切片/分盘对照和新 CLI 场景分列当前记录。"
 }
 -->
 
@@ -42,11 +42,11 @@
 
 2026-10-28 阶段读取允许彩色二进制STL的几何及ASCII非有限法向字面量，仍要求顶点有限，文件身份保持原始字节；直接重建仍使用严格输入限制，未新增CLI参数。阶段报告新增数值裂缝清理的逐面保留证明和候选最长边，业务选择仍由PDS处理。声明注释同步为geometry-only；普通切片、分盘和GUI入口未改。当前44阶段CLI、普通入口冒烟及10-29当前程序报告开关耗时对照见[当前修复记录](../validation/2026-10-28-local-repair-adoption.md)。
 
-独立 `--reconstruct-model` 的可选本机评估后端使用 `--reconstruction-engine meshlib --reconstruction-voxel-mm <毫米>`，仍要求风险确认和新输出目录。同一Orca进程内部调用SDK，不再接受 `--reconstruction-worker-path`，不启动MeshLib或Orca修复子进程；默认Alpha Wrap保留原worker。普通检测/高级修复/切片的业务不变，不新增自动编排或原生GUI入口。引擎/体素仅在此入口解析；未编入SDK、参数混用或失败不静默回退。启用SDK构建依赖本地动态库，缺库可在进程启动阶段失败。输出仍为 `candidate.stl`、`reconstruction.json`，报告包含同进程身份与协作预算边界；成功仅表示候选及导出验收完成。详细结果/授权/结构保留边界见[模型修复](model-repair.md)。
+独立重建现统一调用 MeshLib。必填 `--reconstruction-voxel-mm`，兼容服务端显式 `--reconstruction-engine meshlib`；风险确认、新输出目录和报告合同保留。旧 Alpha 参数、其他引擎及 worker 参数明确拒绝。SDK-OFF 返回不可用，不回退；普通检测/高级修复/切片不自动重建。
 
 `main()` 进入 `CLI::run()`，解析动作、变换和配置，加载模型后按请求分盘、切片或导出；需要交互界面时转入 GUI 启动。模型导出走 `CLI::export_models()`，工程导出走 `export_project()`，不是同一种输出。无 GUI 的业务依然复用 Model、Print 和文件格式层。
 
-独立 `--reconstruct-model` 与内部 `--reconstruction-worker` 在 `CLI::run` 的普通解析、预设和 GUI 启动之前分流到 ModelReconstruction。前者要求一个无色 STL、尚不存在的 `--outputdir` 和显式 `--accept-reconstruction-risk`；后者只用于受控任务目录中的 worker 协议。GUI 与公共 CLI 共享候选核心，不通过旧 `--repair-model cgal` 或 `--check-model` 间接执行重建。
+独立 `--reconstruct-model` 在普通参数解析、预设及 GUI 启动前分流到 ModelReconstruction。要求一个无色 STL、新输出目录、体素尺寸和显式风险确认；GUI/CLI 共用候选核心。已删除内部 `--reconstruction-worker` 路由。
 
 `--repair-evidence` 是非动作选项（默认关闭，显式 `0` 关闭），不新增修复命令、菜单或编排。默认 `--check-model` v4 仍为六字段；显式开启才附加自身 `schema_version=2` 的 `boundary`，包含 `proper_crossings` 摘要与 `reconstruction.policy`。普通 `--repair-model cgal` 和独立 `--reconstruct-model` 也只在此选项下投影已有报告，保持各自原有投影，不升级为模型检测证据协议；开启选项却不包含上述检测／修复入口时受控拒绝，不能借此启动 GUI 或改变普通导出。原检测七项计数、修复参数和旧入口退出码不变；后端自行调度，程序不因证据字段执行重建。
 
@@ -101,21 +101,21 @@ CLI 预检查与 Print::apply 一致，关闭打印的对象／实例不参与�
 
 `--export-model-transforms` 仅在返回 JSON 中重映射越界/无归属实例：先核对 `contain_instance` 归属，再用只读 `check_outside` 复核当前几何，区分真正盘内与仅有编辑归属；不依赖可能在 `--ensure-on-bed` 后过期的盘外状态缓存，每个越界实例按输出遍历顺序分配一个独立 `plate_index`，从实际盘数量开始递增，XY 为有效 `printable_area` 包围盒中心（盘内坐标），Z固定为0，表示独立返回盘上以底面贴床呈现；旋转和缩放保持实际输出。普通盘内实例保持原盘号与坐标规则，包括原有正/负底面Z；字段结构不变，不增加 `outside`/`position_space`。此规则同样用于显式单盘和不重排导出；只读投影不修改模型或盘列表，不受真实36盘容量限制，也不改变实际排布、切片退出码、GUI或3MF。返回虚拟盘号不能当作真实切片盘号；复现与对照见[验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)。
 
-`--repair-evidence-close-boundaries 0|1` 默认false，仅允许与 `--check-model --repair-model cgal --repair-evidence` 同时启用。值1是调用方明确承诺“输入应为闭合实体、允许填补剩余开口”，仅影响重建建议，不执行封口、重建或采用；不从STL格式、面数或组件数猜测设计意图。`boundary.reconstruction.policy` 记录版本1及实际 `allow_boundary_closure`。显式传0也必须在该组合使用；普通修复/导出和独立重建早分流均拒绝这个策略参数，独立重建仍使用自己原有的风险确认及封口参数。该选项不是对旧 `--auto-repair-model 0|1` 的替代。
+`--repair-evidence-close-boundaries 0|1` 默认false，仅允许与 `--check-model --repair-model cgal --repair-evidence` 同时启用。值1是调用方明确承诺“输入应为闭合实体、允许填补剩余开口”，仅影响重建建议，不执行封口、重建或采用；不从STL格式、面数或组件数猜测设计意图。`boundary.reconstruction.policy` 记录版本1及实际 `allow_boundary_closure`。显式传0也必须在该组合使用；普通修复/导出和独立重建早分流均拒绝这个策略参数，独立 MeshLib 重建仍使用自己的风险确认及体素参数。该选项不是对旧 `--auto-repair-model 0|1` 的替代。
 
 `--slice 0` 全部切片跳过空盘及全部实例明确关闭打印的盘，不因这些盘在 apply 后没有打印对象而中断任务。显式指定该盘仍执行原有校验；启用但越界的模型不因此跳过。`--min-save --export-3mf` 使用共享导出快照，只写选定的可打印盘的 G-code/切片信息，未选中盘仅留编号空槽兼容既有读取器；参与打印但未切片、缺失 G-code 或没有目标盘仍失败。普通带模型工程允许包含未切片盘，不套用切片包限制。
 
-重建首版仅为模型候选入口，拒绝额外输入、普通切片配置／变换和未白名单参数；STL 数值按毫米解释，不猜单位或采用原修复的 geometry-only 导入降级。公开参数为 `--reconstruction-alpha`、`--reconstruction-offset`、`--reconstruction-max-deviation`（毫米）及 `--reconstruction-timeout`（秒）。其中 max-deviation 保留参数名但改为偏差告警阈值，不再因超过它拒绝已通过完整网格检查的候选；帮助和 `deviation_policy=warning_only` 明确这一点，与 GUI 告警文案一致。最多三档尝试共享总预算，报告包含每轮及最终 alpha/offset。默认几何／资源策略见[模型修复](model-repair.md)。由于首版尚未自动试切片，不能把“同一预设名”或 CLI 候选生成当成与 GUI 同有效配置切片对照已完成。
+重建只生成候选，拒绝额外输入及普通切片配置/变换，STL 按毫米解释。参数包括体素尺寸、偏差告警阈值、时间及内存预算；不自动重试。`max-deviation` 是告警阈值，报告 `deviation_policy=warning_only`。GUI/CLI 使用同一 MeshLib、完整网格和坐标验收，不从候选成功推导可打印。
 
 ## 失败与取消
 
-重建输入上限为 300 万面且 STL 文件最多 256 MiB，超过任一限制即受控拒绝；输出仍最多 100 万面。未传 `--reconstruction-timeout` 时共享核心按模型面数选择 60/180/300 秒，传入的 1–300 秒覆盖自动值。可选 `--reconstruction-memory-mb` 严格接受十进制整数128–4096，覆盖自动内存预算；未传时仍共享GUI分档及物理RAM约束，不由STL字节大小替代面数。该服务配置仅在CLI暴露，GUI没有资源手填项，但两端共享同一有效预算规则。MeshLib统计整个Orca RSS、AlphaWrap统计worker预算；不自动检测容器限制，不宣称硬隔离。`resource_limits`记录实际生效值，超时/内存不足也保留；具体分档见[模型修复](model-repair.md)。
+重建输入最多 300 万面、256 MiB，输出最多 100 万面；默认按面数选择 120/180/300 秒及 1024/2048/4096 MiB，内存另受物理 RAM 约束。CLI 可用 1–300 秒和 128–4096 MiB 覆盖，GUI 不手填资源预算。统计整个 Orca 的进程内存（macOS footprint、Windows working set、Linux RSS），时间/内存是协作预算，不是硬隔离；报告保留生效值和停止原因。
 
 输入解析、参数组合、IO 和切片校验失败有不同出口；分盘未排入与进程成功不能画等号。应同时核对盘归属、警告和实际产物。用户没有要求时不要启动真实设备任务，也不要把运行生成的 result.json 入库。
 
-重建不覆盖源 STL／已有目录，不生成旧 `result.json`，仅在本次创建的输出目录保存 `candidate.stl` 与 `reconstruction.json`。拒绝／失败不给出可用候选；读取和报告中明确区分候选成功、形状未确认、`trial_slice=not_run` 和 `print_ready=false`。公共命令退出 0 只能表示候选工作流成功，不表示可打印；专用 worker 退出状态和业务拒绝报告分开解释。
+重建不覆盖源 STL/已有目录，新目录保存 `candidate.stl` 和 `reconstruction.json`。失败不提供可用候选；退出 0 仅表示候选生成和验收成功，`trial_slice=not_run`、`print_ready=false` 和待人工确认保持，不自动打印。
 
-Alpha Wrap 默认 `parameters.close_open_boundaries=true`，与 GUI 的“包裹前尝试闭合开放边界”相同；`--reconstruction-no-close-open-boundaries` 显式关闭。该参数完整传递至 worker，旧内部请求缺字段时取默认 true。封闭副本必须通过完整检查才能用于包裹；有意开口可能被填上，仍要求风险确认。报告新增 `engine.boundary_closure` 与 `engine.metrics.open_surface_envelope_warning`，分别解释预闭合结果和原汤包裹的薄壳风险；不能仅因命令退出 0 推断墙/填充可生成。不改 `--check-model` v4 或旧 repair JSON。MeshLib 不接受此 Alpha Wrap 专用参数；其超时/RSS为协作预算，覆盖准入及生成/验收而非最终文件导出，并明确报告非硬限制。
+Alpha Wrap、预封口/粗化及专用 worker 已删除，基础/高级修复使用的 CGAL 保留。GUI/CLI 均接同一核心；新体素输入及 GUI 手测见[当前交接](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 
 保存工程与本次新增 STL/OBJ 混合时，盘外备用对象豁免按导入实例身份判断，合并模型时传递身份；新增输入不会因批次含3MF而漏检。显式选择盘也不能略过本次新增但完全无归属的启用网格，避免只切成功子集。
@@ -124,11 +124,13 @@ Alpha Wrap 默认 `parameters.close_open_boundaries=true`，与 GUI 的“包裹
 
 ## 修改与验证
 
+纹理导出可显式加 `--texture-repair`，在共享纹理转换内调用高级修复；默认关闭，只允许配合 `--export-texture-obj`，不能与另一 `--repair-model cgal` 入口混用。失败不导出 OBJ/MTL，输入保留。与 GUI“修复后导入”使用同一算法及最近原面颜色映射；回归脚本为 `scripts/test_cli_texture_repair.py`，记录见[当前交接](../validation/2026-10-31-cgal-621-upgrade.md)。
+
 修改动作路由优先检查 run/export_models 和结果序列化；验证无参数启动、模型导出、分盘→切片和不合法参数。先查看本分支可用的 CLI 脚本，测试写入隔离输出目录。共享功能同时核对 GUI 的调用及生效配置，验证实际产物与错误语义一致；对应 GUI 步骤按[交接规范](../gui-validation.md) 提供，不能只凭 CLI 退出 0 结束验收。
 
 现有测试/工具范围：`tests/fff_print/test_gcode.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
 
-独立重建另用 `scripts/test_cli_model_reconstruction.py --binary <当前应用可执行文件> --output-dir <全新证据目录>`，校验二进制／输入 hash、独立报告、候选 STL、输入与既有输出不变；脚本不构建、不试切片、不打印。运行身份与结果在[主记录](../validation/2026-10-04-smart-print-engine.md)，GUI 路径和具体对照在[交接清单](../validation/2026-10-05-reconstruction-gui.md)。
+独立重建用 `scripts/test_cli_meshlib_reconstruction.py --binary <当前应用> --output-dir <新证据目录>` 验证，SDK-OFF 加 `--expect-unavailable`；阶段报告用 `scripts/test_cli_model_stage_report.py`。公共夹具/断言位于 `scripts/reconstruction_test_helpers.py`，已删除 Alpha CLI 脚本。结果见[当前记录](../validation/2026-10-31-cgal-621-upgrade.md)。
 
 现有三个修复CLI脚本覆盖默认旧协议、显式on/off证据、非法组合、输入/早期参数失败，以及相同模型修复/候选身份和原件不变；不另设自动修复协议脚本。`test_cli_model_check.py` 新增schema2、真实穿透见证、封口策略开/关/默认、无开边不误触发，以及新参数在普通入口/独立重建及显式0时拒绝的契约检查；用高级修复实际保留网格验证建议，不能以修复已通过的缺顶方块冒充残留开边触发。只检测不运行分类或截面观察。脚本覆盖不等于已运行，统计与平台/GUI状态见主记录，不能据证据字段宣称已经可打印。
 

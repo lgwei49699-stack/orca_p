@@ -1,25 +1,21 @@
 #include "MeshReconstruction.hpp"
 #include "I18N.hpp"
-#include "MeshRepair.hpp"
 #include "ModelInspection.hpp"
 #include "TriangleMesh.hpp"
 #undef PI
 
-#include <CGAL/AABB_traits.h>
+#include <CGAL/AABB_traits_3.h>
 #include <CGAL/AABB_tree.h>
-#include <CGAL/AABB_triangle_primitive.h>
+#include <CGAL/AABB_triangle_primitive_3.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Polygon_mesh_processing/connected_components.h>
-#include <CGAL/Polygon_mesh_processing/border.h>
 #include <CGAL/Polygon_mesh_processing/manifoldness.h>
 #include <CGAL/Polygon_mesh_processing/measure.h>
 #include <CGAL/Polygon_mesh_processing/orientation.h>
 #include <CGAL/Polygon_mesh_processing/self_intersections.h>
 #include <CGAL/Side_of_triangle_mesh.h>
 #include <CGAL/Surface_mesh.h>
-#include <CGAL/alpha_wrap_3.h>
 #include <CGAL/boost/graph/helpers.h>
-#include <CGAL/version.h>
 #include <boost/container_hash/hash.hpp>
 
 #include <algorithm>
@@ -48,8 +44,8 @@ using Point     = Kernel::Point_3;
 using Face      = std::array<std::size_t, 3>;
 using Surface   = CGAL::Surface_mesh<Point>;
 using Triangle  = Kernel::Triangle_3;
-using Primitive = CGAL::AABB_triangle_primitive<Kernel, std::vector<Triangle>::const_iterator>;
-using Tree      = CGAL::AABB_tree<CGAL::AABB_traits<Kernel, Primitive>>;
+using Primitive = CGAL::AABB_triangle_primitive_3<Kernel, std::vector<Triangle>::const_iterator>;
+using Tree      = CGAL::AABB_tree<CGAL::AABB_traits_3<Kernel, Primitive>>;
 
 struct Rejection : std::runtime_error
 {
@@ -206,49 +202,6 @@ void validate_output_surface(Surface& surface)
             L("The float mesh does not bound an outward-oriented solid."));
     const double volume = double(PMP::volume(surface));
     require(std::isfinite(volume) && volume > 0, "candidate_rejected", L("The float mesh has no finite positive solid volume."));
-}
-
-// CGAL 5.6.3's visitor is copied by value. Bounds supplement, but do not replace,
-// the worker's hard memory/time limits. They also bound intermediate refinement.
-struct BudgetVisitor
-{
-    std::size_t                  max_vertices;
-    std::size_t                  max_cells;
-    template<class Wrapper> void check(const Wrapper& wrapper) const
-    {
-        require(wrapper.triangulation().number_of_vertices() <= max_vertices && wrapper.triangulation().number_of_cells() <= max_cells,
-                "resource_limit", L("Alpha wrapping exceeded the intermediate refinement budget."));
-    }
-    template<class Wrapper> void               on_alpha_wrapping_begin(const Wrapper& wrapper) { check(wrapper); }
-    template<class Wrapper> void               on_flood_fill_begin(const Wrapper& wrapper) { check(wrapper); }
-    template<class Wrapper, class Gate> void   before_facet_treatment(const Wrapper& wrapper, const Gate&) { check(wrapper); }
-    template<class Wrapper, class P> void      before_Steiner_point_insertion(const Wrapper& wrapper, const P&) { check(wrapper); }
-    template<class Wrapper, class Vertex> void after_Steiner_point_insertion(const Wrapper& wrapper, const Vertex&) { check(wrapper); }
-    template<class Wrapper> void               on_flood_fill_end(const Wrapper& wrapper) { check(wrapper); }
-    template<class Wrapper> void               on_alpha_wrapping_end(const Wrapper& wrapper) { check(wrapper); }
-};
-
-TriangleMesh to_triangle_mesh(const Surface& surface, std::size_t face_limit)
-{
-    require(!surface.is_empty(), "candidate_rejected", L("The reconstruction produced no surface."));
-    require(surface.number_of_faces() <= face_limit && surface.number_of_vertices() <= std::size_t(INT_MAX), "resource_limit",
-            L("The reconstructed surface exceeds the output limit."));
-    indexed_triangle_set                 result;
-    std::map<Surface::Vertex_index, int> ids;
-    result.vertices.reserve(surface.number_of_vertices());
-    result.indices.reserve(surface.number_of_faces());
-    for (const auto v : surface.vertices()) {
-        const Point& p = surface.point(v);
-        Vec3f        converted(float(p.x()), float(p.y()), float(p.z()));
-        require(converted.allFinite(), "candidate_rejected", L("A reconstructed coordinate cannot be represented safely."));
-        ids.emplace(v, int(result.vertices.size()));
-        result.vertices.push_back(converted);
-    }
-    for (const auto f : surface.faces()) {
-        const auto h = surface.halfedge(f);
-        result.indices.emplace_back(ids.at(surface.target(h)), ids.at(surface.target(surface.next(h))), ids.at(surface.source(h)));
-    }
-    return TriangleMesh(std::move(result));
 }
 
 std::vector<Triangle> triangles(const Soup& soup)
@@ -490,75 +443,6 @@ nlohmann::json material_union_comparison(const Soup& source, const Soup& output)
     return result;
 }
 
-// A wrap of an open surface can be a paper-thin envelope instead of the intended
-// solid. Prepare a private, fully validated closed input when requested. Never
-// treat a failed patch or a checker exception as successful closure.
-std::optional<Soup> prepare_closed_input(const Soup& source, const MeshReconstructionOptions& options, nlohmann::json& report)
-{
-    constexpr std::size_t                                   MAX_BOUNDARY_EDGES = 2048;
-    constexpr std::size_t                                   MAX_LOOP_EDGES     = 512;
-    constexpr std::size_t                                   MAX_LOOPS          = 64;
-    std::map<std::pair<std::size_t, std::size_t>, unsigned> edge_uses;
-    for (const auto& face : source.faces)
-        for (int i = 0; i < 3; ++i)
-            ++edge_uses[std::minmax(face[i], face[(i + 1) % 3])];
-    const std::size_t boundary_edges = std::count_if(edge_uses.begin(), edge_uses.end(), [](const auto& edge) { return edge.second == 1; });
-    report                           = {{"requested", options.close_open_boundaries},
-                                        {"input_boundary_edges", boundary_edges},
-                                        {"status", boundary_edges == 0 ? "no_open_edges" : "disabled"},
-                                        {"used_for_wrapping", false},
-                                        {"closed_loops", 0},
-                                        {"added_faces", 0}};
-    if (boundary_edges == 0 || !options.close_open_boundaries)
-        return std::nullopt;
-    try {
-        require(boundary_edges <= MAX_BOUNDARY_EDGES, "closure_budget", L("Open boundary preparation exceeded its patch budget."));
-        Surface surface = to_surface(source);
-        require(!PMP::does_self_intersect(surface), "closure_intersection",
-                L("Intersecting open surfaces cannot be closed by the boundary preparation step."));
-        std::vector<Surface::Halfedge_index> borders;
-        PMP::extract_boundary_cycles(surface, std::back_inserter(borders));
-        require(!borders.empty() && borders.size() <= MAX_LOOPS, "closure_budget",
-                L("Open boundary preparation exceeded its patch budget."));
-        // Check every loop before attempting any patch, keeping work bounded.
-        for (const auto border : borders) {
-            auto        edge  = border;
-            std::size_t count = 0;
-            do {
-                require(++count <= MAX_LOOP_EDGES, "closure_budget", L("Open boundary preparation exceeded its patch budget."));
-                edge = surface.next(edge);
-            } while (edge != border);
-        }
-        // Preparation is still an input mesh. The smaller reconstructed-output
-        // budget must not reject a dense input before wrapping has reduced it.
-        const std::size_t face_limit = source.faces.size() + MAX_BOUNDARY_EDGES;
-        // Share only the annular patcher. Full repair may weld nearby parts or
-        // remove shells; boundary preparation must preserve the input surfaces.
-        auto mesh = to_triangle_mesh(surface, face_limit);
-        require(close_mesh_holes(mesh, face_limit), "closure_patch_failed",
-                L("An open boundary could not be closed within the patch budget."));
-        nlohmann::json validation;
-        if (!validate_reconstruction_mesh(mesh, validation, face_limit)) {
-            report["validation"] = validation;
-            if (validation.value("status", "") == "engine_error")
-                throw std::runtime_error(validation.at("message").get<std::string>());
-            throw Rejection("closure_invalid", L("The closed input did not form a valid non-intersecting solid."));
-        }
-        report["status"]            = "closed_input_ready";
-        report["used_for_wrapping"] = true;
-        report["closed_loops"]      = borders.size();
-        report["added_faces"]       = mesh.its.indices.size() - source.faces.size();
-        report["validation"]        = std::move(validation);
-        return read_soup(mesh, face_limit);
-    } catch (const Rejection& error) {
-        // Only a controlled geometry/budget refusal falls back to the original
-        // soup. Allocation errors or unexpected engine failures stop the worker.
-        report["status"]  = error.status;
-        report["message"] = error.what();
-        return std::nullopt;
-    }
-}
-
 } // namespace
 
 bool validate_reconstruction_mesh(const TriangleMesh& mesh, nlohmann::json& report, std::size_t face_limit)
@@ -650,120 +534,4 @@ nlohmann::json compare_model_stage_meshes(const TriangleMesh& source_mm, const T
     return metrics;
 }
 
-bool reconstruct_mesh(const TriangleMesh&              source_mm,
-                      TriangleMesh&                    candidate_mm,
-                      nlohmann::json&                  report,
-                      const MeshReconstructionOptions& options)
-{
-    report = {{"status", "failed"},
-              {"message", L("Reconstruction did not complete.")},
-              {"input", {{"faces", source_mm.its.indices.size()}, {"vertices", source_mm.its.vertices.size()}, {"units", "mm"}}},
-              {"output", nlohmann::json::object()},
-              {"attempts", nlohmann::json::array()},
-              {"validation",
-               {{"complete", false},
-                {"geometry_complete", false},
-                {"requires_manual_confirmation", true},
-                {"printability_verified", false},
-                {"design_intent_restored", false},
-                {"reference_interior_check_complete", false},
-                {"interior_check_status", "not_preserved"}}},
-              {"metrics",
-               {{"distance_method", "sampled_vertices_edge_midpoints_and_face_centroids"},
-                {"distance_is_upper_bound", false},
-                {"engine", "CGAL AlphaWrap"},
-                {"engine_version", CGAL_VERSION_STR},
-                {"deviation_policy", "warning_only"}}}};
-    try {
-        require(&source_mm != &candidate_mm, "invalid_input", L("Source and candidate meshes must be distinct objects."));
-        require(std::isfinite(options.alpha_mm) && std::isfinite(options.offset_mm) && std::isfinite(options.max_deviation_mm) &&
-                    options.alpha_mm > 0 && options.offset_mm > 0 && options.max_deviation_mm > 0,
-                "invalid_options", L("Alpha, offset and deviation warning threshold must be finite and positive."));
-        require(options.offset_mm <= options.alpha_mm * 0.25, "invalid_options", L("Offset must not exceed one quarter of alpha."));
-        require(options.max_input_faces >= 4 && options.max_output_faces >= 4 &&
-                    options.max_input_faces <= RECONSTRUCTION_MAX_INPUT_FACES &&
-                    options.max_output_faces <= RECONSTRUCTION_MAX_OUTPUT_FACES,
-                "invalid_options", L("Requested face limits exceed the supported reconstruction budget."));
-        const Soup  source = read_soup(source_mm, options.max_input_faces, true);
-        const Vec3d extent = source.maximum - source.minimum;
-        require(extent.allFinite() && extent.maxCoeff() > 0, "invalid_input", L("The model has no usable spatial extent."));
-        report["input"]["canonical_vertices"]       = source.points.size();
-        report["input"]["cleaned_faces"]            = source.faces.size();
-        report["input"]["removed_degenerate_faces"] = source.removed_degenerate;
-        report["input"]["removed_duplicate_faces"]  = source.removed_duplicates;
-        auto        closed_input                           = prepare_closed_input(source, options, report["boundary_closure"]);
-        const Soup& wrap_input                             = closed_input ? *closed_input : source;
-        report["metrics"]["open_surface_envelope_warning"] = report["boundary_closure"]["input_boundary_edges"].get<std::size_t>() > 0 &&
-                                                             !closed_input;
-        // Failure to prepare a closed input does not exclude defective soups.
-        double area = 0;
-        for (const auto& face : wrap_input.faces)
-            area += std::sqrt(
-                double(Triangle(wrap_input.points[face[0]], wrap_input.points[face[1]], wrap_input.points[face[2]]).squared_area()));
-        require(std::isfinite(area) && area > 0, "invalid_input", L("The model has no finite positive surface area."));
-        // A single worker owns the overall deadline/RSS budget for all attempts.
-        // Try the requested resolution first, then two bounded coarser profiles.
-        for (const double factor : {1., 2., 4.}) {
-            const double   alpha   = options.alpha_mm * factor;
-            const double   offset  = options.offset_mm * factor;
-            nlohmann::json attempt = {{"alpha_mm", alpha}, {"offset_mm", offset}};
-            try {
-                require(std::isfinite(alpha) && std::isfinite(offset), "invalid_options", L("Reconstruction scales are not finite."));
-                require(area / alpha / alpha <= double(options.max_output_faces), "resource_limit",
-                        L("The requested alpha exceeds the estimated surface refinement budget."));
-                Surface       wrapped;
-                BudgetVisitor visitor{std::max<std::size_t>(64, options.max_output_faces * 2),
-                                      std::max<std::size_t>(512, options.max_output_faces * 12)};
-                CGAL::alpha_wrap_3(wrap_input.points, wrap_input.faces, alpha, offset, wrapped, CGAL::parameters::visitor(visitor));
-                TriangleMesh   staged = to_triangle_mesh(wrapped, options.max_output_faces);
-                nlohmann::json validation;
-                if (!validate_reconstruction_mesh(staged, validation, options.max_output_faces)) {
-                    attempt["validation"] = validation;
-                    // A failed checker is not a geometric rejection. Retrying it
-                    // with a coarser mesh would conceal the engine failure.
-                    if (validation.value("status", "") == "engine_error")
-                        throw Rejection("engine_error", validation.at("message").get<std::string>().c_str());
-                    require(false, "candidate_rejected", L("The reconstructed mesh did not pass all complete model checks."));
-                }
-                const Soup output                        = read_soup(staged, options.max_output_faces);
-                report["output"]                         = {{"faces", output.faces.size()}, {"vertices", output.points.size()}};
-                report["final_mesh_check"]               = std::move(validation);
-                report["metrics"]["effective_alpha_mm"]  = alpha;
-                report["metrics"]["effective_offset_mm"] = offset;
-                report["metrics"]["output_volume_mm3"]   = report["final_mesh_check"]["metrics"]["signed_volume"];
-                report["metrics"]["component_count"]     = report["final_mesh_check"]["metrics"]["component_count"];
-                report["metrics"].update(comparison_metrics(source, output, options.max_deviation_mm));
-                attempt["status"] = "candidate_ready";
-                report["attempts"].push_back(std::move(attempt));
-                report["validation"]["complete"]               = true;
-                report["validation"]["geometry_complete"]      = true;
-                report["validation"]["closed"]                 = true;
-                report["validation"]["manifold"]               = true;
-                report["validation"]["self_intersection_free"] = true;
-                report["status"]                               = "candidate_ready";
-                report["message"] = L("The reconstructed mesh passed complete model checks. Shape and internal structure may have changed; "
-                                      "trial slicing is still required.");
-                candidate_mm      = std::move(staged);
-                return true;
-            } catch (const Rejection& error) {
-                attempt["status"]  = error.status;
-                attempt["message"] = error.what();
-                report["attempts"].push_back(std::move(attempt));
-                // Do not retry corrupted inputs, options or engine/monitor failures.
-                if (factor == 4. || (error.status != "resource_limit" && error.status != "candidate_rejected"))
-                    throw;
-            }
-        }
-    } catch (const Rejection& error) {
-        report["status"]  = error.status;
-        report["message"] = error.what();
-    } catch (const std::exception& error) {
-        report["status"]  = "engine_error";
-        report["message"] = error.what();
-    } catch (...) {
-        report["status"]  = "engine_error";
-        report["message"] = L("The reconstruction engine failed with an unknown exception.");
-    }
-    return false;
-}
 } // namespace Slic3r

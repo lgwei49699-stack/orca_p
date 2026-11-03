@@ -2,8 +2,8 @@
 #define slic3r_ModelReconstruction_hpp_
 
 #include "MeshReconstruction.hpp"
-#include "ReconstructionProcess.hpp"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -13,24 +13,31 @@ namespace Slic3r {
 class Model;
 class ModelObject;
 
+struct ReconstructionLimits
+{
+    // Zero selects a size-aware budget. Explicit caller values are retained.
+    unsigned              timeout_ms      = 0;
+    std::size_t           memory_limit_mb = 0;
+    std::function<bool()> is_canceled;
+    // Runs on the caller/UI thread. Cancellation waits for SDK work to return.
+    std::function<void()> on_tick;
+};
+
 struct ModelReconstructionOptions
 {
-    MeshReconstructionOptions    mesh;
-    // Zero selects a size-aware budget. Positive caller overrides are retained.
-    // These sentinels are resolved before invoking the generic process runner.
-    ReconstructionProcessOptions process{0, 0, {}, {}};
-    std::string                  executable;
-    // CLI-only opt-in backend. The native GUI keeps alpha-wrap. An enabled
-    // MeshLib build calls the SDK in this process, with cooperative limits.
-    std::string engine   = "alpha-wrap";
-    double      voxel_mm = 0.;
+    MeshReconstructionOptions mesh;
+    ReconstructionLimits      limits;
+    // CLI requires an explicit size. GUI supplies the value shown to the user.
+    double voxel_mm = 0.;
 };
+
+bool model_reconstruction_available() noexcept;
 
 // Resolves only resource limits, preserving cancellation/tick callbacks. Physical
 // RAM is an upper bound for automatic budgets, not an estimate of free memory.
-ReconstructionProcessOptions model_reconstruction_process_options(std::size_t input_faces,
-                                                                  const ReconstructionProcessOptions& requested,
-                                                                  std::size_t physical_memory_bytes);
+ReconstructionLimits model_reconstruction_limits(std::size_t                 input_faces,
+                                                 const ReconstructionLimits& requested,
+                                                 std::size_t                 physical_memory_bytes);
 
 struct ModelReconstructionResult
 {
@@ -53,13 +60,9 @@ std::string model_reconstruction_source_identity(const ModelObject& object);
 // Does not commit to the source, move onto the bed, slice, or start printing.
 ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t object_index, const ModelReconstructionOptions& options);
 
-// Internal headless entry, dispatched before normal CLI/GUI startup. It only
-// reads/writes the fixed protocol filenames inside the supplied task directory.
-int run_model_reconstruction_worker(const std::string& task_directory);
-
 // Public standalone CLI. STL only for v1 to avoid geometry-only import silently
 // discarding material/texture semantics. Writes to a new, nonexistent directory.
-int run_model_reconstruction_cli(const std::string& executable, const std::vector<std::string>& args);
+int run_model_reconstruction_cli(const std::vector<std::string>& args);
 
 // Reuse the standalone parser for explicit stage reports: one bounded,
 // geometry-only STL snapshot, no import repair, hash of the bytes actually parsed.

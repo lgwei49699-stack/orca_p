@@ -15,9 +15,14 @@ enum class InProcessReconstructionStop { None, Canceled, TimedOut, MemoryLimitEx
 
 const char* inprocess_reconstruction_stop_name(InProcessReconstructionStop reason) noexcept;
 
+uint64_t current_reconstruction_process_id() noexcept;
+
 // Samples this process only. False (including an unsupported platform) means
 // unknown, never zero memory. Does not change process limits or signal handlers.
-bool current_reconstruction_resident_bytes(uint64_t& bytes) noexcept;
+// macOS: physical footprint (dirty/compressed memory); Windows: working set;
+// Linux: resident set. The budget always includes the current host process.
+const char* reconstruction_memory_metric() noexcept;
+bool        current_reconstruction_memory_bytes(uint64_t& bytes) noexcept;
 
 // Cooperative control, not process isolation or a hard allocator/time limit.
 // The caller polls and owns/join()s the background task. SDK callbacks and phase
@@ -27,15 +32,15 @@ bool current_reconstruction_resident_bytes(uint64_t& bytes) noexcept;
 class InProcessReconstructionControl
 {
 public:
-    using Clock       = std::chrono::steady_clock;
-    using RssReader   = std::function<bool(uint64_t&)>;
-    using ClockReader = std::function<Clock::time_point()>;
+    using Clock        = std::chrono::steady_clock;
+    using MemoryReader = std::function<bool(uint64_t&)>;
+    using ClockReader  = std::function<Clock::time_point()>;
 
     InProcessReconstructionControl(
-        unsigned    timeout_ms,
-        size_t      memory_limit_mb,
-        RssReader   rss_reader   = current_reconstruction_resident_bytes,
-        ClockReader clock_reader = [] { return std::chrono::steady_clock::now(); });
+        unsigned     timeout_ms,
+        size_t       memory_limit_mb,
+        MemoryReader memory_reader = current_reconstruction_memory_bytes,
+        ClockReader  clock_reader  = [] { return std::chrono::steady_clock::now(); });
 
     // Call only from the coordinating caller thread. These functions do not
     // throw; reader failures latch MonitorFailed. The first stop reason wins.
@@ -45,21 +50,21 @@ public:
     InProcessReconstructionStop stop_reason() const noexcept;
 
     uint64_t elapsed_ms() const noexcept;
-    uint64_t resident_bytes() const noexcept;
-    uint64_t peak_resident_bytes() const noexcept;
+    uint64_t memory_bytes() const noexcept;
+    uint64_t peak_memory_bytes() const noexcept;
 
 private:
     void request_stop(InProcessReconstructionStop reason) noexcept;
 
     unsigned                                 m_timeout_ms;
     uint64_t                                 m_memory_limit_bytes;
-    RssReader                                m_rss_reader;
+    MemoryReader                             m_memory_reader;
     ClockReader                              m_clock_reader;
     Clock::time_point                        m_started;
     std::atomic<InProcessReconstructionStop> m_stop{InProcessReconstructionStop::None};
     std::atomic<uint64_t>                    m_elapsed_ms{0};
-    std::atomic<uint64_t>                    m_resident_bytes{0};
-    std::atomic<uint64_t>                    m_peak_resident_bytes{0};
+    std::atomic<uint64_t>                    m_memory_bytes{0};
+    std::atomic<uint64_t>                    m_peak_memory_bytes{0};
 };
 
 struct InProcessReconstructionEstimateInput
@@ -70,7 +75,7 @@ struct InProcessReconstructionEstimateInput
     double                surface_area_mm2 = 0.;
     std::array<double, 3> extent_mm{{0., 0., 0.}};
     double                voxel_mm        = 0.;
-    uint64_t              resident_bytes  = 0;
+    uint64_t              memory_bytes    = 0;
     size_t                memory_limit_mb = 1024;
 };
 
@@ -85,9 +90,9 @@ struct InProcessReconstructionEstimate
 };
 
 // Checked heuristic for rejecting clearly excessive requests before SDK work.
-// Includes input copies/topology, a candidate/validation reserve, and a sparse
-// surface-grid estimate. It is neither a dense-grid allocation nor an upper
-// bound for MeshLib/CGAL memory. Runtime cooperative RSS polling is still needed.
+// Includes input copies/topology, a candidate/validation reserve, surface work,
+// full-grid marching-cubes masks and the distance slab. This is not an upper
+// bound for MeshLib/CGAL memory. Runtime cooperative process-memory polling is still needed.
 InProcessReconstructionEstimate estimate_inprocess_reconstruction(const InProcessReconstructionEstimateInput& input);
 
 } // namespace Slic3r

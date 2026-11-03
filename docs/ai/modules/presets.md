@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:748ecf37468c0919682b818035c3cf057f6537effac43b426be54a5aa12f1b51",
-  "reason": "合并云导入预设的gfd-cloud机器子目录、保存/重载与三档旧名称兼容，默认save_current_preset调用保持原公共目录。保留CLI专用默认关闭的repair_evidence/close_boundaries选项，不把其纳入机器/耗材/工艺配置。正文补存储边界，合并后验证见主记录。 10-17 仅CLI misc新增默认关闭model_stage_report及默认空model_reference，不属于工艺/机器/耗材参数，未新增GUI面板或配置覆盖。 10-18 CLIMiscConfigDef仅新增默认false的slice_analysis_report，不加入有效打印参数、预设持久化或GUI面板；既有默认值和覆盖规则未改。 2026-10-22仅CLIMisc新增optimize_model_detail_paths=false，不加入PrintConfig/PrintObjectConfig、预设和工程持久化；GUI按用户要求默认关闭。原云预设、资源默认值及覆盖规则保留，正文补运行时边界。 云工艺改为工程有效值优先、缺键回退嵌入值；补充配置来源正文，测试覆盖显式零/百分比和隔离目录保存重载。PresetCollection 和系统资源默认值未改。 2026-10-26合入master至Linux发布分支：两侧业务说明与发布配置均保留；源码无冲突，合并验证单独记录。 2026-10-26目标分支复核：合入master的云工艺快照优先、MSVC时钟名称与CuraV1偏心填充修复；保留已存细节opt-in和Linux专用构建。模块正文已合并对应说明，共享配置/测试引起的身份更新不代表另改本模块默认策略。运行与GUI边界见2026-10-26发布合并记录。 合并云导入预设的gfd-cloud机器子目录、保存/重载与三档旧名称兼容，默认save_current_preset调用保持原公共目录。保留CLI专用默认关闭的repair_evidence/close_boundaries选项，不把其纳入机器/耗材/工艺配置。正文补存储边界，合并后验证见主记录。 10-17 仅CLI misc新增默认关闭model_stage_report及默认空model_reference，不属于工艺/机器/耗材参数，未新增GUI面板或配置覆盖。 10-18 CLIMiscConfigDef仅新增默认false的slice_analysis_report，不加入有效打印参数、预设持久化或GUI面板；既有默认值和覆盖规则未改。 2026-10-22仅CLIMisc新增optimize_model_detail_paths=false，不加入PrintConfig/PrintObjectConfig、预设和工程持久化；GUI按用户要求默认关闭。原云预设、资源默认值及覆盖规则保留，正文补运行时边界。 2026-10-22仅CLIMisc新增variable_layer_height_min/max默认0，未改PrintConfig/PrintObjectConfig有效配置、资源或持久化；正文补显式计划边界。 2026-10-23仅在CLITransform注册默认空的model_layer_height_plan及英文/简中帮助，非普通打印配置，不改预设继承/默认值或GUI面板；CLI契约与回归见进展记录。 2026-10-26合入f9bcf0afe：保留master修复、Linux打包与特征CLI边界，当前组合验证另记。 2026-10-26发布分支最终复核：合并CLI专属计划/上下界注册（默认空/0）与工程快照优先的云预设修复，两者不改系统工艺默认值。 构建/回归及GUI待验见发布合并记录。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。"
+  "source_fingerprint": "sha256:7780c2d5a61121de36c4abb4af7bfd56f596d65abf0c23026f10b0abe2a355a0",
+  "reason": "2026-10-31：PrintConfig 仅增加 CLIConfig 中默认 false 的 texture_repair，未改打印工艺/喷嘴/耗材配置、FFF 默认或单位；正文说明与普通切片对照已补。"
 }
 -->
 
@@ -54,6 +54,8 @@ Config 的反序列化与兼容替换规则决定未知／旧值如何处理；�
 PresetUpdater 在重载前经 check_and_save_current_preset_changes 处理未保存修改，用户取消后不继续重载。AppConfig::save 要求主线程并先写带 PID 的临时文件。缺父项、循环或坏 JSON 的隔离范围要回到实际加载入口；[向导](guide.md) 的单项跳过能力不能推断为所有加载路径共有。
 
 ## 修改与验证
+
+`CLIConfig` 新增默认 false 的 `texture_repair`，仅用于显式纹理 OBJ 导出前的高级修复。它不是 FFF 工艺参数，不进入普通机型/耗材/工艺预设或 G-code；不改现有参数默认值、单位和覆盖顺序。具体约束见[CLI模块](cli.md)。
 
 改键/默认值需测试序列化、合法 0、继承、旧工程兼容及资源升级；修改资源包元信息时审查 version 与实际差异，不能顺便改打印参数。
 

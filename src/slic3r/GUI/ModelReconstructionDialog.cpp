@@ -57,7 +57,7 @@ std::vector<PreviewSegment> make_section(const PreviewGeometry& geometry, int ax
             const Vec3d& a = geometry.vertices[face[edge]];
             const Vec3d& b = geometry.vertices[face[(edge + 1) % 3]];
             // Half-open intervals avoid adding a plane vertex twice. Coplanar
-            // triangles are omitted; these are middle sections, not silhouettes.
+            // triangles are omitted; these are cross-sections, not silhouettes.
             if ((a[axis] <= position && b[axis] > position) || (b[axis] <= position && a[axis] > position))
                 intersections[count++] = a + (position - a[axis]) / (b[axis] - a[axis]) * (b - a);
         }
@@ -74,14 +74,27 @@ public:
     ReconstructionSectionPanel(
         wxWindow* parent, const PreviewGeometry& source, const PreviewGeometry& candidate, const BoundingBoxf3& bounds, int axis)
         : wxPanel(parent)
+        , m_source_geometry(source)
+        , m_candidate_geometry(candidate)
         , m_bounds(bounds)
         , m_axis(axis)
-        , m_source(make_section(source, axis, bounds.center()[axis]))
-        , m_candidate(make_section(candidate, axis, bounds.center()[axis]))
+        , m_position(bounds.center()[axis])
+        , m_source(make_section(source, axis, m_position))
+        , m_candidate(make_section(candidate, axis, m_position))
     {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         SetMinSize(FromDIP(wxSize(220, 190)));
         Bind(wxEVT_PAINT, &ReconstructionSectionPanel::paint, this);
+    }
+
+    void set_position(double position)
+    {
+        if (position == m_position)
+            return;
+        m_position  = position;
+        m_source    = make_section(m_source_geometry, m_axis, position);
+        m_candidate = make_section(m_candidate_geometry, m_axis, position);
+        Refresh();
     }
 
 private:
@@ -102,7 +115,7 @@ private:
         };
         dc.SetTextForeground(GetForegroundColour());
         const wxString plane = m_axis == 2 ? "XY" : (m_axis == 1 ? "XZ" : "YZ");
-        dc.DrawText(plane + wxString::Format("  %.3f mm", m_bounds.center()[m_axis]), FromDIP(8), FromDIP(6));
+        dc.DrawText(plane + wxString::Format("  %.3f mm", m_position), FromDIP(8), FromDIP(6));
         dc.SetPen(wxPen(wxColour(159, 84, 209), FromDIP(2), wxPENSTYLE_SHORT_DASH));
         for (const PreviewSegment& segment : m_source)
             dc.DrawLine(point(segment[0]), point(segment[1]));
@@ -111,8 +124,12 @@ private:
             dc.DrawLine(point(segment[0]), point(segment[1]));
     }
 
+    // The two preview geometries outlive the modal dialog and all its panels.
+    const PreviewGeometry&      m_source_geometry;
+    const PreviewGeometry&      m_candidate_geometry;
     BoundingBoxf3               m_bounds;
     int                         m_axis;
+    double                      m_position;
     std::vector<PreviewSegment> m_source;
     std::vector<PreviewSegment> m_candidate;
 };
@@ -179,6 +196,11 @@ void fit_scrollable_dialog(wxDialog& dialog, wxBoxSizer* root, wxScrolledWindow&
 
 bool show_model_reconstruction_settings(wxWindow* parent, ModelReconstructionOptions& options)
 {
+    if (!model_reconstruction_available()) {
+        wxMessageBox(_L("This Orca build does not include the MeshLib SDK backend."), _L("Reconstruct model"), wxOK | wxICON_WARNING,
+                     parent);
+        return false;
+    }
     wxDialog dialog(parent, wxID_ANY, _L("Reconstruct model"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
     auto*    root          = new wxBoxSizer(wxVERTICAL);
     auto*    content_sizer = new wxBoxSizer(wxVERTICAL);
@@ -201,26 +223,17 @@ bool show_model_reconstruction_settings(wxWindow* parent, ModelReconstructionOpt
         grid->Add(control, 1, wxEXPAND);
         return control;
     };
-    auto* alpha     = add_parameter(_L("Wrap detail radius (mm)"), options.mesh.alpha_mm, 0.01, 100.0, 0.05);
-    auto* offset    = add_parameter(_L("Surface offset (mm)"), options.mesh.offset_mm, 0.001, 10.0, 0.01);
+    auto* voxel     = add_parameter(_L("Voxel size (mm)"), options.voxel_mm > 0. ? options.voxel_mm : 0.1, 0.001, 100.0, 0.01);
     auto* deviation = add_parameter(_L("Surface deviation warning threshold (mm)"), options.mesh.max_deviation_mm, 0.001, 100.0, 0.05);
     content_sizer->Add(grid, 0, wxEXPAND | wxALL, dialog.FromDIP(12));
-    auto* close_boundaries = new wxCheckBox(content, wxID_ANY, _L("Try closing open boundaries before wrapping"));
-    close_boundaries->SetValue(options.mesh.close_open_boundaries);
-    content_sizer->Add(close_boundaries, 0, wxALL, dialog.FromDIP(12));
     add_wrapped_text(*content, *content_sizer,
-                     _L("Closing open boundaries can avoid a thin envelope around a broken surface, but may fill intended openings. "
-                        "Only a validated closed input is used. If closure fails, the original surface is wrapped and a warning is shown."),
+                     _L("MeshLib reconstructs the model at the selected voxel size. Smaller voxels require more time and memory. "
+                        "No automatic coarsening or fallback is performed. Surface deviation is a warning, not a rejection limit."),
                      570);
-    add_wrapped_text(
-        *content, *content_sizer,
-        _L("Smaller detail radii require more time and memory. Up to three progressively coarser attempts share the time budget. "
-           "Surface deviation is reported as a warning, not a rejection. Values are in physical millimeters."),
-        570);
     add_wrapped_text(*content, *content_sizer,
-                     wxString::Format(_L("Worker budget: %u seconds, %u MiB. Chosen for the input size and physical RAM; "
-                                         "this is a limit, not a completion estimate. The original model is kept on timeout or memory exhaustion."),
-                                      options.process.timeout_ms / 1000, static_cast<unsigned>(options.process.memory_limit_mb)),
+                     wxString::Format(_L("Cooperative budget: %u seconds, %u MiB for the whole application. "
+                                         "Cancellation waits for reconstruction and validation to return; the original model is kept."),
+                                      options.limits.timeout_ms / 1000, static_cast<unsigned>(options.limits.memory_limit_mb)),
                      570);
     auto* consent = new wxCheckBox(content, wxID_ANY, _L("I understand that reconstruction changes the model's shape."));
     content_sizer->Add(consent, 0, wxALL, dialog.FromDIP(12));
@@ -233,11 +246,10 @@ bool show_model_reconstruction_settings(wxWindow* parent, ModelReconstructionOpt
     generate->Bind(wxEVT_BUTTON, [&](wxCommandEvent&) {
         if (!consent->GetValue())
             return;
-        if (!std::isfinite(alpha->GetValue()) || !std::isfinite(offset->GetValue()) || !std::isfinite(deviation->GetValue()) ||
-            alpha->GetValue() <= 0 || offset->GetValue() <= 0 || deviation->GetValue() <= 0 ||
-            offset->GetValue() > alpha->GetValue() * 0.25) {
-            wxMessageBox(_L("Use positive values. The surface offset must not exceed one quarter of the detail radius."),
-                         _L("Reconstruct model"), wxOK | wxICON_WARNING, &dialog);
+        if (!std::isfinite(voxel->GetValue()) || voxel->GetValue() <= 0 || !std::isfinite(deviation->GetValue()) ||
+            deviation->GetValue() <= 0) {
+            wxMessageBox(_L("Reconstruction options require finite positive numbers."), _L("Reconstruct model"), wxOK | wxICON_WARNING,
+                         &dialog);
             return;
         }
         dialog.EndModal(wxID_OK);
@@ -247,10 +259,8 @@ bool show_model_reconstruction_settings(wxWindow* parent, ModelReconstructionOpt
     fit_scrollable_dialog(dialog, root, *content);
     if (dialog.ShowModal() != wxID_OK)
         return false;
-    options.mesh.alpha_mm              = alpha->GetValue();
-    options.mesh.offset_mm             = offset->GetValue();
-    options.mesh.max_deviation_mm      = deviation->GetValue();
-    options.mesh.close_open_boundaries = close_boundaries->GetValue();
+    options.voxel_mm              = voxel->GetValue();
+    options.mesh.max_deviation_mm = deviation->GetValue();
     return true;
 }
 
@@ -272,13 +282,35 @@ bool show_model_reconstruction_preview(wxWindow*                        parent,
     auto*    content       = add_scrollable_content(dialog, *root, content_sizer);
     add_experimental_warning(*content, *content_sizer, 770);
     add_wrapped_text(*content, *content_sizer,
-                     _L("Middle cross-sections at the same physical coordinates: dashed purple = original; solid teal = candidate. "
-                        "These three sections do not show every hole or internal feature."),
+                     _L("Cross-sections at the same physical coordinates: dashed purple = original; solid teal = candidate. "
+                        "Set the X/Y/Z positions and update the sections to inspect specific holes or cavities. "
+                        "Selected sections do not prove that every feature is preserved."),
                      770);
-    auto* views = new wxBoxSizer(wxHORIZONTAL);
-    for (int axis : {2, 1, 0})
-        views->Add(new ReconstructionSectionPanel(content, source, rebuilt, bounds, axis), 1, wxEXPAND | wxALL, dialog.FromDIP(4));
+    auto*                                      views = new wxBoxSizer(wxHORIZONTAL);
+    std::array<ReconstructionSectionPanel*, 3> panels;
+    std::array<wxSpinCtrlDouble*, 3>           positions;
+    for (int axis : {2, 1, 0}) {
+        auto* column = new wxBoxSizer(wxVERTICAL);
+        panels[axis] = new ReconstructionSectionPanel(content, source, rebuilt, bounds, axis);
+        column->Add(panels[axis], 1, wxEXPAND);
+        auto*          row        = new wxBoxSizer(wxHORIZONTAL);
+        const wxString coordinate = axis == 2 ? "Z (mm)" : (axis == 1 ? "Y (mm)" : "X (mm)");
+        row->Add(new wxStaticText(content, wxID_ANY, coordinate), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, dialog.FromDIP(6));
+        positions[axis] = new wxSpinCtrlDouble(content, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS,
+                                               bounds.min[axis], bounds.max[axis], bounds.center()[axis], 0.1);
+        positions[axis]->SetDigits(3);
+        positions[axis]->SetName(coordinate);
+        row->Add(positions[axis], 1, wxEXPAND);
+        column->Add(row, 0, wxEXPAND | wxTOP, dialog.FromDIP(4));
+        views->Add(column, 1, wxEXPAND | wxALL, dialog.FromDIP(4));
+    }
     content_sizer->Add(views, 1, wxEXPAND | wxLEFT | wxRIGHT, dialog.FromDIP(8));
+    auto* update_sections = new wxButton(content, wxID_ANY, _L("Update cross-sections"));
+    update_sections->Bind(wxEVT_BUTTON, [panels, positions](wxCommandEvent&) {
+        for (int axis = 0; axis < 3; ++axis)
+            panels[axis]->set_position(positions[axis]->GetValue());
+    });
+    content_sizer->Add(update_sections, 0, wxALIGN_RIGHT | wxALL, dialog.FromDIP(8));
     add_wrapped_text(*content, *content_sizer,
                      _L("Original size:") + " " + dimensions(source.bounds.size()) + "\n" + _L("Candidate size:") + " " +
                          dimensions(rebuilt.bounds.size()) + "\n" + _L("Bottom height before / after (mm):") +
@@ -303,21 +335,19 @@ bool show_model_reconstruction_preview(wxWindow*                        parent,
     add_wrapped_text(*content, *content_sizer,
                      _L("Sampled distance, original to candidate / candidate to original (mm):") + " " +
                          metric("sampled_source_to_candidate_mm") + " / " + metric("sampled_candidate_to_source_mm") + "\n" +
-                         _L("Bounding box deviation (mm):") + " " + metric("bbox_deviation_mm") + "\n" +
-                         _L("Effective wrap radius / surface offset (mm):") + " " + metric("effective_alpha_mm") + " / " +
-                         metric("effective_offset_mm") + "\n" + _L("Sampled distances are not a guaranteed maximum surface error."),
+                         _L("Bounding box deviation (mm):") + " " + metric("bbox_deviation_mm") + "\n" + _L("Voxel size (mm)") + ": " +
+                         wxString::Format("%.5f", result.report.at("parameters").at("voxel_mm").get<double>()) + "\n" +
+                         _L("Sampled distances are not a guaranteed maximum surface error."),
                      770);
     const auto engine = result.report.find("engine");
     if (engine != result.report.end() && engine->is_object()) {
-        const auto closure = engine->find("boundary_closure");
-        if (closure != engine->end() && closure->is_object() && closure->value("used_for_wrapping", false))
-            add_wrapped_text(*content, *content_sizer,
-                             _L("Open boundaries were closed before wrapping. Review the added surfaces and any filled openings."), 770);
-        const auto validation = engine->find("validation");
-        if (validation != engine->end() && validation->is_object() && validation->value("interior_check_status", "") == "not_preserved") {
+        const auto structure = engine->find("structure_preservation");
+        if (structure != engine->end() && structure->value("topology_comparison_complete", false) &&
+            structure->at("topology_changed").get<bool>()) {
             auto*  warning = add_wrapped_text(*content, *content_sizer,
-                                              _L("The reconstructed mesh passed complete model checks. Shape and internal structure may "
-                                                  "have changed; trial slicing is still required."),
+                                              _L("Reconstruction changed the connectivity of closed surfaces or through-holes. "
+                                                  "Inspect holes, cavities and separate parts before applying the candidate, even if "
+                                                  "surface deviation is below the warning threshold."),
                                               770);
             wxFont font    = warning->GetFont();
             font.SetWeight(wxFONTWEIGHT_BOLD);
@@ -327,11 +357,6 @@ bool show_model_reconstruction_preview(wxWindow*                        parent,
     if (metrics_it != result.report.end() && metrics_it->value("deviation_warning", false))
         add_wrapped_text(*content, *content_sizer,
                          _L("Surface deviation exceeds the warning threshold. The candidate is valid, but its shape needs review."), 770);
-    if (metrics_it != result.report.end() && metrics_it->value("open_surface_envelope_warning", false))
-        add_wrapped_text(*content, *content_sizer,
-                         _L("Open boundaries remain in the wrapping input. The candidate may be a thin envelope with missing wall paths. "
-                            "Complete mesh checks do not establish printability; inspect the sliced result before use."),
-                         770);
     auto* bed = new wxCheckBox(content, wxID_ANY, _L("Move the candidate in Z so its lowest point rests on the bed"));
     bed->SetValue(false);
     content_sizer->Add(bed, 0, wxALL, dialog.FromDIP(12));

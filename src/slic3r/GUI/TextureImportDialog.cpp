@@ -1,6 +1,7 @@
 #include <GL/glew.h>
 
 #include "TextureImportDialog.hpp"
+#include "MsgDialog.hpp"
 #include "I18N.hpp"
 #include "GUI_App.hpp"
 #include "Widgets/StateColor.hpp"
@@ -291,6 +292,7 @@ namespace Slic3r { namespace GUI {
 wxDEFINE_EVENT(EVT_TEXTURE_COMPUTE_DONE, wxCommandEvent);
 wxDEFINE_EVENT(EVT_TEXTURE_COMPUTE_PROGRESS, wxCommandEvent);
 wxDEFINE_EVENT(EVT_TEXTURE_COMPUTE_ERROR, wxCommandEvent);
+wxDEFINE_EVENT(EVT_TEXTURE_MESH_REPAIR_DECISION, wxCommandEvent);
 
 static std::array<float, 4> parse_color_string(const std::string& hex)
 {
@@ -1380,6 +1382,7 @@ TextureImportDialog::TextureImportDialog(
     Bind(EVT_TEXTURE_COMPUTE_DONE,     &TextureImportDialog::on_computation_complete, this);
     Bind(EVT_TEXTURE_COMPUTE_PROGRESS, &TextureImportDialog::on_computation_progress, this);
     Bind(EVT_TEXTURE_COMPUTE_ERROR,    &TextureImportDialog::on_computation_error,    this);
+    Bind(EVT_TEXTURE_MESH_REPAIR_DECISION, &TextureImportDialog::on_mesh_repair_decision_required, this);
 
     build_ui();
     SetMinSize(wxSize(FromDIP(800), FromDIP(500)));
@@ -1917,6 +1920,7 @@ void TextureImportDialog::start_computation(bool auto_color, bool initial)
 
     m_cancel_flag = false;
     m_current_computation_initial = initial;
+    m_current_computation_auto_color = auto_color;
     if (initial) {
         m_initial_computation_pending = true;
         m_initial_computation_cancelled = false;
@@ -1934,6 +1938,7 @@ void TextureImportDialog::start_computation(bool auto_color, bool initial)
     Slic3r::TexturePaintingSettings settings;
     settings.target_colors_num = auto_color ? 0 : (size_t)m_param_color_count;
     settings.smooth_weight     = m_param_smooth / 10.0;
+    settings.mesh_repair_decision = m_mesh_repair_decision;
 
     const Slic3r::TexturedMesh* textured_mesh = &m_textured_mesh;
     wxEvtHandler*               handler       = this;
@@ -1951,10 +1956,17 @@ void TextureImportDialog::start_computation(bool auto_color, bool initial)
             return m_cancel_flag.load();
         };
 
-        bool ok = Slic3r::texture_to_painting(*textured_mesh, result, settings, progress_cb, cancel_cb);
+        bool repair_decision_required                 = false;
+        auto worker_settings                          = settings;
+        worker_settings.mesh_repair_decision_required = &repair_decision_required;
+        bool ok = Slic3r::texture_to_painting(*textured_mesh, result, worker_settings, progress_cb, cancel_cb);
 
         if (m_cancel_flag.load()) {
             wxQueueEvent(handler, new wxCommandEvent(EVT_TEXTURE_COMPUTE_ERROR));
+            return;
+        }
+        if (repair_decision_required) {
+            wxQueueEvent(handler, new wxCommandEvent(EVT_TEXTURE_MESH_REPAIR_DECISION));
             return;
         }
 
@@ -2089,17 +2101,55 @@ void TextureImportDialog::on_computation_error(wxCommandEvent&)
         return;
     }
 
+    const bool requested_repair = m_mesh_repair_decision == tex2color::MeshRepairDecision::RepairAndImport;
     if (initial) {
         m_initial_computation_failed = true;
         m_initial_computation_pending = false;
         m_current_computation_initial = false;
-        m_fallback_to_geometry_only = true;
-        return;
+        m_fallback_to_geometry_only   = !requested_repair;
+        if (!requested_repair)
+            return;
     }
 
     set_state(TextureImportState::Error);
-    wxMessageBox(_L("Computation failed. Please adjust parameters and retry."),
+    wxMessageBox(requested_repair ? _L("Texture conversion with repair failed. The original model was not changed.") :
+                                    _L("Computation failed. Please adjust parameters and retry."),
                  _L("Error"), wxOK | wxICON_ERROR, initial ? GetParent() : this);
+}
+
+void TextureImportDialog::on_mesh_repair_decision_required(wxCommandEvent&)
+{
+    if (m_cancel_flag.load()) {
+        wxCommandEvent event;
+        on_computation_error(event);
+        return;
+    }
+    const bool initial    = m_current_computation_initial;
+    const bool auto_color = m_current_computation_auto_color;
+    if (m_progress_dlg) {
+        m_progress_dlg->Destroy();
+        m_progress_dlg = nullptr;
+    }
+    MessageDialog
+        dialog(initial ? GetParent() : this,
+               _L("The mesh has non-manifold geometry or open boundaries. You can import it as-is or repair it before importing."),
+               _L("Mesh repair"), wxYES_NO | wxCANCEL | wxICON_WARNING | wxYES_DEFAULT);
+    dialog.SetButtonLabel(wxID_YES, _L("Import without repair"));
+    dialog.SetButtonLabel(wxID_NO, _L("Repair and import"), true);
+    dialog.SetButtonLabel(wxID_CANCEL, _L("Cancel"));
+    dialog.Layout();
+    dialog.Fit();
+    dialog.CenterOnParent();
+    const int choice = dialog.ShowModal();
+    if (choice == wxID_CANCEL) {
+        m_cancel_flag = true;
+        wxCommandEvent event;
+        on_computation_error(event);
+        return;
+    }
+    m_mesh_repair_decision = choice == wxID_NO ? tex2color::MeshRepairDecision::RepairAndImport :
+                                                 tex2color::MeshRepairDecision::ImportWithoutRepair;
+    start_computation(auto_color, initial);
 }
 
 // ---- Mapping ----

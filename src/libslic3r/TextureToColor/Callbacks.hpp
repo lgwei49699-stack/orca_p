@@ -3,6 +3,8 @@
 
 namespace Slic3r { namespace tex2color {
 
+enum class MeshRepairDecision { Ask, ImportWithoutRepair, RepairAndImport };
+
 struct AlgoProgress {
     int percent = 0;
     const char* message = "";

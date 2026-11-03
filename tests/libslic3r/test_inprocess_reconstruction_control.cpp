@@ -20,7 +20,7 @@ InProcessReconstructionEstimateInput small_estimate()
     input.surface_area_mm2 = 600.;
     input.extent_mm        = {{10., 10., 10.}};
     input.voxel_mm         = 0.1;
-    input.resident_bytes   = 64 * MIB;
+    input.memory_bytes     = 64 * MIB;
     input.memory_limit_mb  = 1024;
     return input;
 }
@@ -42,8 +42,8 @@ TEST_CASE("In-process reconstruction observes a sticky cooperative deadline", "[
     auto                           now = Clock::time_point{};
     InProcessReconstructionControl control(
         100, 128,
-        [](uint64_t& rss) {
-            rss = MIB;
+        [](uint64_t& bytes_used) {
+            bytes_used = MIB;
             return true;
         },
         [&] { return now; });
@@ -64,23 +64,23 @@ TEST_CASE("In-process reconstruction observes a sticky cooperative deadline", "[
 
 TEST_CASE("In-process reconstruction memory budget includes the current host", "[ModelRepair][InProcessReconstruction]")
 {
-    uint64_t                       rss = 128 * MIB;
+    uint64_t                       bytes_used = 128 * MIB;
     InProcessReconstructionControl control(300000, 128, [&](uint64_t& bytes) {
-        bytes = rss;
+        bytes = bytes_used;
         return true;
     });
     control.poll();
     REQUIRE(control.keep_running());
-    ++rss;
+    ++bytes_used;
     control.poll();
     REQUIRE(control.stop_reason() == InProcessReconstructionStop::MemoryLimitExceeded);
-    REQUIRE(control.resident_bytes() == rss);
-    REQUIRE(control.peak_resident_bytes() == rss);
-    rss = MIB;
+    REQUIRE(control.memory_bytes() == bytes_used);
+    REQUIRE(control.peak_memory_bytes() == bytes_used);
+    bytes_used = MIB;
     control.poll();
     REQUIRE_FALSE(control.keep_running());
-    REQUIRE(control.resident_bytes() == MIB);
-    REQUIRE(control.peak_resident_bytes() == 128 * MIB + 1);
+    REQUIRE(control.memory_bytes() == MIB);
+    REQUIRE(control.peak_memory_bytes() == 128 * MIB + 1);
 }
 
 TEST_CASE("In-process reconstruction never treats unknown monitoring as zero", "[ModelRepair][InProcessReconstruction]")
@@ -156,14 +156,14 @@ TEST_CASE("In-process reconstruction cancellation is atomic and does not detach 
     REQUIRE(control.stop_reason() == InProcessReconstructionStop::Canceled);
 }
 
-TEST_CASE("In-process reconstruction can read this process resident memory", "[ModelRepair][InProcessReconstruction]")
+TEST_CASE("In-process reconstruction can read this process memory usage", "[ModelRepair][InProcessReconstruction]")
 {
-    uint64_t rss = 0;
+    uint64_t bytes_used = 0;
 #if defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
-    REQUIRE(current_reconstruction_resident_bytes(rss));
-    REQUIRE(rss > 0);
+    REQUIRE(current_reconstruction_memory_bytes(bytes_used));
+    REQUIRE(bytes_used > 0);
 #else
-    REQUIRE_FALSE(current_reconstruction_resident_bytes(rss));
+    REQUIRE_FALSE(current_reconstruction_memory_bytes(bytes_used));
 #endif
 }
 
@@ -175,7 +175,30 @@ TEST_CASE("In-process reconstruction admission keeps a clearly labeled heuristic
     REQUIRE(estimate.reason == "within_heuristic_budget");
     REQUIRE(estimate.estimated_surface_cells > 0);
     REQUIRE(estimate.estimated_incremental_bytes > 128 * input.max_output_faces);
-    REQUIRE(estimate.estimated_total_bytes == estimate.estimated_incremental_bytes + input.resident_bytes);
+    REQUIRE(estimate.estimated_total_bytes == estimate.estimated_incremental_bytes + input.memory_bytes);
+}
+
+TEST_CASE("Fine reconstruction admission includes volume storage for the glasses model", "[ModelRepair][InProcessReconstruction]")
+{
+    auto input             = small_estimate();
+    input.input_faces      = 2304;
+    input.input_vertices   = 1152;
+    input.surface_area_mm2 = 10303.44;
+    input.extent_mm        = {{163.632, 174.537, 31.004}};
+    input.memory_bytes     = 1024 * MIB;
+    input.memory_limit_mb  = 2048;
+    input.voxel_mm         = 0.075;
+    REQUIRE(estimate_inprocess_reconstruction(input).accepted);
+
+    // This Mac fixture exceeded 3 GiB at 0.05 mm despite the old surface-only
+    // estimate accepting it. Reject before allocating the SDK grid, not after
+    // a long computation; the same host can still accept the coarser request.
+    input.voxel_mm  = 0.05;
+    const auto fine = estimate_inprocess_reconstruction(input);
+    REQUIRE_FALSE(fine.accepted);
+    REQUIRE(fine.reason == "estimated_memory_budget_exceeded");
+    input.voxel_mm = 0.075;
+    REQUIRE(estimate_inprocess_reconstruction(input).accepted);
 }
 
 TEST_CASE("In-process reconstruction admission rejects invalid and overflow-prone requests", "[ModelRepair][InProcessReconstruction]")
@@ -187,7 +210,7 @@ TEST_CASE("In-process reconstruction admission rejects invalid and overflow-pron
     SECTION("empty input") { input.input_faces = 0; }
     SECTION("invalid output cap") { input.max_output_faces = 1000001; }
     SECTION("output cannot form solid") { input.max_output_faces = 3; }
-    SECTION("unknown resident size") { input.resident_bytes = 0; }
+    SECTION("unknown process memory") { input.memory_bytes = 0; }
     SECTION("unsupported memory cap") { input.memory_limit_mb = 4097; }
     SECTION("zero surface") { input.surface_area_mm2 = 0.; }
     SECTION("infinite surface") { input.surface_area_mm2 = std::numeric_limits<double>::infinity(); }
@@ -202,8 +225,8 @@ TEST_CASE("In-process reconstruction admission rejects invalid and overflow-pron
     SECTION("overflow in SDK float") { input.voxel_mm = 1e100; }
     SECTION("sparse grid dimension integer limit") { input.voxel_mm = 1e-9; }
     SECTION("surface estimate overflow") { input.surface_area_mm2 = std::numeric_limits<double>::max(); }
-    SECTION("total estimate overflow") { input.resident_bytes = std::numeric_limits<uint64_t>::max(); }
-    SECTION("current process already over budget") { input.resident_bytes = 2048 * MIB; }
+    SECTION("total estimate overflow") { input.memory_bytes = std::numeric_limits<uint64_t>::max(); }
+    SECTION("current process already over budget") { input.memory_bytes = 2048 * MIB; }
     SECTION("fine grid exceeds heuristic budget") { input.voxel_mm = 0.0001; }
     const auto estimate = estimate_inprocess_reconstruction(input);
     REQUIRE_FALSE(estimate.accepted);

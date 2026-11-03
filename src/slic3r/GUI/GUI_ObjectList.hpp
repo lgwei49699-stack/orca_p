@@ -424,6 +424,7 @@ public:
     void split_instances();
     void rename_item();
     void fix_through_cgal();
+    void fix_all_through_cgal(bool all_plates);
     void reconstruct_model();
     void simplify();
     void update_item_error_icon(int obj_idx, int model_volume_idx) const;
@@ -467,6 +468,7 @@ private:
 //    void OnChar(wxKeyEvent& event);
     wxAcceleratorTable m_accel;
 #endif /* __WXOSX__ */
+    void fix_through_cgal(const std::vector<std::pair<int, int>>& targets, bool restore_settings);
     void OnContextMenu(wxDataViewEvent &event);
     void list_manipulation(const wxPoint& mouse_pos, bool evt_context_menu = false);
 

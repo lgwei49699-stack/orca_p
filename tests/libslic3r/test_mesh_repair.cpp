@@ -61,6 +61,39 @@ void check_solid(const TriangleMesh& mesh, double volume)
 
 } // namespace
 
+TEST_CASE("Reconstruction input cleanup preserves cavity orientation and open boundaries", "[MeshRepair]")
+{
+    auto inner = cube(10., {5., 5., 5.});
+    its_flip_triangles(inner);
+    auto its = merged({cube(20.), inner});
+    SECTION("No duplicates leaves the input untouched")
+    {
+        TriangleMesh mesh(its);
+        CHECK(normalize_reconstruction_duplicates(mesh) == 0);
+        CHECK(mesh.its.vertices == its.vertices);
+        CHECK(mesh.its.indices == its.indices);
+    }
+    SECTION("An opposite first copy follows its cavity neighbors")
+    {
+        auto opposite = its.indices[12];
+        std::swap(opposite[1], opposite[2]);
+        its.indices.insert(its.indices.begin(), opposite);
+        TriangleMesh mesh(soup(its));
+        CHECK(normalize_reconstruction_duplicates(mesh) == 1);
+        CHECK(mesh.facets_count() == 24);
+        check_solid(mesh, 7000.);
+    }
+    SECTION("Cleanup does not fill a missing face")
+    {
+        its.indices.pop_back();
+        its.indices.push_back(its.indices.front());
+        TriangleMesh mesh(soup(its));
+        CHECK(normalize_reconstruction_duplicates(mesh) == 1);
+        CHECK(mesh.facets_count() == 23);
+        CHECK(its_num_open_edges(mesh.its) == 3);
+    }
+}
+
 TEST_CASE("A triangle soup repairs into the solid it describes", "[MeshRepair]")
 {
     TriangleMesh    mesh(soup(cube(20.)));
@@ -307,40 +340,6 @@ TEST_CASE("Closed shell repair is independent of the coordinate origin", "[MeshR
     CHECK_FALSE(stats.modified);
     CHECK(mesh.its.vertices == original.vertices);
     CHECK(mesh.its.indices == original.indices);
-}
-
-TEST_CASE("Hole-only preparation preserves existing faces and rejects over-budget patches atomically", "[MeshRepair][BoundaryClosure]")
-{
-    auto input = cube(10.);
-    input.indices.erase(input.indices.begin(), input.indices.begin() + 2);
-    auto other = input;
-    for (auto& p : other.vertices)
-        p.x() += 10.00002f;
-    TriangleMesh mesh(merged({input, other}));
-    const auto   original      = mesh.its;
-    const bool   enough_budget = GENERATE(false, true);
-    if (!enough_budget) {
-        CHECK_FALSE(close_mesh_holes(mesh, original.indices.size()));
-        CHECK(mesh.its.vertices == original.vertices);
-        CHECK(mesh.its.indices == original.indices);
-        return;
-    }
-    REQUIRE(close_mesh_holes(mesh, original.indices.size() + 4));
-    CHECK(mesh.split().size() == 2);
-    CHECK(mesh.facets_count() == original.indices.size() + 4);
-    const auto key = [](const indexed_triangle_set& its, const stl_triangle_vertex_indices& f) {
-        std::array<std::array<float, 3>, 3> result;
-        for (int k = 0; k < 3; ++k) {
-            const auto& p = its.vertices[f[k]];
-            result[k]     = {p.x(), p.y(), p.z()};
-        }
-        std::sort(result.begin(), result.end());
-        return result;
-    };
-    for (const auto& f : original.indices)
-        CHECK(std::any_of(mesh.its.indices.begin(), mesh.its.indices.end(),
-                          [&](const auto& candidate) { return key(original, f) == key(mesh.its, candidate); }));
-    check_solid(mesh, 2000.);
 }
 
 TEST_CASE("A mesh enclosing no volume is reported and left untouched", "[MeshRepair]")

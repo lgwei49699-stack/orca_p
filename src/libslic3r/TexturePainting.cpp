@@ -314,6 +314,8 @@ bool texture_to_painting(
     PaintProgressCallback progress,
     PaintCancelCallback cancel)
 {
+    if (settings.mesh_repair_decision_required)
+        *settings.mesh_repair_decision_required = false;
     if (textured.vertices.empty() || textured.indices.empty() || textured.textures.empty())
         return false;
 
@@ -349,6 +351,8 @@ bool texture_to_painting(
     algo_settings.max_cluster_k      = 16;
     algo_settings.smooth_weight      = settings.smooth_weight;
     algo_settings.oversampling_iters = settings.oversampling_iters;
+    algo_settings.mesh_repair_decision          = settings.mesh_repair_decision;
+    algo_settings.mesh_repair_decision_required = settings.mesh_repair_decision_required;
 
     tex2color::AlgoProgressCallback algo_progress = nullptr;
     if (progress) {

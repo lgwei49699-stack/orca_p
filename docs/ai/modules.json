@@ -76,7 +76,7 @@
       ],
       "tests": [
         "tests/fff_print/test_gcode.cpp",
-        "scripts/test_cli_model_reconstruction.py",
+        "scripts/reconstruction_test_helpers.py",
         "scripts/test_cli_model_check.py",
         "scripts/test_cli_oversized_arrange.py",
         "scripts/test_cli_slice_analysis.py",
@@ -379,8 +379,6 @@
         "src/libslic3r/ModelRepair.hpp",
         "src/libslic3r/ModelRepairEvidence.cpp",
         "src/libslic3r/ModelRepairEvidence.hpp",
-        "src/libslic3r/ReconstructionProcess.cpp",
-        "src/libslic3r/ReconstructionProcess.hpp",
         "src/slic3r/Utils/FixModelByCgal.cpp",
         "src/slic3r/Utils/FixModelByCgal.hpp",
         "src/slic3r/Utils/ModelExportPolicy.hpp",
@@ -400,8 +398,7 @@
         "src/libslic3r/ModelCheckWorkflow.cpp",
         "src/libslic3r/ModelInspection.cpp",
         "src/libslic3r/ModelReconstruction.cpp",
-        "src/libslic3r/MeshReconstruction.cpp",
-        "src/libslic3r/ReconstructionProcess.cpp"
+        "src/libslic3r/MeshReconstruction.cpp"
       ],
       "tests": [
         "tests/libslic3r/test_model_repair.cpp",
@@ -410,16 +407,15 @@
         "tests/libslic3r/test_saved_painting.cpp",
         "tests/libslic3r/test_mesh_reconstruction.cpp",
         "tests/libslic3r/test_model_reconstruction.cpp",
-        "tests/libslic3r/test_reconstruction_process.cpp",
         "tests/libslic3r/test_inprocess_reconstruction_control.cpp",
         "tests/libslic3r/test_model_repair_evidence.cpp",
         "tests/libslic3r/test_mesh_slice_diagnostics.cpp",
-        "scripts/test_cli_model_reconstruction.py",
+        "scripts/reconstruction_test_helpers.py",
         "scripts/test_cli_meshlib_reconstruction.py",
         "scripts/test_cli_model_check.py",
         "scripts/test_cli_model_stage_report.py"
       ],
-      "test_note": "旧修复按 `[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]` 回归；独立重建按 `[MeshReconstruction],[ModelReconstruction],[ReconstructionProcess]` 及 CLI 专项检查健康/不支持输入、变换后最终网格、候选不污染源、取消/超时/内存/异常输出。新增只读证据投影及 `[MeshSliceDiagnostics]` 回归，既有check-model脚本核对v4旧字段/退出码和boundary扩展；不新增自动编排，参考 Z 截面不等于实际试切片。GUI 确认、Undo、备份和同参试切片按交接记录另验，无匹配不能计为通过。"
+      "test_note": "旧修复按 `[ModelRepair],[MeshBoolean],[SavedPainting],[OBJ],[stl]` 回归；独立重建按 `[MeshReconstruction],[ModelReconstruction],[InProcessReconstruction]` 及 CLI 专项检查健康/不支持输入、变换后最终网格、候选不污染源、取消/超时/内存/异常输出。新增只读证据投影及 `[MeshSliceDiagnostics]` 回归，既有check-model脚本核对v4旧字段/退出码和boundary扩展；不新增自动编排，参考 Z 截面不等于实际试切片。GUI 确认、Undo、备份和同参试切片按交接记录另验，无匹配不能计为通过。"
     },
     {
       "id": "geometry",
@@ -1761,10 +1757,11 @@
         "scripts/test_cli_slice_features.py",
         "scripts/test_cli_meshlib_reconstruction.py",
         "scripts/test_linux_meshlib_package.sh",
-        "scripts/test_cli_model_reconstruction.py",
+        "scripts/reconstruction_test_helpers.py",
         "scripts/test_cli_plate_names.py",
         "scripts/test_cli_oversized_arrange.py",
         "scripts/test_cli_repair_acceptance.py",
+        "scripts/test_cli_texture_repair.py",
         "scripts/test_cli_repair_materials.py",
         "scripts/test_raft_stability_helpers.py",
         "scripts/test_repair_acceptance_helpers.py",

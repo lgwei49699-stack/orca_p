@@ -2,6 +2,7 @@
 #include <libslic3r/Model.hpp>
 #include <libslic3r/ModelInspection.hpp>
 #include <libslic3r/ModelReconstruction.hpp>
+#include <libslic3r/InProcessReconstructionControl.hpp>
 #include <libslic3r/ModelRepairEvidence.hpp>
 #include <libslic3r/ModelStageReport.hpp>
 #include <libslic3r/Format/STL.hpp>
@@ -9,6 +10,7 @@
 #include <meshlib/MeshLibAdapter.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/nowide/fstream.hpp>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -38,6 +40,19 @@ bool same_ordered_triangles(const TriangleMesh& first, const TriangleMesh& secon
             if (first.its.vertices[first.its.indices[face][corner]] != second.its.vertices[second.its.indices[face][corner]])
                 return false;
     return true;
+}
+
+bool inside_closed_mesh(const TriangleMesh& mesh, const Vec3d& point)
+{
+    double angle = 0.;
+    for (const auto& face : mesh.its.indices) {
+        const Vec3d a = mesh.its.vertices[face[0]].cast<double>() - point;
+        const Vec3d b = mesh.its.vertices[face[1]].cast<double>() - point;
+        const Vec3d c = mesh.its.vertices[face[2]].cast<double>() - point;
+        angle += 2. * std::atan2(a.dot(b.cross(c)),
+                                 a.norm() * b.norm() * c.norm() + a.dot(b) * c.norm() + b.dot(c) * a.norm() + c.dot(a) * b.norm());
+    }
+    return std::abs(angle) > 2. * PI;
 }
 
 Model reconstruction_model()
@@ -554,35 +569,35 @@ TEST_CASE("Stage STL above one million faces retains the section input budget", 
 
 TEST_CASE("Reconstruction budgets scale without overriding explicit limits", "[ModelReconstruction]")
 {
-    const auto automatic = ModelReconstructionOptions{}.process;
+    const auto   automatic = ModelReconstructionOptions{}.limits;
     const size_t ram = size_t(16) * 1024 * 1024 * 1024;
     for (const auto faces : {12u, 200000u, 200001u, 1000000u, 1000001u, 1808823u, 3000000u}) {
-        const auto budget = model_reconstruction_process_options(faces, automatic, ram);
-        CHECK(budget.timeout_ms == (faces > 1000000 ? 300000 : faces > 200000 ? 180000 : 60000));
+        const auto budget = model_reconstruction_limits(faces, automatic, ram);
+        CHECK(budget.timeout_ms == (faces > 1000000 ? 300000 : faces > 200000 ? 180000 : 120000));
         CHECK(budget.memory_limit_mb == (faces > 1000000 ? 4096 : faces > 200000 ? 2048 : 1024));
     }
-    CHECK(model_reconstruction_process_options(1808823, automatic, ram / 2).memory_limit_mb == 2048);
-    CHECK(model_reconstruction_process_options(1808823, automatic, 0).memory_limit_mb == 1024);
-    CHECK(model_reconstruction_process_options(1808823, automatic, 1024 * 1024 * 1024).memory_limit_mb == 256);
+    CHECK(model_reconstruction_limits(1808823, automatic, ram / 2).memory_limit_mb == 2048);
+    CHECK(model_reconstruction_limits(1808823, automatic, 0).memory_limit_mb == 1024);
+    CHECK(model_reconstruction_limits(1808823, automatic, 1024 * 1024 * 1024).memory_limit_mb == 256);
     auto requested = automatic;
     requested.timeout_ms = 1000;
     requested.memory_limit_mb = 512;
     int ticks = 0;
     requested.is_canceled = [] { return true; };
     requested.on_tick = [&] { ++ticks; };
-    const auto explicit_budget = model_reconstruction_process_options(1808823, requested, ram);
+    const auto explicit_budget = model_reconstruction_limits(1808823, requested, ram);
     CHECK(explicit_budget.timeout_ms == 1000);
     CHECK(explicit_budget.memory_limit_mb == 512);
     CHECK(explicit_budget.is_canceled());
     explicit_budget.on_tick();
     CHECK(ticks == 1);
     requested.timeout_ms = 300001;
-    CHECK_THROWS(model_reconstruction_process_options(12, requested, ram));
+    CHECK_THROWS(model_reconstruction_limits(12, requested, ram));
     requested.timeout_ms = 0;
     requested.memory_limit_mb = 4097;
-    CHECK_THROWS(model_reconstruction_process_options(12, requested, ram));
+    CHECK_THROWS(model_reconstruction_limits(12, requested, ram));
     requested.memory_limit_mb = 127;
-    CHECK_THROWS(model_reconstruction_process_options(12, requested, ram));
+    CHECK_THROWS(model_reconstruction_limits(12, requested, ram));
 }
 
 TEST_CASE("Reconstruction eligibility never clears unsupported data", "[ModelReconstruction]")
@@ -598,6 +613,7 @@ TEST_CASE("Reconstruction eligibility never clears unsupported data", "[ModelRec
     REQUIRE_FALSE(model_reconstruction_ineligibility(object).empty());
     const auto                 identity = model_reconstruction_source_identity(object);
     ModelReconstructionOptions options;
+    options.voxel_mm                  = 0.1;
     auto                       result = reconstruct_model_candidate(model, 0, options);
     CHECK(result.status == "unsupported");
     CHECK_FALSE(result.candidate_model);
@@ -625,36 +641,30 @@ TEST_CASE("Reconstruction failure and pre-cancel preserve the source", "[ModelRe
     const auto                 identity = model_reconstruction_source_identity(object);
     const auto                 mesh     = object.volumes.front()->mesh_ptr();
     ModelReconstructionOptions options;
-    SECTION("missing worker") { options.executable = "/nonexistent-reconstruction-worker"; }
+    options.voxel_mm = 0.0803;
     SECTION("pre-cancel")
     {
-        options.process.is_canceled = [] { return true; };
+        options.limits.is_canceled = [] { return true; };
     }
-    SECTION("invalid parameters") { options.mesh.alpha_mm = -1.; }
-    SECTION("unknown backend") { options.engine = "unknown"; }
-    SECTION("voxel rejected by default backend") { options.voxel_mm = 0.08; }
-    SECTION("meshlib requires voxel") { options.engine = "meshlib"; }
+    SECTION("invalid parameters") { options.mesh.max_deviation_mm = -1.; }
+    SECTION("meshlib requires voxel") { options.voxel_mm = 0.; }
     SECTION("meshlib invalid voxel")
     {
-        options.engine   = "meshlib";
         options.voxel_mm = std::numeric_limits<double>::infinity();
     }
     SECTION("meshlib float voxel underflow")
     {
-        options.engine   = "meshlib";
         options.voxel_mm = 1e-100;
     }
     SECTION("meshlib pre-cancel")
     {
-        options.engine              = "meshlib";
         options.voxel_mm            = 0.0803;
-        options.process.is_canceled = [] { return true; };
+        options.limits.is_canceled  = [] { return true; };
     }
     SECTION("early unknown cancellation callback exception")
     {
-        options.engine              = "meshlib";
         options.voxel_mm            = 0.0803;
-        options.process.is_canceled = []() -> bool { throw 17; };
+        options.limits.is_canceled  = []() -> bool { throw 17; };
     }
     SECTION("excessive input") { options.mesh.max_input_faces = 4; }
     const auto result = reconstruct_model_candidate(model, 0, options);
@@ -675,10 +685,7 @@ TEST_CASE("SDK-OFF MeshLib requests never fall back to another backend", "[Model
     Model                      model    = reconstruction_model();
     const auto                 identity = model_reconstruction_source_identity(*model.objects.front());
     ModelReconstructionOptions options;
-    options.engine   = "meshlib";
     options.voxel_mm = 0.0803;
-    // An invalid Alpha Wrap worker must never be consulted as a fallback.
-    options.executable = "/nonexistent-reconstruction-worker";
     const auto result  = reconstruct_model_candidate(model, 0, options);
     CHECK_FALSE(result.candidate_model);
     CHECK(result.status == "failed");
@@ -696,10 +703,8 @@ TEST_CASE("In-process MeshLib joins stopped work and remains reusable", "[.][Mes
     const auto                 identity    = model_reconstruction_source_identity(object);
     const auto                 source_mesh = object.volumes.front()->mesh_ptr();
     ModelReconstructionOptions options;
-    options.engine                  = "meshlib";
     options.voxel_mm                = 0.0803;
-    options.executable              = "/must-not-launch-a-reconstruction-worker";
-    options.process.memory_limit_mb = 2048;
+    options.limits.memory_limit_mb  = 2048;
     const auto check_source         = [&] {
         CHECK(model_reconstruction_source_identity(object) == identity);
         CHECK(object.volumes.front()->mesh_ptr() == source_mesh);
@@ -710,7 +715,7 @@ TEST_CASE("In-process MeshLib joins stopped work and remains reusable", "[.][Mes
         REQUIRE(result.status == "candidate_ready");
         REQUIRE(result.candidate_model);
         CHECK(result.report["execution"]["mode"] == "in_process");
-        CHECK(result.report["execution"]["process_id"] == reconstruction_process_id());
+        CHECK(result.report["execution"]["process_id"] == current_reconstruction_process_id());
         CHECK(result.report["execution"]["hard_timeout"] == false);
         CHECK(result.report["execution"]["crash_isolation"] == false);
         CHECK(result.report["resource_limits"]["hard_memory_limit"] == false);
@@ -726,8 +731,8 @@ TEST_CASE("In-process MeshLib joins stopped work and remains reusable", "[.][Mes
     {
         bool   cancel               = false;
         size_t ticks                = 0;
-        options.process.is_canceled = [&] { return cancel; };
-        options.process.on_tick     = [&] {
+        options.limits.is_canceled  = [&] { return cancel; };
+        options.limits.on_tick      = [&] {
             ++ticks;
             cancel = true;
         };
@@ -735,22 +740,24 @@ TEST_CASE("In-process MeshLib joins stopped work and remains reusable", "[.][Mes
         INFO(result.report.dump(2));
         REQUIRE(ticks > 0);
         CHECK(result.status == "canceled");
+        CHECK(result.message == "Reconstruction was canceled. The original model was kept.");
         CHECK_FALSE(result.candidate_model);
         CHECK(result.report["mesh_validated"] == false);
     }
     SECTION("expired cooperative budget discards all late output")
     {
-        options.process.timeout_ms = 1;
+        options.limits.timeout_ms  = 1;
         const auto result          = reconstruct_model_candidate(model, 0, options);
         INFO(result.report.dump(2));
         CHECK(result.status == "timed_out");
+        CHECK(result.message == "Reconstruction exceeded its time budget. The original model was kept.");
         CHECK_FALSE(result.candidate_model);
         CHECK(result.report["mesh_validated"] == false);
     }
     SECTION("caller callback exception is contained")
     {
         size_t ticks            = 0;
-        options.process.on_tick = [&] {
+        options.limits.on_tick  = [&] {
             ++ticks;
             throw std::runtime_error("test callback failure");
         };
@@ -764,7 +771,7 @@ TEST_CASE("In-process MeshLib joins stopped work and remains reusable", "[.][Mes
     SECTION("unknown caller callback exception is contained")
     {
         size_t ticks            = 0;
-        options.process.on_tick = [&] {
+        options.limits.on_tick  = [&] {
             ++ticks;
             throw 17;
         };
@@ -776,9 +783,9 @@ TEST_CASE("In-process MeshLib joins stopped work and remains reusable", "[.][Mes
         CHECK(result.report["mesh_validated"] == false);
     }
     check_source();
-    options.process.is_canceled = {};
-    options.process.on_tick     = {};
-    options.process.timeout_ms  = 0;
+    options.limits.is_canceled = {};
+    options.limits.on_tick     = {};
+    options.limits.timeout_ms  = 0;
     check_candidate();
 }
 
@@ -800,11 +807,9 @@ TEST_CASE("Installing a matching convex hull invalidates an existing footprint",
     CHECK(volume.get_convex_hull_2d(instance.get_matrix()) == installed);
 }
 
-TEST_CASE("Isolated reconstruction preserves placement and staged metadata", "[.][ReconstructionIntegration]")
+TEST_CASE("MeshLib reconstruction preserves placement and staged metadata", "[.][ReconstructionIntegration]")
 {
-    // Run explicitly with the freshly built application, never a cached binary.
-    const char* executable = std::getenv("ORCA_RECONSTRUCTION_BINARY");
-    REQUIRE(executable != nullptr);
+    REQUIRE(model_reconstruction_available());
     Model model    = reconstruction_model();
     auto& object   = *model.objects.front();
     auto& volume   = *object.volumes.front();
@@ -827,7 +832,7 @@ TEST_CASE("Isolated reconstruction preserves placement and staged metadata", "[.
     const auto                 instance_transform = instance.get_matrix();
     const auto                 assembly           = instance.get_assemble_transformation().get_matrix();
     ModelReconstructionOptions options;
-    options.executable = executable;
+    options.voxel_mm   = 0.1;
     auto result        = reconstruct_model_candidate(model, 0, options);
     INFO(result.report.dump(2));
     REQUIRE(result.status == "candidate_ready");
@@ -854,4 +859,547 @@ TEST_CASE("Isolated reconstruction preserves placement and staged metadata", "[.
     CHECK(candidate_volume.get_convex_hull_2d(candidate_instance.get_matrix()) == candidate_footprint);
     CHECK(volume.get_convex_hull_2d(instance.get_matrix()) == source_footprint);
     CHECK(model_reconstruction_source_identity(object) == identity);
+}
+
+TEST_CASE("MeshLib skips distant hole filling only for verified closed surfaces", "[.][MeshLibInProcessIntegration]")
+{
+    REQUIRE(model_reconstruction_available());
+    Model model       = reconstruction_model();
+    auto  source      = make_cube(4., 4., 4.);
+    bool  close_holes = false;
+    bool  rejected    = false;
+    SECTION("Closed solid") {}
+    SECTION("Intersecting closed solids still use winding-number union")
+    {
+        auto other = make_cube(4., 4., 4.);
+        other.translate(2.f, 2.f, 2.f);
+        source.merge(other);
+    }
+    SECTION("Open face still requires hole filling")
+    {
+        source.its.indices.erase(source.its.indices.begin());
+        close_holes = true;
+    }
+    SECTION("Conflicting face direction keeps hole filling")
+    {
+        std::swap(source.its.indices.front()[0], source.its.indices.front()[1]);
+        close_holes = true;
+        rejected    = true; // Existing hole filling does not repair this inconsistent winding.
+    }
+    SECTION("Duplicate input keeps the existing reconstruction policy")
+    {
+        source.its.indices.push_back(source.its.indices.front());
+        close_holes = true;
+    }
+    model.objects.front()->volumes.front()->set_mesh(source);
+    const auto                 identity = model_reconstruction_source_identity(*model.objects.front());
+    ModelReconstructionOptions options;
+    options.voxel_mm  = 0.1;
+    const auto result = reconstruct_model_candidate(model, 0, options);
+    INFO(result.report.dump(2));
+    CHECK(result.report["engine"]["sdk"]["parameters"]["close_holes_in_hole_winding_number"] == close_holes);
+    CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
+    if (rejected) {
+        CHECK_FALSE(result.candidate_model);
+        CHECK(result.status == "candidate_rejected");
+        CHECK(result.report["mesh_validated"] == false);
+        return;
+    }
+    REQUIRE(result.candidate_model);
+    const auto& candidate = result.candidate_model->objects.front()->volumes.front()->mesh();
+    CHECK(inside_closed_mesh(candidate, Vec3d(2., 2., 2.)));
+    CHECK_FALSE(inside_closed_mesh(candidate, Vec3d(7., 2., 2.)));
+    CHECK(result.report["mesh_validated"] == true);
+    CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
+}
+
+TEST_CASE("MeshLib reports topology changes independently of surface deviation", "[.][MeshLibInProcessIntegration]")
+{
+    REQUIRE(model_reconstruction_available());
+    Model   model          = reconstruction_model();
+    auto    source         = make_cube(4., 4., 4.);
+    bool    comparable     = true;
+    bool    changed        = false;
+    int64_t expected_euler = 2;
+    SECTION("A closed solid keeps its topology") {}
+    SECTION("Separated solids keep their independent surfaces")
+    {
+        auto other = source;
+        other.translate(5.f, 0.f, 0.f);
+        source.merge(other);
+        expected_euler = 4;
+    }
+    SECTION("A subvoxel gap merges two valid solids")
+    {
+        auto other = source;
+        other.translate(4.02f, 0.f, 0.f);
+        source.merge(other);
+        expected_euler = 4;
+        changed        = true;
+    }
+    SECTION("A subvoxel torus bore closes without changing component count")
+    {
+        source         = make_torus(1.01, 1., PI / 16.);
+        expected_euler = 0;
+        changed        = true;
+    }
+    SECTION("An open input cannot establish the original closed topology")
+    {
+        source.its.indices.pop_back();
+        comparable = false;
+    }
+    model.objects.front()->volumes.front()->set_mesh(source);
+    const auto                 identity = model_reconstruction_source_identity(*model.objects.front());
+    ModelReconstructionOptions options;
+    options.voxel_mm              = 0.1;
+    options.mesh.max_deviation_mm = 3.; // Geometry warning and topology evidence are independent.
+    const auto result             = reconstruct_model_candidate(model, 0, options);
+    INFO(result.report.dump(2));
+    REQUIRE(result.candidate_model);
+    CHECK(result.report.at("mesh_validated") == true);
+    CHECK(result.report.at("metrics").at("deviation_warning") == false);
+    const auto& structure = result.report.at("engine").at("structure_preservation");
+    CHECK(structure.at("verified") == false);
+    CHECK(structure.at("topology_comparison_complete") == comparable);
+    if (comparable) {
+        CHECK(structure.at("input_euler_characteristic") == expected_euler);
+        CHECK(structure.at("output_euler_characteristic") == (changed ? 2 : expected_euler));
+        CHECK(structure.at("topology_changed") == changed);
+    } else {
+        CHECK(structure.at("topology_changed").is_null());
+        CHECK_FALSE(structure.contains("input_euler_characteristic"));
+    }
+    CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
+}
+
+TEST_CASE("MeshLib reconstruction retains a known cavity and thin wall", "[.][MeshLibInProcessIntegration]")
+{
+    REQUIRE(model_reconstruction_available());
+    Model  model           = reconstruction_model();
+    auto   source          = make_cube(20., 20., 20.);
+    double expected_volume = 7000.;
+    bool   thin_wall       = false;
+    bool   blind_pocket    = false;
+    SECTION("Enclosed cavity")
+    {
+        auto inner = make_cube(10., 10., 10.);
+        inner.translate(5.f, 5.f, 5.f);
+        inner.flip_triangles();
+        source.merge(inner);
+    }
+    SECTION("Blind pocket keeps its opening and floor")
+    {
+        blind_pocket    = true;
+        expected_volume = 6500.;
+        source          = make_cube(20., 20., 5.);
+        for (double x : {0., 15.}) {
+            auto wall = make_cube(5., 20., 20.);
+            wall.translate(x, 0., 0.);
+            source.merge(wall);
+        }
+        for (double y : {0., 15.}) {
+            auto wall = make_cube(10., 5., 20.);
+            wall.translate(5., y, 0.);
+            source.merge(wall);
+        }
+    }
+    SECTION("A 0.1 mm wall is not expanded into a 0.2 mm envelope")
+    {
+        source          = make_cube(20., 20., 0.1);
+        expected_volume = 40.;
+        thin_wall       = true;
+    }
+    model.objects.front()->volumes.front()->set_mesh(source);
+    const auto                 identity = model_reconstruction_source_identity(*model.objects.front());
+    ModelReconstructionOptions options;
+    options.voxel_mm  = 0.1;
+    const auto result = reconstruct_model_candidate(model, 0, options);
+    INFO(result.report.dump(2));
+    REQUIRE(result.candidate_model);
+    const auto& candidate = result.candidate_model->objects.front()->volumes.front()->mesh();
+    CHECK(its_volume(candidate.its) == Approx(expected_volume).epsilon(0.01));
+    if (thin_wall)
+        CHECK(candidate.bounding_box().size().z() == Approx(0.1).margin(0.001));
+    else {
+        CHECK(result.report.at("engine").at("final_mesh_check").at("metrics").at("component_count") == (blind_pocket ? 1 : 2));
+        // Volume and shell count alone do not prove that the cavity survived.
+        for (double z : {5.2, 10., 14.8}) {
+            CHECK_FALSE(inside_closed_mesh(candidate, Vec3d(10., 10., z)));
+            CHECK(inside_closed_mesh(candidate, Vec3d(4., 10., z)));
+        }
+        CHECK(inside_closed_mesh(candidate, Vec3d(10., 10., 4.)));
+        CHECK(inside_closed_mesh(candidate, Vec3d(10., 10., 19.8)) == !blind_pocket);
+    }
+    CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
+    CHECK(result.report.at("backend") == "meshlib");
+    CHECK_FALSE(result.report.at("print_ready").get<bool>());
+}
+
+TEST_CASE("MeshLib reconstruction keeps source and candidate geometry independent of placement", "[.][MeshLibInProcessIntegration]")
+{
+    REQUIRE(model_reconstruction_available());
+    Model     model    = reconstruction_model();
+    auto&     volume   = *model.objects.front()->volumes.front();
+    auto&     instance = *model.objects.front()->instances.front();
+    auto      its      = make_cube(6., 6., 6.).its;
+    const int a = its.indices.front()[0], b = its.indices.front()[1];
+    const int middle = int(its.vertices.size());
+    its.vertices.push_back((its.vertices[a] + 1e-7f * (its.vertices[b] - its.vertices[a])).eval());
+    const auto original_faces = its.indices;
+    its.indices.clear();
+    for (const auto& face : original_faces) {
+        bool split = false;
+        for (int corner = 0; corner < 3; ++corner) {
+            const int first = face[corner], second = face[(corner + 1) % 3], third = face[(corner + 2) % 3];
+            if ((first == a && second == b) || (first == b && second == a)) {
+                its.indices.emplace_back(first, middle, third);
+                its.indices.emplace_back(middle, second, third);
+                split = true;
+                break;
+            }
+        }
+        if (!split)
+            its.indices.push_back(face);
+    }
+    REQUIRE(its.indices.size() == 14);
+    for (const auto& face : its.indices)
+        REQUIRE((its.vertices[face[1]] - its.vertices[face[0]]).cross(its.vertices[face[2]] - its.vertices[face[0]]).squaredNorm() > 0.f);
+    volume.set_mesh(TriangleMesh(std::move(its)));
+    volume.set_offset(Vec3d::Zero());
+    ModelReconstructionOptions options;
+    options.voxel_mm = 0.1;
+    TriangleMesh baseline;
+    // Include a distant plate position: placement must remain a transform, not
+    // be baked into either the source or candidate float vertices.
+    for (double offset : {0., 50.5, -50.5, 2000.5}) {
+        instance.set_offset(Vec3d(offset, -offset, offset == 0. ? 0. : std::copysign(3.5234421491622925, offset)));
+        const auto identity = model_reconstruction_source_identity(*model.objects.front());
+        const auto result   = reconstruct_model_candidate(model, 0, options);
+        INFO(result.report.dump(2));
+        REQUIRE(result.candidate_model);
+        CHECK(result.report.at("engine").at("sdk").at("skipped_face_count") == 0);
+        CHECK(result.report.at("engine").at("sdk").at("input").at("loaded_faces") == 14);
+        CHECK(result.report.at("coordinate_validation").at("physical_round_trip").at("validation").at("complete") == true);
+        CHECK(result.report.at("coordinate_validation").at("includes_placement_translation") == false);
+        CHECK(result.report.at("placement").at("before_min_z_mm").get<double>() == Approx(instance.get_offset().z()).margin(1e-6));
+        CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
+        const auto& object = *result.candidate_model->objects.front();
+        CHECK(object.instances.front()->get_matrix().matrix() == instance.get_matrix().matrix());
+        if (offset == 0.)
+            baseline = object.volumes.front()->mesh();
+        else
+            CHECK(same_ordered_triangles(baseline, object.volumes.front()->mesh()));
+    }
+}
+
+TEST_CASE("MeshLib reconstruction retains an open pipe bore and a separate small solid", "[.][MeshLibInProcessIntegration]")
+{
+    REQUIRE(model_reconstruction_available());
+    const double placement       = GENERATE(0., 50.5, -50.5);
+    Model        model           = reconstruction_model();
+    auto         source          = make_cube(6., 6., 6.);
+    bool         pipe            = false;
+    double       expected_volume = 216.125;
+    Vec3d        small_center(8.25, 2.25, 2.25);
+    SECTION("Independent 0.5 mm solid")
+    {
+        auto small = make_cube(0.5, 0.5, 0.5);
+        small.translate(8., 2., 2.);
+        source.merge(small);
+    }
+    SECTION("Independent tetrahedron with distinct vertices is retained")
+    {
+        indexed_triangle_set tetrahedron;
+        tetrahedron.vertices = {Vec3f(8.f, 2.f, 2.f), Vec3f(8.5f, 2.f, 2.f), Vec3f(8.f, 2.5f, 2.f), Vec3f(8.f, 2.f, 2.5f)};
+        tetrahedron.indices  = {Vec3i32(0, 2, 1), Vec3i32(0, 1, 3), Vec3i32(1, 2, 3), Vec3i32(0, 3, 2)};
+        source.merge(TriangleMesh(std::move(tetrahedron)));
+        small_center    = Vec3d(8.125, 2.125, 2.125);
+        expected_volume = 216. + 0.125 / 6.;
+    }
+    SECTION("Open annular end must not become a solid lid")
+    {
+        pipe                             = true;
+        const double         bore_radius = GENERATE(1.5, 3.);
+        indexed_triangle_set rings;
+        constexpr int        sides = 32;
+        for (int ring = 0; ring < 2; ++ring) {
+            const double radius = ring == 0 ? 5. : bore_radius;
+            for (int k = 0; k < sides; ++k) {
+                const double angle = 2. * PI * k / sides;
+                rings.vertices.emplace_back(radius * std::cos(angle), radius * std::sin(angle), 0.f);
+                rings.vertices.emplace_back(radius * std::cos(angle), radius * std::sin(angle), 6.f);
+            }
+            for (int k = 0; k < sides; ++k) {
+                const int a = 2 * (ring * sides + k), b = 2 * (ring * sides + (k + 1) % sides);
+                rings.indices.emplace_back(a, b, b + 1);
+                rings.indices.emplace_back(a, b + 1, a + 1);
+                if (ring == 1) {
+                    std::swap(rings.indices[rings.indices.size() - 2][1], rings.indices[rings.indices.size() - 2][2]);
+                    std::swap(rings.indices.back()[1], rings.indices.back()[2]);
+                }
+            }
+        }
+        for (int k = 0; k < sides; ++k) {
+            const int a = 2 * k, b = 2 * ((k + 1) % sides), c = a + 2 * sides, d = b + 2 * sides;
+            rings.indices.emplace_back(a, c, b);
+            rings.indices.emplace_back(b, c, d);
+        }
+        // Real frame exports repeat the bore wall. Native import may reverse
+        // one copy; keeping both then cancels the wall in winding-number tests.
+        const int duplicate_mode = GENERATE(0, 1, 2, 3);
+        CAPTURE(bore_radius, duplicate_mode, placement);
+        if (duplicate_mode != 0) {
+            std::vector<Vec3i32> copies;
+            for (int i = 2 * sides; i < 4 * sides; ++i) {
+                Vec3i32 face = rings.indices[i];
+                if (duplicate_mode >= 2)
+                    std::swap(face[1], face[2]);
+                copies.push_back(face);
+            }
+            if (duplicate_mode == 3)
+                rings.indices.insert(rings.indices.begin(), copies.begin(), copies.end());
+            else
+                rings.indices.insert(rings.indices.end(), copies.begin(), copies.end());
+        }
+        source          = TriangleMesh(std::move(rings));
+        expected_volume = 0.5 * sides * std::sin(2. * PI / sides) * (25. - bore_radius * bore_radius) * 6.;
+    }
+    model.objects.front()->volumes.front()->set_mesh(source);
+    auto& instance = *model.objects.front()->instances.front();
+    instance.set_offset(Vec3d(placement, placement, placement == 0. ? 0. : 3.5234421491622925));
+    const auto                 instance_matrix = instance.get_matrix().matrix().eval();
+    const auto                 identity        = model_reconstruction_source_identity(*model.objects.front());
+    ModelReconstructionOptions options;
+    options.voxel_mm  = 0.1;
+    const auto result = reconstruct_model_candidate(model, 0, options);
+    INFO(result.report.dump(2));
+    REQUIRE(result.candidate_model);
+    CHECK(result.report.at("coordinate_validation").at("local").at("validation").at("complete") == true);
+    CHECK(result.report.at("coordinate_validation").at("physical_round_trip").at("validation").at("complete") == true);
+    CHECK(result.candidate_model->objects.front()->instances.front()->get_matrix().matrix() == instance_matrix);
+    const auto& candidate = result.candidate_model->objects.front()->volumes.front()->mesh();
+    CHECK(its_volume(candidate.its) == Approx(expected_volume).epsilon(0.02));
+    const auto& metrics = result.report.at("engine").at("final_mesh_check").at("metrics");
+    CHECK(metrics.at("component_count") == (pipe ? 1 : 2));
+    // Solid-angle probes distinguish a through bore from a capped/filled tube.
+    if (pipe) {
+        for (double z : {0.1, 1., 3., 5., 5.9}) {
+            CHECK_FALSE(inside_closed_mesh(candidate, Vec3d(0.1, 0.2, z)));
+            CHECK(inside_closed_mesh(candidate, Vec3d(4., 0.1, z)));
+        }
+    } else {
+        CHECK(inside_closed_mesh(candidate, small_center));
+        CHECK_FALSE(inside_closed_mesh(candidate, Vec3d(7., 2.25, 2.25)));
+    }
+    CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
+    CHECK_FALSE(result.report.at("print_ready").get<bool>());
+}
+
+TEST_CASE("MeshLib reconstruction keeps a bore connected across distance grid slabs", "[.][MeshLibInProcessIntegration]")
+{
+    REQUIRE(model_reconstruction_available());
+    // At 0.1 mm this grid contains over 16 million samples, spanning multiple
+    // slabs. Exercise both the open far field and closed narrow surface band.
+    const bool           closed = GENERATE(false, true);
+    indexed_triangle_set rings;
+    constexpr int        sides  = 16;
+    constexpr float      height = 60.f;
+    for (int ring = 0; ring < 2; ++ring) {
+        const double radius = ring == 0 ? 8. : 6.;
+        for (int k = 0; k < sides; ++k) {
+            const double angle = 2. * PI * k / sides;
+            rings.vertices.emplace_back(radius * std::cos(angle), radius * std::sin(angle), 0.f);
+            rings.vertices.emplace_back(radius * std::cos(angle), radius * std::sin(angle), height);
+        }
+        for (int k = 0; k < sides; ++k) {
+            const int a = 2 * (ring * sides + k), b = 2 * (ring * sides + (k + 1) % sides);
+            rings.indices.emplace_back(a, b, b + 1);
+            rings.indices.emplace_back(a, b + 1, a + 1);
+            if (ring == 1) {
+                std::swap(rings.indices[rings.indices.size() - 2][1], rings.indices[rings.indices.size() - 2][2]);
+                std::swap(rings.indices.back()[1], rings.indices.back()[2]);
+            }
+        }
+    }
+    for (int k = 0; k < sides; ++k) {
+        const int a = 2 * k, b = 2 * ((k + 1) % sides), c = a + 2 * sides, d = b + 2 * sides;
+        rings.indices.emplace_back(a, c, b);
+        rings.indices.emplace_back(b, c, d);
+        if (closed) {
+            rings.indices.emplace_back(a + 1, b + 1, c + 1);
+            rings.indices.emplace_back(b + 1, d + 1, c + 1);
+        }
+    }
+    Model model = reconstruction_model();
+    model.objects.front()->volumes.front()->set_mesh(TriangleMesh(std::move(rings)));
+    const auto                 identity = model_reconstruction_source_identity(*model.objects.front());
+    ModelReconstructionOptions options;
+    options.voxel_mm  = 0.1;
+    const auto result = reconstruct_model_candidate(model, 0, options);
+    INFO(result.report.dump(2));
+    REQUIRE(result.candidate_model);
+    CHECK(result.report.at("engine").at("sdk").at("parameters").at("close_holes_in_hole_winding_number") == !closed);
+    CHECK(result.report.at("engine").at("final_mesh_check").at("metrics").at("component_count") == 1);
+    const auto&  candidate       = result.candidate_model->objects.front()->volumes.front()->mesh();
+    const double expected_volume = 0.5 * sides * std::sin(2. * PI / sides) * (64. - 36.) * height;
+    CHECK(its_volume(candidate.its) == Approx(expected_volume).epsilon(0.02));
+    for (double z = 0.2; z < height; z += 0.5) {
+        CAPTURE(z);
+        CHECK_FALSE(inside_closed_mesh(candidate, Vec3d(0.1, 0.2, z)));
+        CHECK(inside_closed_mesh(candidate, Vec3d(7., 0.1, z)));
+    }
+    CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
+}
+
+TEST_CASE("MeshLib reconstruction does not add a void below an open dome", "[.][MeshLibInProcessIntegration]")
+{
+    REQUIRE(model_reconstruction_available());
+    Model model  = reconstruction_model();
+    auto  source = make_cube(12., 12., 1.03603);
+    source.translate(-6.f, -6.f, -1.03603f);
+    // An open-bottom decorative dome rests on the floor, as in the radio model.
+    // Its central depression must remain open above, without creating air pockets below.
+    indexed_triangle_set dome;
+    const int            sides = GENERATE(16, 20, 24, 28, 32, 48, 64, 192);
+    INFO("Dome sides: " << sides);
+    const double radii[]   = {4.157, 3.2, 1.85, 1.2, 0.};
+    const double heights[] = {0., 1., 1.845, 0.8, 0.308};
+    for (int ring = 0; ring < 5; ++ring)
+        for (int k = 0; k < sides; ++k) {
+            const double angle = 2. * PI * k / sides;
+            dome.vertices.emplace_back(radii[ring] * std::cos(angle), radii[ring] * std::sin(angle), heights[ring]);
+        }
+    for (int ring = 0; ring < 4; ++ring)
+        for (int k = 0; k < sides; ++k) {
+            const int a = ring * sides + k, b = ring * sides + (k + 1) % sides, c = a + sides, d = b + sides;
+            dome.indices.emplace_back(a, b, c);
+            if (ring < 3)
+                dome.indices.emplace_back(b, d, c);
+        }
+    source.merge(TriangleMesh(std::move(dome)));
+    // Dense, rotated triangle fans also exercise approximation near the 0.5
+    // winding threshold; a valid closed output can still contain a false void.
+    const double rotation = GENERATE(0., 0.73);
+    INFO("Dome rotation: " << rotation);
+    source.rotate_z(rotation);
+    model.objects.front()->volumes.front()->set_mesh(source);
+    const auto                 identity = model_reconstruction_source_identity(*model.objects.front());
+    ModelReconstructionOptions options;
+    options.voxel_mm  = 0.1;
+    const auto result = reconstruct_model_candidate(model, 0, options);
+    INFO(result.report.dump(2));
+    REQUIRE(result.candidate_model);
+    const auto& candidate = result.candidate_model->objects.front()->volumes.front()->mesh();
+    CHECK(result.report.at("engine").at("final_mesh_check").at("metrics").at("component_count") == 1);
+    for (double z : {0.06, 0.1, 0.15}) {
+        CHECK(inside_closed_mesh(candidate, Vec3d(0., 0., z)));
+        CHECK(inside_closed_mesh(candidate, Vec3d(1., 1., z)));
+    }
+    CHECK_FALSE(inside_closed_mesh(candidate, Vec3d(0., 0., 0.6)));
+    CHECK(inside_closed_mesh(candidate, Vec3d(5., 0., -0.5)));
+    CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
+}
+
+TEST_CASE("MeshLib reconstruction preserves all faces at conflicting vertex fans", "[.][MeshLibInProcessIntegration]")
+{
+    REQUIRE(OrcaMeshLib::available());
+    OrcaMeshLib::Mesh input;
+    // Abstract non-manifold fans, with non-collinear points on a moment curve.
+    // The SDK STL loader drops two of these six faces while trying to connect them.
+    for (int i = 1; i <= 10; ++i) {
+        const float a = 0.1f * i;
+        input.vertices.push_back({a, a * a, a * a * a});
+    }
+    input.faces                   = {{0, 1, 2}, {0, 3, 4}, {5, 0, 6}, {6, 7, 5}, {6, 8, 9}, {6, 0, 4}};
+    const auto           original = input;
+    OrcaMeshLib::Options options;
+    options.voxel_mm  = 0.1;
+    const auto result = OrcaMeshLib::rebuild(input, options);
+    const auto report = nlohmann::json::parse(result.report_json);
+    INFO(report.dump(2));
+    CHECK(report.at("input").at("loaded_faces") == input.faces.size());
+    CHECK(report.at("skipped_face_count") == 0);
+    CHECK(input.vertices == original.vertices);
+    CHECK(input.faces == original.faces);
+}
+
+TEST_CASE("MeshLib sampling, extraction and simplification cancellation discard candidates and permit reuse",
+          "[.][MeshLibInProcessIntegration]")
+{
+    REQUIRE(OrcaMeshLib::available());
+    const auto        source = make_cube(6., 6., 6.);
+    OrcaMeshLib::Mesh input;
+    for (const auto& p : source.its.vertices)
+        input.vertices.push_back({p.x(), p.y(), p.z()});
+    for (const auto& f : source.its.indices)
+        input.faces.push_back({f[0], f[1], f[2]});
+    OrcaMeshLib::Options options;
+    options.voxel_mm                = 0.1;
+    options.close_holes             = GENERATE(false, true);
+    const bool        throws        = GENERATE(false, true);
+    const float       stop_progress = GENERATE(0.1f, 0.75f, 0.81f, 0.97f);
+    std::atomic<bool> reached_stop_phase{false};
+    std::atomic<float> observed_stop_progress{0.f};
+    options.progress = [&](float progress) {
+        if (progress <= stop_progress)
+            return true;
+        reached_stop_phase = true;
+        observed_stop_progress.store(progress);
+        if (throws)
+            throw std::runtime_error("reconstruction callback failure");
+        return false;
+    };
+    const auto canceled = OrcaMeshLib::rebuild(input, options);
+    CHECK(reached_stop_phase.load());
+    if (stop_progress == 0.75f)
+        CHECK(observed_stop_progress.load() < 0.8f); // Extraction must stop before simplification starts.
+    CHECK_FALSE(canceled.success);
+    CHECK(canceled.status == (throws ? "callback_error" : "cancelled"));
+    CHECK(canceled.mesh.faces.empty());
+    CHECK(canceled.mesh.vertices.empty());
+    options.progress  = {};
+    const auto reused = OrcaMeshLib::rebuild(input, options);
+    REQUIRE(reused.success);
+    indexed_triangle_set mesh;
+    for (const auto& p : reused.mesh.vertices)
+        mesh.vertices.emplace_back(p[0], p[1], p[2]);
+    for (const auto& f : reused.mesh.faces)
+        mesh.indices.emplace_back(f[0], f[1], f[2]);
+    nlohmann::json validation;
+    CHECK(validate_reconstruction_mesh(TriangleMesh(std::move(mesh)), validation, RECONSTRUCTION_MAX_OUTPUT_FACES));
+}
+
+TEST_CASE("MeshLib output budget counts the simplified candidate and rejects excess faces", "[.][MeshLibInProcessIntegration]")
+{
+    REQUIRE(OrcaMeshLib::available());
+    const auto        source = make_cube(6., 6., 6.);
+    OrcaMeshLib::Mesh input;
+    for (const auto& p : source.its.vertices)
+        input.vertices.push_back({p.x(), p.y(), p.z()});
+    for (const auto& f : source.its.indices)
+        input.faces.push_back({f[0], f[1], f[2]});
+    const auto          original = input;
+    OrcaMeshLib::Options options;
+    options.voxel_mm    = 0.1;
+    options.close_holes = false;
+    const auto reference = OrcaMeshLib::rebuild(input, options);
+    REQUIRE(reference.success);
+    REQUIRE(reference.mesh.faces.size() > 1);
+    // Marching cubes produces many more vertices than survive simplification.
+    // The output cap applies to the surviving geometry, not those deleted slots.
+    options.max_output_faces = reference.mesh.faces.size();
+    const auto exact = OrcaMeshLib::rebuild(input, options);
+    INFO(exact.report_json);
+    REQUIRE(exact.success);
+    CHECK(exact.mesh.vertices == reference.mesh.vertices);
+    CHECK(exact.mesh.faces == reference.mesh.faces);
+    --options.max_output_faces;
+    const auto excess = OrcaMeshLib::rebuild(input, options);
+    INFO(excess.report_json);
+    CHECK_FALSE(excess.success);
+    CHECK(excess.status == "resource_limit");
+    CHECK(excess.mesh.vertices.empty());
+    CHECK(excess.mesh.faces.empty());
+    CHECK(input.vertices == original.vertices);
+    CHECK(input.faces == original.faces);
 }

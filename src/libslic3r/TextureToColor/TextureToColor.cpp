@@ -15,7 +15,9 @@
 #include <filesystem>
 #include <fstream>
 #include "Repair.hpp"
-#include "KdTree.hpp"
+#include "libslic3r/AABBTreeIndirect.hpp"
+#include "libslic3r/MeshRepair.hpp"
+#include "libslic3r/TriangleMesh.hpp"
 #include <boost/log/trivial.hpp>
 
 namespace Slic3r { namespace tex2color {
@@ -355,6 +357,8 @@ bool TextureToColor(const TriMesh& texture_mesh, const std::vector<std::vector<V
 
     color_mesh.clear();
     face_colors.clear();
+    if (settings.mesh_repair_decision_required)
+        *settings.mesh_repair_decision_required = false;
 
     report(0, "Initializing");
     if (cancelled()) {
@@ -484,42 +488,72 @@ bool TextureToColor(const TriMesh& texture_mesh, const std::vector<std::vector<V
         return false;
     }
 
-    // Step 3: Repair mesh
-    // Many textured models have non-manifold, non-closed, or other issues that need to be fixed beforehand
-    auto repair_and_resample_mesh = [&]() -> bool {
-        KdTree before_repair(color_mesh);
-        std::shared_ptr<TriMesh> repaired_mesh;
-        bool success = RepairMesh(color_mesh, repaired_mesh);
-        if (success == false) {
-            BOOST_LOG_TRIVIAL(debug) << "TextureToColor: repair mesh failed.";
+    // Match the upstream texture-import flow: request a decision, then use the
+    // same advanced repair as object/CLI repair. The compatibility cleanup below
+    // remains available when advanced repair was explicitly skipped.
+    auto resample_face_colors = [&](TriMesh&& repaired_mesh) -> bool {
+        if (cancelled() || repaired_mesh.indices.empty())
             return false;
-        }
-        if (cancelled()) return false;
-        color_mesh = std::move(*repaired_mesh);
-        if (is_closed(color_mesh)) {
-            BOOST_LOG_TRIVIAL(debug) << "TextureToColor: repaired mesh is closed.";
-        } else {
-            BOOST_LOG_TRIVIAL(debug) << "TextureToColor: repaired mesh is open.";
-        }
-
-        // New faces after repair inherit old face colors via centroid nearest-neighbor lookup.
-        // Since the mesh barely changes after repair, resampling via centroid nearest-neighbor is sufficient.
-        std::vector<RGB> new_face_colors(color_mesh.facets_count());
-        tbb::parallel_for(tbb::blocked_range<std::size_t>(0, color_mesh.facets_count()), [&](const tbb::blocked_range<size_t>& range) {
+        const auto       tree = AABBTreeIndirect::build_aabb_tree_over_indexed_triangle_set(color_mesh.vertices, color_mesh.indices);
+        std::vector<RGB> new_face_colors(repaired_mesh.facets_count());
+        tbb::parallel_for(tbb::blocked_range<std::size_t>(0, repaired_mesh.facets_count()), [&](const tbb::blocked_range<size_t>& range) {
             for (std::size_t fid = range.begin(); fid < range.end(); ++fid) {
-                const auto& face = color_mesh.indices[fid];
-                auto center = (color_mesh.vertices[face[0]] + color_mesh.vertices[face[1]] + color_mesh.vertices[face[2]]) / 3.0f;
-                auto nearest_node = before_repair.nearest(center);
-                new_face_colors[fid] = face_colors[nearest_node.face_id];
+                const auto& face   = repaired_mesh.indices[fid];
+                const Vec3f center = (repaired_mesh.vertices[face[0]] + repaired_mesh.vertices[face[1]] + repaired_mesh.vertices[face[2]]) /
+                                     3.0f;
+                size_t hit = 0;
+                Vec3f  closest;
+                AABBTreeIndirect::squared_distance_to_indexed_triangle_set(color_mesh.vertices, color_mesh.indices, tree, center, hit,
+                                                                           closest);
+                new_face_colors[fid] = face_colors[hit];
             }
         });
+        if (cancelled())
+            return false;
+        color_mesh  = std::move(repaired_mesh);
         face_colors = std::move(new_face_colors);
         return true;
     };
 
-    if (!cgalutils::is_mesh_halfedge_compatible(color_mesh) && repair_and_resample_mesh() == false) {
-        BOOST_LOG_TRIVIAL(debug) << "TextureToColor: repair and resample mesh failed.";
-        return false;
+    bool         compatible = cgalutils::is_mesh_halfedge_compatible(color_mesh);
+    TriangleMesh stats_mesh(static_cast<const indexed_triangle_set&>(color_mesh));
+    if (!stats_mesh.stats().manifold() || !compatible) {
+        if (settings.mesh_repair_decision == MeshRepairDecision::Ask) {
+            if (settings.mesh_repair_decision_required)
+                *settings.mesh_repair_decision_required = true;
+            return false;
+        }
+        if (settings.mesh_repair_decision == MeshRepairDecision::RepairAndImport) {
+            struct Canceled
+            {};
+            std::string error;
+            try {
+                if (!repair_mesh(stats_mesh, nullptr, &error, [&](int percent) {
+                        if (cancelled())
+                            throw Canceled{};
+                        report(40 + percent / 5, "Repairing mesh");
+                    })) {
+                    BOOST_LOG_TRIVIAL(warning) << "TextureToColor: advanced repair failed: " << error;
+                    return false;
+                }
+            } catch (const Canceled&) {
+                return false;
+            } catch (const std::exception& error) {
+                BOOST_LOG_TRIVIAL(warning) << "TextureToColor: advanced repair failed: " << error.what();
+                return false;
+            }
+            if (!resample_face_colors(TriMesh(std::move(stats_mesh.its))))
+                return false;
+            compatible = cgalutils::is_mesh_halfedge_compatible(color_mesh);
+            // Do not silently substitute another repair after an explicit one.
+            if (!compatible)
+                return false;
+        }
+    }
+    if (!compatible) {
+        std::shared_ptr<TriMesh> repaired_mesh;
+        if (!RepairMesh(color_mesh, repaired_mesh, {}, cancel_callback) || !resample_face_colors(std::move(*repaired_mesh)))
+            return false;
     }
     lap("Repairing mesh");
 #ifdef OUTPUT_TEST_RESULT

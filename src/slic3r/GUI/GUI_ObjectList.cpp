@@ -5649,28 +5649,37 @@ void ObjectList::reconstruct_model()
             notify(_L("The source model or its settings changed. The reconstruction candidate was discarded."));
         };
         ModelReconstructionOptions options;
-        options.process = model_reconstruction_process_options(original->volumes.front()->mesh().its.indices.size(), options.process,
-                                                                total_physical_memory());
+        const size_t               ram = total_physical_memory();
+        options.limits = model_reconstruction_limits(original->volumes.front()->mesh().its.indices.size(), options.limits, ram);
+#ifdef __APPLE__
+        // macOS footprint includes GUI/graphics allocations. On an 8 GiB+ Mac,
+        // leave room for the editor as well as reconstruction, still <= RAM/4.
+        if (ram / (1024 * 1024) >= 8192)
+            options.limits.memory_limit_mb = std::max(options.limits.memory_limit_mb, size_t(2048));
+#endif
         if (!show_model_reconstruction_settings(parent, options))
             return;
         if (!source_is_current()) {
             notify_stale();
             return;
         }
-        options.executable = into_u8(wxStandardPaths::Get().GetExecutablePath());
         ModelReconstructionResult result;
         bool                      canceled = false;
         {
+            // This fixed status message needs no scrolling; keep the abort button inside the fitted dialog.
             ProgressDialog progress(_L("Reconstructing model"), _L("Generating and checking a separate candidate..."), 100, parent,
-                                    wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_AUTO_HIDE, true);
-            options.process.is_canceled = [&]() { return canceled; };
-            options.process.on_tick     = [&]() {
+                                    wxPD_APP_MODAL | wxPD_CAN_ABORT | wxPD_AUTO_HIDE);
+            options.limits.is_canceled = [&]() { return canceled; };
+            options.limits.on_tick     = [&]() {
                 if (!progress.Pulse(_L("Generating and checking a separate candidate...")))
                     canceled = true;
             };
             if (!progress.Update(0))
                 return;
             result = reconstruct_model_candidate(model, object_index, options);
+            BOOST_LOG_TRIVIAL(info) << "Model reconstruction: status=" << result.status
+                                    << ", resource_limits=" << result.report.value("resource_limits", nlohmann::json::object()).dump()
+                                    << ", admission=" << result.report.value("admission", nlohmann::json::object()).dump();
             if (!canceled && result.candidate_model)
                 canceled = !progress.Update(100);
         }
@@ -5756,13 +5765,32 @@ void ObjectList::reconstruct_model()
 
 void ObjectList::fix_through_cgal()
 {
+    std::vector<std::pair<int, int>> targets;
+    get_model_repair_selection_indexes(targets);
+    const wxDataViewItem selected_item = GetSelectedItemsCount() == 1 ? GetSelection() : wxDataViewItem{};
+    fix_through_cgal(targets, selected_item.IsOk() && (m_objects_model->GetItemType(selected_item) & itSettings));
+}
+
+void ObjectList::fix_all_through_cgal(bool all_plates)
+{
+    auto*       plater        = wxGetApp().plater();
+    const auto& objects       = plater->model().objects;
+    const auto  plate_objects = all_plates ? objects : plater->get_partplate_list().get_selected_plate()->get_objects_on_this_plate();
+    std::vector<std::pair<int, int>> targets;
+    // Iterate model objects once: several instances on a plate still share one mesh.
+    for (size_t index = 0; index < objects.size(); ++index) {
+        if (std::find(plate_objects.begin(), plate_objects.end(), objects[index]) != plate_objects.end())
+            targets.emplace_back(static_cast<int>(index), -1);
+    }
+    fix_through_cgal(targets, false);
+}
+
+void ObjectList::fix_through_cgal(const std::vector<std::pair<int, int>>& selected_targets, bool restore_settings)
+{
     // Do not fix anything when a gizmo is open. There might be issues with updates
     // and what is worse, the snapshot time would refer to the internal stack.
     if (!wxGetApp().plater()->get_view3D_canvas3D()->get_gizmos_manager().check_gizmos_closed_except(GLGizmosManager::Undefined))
         return;
-
-    std::vector<std::pair<int, int>> selected_targets;
-    get_model_repair_selection_indexes(selected_targets);
 
     auto*  plater = wxGetApp().plater();
     Model& model  = plater->model();
@@ -5775,8 +5803,6 @@ void ObjectList::fix_through_cgal()
         bool     settings   = false;
     };
 
-    const wxDataViewItem selected_item    = GetSelectedItemsCount() == 1 ? GetSelection() : wxDataViewItem{};
-    const bool           restore_settings = selected_item.IsOk() && (m_objects_model->GetItemType(selected_item) & itSettings);
     std::vector<SelectedRepairIdentity> selected_identities;
     selected_identities.reserve(selected_targets.size());
     for (const auto& [object_index, volume_index] : selected_targets) {

@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 
-from test_cli_model_reconstruction import (
+from reconstruction_test_helpers import (
     FACES, VERTICES, ascii_stl, binary_stl, check_candidate_file,
     check_report_contract, digest, directory_snapshot, extract_report, save_json,
 )
@@ -73,7 +73,10 @@ def check_execution_contract(report, process_id):
     assert execution["hard_timeout"] is False, execution
     assert execution["crash_isolation"] is False, execution
     limits = report["resource_limits"]
-    assert limits["budget_mode"] == "cooperative_process_rss", limits
+    assert limits["budget_mode"] == "cooperative_process_memory", limits
+    expected_metric = {"Darwin": "physical_footprint", "Windows": "working_set"}.get(platform.system(), "resident_set")
+    assert limits["memory_metric"] == expected_metric, limits
+    assert limits["observed_peak_memory_bytes"] > 0, limits
     assert limits["hard_memory_limit"] is False, limits
 
 
@@ -287,7 +290,7 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True, help="Nonexistent output directory under an existing parent")
     parser.add_argument("--timeout", type=float, default=90., help="Harness deadline per invocation, at least 65 seconds")
     parser.add_argument("--sdk-version", default=EXPECTED_SDK_VERSION, help="Exact SDK identity expected in successful reports")
-    parser.add_argument("--expect-unavailable", action="store_true", help="Test the SDK-OFF rejection and default Alpha Wrap path")
+    parser.add_argument("--expect-unavailable", action="store_true", help="Test SDK-OFF rejection for explicit and default MeshLib requests")
     parser.add_argument("--timeout-model", type=Path,
                         help="Optional known-slow STL for an actual one-second cooperative timeout (not modified)")
     args = parser.parse_args()
@@ -357,10 +360,14 @@ def main():
                          ("timeout", ("--reconstruction-timeout", "0.5"))):
         suite.run("reject_meshlib_" + label, fixtures["cube"], flags=flags)
     suite.run("unknown_engine", fixtures["cube"], engine="not-an-engine")
-    suite.run("alpha_wrap_rejects_voxel", fixtures["cube"], engine="alpha-wrap")
-    suite.run("default_engine_rejects_meshlib_flags", fixtures["cube"], engine=None)
-    suite.run("default_alpha_wrap_unchanged", fixtures["cube"], engine=None, voxel=None,
-              expectation="candidate", meshlib_contract=False, expected_memory_limit_mb=default_memory_limit_mb)
+    suite.run("removed_alpha_wrap_engine", fixtures["cube"], engine="alpha-wrap",
+              message_contains="Only the meshlib reconstruction engine is supported")
+    suite.run("default_engine_requires_voxel", fixtures["cube"], engine=None, voxel=None)
+    if args.expect_unavailable:
+        suite.run("default_meshlib_sdk_off", fixtures["cube"], engine=None,
+                  message_contains="does not include the MeshLib SDK backend")
+    else:
+        suite.run("default_meshlib", fixtures["cube"], engine=None, expectation="candidate", expected_components=1)
     # This former option must be unknown even when it names a valid executable.
     suite.run("legacy_worker_path_rejected", fixtures["cube"],
               flags=("--reconstruction-worker-path", str(Path(sys.executable).resolve())),

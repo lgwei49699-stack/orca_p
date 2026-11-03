@@ -22,6 +22,9 @@ struct Options
     double voxel_mm         = 0.;
     size_t max_input_faces  = 3000000;
     size_t max_output_faces = 1000000;
+    // False only when the caller has verified a closed, consistently oriented
+    // triangle surface. Open or unverified input still needs hole filling.
+    bool close_holes = true;
     // May be called by SDK threads. Must be thread-safe. False requests
     // cooperative cancellation; this cannot interrupt arbitrary SDK code.
     std::function<bool(float)> progress;
