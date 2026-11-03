@@ -231,6 +231,71 @@ struct ObjImportFixture
 
 } // namespace
 
+TEST_CASE("OBJ diffuse color takes precedence over ambient without losing Ka-only materials", "[OBJ][MTLColor]")
+{
+    const std::vector<std::pair<std::string, RGBA>> cases = {
+        {"Ka 1 1 1\nKd 0 0 0\n", {0.f, 0.f, 0.f, 0.65f}},
+        {"Kd 0 0 0\nKa 1 1 1\n", {0.f, 0.f, 0.f, 0.65f}},
+        {"Ka 0.2 0.2 0.2\nKd 0.3 0.3 0.3\n", {0.3f, 0.3f, 0.3f, 0.65f}},
+        {"Ka 1 1 1\nKd 1 0 0\n", {1.f, 0.f, 0.f, 0.65f}},
+        {"Ka 0 0.5 1\n", {0.f, 0.5f, 1.f, 0.65f}},
+        {"Kd 0 0 0\n", {0.f, 0.f, 0.f, 0.65f}},
+        {"Ka 0 0 0\nKd -0.1 0.5 1.2\n", {0.f, 0.5f, 1.f, 0.65f}},
+        {"", {0.f, 0.f, 0.f, 0.65f}},
+    };
+    ObjImportFixture fixture;
+    // Multiple materials in one file also check that Kd presence is not carried over.
+    std::string mtl, obj = "mtllib palette.mtl\nv 0 0 0\nv 10 0 0\nv 0 10 0\nvt 0 0\nvt 1 0\nvt 0 1\n";
+    for (size_t i = 0; i < cases.size(); ++i) {
+        const std::string name = "color" + std::to_string(i);
+        mtl += "newmtl " + name + "\n" + cases[i].first + "Tr 0.65\nmap_Kd texture.png\n";
+        obj += "usemtl " + name + "\nf 1/1 2/2 3/3\n";
+    }
+    fixture.write("palette.mtl", mtl);
+    fixture.write("input.obj", obj);
+    TriangleMesh mesh;
+    ObjInfo      info;
+    std::string  message;
+    REQUIRE(fixture.load(mesh, info, message));
+    REQUIRE(info.face_colors.size() == cases.size());
+    CHECK(mesh.facets_count() == cases.size());
+    CHECK(info.has_uv_png);
+    REQUIRE(info.uvs.size() == cases.size());
+    REQUIRE(info.uv_map_pngs.size() == cases.size());
+    for (size_t i = 0; i < cases.size(); ++i) {
+        CAPTURE(i, cases[i].first);
+        for (size_t channel = 0; channel < 4; ++channel)
+            CHECK(info.face_colors[i][channel] == Approx(cases[i].second[channel]));
+        CHECK(info.uv_map_pngs.at(i) == "texture.png");
+        CHECK(info.uvs[i][1] == Vec2f(1.f, 0.f));
+    }
+}
+
+TEST_CASE("OBJ GUI color callback receives distinct black and white from MTL", "[OBJ][GUIColor][MTLColor]")
+{
+    ObjImportFixture fixture;
+    fixture.write("palette.mtl", "newmtl black\nKa 1 1 1\nKd 0 0 0\nnewmtl white\nKa 1 1 1\nKd 1 1 1\n");
+    fixture.write("input.obj", "mtllib palette.mtl\nv 0 0 0\nv 10 0 0\nv 0 10 0\nv 0 0 10\n"
+                               "usemtl black\nf 1 3 2\nf 1 2 4\nusemtl white\nf 1 4 3\nf 2 3 4\n");
+    bool             callback_called = false;
+    ObjImportColorFn callback = [&](std::vector<RGBA>& colors, bool single, std::vector<unsigned char>& slots, unsigned char& first) {
+        callback_called = true;
+        CHECK_FALSE(single);
+        REQUIRE(colors.size() == 4);
+        for (size_t i = 0; i < colors.size(); ++i)
+            for (size_t channel = 0; channel < 3; ++channel)
+                CHECK(colors[i][channel] == (i < 2 ? 0.f : 1.f));
+        slots = {1, 1, 2, 2};
+        first = 1;
+    };
+    Model model = fixture.read_model(false, nullptr, nullptr, callback);
+    CHECK(callback_called);
+    REQUIRE(model.objects.size() == 1);
+    REQUIRE(model.objects.front()->volumes.size() == 1);
+    CHECK(model.objects.front()->volumes.front()->mesh().facets_count() == 4);
+    CHECK_FALSE(model.objects.front()->volumes.front()->mmu_segmentation_facets.empty());
+}
+
 TEST_CASE("OBJ material import tolerates faces with omitted UV coordinates", "[OBJ][CLI][Import]")
 {
     ObjImportFixture fixture;
@@ -254,6 +319,10 @@ TEST_CASE("OBJ import rejects invalid UV indices unless explicitly loading geome
     SECTION("positive out of range") { fixture.obj("f 1/5 2/2 3/3\n"); }
     SECTION("negative out of range") { fixture.obj("f 1/-5 2/-3 3/-2\n"); }
     SECTION("invalid fourth corner") { fixture.obj("f 1/1 2/2 3/3 4/9\n"); }
+    SECTION("out of range with an optional texture w component")
+    {
+        fixture.write("input.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0 0\nf 1/1 2/2 3/1\n");
+    }
     TriangleMesh mesh;
     ObjInfo      info;
     std::string  message;
@@ -263,6 +332,29 @@ TEST_CASE("OBJ import rejects invalid UV indices unless explicitly loading geome
     REQUIRE(fixture.load(mesh, geometry_info, message, true));
     CHECK(geometry_info.face_colors.empty());
     CHECK(geometry_info.uvs.empty());
+}
+
+TEST_CASE("OBJ import accepts optional texture w components without shifting UV indices", "[OBJ][CLI][Import]")
+{
+    ObjImportFixture fixture;
+    std::string      faces;
+    SECTION("absolute UV indices") { faces = "f 1/1 2/2 3/3 4/4\n"; }
+    SECTION("relative UV indices") { faces = "f 1/-4 2/-3 3/-2 4/-1\n"; }
+    fixture.write("input.obj", "mtllib palette.mtl\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+                               "vt 0 0 0\nvt 1 0\nvt 1 1 0.5\nvt 0 1 -0.5\nusemtl color\n" +
+                                   faces);
+    TriangleMesh mesh;
+    ObjInfo      info;
+    std::string  message;
+    REQUIRE(fixture.load(mesh, info, message));
+    REQUIRE(mesh.facets_count() == 2);
+    REQUIRE(info.uvs.size() == 2);
+    const std::array<Vec2f, 3> first{Vec2f(0, 0), Vec2f(1, 0), Vec2f(1, 1)};
+    const std::array<Vec2f, 3> second{Vec2f(0, 0), Vec2f(1, 1), Vec2f(0, 1)};
+    for (size_t i = 0; i < 3; ++i) {
+        CHECK((info.uvs[0][i] - first[i]).squaredNorm() == 0.f);
+        CHECK((info.uvs[1][i] - second[i]).squaredNorm() == 0.f);
+    }
 }
 
 TEST_CASE("OBJ negative UV indices and quad triangulation preserve UV corner order", "[OBJ][CLI][Import]")

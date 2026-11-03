@@ -16,6 +16,8 @@
 #include "Geometry.hpp"
 #include "PrintConfig.hpp"
 #include "Surface.hpp"
+#include "Exception.hpp"
+#include "I18N.hpp"
 #include "Fill/FillRectilinear.hpp"
 
 #include <boost/algorithm/string/predicate.hpp>
@@ -1381,8 +1383,15 @@ std::vector<WipeTower::ToolChangeResult> WipeTower2::prime(
 	// If false, the last priming are will be large enough to wipe the last extruder sufficiently.
     bool 						/*last_wipe_inside_wipe_tower*/)
 {
-	this->set_layer(initial_layer_print_height, initial_layer_print_height, tools.size(), true, false);
-	m_current_tool 		= tools.front();
+    if (tools.empty())
+        return {};
+    for (unsigned int tool : tools) {
+        if (tool >= m_filpar.size() || tool >= wipe_volumes.size() || wipe_volumes[tool].size() != wipe_volumes.size())
+            throw Slic3r::SlicingError(
+                _u8L("The flushing volumes matrix does not match the filament assignments. Please check the filament mapping."));
+    }
+    this->set_layer(initial_layer_print_height, initial_layer_print_height, tools.size(), true, false);
+    m_current_tool 		= tools.front();
     
     // The Prusa i3 MK2 has a working space of [0, -2.2] to [250, 210].
     // Due to the XYZ calibration, this working space may shrink slightly from all directions,
@@ -1432,7 +1441,7 @@ std::vector<WipeTower::ToolChangeResult> WipeTower2::prime(
         toolchange_Load(writer, cleaning_box); // Prime the tool.
         if (idx_tool + 1 == tools.size()) {
             // Last tool should not be unloaded, but it should be wiped enough to become of a pure color.
-            toolchange_Wipe(writer, cleaning_box, wipe_volumes[tools[idx_tool-1]][tool]);
+            toolchange_Wipe(writer, cleaning_box, wipe_volumes[tools[idx_tool == 0 ? 0 : idx_tool - 1]][tool]);
         } else {
             // Ram the hot material out of the melt zone, retract the filament into the cooling tubes and let it cool.
             //writer.travel(writer.x(), writer.y() + m_perimeter_width, 7200);

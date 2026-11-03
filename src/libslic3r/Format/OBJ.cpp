@@ -545,22 +545,12 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
                     if (skip_material_data)
                         return;
                     if (mtl_data.new_mtl_unmap.find(mtl_name) != mtl_data.new_mtl_unmap.end()) {
-                        bool is_merge_ka_kd = true;
-                        for (size_t n = 0; n < 3; n++) {
-                            if (float(mtl_data.new_mtl_unmap[mtl_name]->Ka[n] + mtl_data.new_mtl_unmap[mtl_name]->Kd[n]) > 1.0) {
-                                is_merge_ka_kd=false;
-                                break;
-                            }
-                        }
-                        for (size_t n = 0; n < 3; n++) {
-                            if (is_merge_ka_kd) {
-                                face_color[n] = std::clamp(float(mtl_data.new_mtl_unmap[mtl_name]->Ka[n] +
-                                                                 mtl_data.new_mtl_unmap[mtl_name]->Kd[n]),
-                                                           0.f, 1.f);
-                            } else {
-                                face_color[n] = std::clamp(float(mtl_data.new_mtl_unmap[mtl_name]->Kd[n]), 0.f, 1.f);
-                            }
-                        }
+                        const auto& material = *mtl_data.new_mtl_unmap[mtl_name];
+                        // Ka is ambient reflectivity, not an additive part of the printable color.
+                        // Retain Ka-only legacy files, but never replace an explicitly black Kd.
+                        const auto& color = material.has_kd ? material.Kd : material.Ka;
+                        for (size_t n = 0; n < 3; ++n)
+                            face_color[n] = std::clamp(color[n], 0.f, 1.f);
                         face_color[3] = mtl_data.new_mtl_unmap[mtl_name]->Tr; // alpha
                         const bool has_face_uv = uvs[0] >= 0 && uvs[1] >= 0 && uvs[2] >= 0;
                         if (has_face_uv && mtl_data.new_mtl_unmap[mtl_name]->map_Kd.size() > 0) {

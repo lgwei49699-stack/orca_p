@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gcode-preview",
-  "source_fingerprint": "sha256:aa7afdd39edc12fae32d22d30cff0763dbe2cf553261557c7ec67f3504f3ef63",
-  "reason": "保留前批质量角色和实体峰值来源；本批仅显式报告增加无路径岛峰值与最终分区轮廓关系、孔交叠峰值的互斥路径来源，及原moves遍历的同段宽高观察。普通GUI/无报告CLI生成器、配置/指令不变；不把峰值分类或名义线宽当实物缺陷，不盲目增流量/降线宽。原生/CLI及Web严格消费验证见实施记录。 2026-10-23新增small_perimeter_selection只读生成阶段摘要及复制/reset合同；未知/零/命中分开，非最终限速或质量结论。正文及原生/CLI/Web检查同步，未新增GUI入口。"
+  "source_fingerprint": "sha256:fdef43881eb50164a7996a1afb17ef1e929bfccb21ba0c5554070dfd1dd9c49e",
+  "reason": "保留前批质量角色和实体峰值来源；本批仅显式报告增加无路径岛峰值与最终分区轮廓关系、孔交叠峰值的互斥路径来源，及原moves遍历的同段宽高观察。普通GUI/无报告CLI生成器、配置/指令不变；不把峰值分类或名义线宽当实物缺陷，不盲目增流量/降线宽。原生/CLI及Web严格消费验证见实施记录。 2026-10-23新增small_perimeter_selection只读生成阶段摘要及复制/reset合同；未知/零/命中分开，非最终限速或质量结论。正文及原生/CLI/Web检查同步，未新增GUI入口。 合入 master 修复记录：共享test_gcode.cpp增加坏颜色表的真实切片/导出及排序前置检查；预览解析和渲染未改。134断言通过，保留GUI手工待验范围。"
 }
 -->
 

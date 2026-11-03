@@ -2890,6 +2890,12 @@ void Print::_make_wipe_tower()
         // Don't generate any wipe tower.
         return;
 
+    const auto& tools = m_wipe_tower_data.tool_ordering.all_extruders();
+    if (number_of_extruders == 0 || size_t(number_of_extruders) * number_of_extruders != flush_matrix.size() ||
+        std::any_of(tools.begin(), tools.end(), [number_of_extruders](unsigned int tool) { return tool >= number_of_extruders; }))
+        throw Slic3r::SlicingError(
+            _u8L("The flushing volumes matrix does not match the filament assignments. Please check the filament mapping."));
+
     // Check whether there are any layers in m_tool_ordering, which are marked with has_wipe_tower,
     // they print neither object, nor support. These layers are above the raft and below the object, and they
     // shall be added to the support layers to be printed.

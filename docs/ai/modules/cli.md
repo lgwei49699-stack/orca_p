@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:55f3e5b5bf094c3a3bf278496abc6a621ef54372fbb8c347c9fc92f84a93d077",
-  "reason": "2026-10-26 QA进度管道回归：仅在显式局部计划允许列表增加pipe与min_save，沿用原进度通知/精简3MF导出，模型/姿态/修复/缓存与实际层位约束不变；GUI及无计划CLI不进入该分支，最小构建和真实FIFO组合验证见工作进展。 2026-10-28同步阶段读取geometry-only声明：阶段可读取彩色STL几何、直接重建原限制不变；无新参数，普通切片/分盘未改，相关回归见局部修复记录。 2026-10-29入库复审：新增逻辑限定显式报告，修复算法与普通切片/分盘不变；复核当前源码/程序身份，两个真实模型报告开关各3轮产物完全一致，耗时/内存与平台边界见局部修复记录第九批。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30高级修复接入共享2.5核心，删除旧remove_non_3d_parts赋值及过时注释；CLI参数、App最小交付与普通切片/分盘路由保持。更新basic/full范围及partial/纯平面拒绝说明，配套接口回归通过，真实机型G-code及GUI待验。 2026-10-30共享高级核心补精确内部封盖清理，GUI专用验证runner改名与取消接入不改变CLI调用契约；CLI参数/schema/错误语义、普通切片和分盘入口未改。bracket真实修复成功，保持残留模型语义；346项CLI含两种重建通过，实际机型G-code仍未验证。 2026-10-31 shared App inspection contract: all counted defects trigger advanced, conditional vertex/intersection existence carries lower-bound semantics, and no-change/partial results remain explicit. No new CLI options or default full/GUI/slicing changes. Documented App small-result vs explicit evidence boundaries; 115 inspection, 64 stage and 64 ordinary CLI cases passed with 37 unchanged instruction streams. See the six-task review for build identity and pending manual validation."
+  "source_fingerprint": "sha256:90f295d221f24f70714376b94edccb93f19060e5149f17895e9f23e38be796f3",
+  "reason": "2026-10-26 QA进度管道回归：仅在显式局部计划允许列表增加pipe与min_save，沿用原进度通知/精简3MF导出，模型/姿态/修复/缓存与实际层位约束不变；GUI及无计划CLI不进入该分支，最小构建和真实FIFO组合验证见工作进展。 2026-10-28同步阶段读取geometry-only声明：阶段可读取彩色STL几何、直接重建原限制不变；无新参数，普通切片/分盘未改，相关回归见局部修复记录。 2026-10-29入库复审：新增逻辑限定显式报告，修复算法与普通切片/分盘不变；复核当前源码/程序身份，两个真实模型报告开关各3轮产物完全一致，耗时/内存与平台边界见局部修复记录第九批。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30高级修复接入共享2.5核心，删除旧remove_non_3d_parts赋值及过时注释；CLI参数、App最小交付与普通切片/分盘路由保持。更新basic/full范围及partial/纯平面拒绝说明，配套接口回归通过，真实机型G-code及GUI待验。 2026-10-30共享高级核心补精确内部封盖清理，GUI专用验证runner改名与取消接入不改变CLI调用契约；CLI参数/schema/错误语义、普通切片和分盘入口未改。bracket真实修复成功，保持残留模型语义；346项CLI含两种重建通过，实际机型G-code仍未验证。 2026-10-31 shared App inspection contract: all counted defects trigger advanced, conditional vertex/intersection existence carries lower-bound semantics, and no-change/partial results remain explicit. No new CLI options or default full/GUI/slicing changes. Documented App small-result vs explicit evidence boundaries; 115 inspection, 64 stage and 64 ordinary CLI cases passed with 37 unchanged instruction streams. See the six-task review for build identity and pending manual validation. 合入 master 修复记录：仅收紧自动多OBJ合并到同一非空默认耗材路径，普通不同配置保留原对象/面编号，默认标志不放开。25项通过，4组耗材绑定对照一致，20个已有成功场景及3个实际输入重放指令不变。"
 }
 -->
 
@@ -60,6 +60,7 @@
 
 分离截面间距继续作为同一报告逐层字段输出，无新 CLI 参数。它是保留参考截面不同岛的最近边界距离，包括孔内岛；不足两岛为不适用，失败未知，零不代表粘连。象脚层的参考截面不等于补偿后的实际路径，不把它写成参数效果判断。原 34 场景配置保留，另加已知 1 mm 间距的孔内岛双墙夹具；实际通过/失败和程序身份见实施记录。
 
+旧 MTL 自动颜色现在来自共享加载器的明确 Kd，缺 Kd 才回退 Ka。黑色恢复可能使原来被合并的颜色增加一个真实材质槽及相应冲刷矩阵；不改显式材质绑定。原 EP7 黑色32面恢复、显式路径指令不变，详见同一验证记录。
 
 ## 配置与约束
 
@@ -125,6 +126,10 @@ Alpha Wrap 默认 `parameters.close_open_boundaries=true`，与 GUI 的“包裹
 全局 `--rotate/--rotate-x/--rotate-y/--scale` 原来作用于 volume；变换 JSON 需将实际 volume 的前后差值与实例及自动定向变换合成，不能只读取实例字段。按对象保存差值，拆色和repetitions复制时传递变换记录；不修改原有几何操作。仅在请求JSON且存在全局变换时计算volume差值。JSON导出对全局变换、左手镜像实例或有自动定向记录的对象使用实际矩阵分解，将反射方向保存在有符号scale中，正确组合实例镜像与orient；即使没有全局选项，镜像3MF也不能只输出旋转和正缩放。负号可等价归到X轴并配合旋转，不要求保持源文件的镜像轴标记；应以还原几何比较。非等比实例缩放与orient不一定可交换，必须按实际顺序组合后分解，不能直接将原缩放附在组合旋转之后；可表示的变换正确导出，产生剪切时沿用下述明确拒绝语义。普通无镜像、无定向、无全局操作的入口保持原行为。若多部件各自变换不等同于一个整体仿射变换，或分解的合成矩阵有剪切、奇异或非有限值，现有 rotation/scale 字段无法忠实表达，返回 -2 并说明原因；关闭JSON的3MF导出仍沿用原行为。单独per-model参数行为保持。该协议仅CLI提供，GUI不输出此JSON；共享工程导出保护见[格式模块](formats.md)。
 
 ## 修改与验证
+
+普通纯 OBJ 多文件批次在未使用 `--model-filaments`、未进入 CGAL 修复，且普通耗材列表非空、各项均为同一非空配置路径时，才累积统一自动颜色槽，保留默认槽 1，并同步重映射后续对象/体积挤出机与涂色面。沿用首文件的既有导入配色；该默认耗材兼容分支不再由后文件覆盖全局表。不同耗材路径、空列表或空槽保留旧编号及其配色流程，不能因 MTL 颜色不同改用另一份耗材；`--load-defaultfila` 也不授权重排。路径不同但文件内容相同仍保守不合并。包含默认槽最多 16 槽，超过时受控拒绝。单文件、显式材质绑定、混合格式与修复策略保持原流程；GUI 导入已有材质映射交互，不解析普通 CLI 耗材列表，也不进入该批处理分支。两端共用擦料塔矩阵校验，验证及 GUI 待验见[EP7 多 OBJ 修复记录](../validation/2026-11-02-ep7-multi-obj-wipe-tower-crash.md)。
+
+该兼容入口还排除 `--load-filament-ids` 和克隆对象，避免重排用户指定的绑定。普通自动 OBJ（含单文件）若颜色槽超过所传耗材配置数，只在所有配置路径相同、或用户已启用 `use_first_fila_as_default` 时追加默认配置；原条目及顺序不改，不按色值合并真实耗材。若不同配置缺项且无明确默认，不猜测材料，沿用配置错误出口。正常显式绑定、已有足量配置及其颜色优先级不变；专项核对实际 G-code 工具、同色不同耗材参数和修前修后指令。
 
 修改动作路由优先检查 run/export_models 和结果序列化；验证无参数启动、模型导出、分盘→切片和不合法参数。先查看本分支可用的 CLI 脚本，测试写入隔离输出目录。共享功能同时核对 GUI 的调用及生效配置，验证实际产物与错误语义一致；对应 GUI 步骤按[交接规范](../gui-validation.md) 提供，不能只凭 CLI 退出 0 结束验收。
 

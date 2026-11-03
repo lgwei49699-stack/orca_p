@@ -32,7 +32,7 @@ static bool obj_parseline(const char *line, ObjData &data)
 		case 't':
 		{
 			// vt - vertex texture parameter
-			// u v [w], w == 0 (or w == 1)
+			// u v [w]; only u and v are stored.
 			char c2 = *line ++;
 			if (c2 != ' ' && c2 != '\t')
 				return false;
@@ -51,19 +51,18 @@ static bool obj_parseline(const char *line, ObjData &data)
 				line = endptr;
 				EATWS();
 			}
-			/*double w = 0;
+			// Accept the optional w component without changing the UV stride.
 			if (*line != 0) {
-				w = strtod(line, &endptr);
+				strtod(line, &endptr);
 				if (endptr == 0 || (*endptr != ' ' && *endptr != '\t' && *endptr != 0))
 					return false;
 				line = endptr;
 				EATWS();
-			}*/
+			}
 			if (*line != 0)
 				return false;
 			data.textureCoordinates.push_back((float)u);
 			data.textureCoordinates.push_back((float)v);
-			//data.textureCoordinates.push_back((float)w);
 			break;
 		}
 		case 'n':
@@ -464,9 +463,10 @@ static bool        mtl_parseline(const char *line, MtlData &data)
                 line = endptr;
                 EATWS();
                 if (data.new_mtl_unmap.find(cur_mtl_name) != data.new_mtl_unmap.end()) {
-                    data.new_mtl_unmap[cur_mtl_name]->Kd[0] = x;
-                    data.new_mtl_unmap[cur_mtl_name]->Kd[1] = y;
-                    data.new_mtl_unmap[cur_mtl_name]->Kd[2] = z;
+                    data.new_mtl_unmap[cur_mtl_name]->Kd[0]  = x;
+                    data.new_mtl_unmap[cur_mtl_name]->Kd[1]  = y;
+                    data.new_mtl_unmap[cur_mtl_name]->Kd[2]  = z;
+                    data.new_mtl_unmap[cur_mtl_name]->has_kd = true;
                 }
             } else if (cur_char == 's') {
                 EATWS();

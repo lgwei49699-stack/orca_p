@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:b10431d6ba1b4825404548c11782945b18bbaca06678c1eead53b98cca53e9c3",
-  "reason": "2026-10-26在既有局部计划脚本补真实FIFO读取/收尾、普通修正前后对照、报告/细节/精简3MF组合及带管道非法请求拒绝；不新增依赖、业务开关、线上调用或自动试参。 2026-10-29仅本批修复原生/CLI回归：补洞、清理、内部面与输入兼容正反例，121断言/44CLI按身份复用，当前程序报告开关12次实测见修复记录；普通路径未改。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30补合master c0ccf31b22：Cura V1真实垫层接触锚点只修正计划首层空层误报，保留真实缺层保护和发布分支只读小轮廓分析；未更改实际路径、参数、普通修复或Linux打包配置。正文与测试说明按目标源码合并，目标回归见App发布记录。 2026-10-30 App最小交付：仅basic无显式报告STL路径取消中间导出/回读；高级仅committed导出，默认full/GUI/普通切片分盘不变。更新正文及AppBasicDelivery测试，45原生/56报告CLI和服务真实链路、耗时与未验证边界见App提速记录。 2026-10-31入库复核：仅2.5共享修复、环孔/薄壁与内部膜保护、事务/绘色/取消、重建预封口和自动外墙宽度回归；删除旧外层算法专用断言，保留实际残留与拒绝语义。不包含本地下载工具和参数审计改动，GUI/跨平台待验见修复对照记录。 2026-10-31 App inspection regression: cover seven positive categories, negative and incomplete results, shared volume admission, partial/no-change outcomes and topology-only transaction checks. Basic advanced CLI now mirrors the App command without full evidence; an explicit incomplete-evidence rejection remains. Native 275, check CLI 115, stage CLI 64 and ordinary CLI 64 passed; 37 G-code instruction hashes match baseline. Source and build identity, service mock/real-engine results and pending manual checks are recorded in the six-task review."
+  "source_fingerprint": "sha256:d1e9e95b8c07f7ade5a582b260289268f26594f2eb045d78d31bd27a5e9be30c",
+  "reason": "2026-10-26在既有局部计划脚本补真实FIFO读取/收尾、普通修正前后对照、报告/细节/精简3MF组合及带管道非法请求拒绝；不新增依赖、业务开关、线上调用或自动试参。 2026-10-29仅本批修复原生/CLI回归：补洞、清理、内部面与输入兼容正反例，121断言/44CLI按身份复用，当前程序报告开关12次实测见修复记录；普通路径未改。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30补合master c0ccf31b22：Cura V1真实垫层接触锚点只修正计划首层空层误报，保留真实缺层保护和发布分支只读小轮廓分析；未更改实际路径、参数、普通修复或Linux打包配置。正文与测试说明按目标源码合并，目标回归见App发布记录。 2026-10-30 App最小交付：仅basic无显式报告STL路径取消中间导出/回读；高级仅committed导出，默认full/GUI/普通切片分盘不变。更新正文及AppBasicDelivery测试，45原生/56报告CLI和服务真实链路、耗时与未验证边界见App提速记录。 2026-10-31入库复核：仅2.5共享修复、环孔/薄壁与内部膜保护、事务/绘色/取消、重建预封口和自动外墙宽度回归；删除旧外层算法专用断言，保留实际残留与拒绝语义。不包含本地下载工具和参数审计改动，GUI/跨平台待验见修复对照记录。 2026-10-31 App inspection regression: cover seven positive categories, negative and incomplete results, shared volume admission, partial/no-change outcomes and topology-only transaction checks. Basic advanced CLI now mirrors the App command without full evidence; an explicit incomplete-evidence rejection remains. Native 275, check CLI 115, stage CLI 64 and ordinary CLI 64 passed; 37 G-code instruction hashes match baseline. Source and build identity, service mock/real-engine results and pending manual checks are recorded in the six-task review. 合入 master 修复记录：多OBJ专项扩展25例；新增4组普通不同配置的槽位、面标记、温度流量和指令对照，旧构建确实失败、新构建通过。20个此前成功场景逐条一致；3个实际输入重放保持通过。"
 }
 -->
 
@@ -165,6 +165,8 @@ Windows GUI 采集脚本使用 PowerShell 5.1 与内嵌 C# P/Invoke，默认延�
 
 10-17 本地维护台应用构建和 CI 命令依据 MeshLib ON 缓存显示 `-t 14.0`（保留更高目标）；OFF 和第三方依赖任务保持原命令。DMG 任务经正式脚本完成依赖和签名完整性检查。69 项后端测试含 ON/旧缓存/高版本/OFF 与 CI 对照；当前服务及实际应用验证见[打包记录](../validation/2026-10-17-macos-meshlib-packaging.md)。
 
+`[MTLColor]` 扩展现有 OBJ 临时夹具：黑色/顺序、暗灰、Ka-only、Kd-only、缺省和范围约束，同时检验每材质标记、UV、透明度及 GUI 导入回调。多 OBJ 脚本另用白色 Ka、黑白红黄 Kd，覆盖单文件和两种多文件顺序，逐面核对颜色；合计15例。回调自动化不是 GUI 手工验收，构建、原任务对照与 GUI 清单见同一 EP7 记录。
+
 ## 配置与约束
 
 平行边批次沿用40个CLI场景，新增已知U/C槽与窄颈宽度断言；不允许指定真值用例以unknown跳过。原生覆盖旋转/大平移、嵌套岛阻挡、孔/槽分开、非适用/非法及100齿复杂边界；G-code覆盖真实G1/G2、G92/相对坐标、抬Z回抽、负接缝坐标、按材料上限和角色长度加权。Python检查统计合同及反例，Web补缺层完整性与FAILED隐藏旧产物。当前运行数量与二进制身份见实施记录，历史通过数量不累加。
@@ -185,6 +187,14 @@ Windows GUI 采集脚本使用 PowerShell 5.1 与内嵌 C# P/Invoke，默认延�
 固定位置脚本追加已有3MF与新增STL/OBJ混合、单盘/多盘、盘内/完全越界/部分越界及显式盘号，成功时三个对象必须均有实际挤出路径。分盘脚本追加全局旋转/缩放/三轴组合、per-model叠加、自动定向、切片及repetitions复制；用JSON重建源顶点并与3MF实际顶点逐点比对，不仅检查包围盒或退出码。不同对象已有不同volume旋转时各自验证；无法用rotation+scale表达的剪切应明确拒绝，而不导出JSON时仍可保存3MF。格式层新增 `[PlateReferences]`，范围与失败语义见[格式模块](formats.md)。
 
 ## 修改与验证
+
+`[FlushMatrixCompatibility]` 覆盖10种真实Print生命周期场景：完整自定义矩阵、过小、缺键、空、非方阵、换色量向量缺项、完整矩阵含手动0，以及0/1/2项颜色表。显式设置4份喷嘴/耗材参数及工具0/3，验证完整配置、倍率、生成擦料塔、G-code矩阵和重复apply缓存；测试使用绝对临时导出路径、有效输出结果对象并恢复资源目录。`[WipeTowerSlots]` 追加换料排序入口的空集合、有效顺序、工具越界、起始工具越界和缺行检查，保护早于擦料塔读取的路径。
+
+`scripts/test_cli_multi_obj_palette.py` 使用现有应用和外部解析后的 machine/process/filament JSON，在独立目录生成闭合四色夹具；完整切片并按几何位置核对导出 OBJ 每面的实际 RGB。覆盖六种导入顺序、单输入、显式绑定、16 槽接受与 17 槽受控拒绝，保存命令、日志及程序/配置哈希，不内置私有模型、不构建或下发。`[WipeTowerSlots]` 覆盖正常、越界、缺矩阵行、空/单工具和缺耗材参数。结果见[EP7 多 OBJ 修复记录](../validation/2026-11-02-ep7-multi-obj-wipe-tower-crash.md)。
+
+脚本现有25例，包含1/4/5份默认参数、单模型单份默认、16槽单份默认及同色不同参数显式绑定；核对实际G-code包含全部应有工具，防止只验导出颜色而漏掉打印丢色。新增4组普通不同耗材对照：两单色模型、反向导入、默认耗材标志、多色面；核对对象/体积槽位、三角面标记、温度、流量及全部非注释G-code，与已有逐文件零编号保留路径一致。`--bindings-only` 可只执行这4组；修正前程序会在首例T1变T1/T2处失败。控制路径用于隔离新增合并，不冒充旧生产二进制。`--baseline-only` 保存16个既有场景（含1个拒绝），`--compare-to` 对存在的历史成功场景逐条比较指令，本次与前轮完整结果的20个成功场景一致。16槽正常基线必须传16份参数；旧版8份参数虽退出0却丢色，不应作为正常基线放宽断言。
+
+`test_obj.cpp` 的 `[OBJ][CLI][Import]` 增加可选第三纹理分量兼容回归；检查混合两/三分量时正负索引对应的 UV 值及四边形拆分，同时保留越界拒绝和显式 geometry-only 对照。使用既有临时文件夹具；本次专项及原始模型切片证据见 [OBJ 修复记录](../validation/2026-10-25-obj-texture-w.md)。
 
 `[CloudProcess]` 覆盖工程有效工艺优先、显式零/百分比、缺项回退及保存后重载；另通过真实 3MF 写入/读取验证差量和全量嵌入工艺产生一致结果。测试隔离用户目录，云端网络与替换/另存弹窗仍需 GUI 验证；本次结果见 [EPONE 记录](../validation/2026-10-24-epone-cloud-preset-roundtrip.md)。
 

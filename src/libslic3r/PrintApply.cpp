@@ -3,6 +3,7 @@
 
 #include <boost/log/trivial.hpp>
 #include <cfloat>
+#include <cmath>
 
 namespace Slic3r {
 
@@ -1080,6 +1081,49 @@ static PrintObjectRegions* generate_print_object_regions(
     return out.release();
 }
 
+// Legacy projects may retain a smaller flushing matrix after adding filaments.
+// Match the GUI's existing expansion policy, preserving identifiable user pairs.
+static void complete_legacy_flush_matrix(DynamicPrintConfig& config)
+{
+    const auto* colors = config.option<ConfigOptionStrings>("filament_colour");
+    // A legacy project can have a truncated/missing display palette while its
+    // material slots and painted tool assignments are still intact. Palette
+    // length alone must not let those tools index a smaller matrix.
+    const auto* diameters = config.option<ConfigOptionFloats>("filament_diameter");
+    const size_t count = std::max(colors ? colors->values.size() : 0, diameters ? diameters->values.size() : 0);
+    if (count < 2)
+        return;
+    auto*        matrix    = config.option<ConfigOptionFloats>("flush_volumes_matrix");
+    const size_t old_size  = matrix ? matrix->values.size() : 0;
+    const size_t old_count = size_t(std::sqrt(old_size) + EPSILON);
+    const bool   square    = old_count > 0 && old_count * old_count == old_size;
+    if (square && old_count >= count)
+        return;
+
+    const auto* volumes = config.option<ConfigOptionFloats>("flush_volumes_vector");
+    const auto  volume  = [volumes](size_t index) {
+        // Same first-filament/default fallback as PresetBundle; also handle an
+        // incomplete pair or invalid values from an old project.
+        if (volumes) {
+            for (size_t candidate : {index, index % 2})
+                if (candidate < volumes->values.size() && std::isfinite(volumes->values[candidate]) && volumes->values[candidate] >= 0.)
+                    return volumes->values[candidate];
+        }
+        return 140.;
+    };
+    std::vector<double> completed(count * count);
+    for (size_t from = 0; from < count; ++from)
+        for (size_t to = 0; to < count; ++to)
+            completed[from * count + to] = square && from < old_count && to < old_count ? matrix->values[from * old_count + to] :
+                                           from == to                                   ? 0. :
+                                                                                          volume(2 * from) + volume(2 * to + 1);
+    BOOST_LOG_TRIVIAL(info) << "Auto-completed legacy flushing matrix: " << old_size << " -> " << completed.size() << " values for "
+                            << count << " known filaments";
+    if (!matrix)
+        matrix = config.option<ConfigOptionFloats>("flush_volumes_matrix", true);
+    matrix->values = std::move(completed);
+}
+
 Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_config)
 {
 #ifdef _DEBUG
@@ -1098,6 +1142,7 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     //new_full_config.normalize_fdm(used_filaments);
     new_full_config.normalize_fdm_1();
     t_config_option_keys changed_keys = new_full_config.normalize_fdm_2(objects().size(), used_filaments);
+    complete_legacy_flush_matrix(new_full_config);
     if (changed_keys.size() > 0) {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", got changed_keys, size=%1%")%changed_keys.size();
         for (int i = 0; i < changed_keys.size(); i++)

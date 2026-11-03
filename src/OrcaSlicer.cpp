@@ -2275,6 +2275,22 @@ int CLI::run(int argc, char **argv)
                                 << ", explicit_groups=" << has_explicit_arrange_group;
     const std::vector<int>  loaded_filament_ids  = m_config.option<ConfigOptionInts>("load_filament_ids", true)->values;
     const std::vector<int>  clone_objects  = m_config.option<ConfigOptionInts>("clone_objects", true)->values;
+    // Only ordinary OBJ imports use this compatibility path. Keep explicit
+    // per-model/per-file bindings, cloning, mixed inputs and repair unchanged.
+    const bool legacy_obj_batch = !has_model_filament_mapping && !cgal_repair_requested && loaded_filament_ids.empty() &&
+                                  clone_objects.empty() && !m_input_files.empty() &&
+                                  std::all_of(m_input_files.begin(), m_input_files.end(),
+                                              [](const std::string& path) { return boost::algorithm::iends_with(path, ".obj"); });
+    // Color-based renumbering is safe only when every supplied slot uses the
+    // same default profile. Different profiles retain their original slot
+    // bindings, even with load_defaultfila: that flag fills missing parameters,
+    // but does not authorize assigning an object to another material.
+    const bool shared_obj_default_filament = !load_filaments.empty() && !load_filaments.front().empty() &&
+                                             std::all_of(load_filaments.begin(), load_filaments.end(),
+                                                         [&load_filaments](const std::string& path) {
+                                                             return path == load_filaments.front();
+                                                         });
+    const bool merge_obj_palettes = legacy_obj_batch && shared_obj_default_filament && m_input_files.size() > 1;
     //when load objects from stl/obj, the total used filaments set
     std::set<int> used_filament_set;
     if (has_model_filament_mapping && !loaded_filament_ids.empty()) {
@@ -2410,7 +2426,58 @@ int CLI::run(int argc, char **argv)
                     const ConfigOptionStrings* obj_filament_colors = config.option<ConfigOptionStrings>("filament_colour");
                     if (obj_filament_colors && obj_filament_colors->values.size() > 1) {
                         obj_multicolor_auto_mapping = true;
-                        obj_multicolor_filament_colors = obj_filament_colors->values;
+                        const auto& local_colors    = obj_filament_colors->values;
+                        if (merge_obj_palettes) {
+                            constexpr size_t max_slots = static_cast<size_t>(EnforcerBlockerType::ExtruderMax);
+                            if (local_colors.size() > max_slots)
+                                throw Slic3r::RuntimeError(
+                                    _u8L("Too many colors in automatic multi-OBJ filament mapping (maximum 16 slots)."));
+                            if (obj_multicolor_filament_colors.empty()) {
+                                obj_multicolor_filament_colors = local_colors;
+                            } else {
+                                EnforcerBlockerStateMap slot_map;
+                                for (size_t slot = 0; slot < slot_map.size(); ++slot)
+                                    slot_map[slot] = static_cast<EnforcerBlockerType>(slot);
+                                // Slot 1 is the legacy importer's unpainted/default
+                                // slot. Keep it separate from the painted colors.
+                                bool remap = false;
+                                for (size_t index = 1; index < local_colors.size(); ++index) {
+                                    auto found = std::find(obj_multicolor_filament_colors.begin() + 1, obj_multicolor_filament_colors.end(),
+                                                           local_colors[index]);
+                                    const size_t target = std::distance(obj_multicolor_filament_colors.begin(), found) + 1;
+                                    if (target > max_slots)
+                                        throw Slic3r::RuntimeError(
+                                            _u8L("Too many colors in automatic multi-OBJ filament mapping (maximum 16 slots)."));
+                                    if (found == obj_multicolor_filament_colors.end())
+                                        obj_multicolor_filament_colors.push_back(local_colors[index]);
+                                    slot_map[index + 1] = static_cast<EnforcerBlockerType>(target);
+                                    remap |= target != index + 1;
+                                }
+                                if (remap) {
+                                    auto remap_extruder = [&slot_map, &local_colors](ModelConfig& object_config) {
+                                        const auto* extruder = object_config.get().option<ConfigOptionInt>("extruder");
+                                        if (extruder && extruder->value > 0 && size_t(extruder->value) <= local_colors.size())
+                                            object_config.set("extruder", static_cast<int>(slot_map[extruder->value]));
+                                    };
+                                    for (ModelObject* object : model.objects) {
+                                        remap_extruder(object->config);
+                                        for (ModelVolume* volume : object->volumes) {
+                                            remap_extruder(volume->config);
+                                            if (!volume->mmu_segmentation_facets.empty()) {
+                                                TriangleSelector selector(volume->mesh());
+                                                selector.deserialize(volume->mmu_segmentation_facets.get_data(), false);
+                                                selector.remap_triangle_state(slot_map);
+                                                volume->mmu_segmentation_facets.set(selector);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            BOOST_LOG_TRIVIAL(info)
+                                << "Merged automatic OBJ palette, global slots=" << obj_multicolor_filament_colors.size();
+                        } else {
+                            obj_multicolor_filament_colors = local_colors;
+                        }
                         BOOST_LOG_TRIVIAL(info) << boost::format("OBJ multicolor auto mapping detected, color count %1%") % obj_filament_colors->values.size();
                     }
                 }
@@ -3097,6 +3164,31 @@ int CLI::run(int argc, char **argv)
             boost::nowide::cerr << "invalid printer_technology " <<printer_technology<<", from config "<< file <<std::endl;
             record_exit_reson(outfile_dir, CLI_INVALID_PRINTER_TECH, 0, cli_errors[CLI_INVALID_PRINTER_TECH], sliced_info);
             flush_and_exit(CLI_INVALID_PRINTER_TECH);
+        }
+    }
+
+    // A legacy OBJ palette may require more slots than the supplied default
+    // filament. Reuse only an unambiguous default; never replace/reorder supplied
+    // profiles or infer a physical spool from its color. Explicit bindings keep
+    // their existing normalization above.
+    if (legacy_obj_batch && obj_multicolor_auto_mapping && !effective_load_filaments.empty() &&
+        effective_load_filaments.size() < obj_multicolor_filament_colors.size()) {
+        const auto first = std::find_if(effective_load_filaments.begin(), effective_load_filaments.end(),
+                                        [](const std::string& path) { return !path.empty(); });
+        if (first != effective_load_filaments.end() &&
+            (use_first_fila_as_default ||
+             std::all_of(effective_load_filaments.begin(), effective_load_filaments.end(),
+                         [&first](const std::string& path) { return path == *first; }))) {
+            const std::string default_path = *first;
+            BOOST_LOG_TRIVIAL(info) << boost::format("Complete automatic OBJ filament parameters from default: %1% -> %2% slots") %
+                                          effective_load_filaments.size() % obj_multicolor_filament_colors.size();
+            effective_load_filaments.resize(obj_multicolor_filament_colors.size(), default_path);
+        } else {
+            // No established default exists for the missing slot. Do not silently
+            // print a different material or discard painted regions.
+            BOOST_LOG_TRIVIAL(error) << "Automatic OBJ colors exceed the supplied filament profiles; use --model-filaments or an explicit default";
+            record_exit_reson(outfile_dir, CLI_CONFIG_FILE_ERROR, 0, cli_errors[CLI_CONFIG_FILE_ERROR], sliced_info);
+            flush_and_exit(CLI_CONFIG_FILE_ERROR);
         }
     }
 
