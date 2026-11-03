@@ -3,10 +3,12 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:ed2209c8bc7ac9549170b1d36732f3cde8bab9521e3f0427eb37ce00c0de8350",
-  "reason": "复核阶梯方柱的折返面内外反例、网格事务、三方向实际切面与销接头局部 G-code 对照。"
+  "source_fingerprint": "sha256:978f7679f426da082a5f61fe39b4ef0d1a32f3465820cd0291056349dcd8ee91",
+  "reason": "复核完整前检无重复或退化面、单独重复面及单独塌缩面的重建分支，覆盖清理数量、候选实体和原件保留。"
 }
 -->
+
+`[MeshLibInProcessIntegration]` 的输入清理用例覆盖含单个塌缩面但无重复面的实体；检查移除面数及重建后的内外位置，避免跳过必要清理。
 
 阶梯方柱的同一折返面分别位于实体内和实体外，测试核对内部面去除后的实际体积、组件数、自交，以及外部面保留后的顶点与面序列。真实 STL 另比较三个方向的截面，以及固定姿态下局部挤出路径。 [Mac 验证记录](../validation/2026-10-31-cgal-621-upgrade.md)
 

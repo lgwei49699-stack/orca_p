@@ -244,11 +244,16 @@ MR::Mesh input_mesh(const Mesh& input, const Options& options, Progress& progres
 // Supply the same SDK distance samples in Z slabs, reusing the shared plane.
 // This avoids a full XY slice cache for each meshing thread.
 template<typename Emit>
-MR::Expected<void> sample_distance_parts(const MR::Mesh& mesh, float voxel, const MR::Vector3i& dims,
-                                        const MR::DistanceToMeshOptions& options, const Emit& emit, const MR::ProgressCallback& progress)
+MR::Expected<void> sample_distance_parts(const MR::Mesh&                  mesh,
+                                         float                            voxel,
+                                         const MR::Vector3f&              origin,
+                                         const MR::Vector3i&              dims,
+                                         const MR::DistanceToMeshOptions& options,
+                                         const Emit&                      emit,
+                                         const MR::ProgressCallback&      progress)
 {
     MR::MeshToDistanceVolumeParams params;
-    params.vol.origin     = MR::calcOriginAndDimensions(mesh.computeBoundingBox(), voxel).origin;
+    params.vol.origin     = origin;
     params.vol.dimensions = dims;
     params.vol.voxelSize  = MR::Vector3f::diagonal(voxel);
     params.dist           = {options, MR::SignDetectionMode::HoleWindingRule};
@@ -352,8 +357,8 @@ MR::Expected<MR::Mesh> rebuild_surface(const MR::Mesh& source, float voxel, bool
             part.voxelSize = voxel_size;
             return mesher.addPart(part);
         };
-        auto sampled = sample_distance_parts(source, voxel, dims, distance, emit,
-                                             [&](float value) { return progress(0.72f * value); });
+        auto sampled = sample_distance_parts(source, voxel, origin, dims, distance, emit,
+                                                              [&](float value) { return progress(0.72f * value); });
         if (!sampled)
             return MR::unexpected(sampled.error());
         extracting = true;

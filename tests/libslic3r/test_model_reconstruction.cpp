@@ -864,10 +864,11 @@ TEST_CASE("MeshLib reconstruction preserves placement and staged metadata", "[.]
 TEST_CASE("MeshLib skips distant hole filling only for verified closed surfaces", "[.][MeshLibInProcessIntegration]")
 {
     REQUIRE(model_reconstruction_available());
-    Model model       = reconstruction_model();
-    auto  source      = make_cube(4., 4., 4.);
-    bool  close_holes = false;
-    bool  rejected    = false;
+    Model  model       = reconstruction_model();
+    auto   source      = make_cube(4., 4., 4.);
+    bool   close_holes = false;
+    bool   rejected    = false;
+    size_t removed     = 0;
     SECTION("Closed solid") {}
     SECTION("Intersecting closed solids still use winding-number union")
     {
@@ -890,6 +891,14 @@ TEST_CASE("MeshLib skips distant hole filling only for verified closed surfaces"
     {
         source.its.indices.push_back(source.its.indices.front());
         close_holes = true;
+        removed     = 1;
+    }
+    SECTION("Collapsed face without a duplicate still takes the cleanup path")
+    {
+        const int v = source.its.indices.front()[0];
+        source.its.indices.emplace_back(v, v, v);
+        close_holes = true;
+        removed     = 1;
     }
     model.objects.front()->volumes.front()->set_mesh(source);
     const auto                 identity = model_reconstruction_source_identity(*model.objects.front());
@@ -898,6 +907,7 @@ TEST_CASE("MeshLib skips distant hole filling only for verified closed surfaces"
     const auto result = reconstruct_model_candidate(model, 0, options);
     INFO(result.report.dump(2));
     CHECK(result.report["engine"]["sdk"]["parameters"]["close_holes_in_hole_winding_number"] == close_holes);
+    CHECK(result.report["engine"]["input_preparation"]["removed_redundant_faces"] == removed);
     CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
     if (rejected) {
         CHECK_FALSE(result.candidate_model);

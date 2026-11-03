@@ -363,6 +363,11 @@ bool reconstruct_with_meshlib(const TriangleMesh&               source,
     report["input_inspection"]               = inspect_model_mesh(source, inspection_options);
     report["timings_ms"]["input_inspection"] = elapsed_ms() - inspection_started;
     checkpoint();
+    const auto issue_absent = [&](const char* key) {
+        const auto& issue = report.at("input_inspection").at("issues").at(key);
+        return issue.at("complete").get<bool>() && issue.at("count") == 0;
+    };
+    const bool clean_faces = issue_absent("duplicate") && issue_absent("degenerate");
 
     OrcaMeshLib::Result sdk;
     {
@@ -370,9 +375,15 @@ bool reconstruct_with_meshlib(const TriangleMesh&               source,
         // Release the private cleanup copy before the SDK allocates its meshes.
         OrcaMeshLib::Mesh input;
         {
-            TriangleMesh input_mesh = source;
-            report["input_preparation"]["removed_redundant_faces"] = normalize_reconstruction_duplicates(input_mesh);
+            TriangleMesh cleaned;
+            size_t       removed = 0;
+            if (!clean_faces) {
+                cleaned = source;
+                removed = normalize_reconstruction_duplicates(cleaned);
+            }
+            report["input_preparation"]["removed_redundant_faces"] = removed;
             checkpoint();
+            const TriangleMesh& input_mesh = clean_faces ? source : cleaned;
             input.vertices.reserve(input_mesh.its.vertices.size());
             input.faces.reserve(input_mesh.its.indices.size());
             for (const auto& v : input_mesh.its.vertices)
@@ -389,13 +400,8 @@ bool reconstruct_with_meshlib(const TriangleMesh&               source,
         // winding-number signs (including intersections and nested cavities),
         // but let the SDK restrict distance evaluation to the surface band.
         // Reuse the complete input inspection; never infer closure from face count.
-        const auto& issues         = report["input_inspection"]["issues"];
-        bool        closed_surface = true;
-        for (const char* key : {"boundary", "nonmanifold_edge", "orientation", "duplicate", "degenerate"}) {
-            const auto& issue = issues.at(key);
-            closed_surface &= issue.at("complete").get<bool>() && issue.at("count") == 0;
-        }
-        sdk_options.close_holes          = !closed_surface;
+        sdk_options.close_holes          = !(clean_faces && issue_absent("boundary") && issue_absent("nonmanifold_edge") &&
+                                    issue_absent("orientation"));
         sdk_options.progress             = [&](float) { return control.keep_running(); };
         const auto sdk_started           = elapsed_ms();
         sdk                              = OrcaMeshLib::rebuild(input, sdk_options);
@@ -880,7 +886,6 @@ ModelReconstructionResult reconstruct_model_candidate(const Model& model, size_t
         auto&             volume    = *object.volumes.front();
         const Transform3d to_mm     = object.instances.front()->get_matrix() * volume.get_matrix();
         TriangleMesh      source_mm = volume.mesh();
-        validate_mesh_storage(source_mm, mesh_options.max_input_faces);
         // Adding bed coordinates to float vertices can collapse tiny valid edges.
         // Keep physical rotation/scale and validate the actual placement on the output.
         source_mm.transform(Matrix3d(to_mm.linear()), true);
@@ -1066,7 +1071,6 @@ int run_model_reconstruction_cli(const std::vector<std::string>& args)
         if (!fs::create_directory(output_path))
             throw std::runtime_error(L("Could not create reconstruction output directory."));
         output_owned = true;
-        validate_mesh_storage(mesh, INPUT_FACE_LIMIT);
         Model model;
         auto* object = model.add_object();
         object->name = input_path.filename().string();
