@@ -28,6 +28,7 @@
 #include <CGAL/Named_function_parameters.h>
 #include <CGAL/number_utils.h>
 #include <CGAL/Origin.h>
+#include <CGAL/Polygon_mesh_processing/autorefinement.h>
 #include <CGAL/Polygon_mesh_processing/bbox.h>
 #include <CGAL/boost/graph/border.h>
 #include <CGAL/Polygon_mesh_processing/connected_components.h>
@@ -39,6 +40,7 @@
 #include <CGAL/Polygon_mesh_processing/orient_polygon_soup.h>
 #include <CGAL/Polygon_mesh_processing/orientation.h>
 #include <CGAL/Polygon_mesh_processing/polygon_soup_to_polygon_mesh.h>
+#include <CGAL/Polygon_mesh_processing/polygon_mesh_to_polygon_soup.h>
 #include <CGAL/Polygon_mesh_processing/remesh_planar_patches.h>
 #include <CGAL/Polygon_mesh_processing/repair.h>
 #include <CGAL/Polygon_mesh_processing/repair_degeneracies.h>
@@ -962,6 +964,8 @@ void trim_residual_crossings(Mesh& shell, double& remaining_volume_change)
     }
 }
 
+bool remove_planar_partition(Mesh& shell, const std::vector<std::pair<Face, Face>>& pairs);
+
 // Returns the pairs removed. Widespread overlaps are left to slicing: remeshing them can cut a part down to a sliver.
 std::size_t remove_local_self_intersections(Mesh& shell, double& remaining_volume_change)
 {
@@ -974,8 +978,14 @@ std::size_t remove_local_self_intersections(Mesh& shell, double& remaining_volum
         faces.insert(a);
         faces.insert(b);
     }
-    if (20 * faces.size() > shell.number_of_faces())
-        return 0;
+    if (20 * faces.size() > shell.number_of_faces()) {
+        // A partition can occupy many triangles of a small part despite having zero thickness.
+        try {
+            return remove_planar_partition(shell, pairs) ? pairs.size() : 0;
+        } catch (const std::exception&) {
+            return 0;
+        }
+    }
     const double volume = signed_volume(shell);
     Mesh         backup = shell;
     try {
@@ -1434,6 +1444,75 @@ bool caps_are_internal(const std::vector<Kernel::Triangle_3>& removed, const Mes
                 return false;
         }
     }
+    return true;
+}
+
+// Split the crossing facets without moving the input vertices. Remove only opposite duplicate
+// triangles forming a certified internal partition of one closed shell.
+bool remove_planar_partition(Mesh& shell, const std::vector<std::pair<Face, Face>>& pairs)
+{
+    constexpr std::size_t MAX_SHELL_FACES = 2048, MAX_PAIRS = 128;
+    if (shell.number_of_faces() > MAX_SHELL_FACES || pairs.size() > MAX_PAIRS || !CGAL::is_closed(shell))
+        return false;
+    const auto shares_plane = [&](Face seed) {
+        const auto ref = face_points(shell, seed);
+        if (CGAL::collinear(ref[0], ref[1], ref[2]))
+            return false;
+        const auto on_plane = [&](Face f) {
+            const auto t = face_points(shell, f);
+            return std::all_of(t.begin(), t.end(), [&](const Point& p) { return CGAL::coplanar(ref[0], ref[1], ref[2], p); });
+        };
+        bool overlap = false;
+        for (const auto& [a, b] : pairs) {
+            const bool lhs = on_plane(a), rhs = on_plane(b);
+            if (a == b || (!lhs && !rhs))
+                return false;
+            overlap |= lhs && rhs;
+        }
+        return overlap;
+    };
+    if (!shares_plane(pairs.front().first) && !shares_plane(pairs.front().second))
+        return false;
+    std::vector<Point>    points;
+    std::vector<Triangle> triangles;
+    PMP::polygon_mesh_to_polygon_soup(shell, points, triangles);
+    PMP::autorefine_triangle_soup(points, triangles);
+    for (Point& p : points)
+        p = Point(float(p.x()), float(p.y()), float(p.z()));
+    std::map<Triangle, std::size_t> first;
+    std::vector<char>               discard(triangles.size(), 0);
+    std::vector<Kernel::Triangle_3> partition;
+    for (std::size_t i = 0; i < triangles.size(); ++i) {
+        Triangle& face = triangles[i];
+        std::rotate(face.begin(), std::min_element(face.begin(), face.end()), face.end());
+        const Triangle key{face[0], std::min(face[1], face[2]), std::max(face[1], face[2])};
+        const auto [where, inserted] = first.emplace(key, i);
+        if (inserted)
+            continue;
+        const auto previous = where->second;
+        if (discard[previous] || triangles[previous] == face)
+            return false;
+        discard[i] = discard[previous] = 1;
+        if (partition.emplace_back(points[face[0]], points[face[1]], points[face[2]]).is_degenerate())
+            return false;
+    }
+    if (partition.empty())
+        return false;
+    erase_marked(triangles, discard);
+    if (triangles.empty() || !PMP::is_polygon_soup_a_polygon_mesh(triangles))
+        return false;
+    Mesh candidate;
+    PMP::polygon_soup_to_polygon_mesh(points, triangles, candidate);
+    PMP::remove_isolated_vertices(candidate);
+    candidate.collect_garbage();
+    std::vector<std::size_t> parts(candidate.number_of_faces());
+    if (!CGAL::is_closed(candidate) || euler_characteristic(candidate) != euler_characteristic(shell) ||
+        PMP::bbox(candidate) != PMP::bbox(shell) || PMP::connected_components(candidate, CGAL::make_property_map(parts)) != 1 ||
+        PMP::does_self_intersect(candidate))
+        return false;
+    if (!caps_are_internal(partition, candidate))
+        return false;
+    shell = std::move(candidate);
     return true;
 }
 

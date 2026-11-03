@@ -286,6 +286,38 @@ TEST_CASE("A newly capped attachment joins only the single solid it penetrates",
     }
 }
 
+TEST_CASE("Overlapping faces forming a partition are removed only inside the solid", "[MeshRepair][PlanarPartition]")
+{
+    // Fold the shoulder of a stepped square post back on itself at Z=2.
+    const bool           external = GENERATE(false, true);
+    indexed_triangle_set its;
+    for (const auto& [r, z] : std::array<std::pair<float, float>, 5>{{{3, 0}, {3, 2}, {external ? 4.f : 1.f, 2}, {2, 2}, {2, 4}}}) {
+        its.vertices.emplace_back(-r, -r, z);
+        its.vertices.emplace_back(r, -r, z);
+        its.vertices.emplace_back(r, r, z);
+        its.vertices.emplace_back(-r, r, z);
+    }
+    its.indices = {{0, 2, 1}, {0, 3, 2}, {16, 17, 18}, {16, 18, 19}};
+    for (int ring = 0; ring < 4; ++ring)
+        for (int k = 0; k < 4; ++k) {
+            const int a = 4 * ring + k, b = 4 * ring + (k + 1) % 4;
+            its.indices.emplace_back(a, b, b + 4);
+            its.indices.emplace_back(a, b + 4, a + 4);
+        }
+    TriangleMesh    mesh(its);
+    MeshRepairStats stats;
+    REQUIRE(repair_mesh(mesh, &stats));
+    if (external) {
+        CHECK_FALSE(stats.modified);
+        CHECK(mesh.its.indices == its.indices);
+        CHECK(mesh.its.vertices == its.vertices);
+    } else {
+        REQUIRE(stats.modified);
+        CHECK(mesh.split().size() == 1);
+        check_solid(mesh, 104.);
+    }
+}
+
 TEST_CASE("A pipe missing its end caps gets annular caps", "[MeshRepair]")
 {
     const int            n = GENERATE(16, 64, 256);
