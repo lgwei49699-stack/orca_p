@@ -3,10 +3,12 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:011716e3a4746f147b8910e242e60fe31d9c6b0f13c63261fcbd0decec94164c",
-  "reason": "2026-10-31：CGAL 固定 6.2.1 官方 URL/SHA256 并同步 Flatpak，CMake 下限 3.22，源码目标删除 Alpha worker；保留 SDK OFF/ON 适配分支。arm64 Release 构建/回归通过，OFF 仅 Stub 重链探针；CI 缓存依赖 deps 哈希，无需改键。Linux/Windows/Flatpak 实际构建未验。"
+  "source_fingerprint": "sha256:8b65a840f24536c5e81dae738b4cc20efc4b4559ee2c58b494612c93400c84dc",
+  "reason": "2026-11-03 复核 SDK 对照目标链接和 ABI 配置、Windows 测试库查找及 Linux 工作流。"
 }
 -->
+
+启用 SDK 且构建测试时增加独立的 meshlib_winding_tile_parity，继承适配器使用的 SDK 头文件和 ABI 配置，通过 CTest 对照固定 SDK。 Linux 候选工作流复用 AppImage 构建目录，执行绕数专项并要求至少命中一个 CTest。 [Mac 验证记录](../validation/2026-10-31-cgal-621-upgrade.md)
 
 ## 职责与边界
 

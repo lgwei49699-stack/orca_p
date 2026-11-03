@@ -38,3 +38,9 @@ repair-backup change. After the user's 15:50 rebuild, the backup filter passed
 see planning/repair/backup-retest-20260929-cjlj46/validation.json.
 Neither these geometry checks nor the independent prototype prove GUI backup
 recovery, Undo/Redo or actual printing.
+
+`folded-panel.stl` is a synthetic closed plate with a 5 × 5 mm base and a folded
+patch in its top surface. Four vertices of a regular grid were displaced to
+create the fold. The original local repair closed its patch but left three
+triangle intersections against neighboring faces in the CLI export. The
+regression checks the complete mesh, its bounds and connected shell count.

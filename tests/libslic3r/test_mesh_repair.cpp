@@ -233,6 +233,91 @@ TEST_CASE("Cap cleanup does not merge healthy closed input parts", "[MeshRepair]
     CHECK(its_num_open_edges(mesh.its) == 0);
 }
 
+TEST_CASE("A newly capped attachment joins only the single solid it penetrates", "[MeshRepair][CappedAttachment]")
+{
+    auto open_cube = [](double size, const Vec3d& offset, int axis) {
+        auto its = cube(size, offset);
+        its.indices.erase(std::remove_if(its.indices.begin(), its.indices.end(),
+                                         [&](const Vec3i32& f) {
+                                             return std::all_of(f.data(), f.data() + 3, [&](auto v) {
+                                                 return its.vertices[v][axis] == float(offset[axis] + size);
+                                             });
+                                         }),
+                          its.indices.end());
+        return its;
+    };
+    const auto host = cube(10.);
+    SECTION("The new cap crosses the original wall; only the volume overlap disappears")
+    {
+        TriangleMesh    mesh(merged({host, open_cube(4., {8., 3., 3.}, 2)}));
+        MeshRepairStats stats;
+        REQUIRE(repair_mesh(mesh, &stats));
+        REQUIRE(stats.filled_holes == 1);
+        CHECK(mesh.split().size() == 1);
+        check_solid(mesh, 1032.);
+    }
+    SECTION("A face contact alone keeps the two pieces")
+    {
+        TriangleMesh mesh(merged({host, open_cube(4., {10., 3., 3.}, 2)}));
+        REQUIRE(repair_mesh(mesh));
+        CHECK(mesh.split().size() == 2);
+        CHECK_THAT(its_volume(mesh.its), WithinRel(1064., 1e-5));
+    }
+    SECTION("Closing a distant opening does not merge an existing overlap")
+    {
+        TriangleMesh mesh(merged({host, open_cube(4., {8., 3., 3.}, 0)}));
+        REQUIRE(repair_mesh(mesh));
+        CHECK(mesh.split().size() == 2);
+    }
+    SECTION("An attachment intersecting two bodies is kept separately")
+    {
+        TriangleMesh mesh(merged({host, cube(10., {12., 0., 0.}), open_cube(6., {8., 1., 1.}, 2)}));
+        REQUIRE(repair_mesh(mesh));
+        CHECK(mesh.split().size() == 3);
+    }
+    SECTION("A nested inward shell keeps the cavity and original winding")
+    {
+        auto cavity = cube(2., {1., 1., 1.});
+        its_flip_triangles(cavity);
+        TriangleMesh mesh(merged({host, cavity, open_cube(4., {8., 3., 3.}, 2)}));
+        REQUIRE(repair_mesh(mesh));
+        CHECK(mesh.split().size() == 3);
+        CHECK_THAT(its_volume(mesh.its), WithinRel(1056., 1e-5));
+    }
+}
+
+TEST_CASE("Overlapping faces forming a partition are removed only inside the solid", "[MeshRepair][PlanarPartition]")
+{
+    // Fold the shoulder of a stepped square post back on itself at Z=2.
+    const bool           external = GENERATE(false, true);
+    indexed_triangle_set its;
+    for (const auto& [r, z] : std::array<std::pair<float, float>, 5>{{{3, 0}, {3, 2}, {external ? 4.f : 1.f, 2}, {2, 2}, {2, 4}}}) {
+        its.vertices.emplace_back(-r, -r, z);
+        its.vertices.emplace_back(r, -r, z);
+        its.vertices.emplace_back(r, r, z);
+        its.vertices.emplace_back(-r, r, z);
+    }
+    its.indices = {{0, 2, 1}, {0, 3, 2}, {16, 17, 18}, {16, 18, 19}};
+    for (int ring = 0; ring < 4; ++ring)
+        for (int k = 0; k < 4; ++k) {
+            const int a = 4 * ring + k, b = 4 * ring + (k + 1) % 4;
+            its.indices.emplace_back(a, b, b + 4);
+            its.indices.emplace_back(a, b + 4, a + 4);
+        }
+    TriangleMesh    mesh(its);
+    MeshRepairStats stats;
+    REQUIRE(repair_mesh(mesh, &stats));
+    if (external) {
+        CHECK_FALSE(stats.modified);
+        CHECK(mesh.its.indices == its.indices);
+        CHECK(mesh.its.vertices == its.vertices);
+    } else {
+        REQUIRE(stats.modified);
+        CHECK(mesh.split().size() == 1);
+        check_solid(mesh, 104.);
+    }
+}
+
 TEST_CASE("A pipe missing its end caps gets annular caps", "[MeshRepair]")
 {
     const int            n = GENERATE(16, 64, 256);

@@ -3,10 +3,18 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:bb9f3fd4e3134c5c703b0a6553f25f72329db93fea979655d40442f20bc3b5a7",
-  "reason": "2026-11-03 Linux 2.3.2 合并。合并纹理坐标、耗材绑定、擦料塔、MeshLib 重建与 App 快速检查回归。"
+  "source_fingerprint": "sha256:ed2209c8bc7ac9549170b1d36732f3cde8bab9521e3f0427eb37ce00c0de8350",
+  "reason": "复核阶梯方柱的折返面内外反例、网格事务、三方向实际切面与销接头局部 G-code 对照。"
 }
 -->
+
+阶梯方柱的同一折返面分别位于实体内和实体外，测试核对内部面去除后的实际体积、组件数、自交，以及外部面保留后的顶点与面序列。真实 STL 另比较三个方向的截面，以及固定姿态下局部挤出路径。 [Mac 验证记录](../validation/2026-10-31-cgal-621-upgrade.md)
+
+补面附件测试同时覆盖实交、仅接触、补面不在交界、多主体和内腔。事务与 basic 工作流各以有无其他相交闭壳两种输入，核对采用后的实体与报告。真实模型另做三方向实体截面、摆放精度以及 GUI 保存与撤销对照。 [Mac 扩样记录](../validation/2026-10-31-cgal-621-upgrade.md)
+
+合成折叠面板覆盖局部修补面与相邻面发生交叉的情况。测试验证完整网格检查、包围盒和组件数，实测集另核对实际导出和 GUI 撤销。 [Mac 扩样记录](../validation/2026-10-31-cgal-621-upgrade.md)
+
+meshlib_winding_tile_parity 逐点对照已分类的内外块，并覆盖开口、临界及回退；七份真实输入另用诊断构建比较完整带符号距离位模式。 同机对照工具按 A/B/B/A 复测首个 STL，为后续模型各生成一对候选和耗时。执行方法见验证记录。 [Mac 验证记录](../validation/2026-10-31-cgal-621-upgrade.md)
 
 2026-10-31 App 检测回归：取消仅非流形边跳过；五项全阴性后的顶点/自交存在性阳性也进入一次高级，保留首次缺陷下界语义。健康反例、输入不变、内部 volume 准入、修后残留、取消及默认 full 隔离均覆盖。阶段 CLI 的 basic 高级用例按 App 实际命令不带 repair-evidence；另保留显式证据不完整时拒绝的用例。闭合但仍自交的原“repaired/passed”断言改为真实 partially_repaired/needs_repair，不以弱化检查维持旧成功。执行与构建身份见[六任务复核](../validation/2026-10-31-app-six-checks-review.md)：275 原生、115 检查 CLI、64 阶段 CLI、64 普通切片/分盘场景通过，37 份普通 G-code 指令与改前一致。历史部分结果/绘色/事务和 GUI 交接仍见[App记录](../validation/2026-10-30-app-basic-repair.md)。
 
