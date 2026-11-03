@@ -3,10 +3,12 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:c32f96d23f6d5e07cb4f25c4479df620d1a31f346e5e8cb5082c40c2047c44fc",
-  "reason": "2026-11-03 复核临界用例与同机双版本命令、结果校验和错误证据保留。"
+  "source_fingerprint": "sha256:5bf9497cbd90b63c4113b40e6a183b5aa0cc98f28f877dc462a2c23d70f75b7f",
+  "reason": "2026-11-03 复核折叠面板同壳交叉回归、合成来源以及 GUI 与 CLI 结果。"
 }
 -->
+
+合成折叠面板覆盖局部修补面与相邻面发生交叉的情况。测试验证完整网格检查、包围盒和组件数，实测集另核对实际导出和 GUI 撤销。 [Mac 扩样记录](../validation/2026-10-31-cgal-621-upgrade.md)
 
 meshlib_winding_tile_parity 逐点对照已分类的内外块，并覆盖开口、临界及回退；七份真实输入另用诊断构建比较完整带符号距离位模式。 同机对照工具按 A/B/B/A 复测首个 STL，为后续模型各生成一对候选和耗时。执行方法见验证记录。 [Mac 验证记录](../validation/2026-10-31-cgal-621-upgrade.md)
 

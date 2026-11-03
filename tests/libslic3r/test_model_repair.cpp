@@ -1056,6 +1056,20 @@ TEST_CASE("Soup topology does not erase membranes outside material or crossing a
     CHECK(mesh.its.indices == original.indices);
 }
 
+TEST_CASE("A repaired fold must clear neighboring faces in the same shell", "[ModelRepair][Repair250]")
+{
+    TriangleMesh mesh;
+    REQUIRE(mesh.ReadSTLFile((std::string(TEST_DATA_DIR) + "/model_repair_topology/folded-panel.stl").c_str(), false));
+    const auto bounds = mesh.bounding_box();
+    REQUIRE(inspect_model_mesh(mesh)["issues"]["self_intersection"]["count"].get<size_t>() > 0);
+    REQUIRE(repair_mesh(mesh));
+    const auto checked = inspect_model_mesh(mesh);
+    CHECK(checked["mesh_status"] == "passed");
+    CHECK(mesh.bounding_box().min == bounds.min);
+    CHECK(mesh.bounding_box().max == bounds.max);
+    CHECK(mesh.split().size() == 1);
+}
+
 TEST_CASE("Bracket soup repair preserves exterior geometry and real holes", "[ModelRepair][CGAL][SoupTopology][Acceptance]")
 {
     TriangleMesh mesh;

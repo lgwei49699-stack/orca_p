@@ -31,6 +31,7 @@
 #include <CGAL/Polygon_mesh_processing/bbox.h>
 #include <CGAL/boost/graph/border.h>
 #include <CGAL/Polygon_mesh_processing/connected_components.h>
+#include <CGAL/Polygon_mesh_processing/corefinement.h>
 #include <CGAL/Polygon_mesh_processing/internal/Snapping/snap.h>
 #include <CGAL/Polygon_mesh_processing/manifoldness.h>
 #include <CGAL/Polygon_mesh_processing/measure.h>
@@ -63,6 +64,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdint>
 #include <exception>
 #include <functional>
@@ -911,8 +913,54 @@ double signed_volume(const Mesh& mesh)
     return vol / 6.;
 }
 
+// The local remesher only checks its working faces. If its patch crosses a previously
+// unaffected neighbor, split along the remaining intersection instead of remeshing another patch.
+void trim_residual_crossings(Mesh& shell, double& remaining_volume_change)
+{
+    // Corefinement visits the whole connected shell. Bound its input and keep the
+    // existing partial result when the remaining intersection set is not local.
+    constexpr std::size_t MAX_SHELL_FACES = 16 * 1024;
+    constexpr unsigned    MAX_PAIRS       = 32;
+    if (remaining_volume_change <= 0. || shell.number_of_faces() > MAX_SHELL_FACES)
+        return;
+
+    std::vector<std::pair<Face, Face>> pairs;
+    PMP::self_intersections<CGAL::Sequential_tag>(shell, std::back_inserter(pairs), CGAL::parameters::maximum_number(MAX_PAIRS + 1));
+    if (pairs.empty() || pairs.size() > MAX_PAIRS)
+        return;
+
+    Mesh candidate = shell;
+    if (!PMP::experimental::autorefine_and_remove_self_intersections(candidate) || candidate.is_empty())
+        return;
+    candidate.collect_garbage();
+    const auto euler = [](const Mesh& m) {
+        return std::int64_t(m.number_of_vertices() + m.number_of_faces()) - std::int64_t(m.number_of_edges());
+    };
+    if (!CGAL::is_valid_polygon_mesh(candidate) || !CGAL::is_closed(candidate) || euler(candidate) != euler(shell) ||
+        PMP::bbox(candidate) != PMP::bbox(shell))
+        return;
+
+    std::vector<std::size_t> parts(candidate.number_of_faces());
+    std::vector<Halfedge>    pinches;
+    PMP::non_manifold_vertices(candidate, std::back_inserter(pinches));
+    if (!pinches.empty() || PMP::connected_components(candidate, CGAL::make_property_map(parts)) != 1)
+        return;
+
+    // Corefinement creates intersection vertices in double. Validate the coordinates
+    // the Orca mesh will actually store, including degeneracies introduced by rounding.
+    for (Vertex v : candidate.vertices()) {
+        const Point p      = candidate.point(v);
+        candidate.point(v) = Point(float(p.x()), float(p.y()), float(p.z()));
+    }
+    const double change = std::abs(signed_volume(candidate) - signed_volume(shell));
+    if (change <= remaining_volume_change && !PMP::does_self_intersect(candidate)) {
+        remaining_volume_change -= change;
+        shell = std::move(candidate);
+    }
+}
+
 // Returns the pairs removed. Widespread overlaps are left to slicing: remeshing them can cut a part down to a sliver.
-std::size_t remove_local_self_intersections(Mesh& shell)
+std::size_t remove_local_self_intersections(Mesh& shell, double& remaining_volume_change)
 {
     std::vector<std::pair<Face, Face>> pairs;
     PMP::self_intersections<CGAL::Parallel_if_available_tag>(shell, std::back_inserter(pairs));
@@ -928,11 +976,16 @@ std::size_t remove_local_self_intersections(Mesh& shell)
     const double volume = signed_volume(shell);
     Mesh         backup = shell;
     try {
-        PMP::experimental::remove_self_intersections(faces, shell, CGAL::parameters::preserve_genus(false));
+        const bool local_fixed = PMP::experimental::remove_self_intersections(faces, shell, CGAL::parameters::preserve_genus(false));
         shell.collect_garbage();
-        if (CGAL::is_valid_polygon_mesh(shell) && CGAL::is_closed(shell) &&
-            std::abs(signed_volume(shell) - volume) <= 1e-3 * std::abs(volume))
-            return pairs.size();
+        if (CGAL::is_valid_polygon_mesh(shell) && CGAL::is_closed(shell)) {
+            const double headroom = 1e-3 * std::abs(volume) - std::abs(signed_volume(shell) - volume);
+            if (headroom >= 0.) {
+                if (local_fixed)
+                    remaining_volume_change = headroom;
+                return pairs.size();
+            }
+        }
     } catch (const std::exception&) {}
     shell = std::move(backup);
     return 0;
@@ -1305,16 +1358,23 @@ bool repair_soup(std::vector<Point>&             points,
     std::vector<std::vector<Mesh>> pieces(shells.size());
     std::vector<std::size_t>       pairs(shells.size(), 0), removed(shells.size(), 0);
     parallel_for_each(shells.size(), [&](std::size_t i) {
+        double remaining_volume_change = 0.;
         if (flat(shells[i], closed_inputs[i]))
             removed[i] = 1;
-        else if ((pairs[i] = remove_local_self_intersections(shells[i])) == 0)
+        else if ((pairs[i] = remove_local_self_intersections(shells[i], remaining_volume_change)) == 0)
             pieces[i].emplace_back(std::move(shells[i]));
         else
             for (Mesh& piece : split_shells(shells[i]))
                 if (flat(piece, false))
                     ++removed[i];
-                else
+                else {
+                    try {
+                        trim_residual_crossings(piece, remaining_volume_change);
+                    } catch (const std::exception&) {
+                        // The private refinement failed. Keep this piece for the ordinary final inspection.
+                    }
                     pieces[i].emplace_back(std::move(piece));
+                }
     });
     stats.removed_shells += std::accumulate(removed.begin(), removed.end(), std::size_t(0));
     stats.self_intersections += std::accumulate(pairs.begin(), pairs.end(), std::size_t(0));
