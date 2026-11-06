@@ -22,7 +22,9 @@ MeshLib 3.1.3.429 是 GUI 和 CLI 唯一的重建引擎。Alpha Wrap 算法、�
 
 重建毫米坐标包含模型旋转/缩放，排除摆放平移，避免浮点精度随床上位置变化。候选仍执行局部坐标及物理坐标往返检查，原件保留，GUI 确认后采用并可撤销。
 
-准入估算包括输入/候选/验收储备、名义网格掩码和距离采样工作区；它是启发式估算，不是原生 SDK 峰值保证。运行中继续监测整个 Orca 进程的时间和内存。超过一亿格目前只提示成本，不改变体素或自动拒绝；新的重建准入分流尚未实现。
+准入估算包括输入/候选/验收储备、名义网格掩码和距离采样工作区；它是启发式估算，不是原生 SDK 峰值保证。实际重建只在启动前读取本进程内存并检查预算；运行中不再采样内存或按内存超限停止，仍保留协作超时和用户取消。
+
+`--check-model --repair-model cgal --repair-evidence` 在几何证据适合重建时追加资源准入结果，默认使用 0.30 mm 体素、最多 2 亿名义格、2048 MiB 估算预算及 60 秒运行预算；可通过对应 CLI 参数覆盖，不自动粗化或重试。此时估算面向未来独立重建进程，不计入当前高级修复进程驻留量。GUI 手动重建及单独的显式 CLI 重建仍保留超过一亿格的成本提示，不等同于自动准入的 2 亿格门槛。完整字段、调用约定和验证边界见[重建准入交付](../../docs/ai/validation/2026-11-06-reconstruction-admission-handoff.md)。
 
 - Orca 主体保持 C++17，适配层是同一次 CMake 构建中的 C++20 静态目标。
 - 公开头只包含标准库数组、向量、字符串和回调；MR、Eigen、TBB、OpenVDB 及 JSON 类型不穿过边界。
@@ -86,7 +88,9 @@ ORCA_EXTRA_BUILD_ARGS="-DORCA_MESHLIB_LOCAL_EVALUATION=ON -DORCA_MESHLIB_SDK_ROO
 
 ### 服务端调用
 
-公共接口为 `--reconstruct-model --reconstruction-voxel-mm <毫米>`，仍兼容服务端的显式 `--reconstruction-engine meshlib`。CLI 必须给出体素尺寸；GUI 显示可编辑的 0.30 mm 初始值，不代表所有模型都适合。旧 Alpha 引擎/参数按不支持拒绝。SDK-OFF 的 GUI 提示不可用，CLI 返回失败；不回退其他算法。可选 `--reconstruction-memory-mb <128至4096的整数>` 覆盖整个 Orca 进程内存的协作预算（macOS footprint、Windows working set、Linux RSS），不是 SDK 增量内存或硬上限。
+公共接口为 `--reconstruct-model --reconstruction-voxel-mm <毫米>`，仍兼容服务端的显式 `--reconstruction-engine meshlib`。CLI 必须给出体素尺寸；GUI 显示可编辑的 0.30 mm 初始值，不代表所有模型都适合。旧 Alpha 引擎/参数按不支持拒绝。SDK-OFF 的 GUI 提示不可用，CLI 返回失败；不回退其他算法。可选 `--reconstruction-memory-mb <128至4096的整数>` 设置启动前内存估算预算。实际重建将自身初始驻留量（macOS footprint、Windows working set、Linux RSS）加上几何工作量估算后判断，不是 SDK 增量内存限制，也不是运行中硬上限。`--reconstruction-timeout` 控制协作运行预算；不可中断阶段可能延迟返回，服务端硬截止仍由调用进程管理。
+
+重建输出在最终网格验收通过后，校验二进制 STL 的面数、文件长度并记录 SHA256，报告使用 `artifact.verification="binary_stl_count_and_size"`、`readback_verified=false`，不再完整重读 STL。检查和高级修复的原有重读校验不变。Slicer 必须仅在重建阶段接受此校验方式，同时保留产物哈希和网格验收；当前兼容补丁的交付状态见[本轮发布记录](../../docs/ai/validation/2026-11-06-release-integration.md)。
 
 重建在 GUI 初始化前分流，但应用可能仍链接图形运行库。部署验收须在目标系统无 DISPLAY、普通用户权限下验证依赖加载、中文路径、连续作业和失败恢复；内部取消回调测试不代表 SIGINT/SIGTERM 保证输出报告。
 
