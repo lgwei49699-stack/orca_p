@@ -377,6 +377,21 @@ def main():
                 assert observed["boundary"]["reconstruction"]["policy"]["allow_boundary_closure"] is False, observed
                 assert observed["issues"] == fixed["issues"], (observed, fixed)
                 assert Path(observed["working_model"]).read_bytes() == Path(fixed["working_model"]).read_bytes()
+                admission = observed["boundary"]["reconstruction"]["admission"]
+                assert admission["voxel_mm"] == 0.30 and admission["max_grid_cells"] == 200000000, admission
+                assert admission["memory_limit_mb"] == 2048 and admission["timeout_ms"] == 60000, admission
+                assert admission["estimate_is_upper_bound"] is False, admission
+                assert admission["accepted"] or admission["reason"] == "backend_unavailable", admission
+                limited, _ = run("cap-grid-budget", cap, "--repair-model", "cgal", "--reconstruction-max-grid-cells", "1",
+                                 "--reconstruction-voxel-mm", "0.4", "--reconstruction-timeout", "30",
+                                 "--reconstruction-memory-mb", "1024", include_evidence=True)
+                gate = limited["boundary"]["reconstruction"]["admission"]
+                assert not gate["accepted"] and gate["reason"] in ("grid_cell_budget_exceeded", "backend_unavailable"), gate
+                assert gate["voxel_mm"] == 0.4 and gate["timeout_ms"] == 30000 and gate["memory_limit_mb"] == 1024, gate
+                assert limited["boundary"]["reconstruction"]["assessment"] == "evidence_present", limited
+                assert limited["issues"] == observed["issues"], limited
+                assert Path(limited["working_model"]).read_bytes() == Path(observed["working_model"]).read_bytes()
+                assert not list((evidence / "cap-grid-budget").glob("**/candidate.stl"))
             if variant == "colored-obj":
                 assert any(path.endswith(".mtl") for path in fixed["_artifacts"])
                 area = material_areas(Path(fixed["working_model"]))
@@ -550,6 +565,21 @@ def main():
         assert accepted["boundary"]["reconstruction"]["policy"]["allow_boundary_closure"] is True, accepted
         assert accepted["boundary"]["reconstruction"]["assessment"] == "not_needed", accepted
         assert accepted["boundary"]["sections"]["status"] == "not_run", accepted
+        assert accepted["boundary"]["reconstruction"]["admission"] == {
+            "accepted": False, "reason": "no_detected_mesh_defects"}, accepted
+        for label, flags, include in (
+                ("no-advanced", (), True),
+                ("no-evidence", ("--repair-model", "cgal"), False)):
+            rejected, response = run(f"reject-admission-{label}", fixtures / "00-healthy-cube.stl",
+                                     *flags, "--reconstruction-max-grid-cells", "200000000",
+                                     success=False, include_evidence=include)
+            assert "Reconstruction admission options require" in response["error_string"], response
+            assert rejected["issues"] is None and not rejected["_artifacts"], rejected
+        for option, value in (("voxel-mm", "0"), ("max-grid-cells", "-1"), ("memory-mb", "4097"), ("timeout", "301")):
+            rejected, response = run(f"reject-admission-{option}", fixtures / "00-healthy-cube.stl", "--repair-model", "cgal",
+                                     "--reconstruction-" + option, value, success=False, include_evidence=True)
+            assert "Invalid reconstruction parameters" in response["error_string"], response
+            assert rejected["issues"] is None and not rejected["_artifacts"], rejected
 
         for label, flags in (
                 ("ordinary-repair", ("--repair-model", "cgal", "--repair-evidence", "--export-stl")),

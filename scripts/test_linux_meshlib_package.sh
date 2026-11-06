@@ -45,7 +45,7 @@ timeout 180s "$package/AppRun" --reconstruct-model "$output/meshlib/fixtures/cub
     > "$output/apprun-reconstruction.txt" 2>&1
 jq --exit-status --arg runtime "$runtime/" \
     '.status == "candidate_ready" and .mesh_validated == true and
-     .export_round_trip == "passed" and .engine.sdk.runtime_identity_verified == true and
+     .export_integrity == "passed" and .engine.sdk.runtime_identity_verified == true and
      (.engine.sdk.runtime_libraries | length == 2) and
      all(.engine.sdk.runtime_libraries[]; .path | startswith($runtime))' \
     "$output/apprun-candidate/reconstruction.json"

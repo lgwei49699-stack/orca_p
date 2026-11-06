@@ -25,7 +25,7 @@ def reconstruct(binary, model, expected_input, output):
         seconds = time.monotonic() - started
     report = json.loads((output / "reconstruction.json").read_text(encoding="utf-8"))
     if (report["status"] != "candidate_ready" or report["mesh_validated"] is not True
-            or report["applied"] is not False or report["export_round_trip"] != "passed"):
+            or report["applied"] is not False or report.get("export_integrity", report.get("export_round_trip")) != "passed"):
         raise ValueError(f"{output}: candidate validation failed")
     issues = report["engine"]["final_mesh_check"]["inspection"]["issues"]
     if set(issues) != ISSUE_KEYS or any(issue["complete"] is not True or issue["count"] != 0 for issue in issues.values()):

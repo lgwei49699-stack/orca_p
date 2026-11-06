@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-parameters",
-  "source_fingerprint": "sha256:df5cb4bc1c5e6b379675730abd39eaa806d8b6787832cebbf8dc25e1008dee38",
-  "reason": "2026-10-31：复核共享 PrintConfig 差异仅为 CLIConfig 的 texture_repair（默认false，仅纹理导出）；未改本模块的工艺字段、单位、默认值或执行算法，无需修改正文；普通切片/分盘对照另见本轮记录。"
+  "source_fingerprint": "sha256:89ad8aa45dc1e4a7d391a63187970283ccadbf5616a893c8ac485a40e0a57dc7",
+  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
 }
 -->
 

@@ -355,7 +355,8 @@ void write_model_stage_report(const ModelStageReportContext& context,
                               const json&                    inspection,
                               const std::string&             stage,
                               const std::string&             repair_status,
-                              const json&                    reconstruction)
+                              const json&                    reconstruction,
+                              const std::string&             verified_reconstruction_sha256)
 {
     const auto directory = fs::canonical(output_directory.empty() ? "." : output_directory);
     const auto artifact  = require_stl(artifact_file);
@@ -363,19 +364,24 @@ void write_model_stage_report(const ModelStageReportContext& context,
     if (relative.empty() || relative.is_absolute() || *relative.begin() == ".." || artifact == fs::path(context.input_file) ||
         artifact == fs::path(context.reference_file))
         throw std::runtime_error(L("Stage artifact must be a new file inside its output directory."));
-    std::string artifact_sha256;
-    const auto  reread = read_bounded_model_stl(artifact.string(), artifact_sha256);
-    if (!same_physical_triangles(reread, inspected_mesh))
-        throw std::runtime_error(L("Stage artifact does not match the inspected triangles."));
+    const bool   checked_export  = stage == "reconstruction" && !verified_reconstruction_sha256.empty();
+    std::string  artifact_sha256 = verified_reconstruction_sha256;
+    TriangleMesh reread;
+    if (!checked_export) {
+        reread = read_bounded_model_stl(artifact.string(), artifact_sha256);
+        if (!same_physical_triangles(reread, inspected_mesh))
+            throw std::runtime_error(L("Stage artifact does not match the inspected triangles."));
+    }
+    const auto& candidate        = checked_export ? inspected_mesh : reread;
     const bool basic            = (stage == "check" || stage == "advanced") && inspection.value("inspection_scope", "full") == "basic";
-    const auto candidate_bounds = reread.bounding_box();
+    const auto  candidate_bounds = candidate.bounding_box();
     json       change           = {{"status", "not_requested"}, {"reason", "app_basic"}};
     if (!basic) {
         const auto reference_components = raw_component_count(context.reference_mesh);
-        const auto candidate_components = raw_component_count(reread);
+        const auto candidate_components = raw_component_count(candidate);
         const bool inspect_union        = stage == "reconstruction" && reference_components > candidate_components &&
                                    inspection.at("mesh_status") == "passed" && inspection.at("check_complete") == true;
-        change = compare_model_stage_meshes(context.reference_mesh, reread, inspect_union);
+        change = compare_model_stage_meshes(context.reference_mesh, candidate, inspect_union);
         // Raw referenced geometry includes zero-area tails excluded from distance
         // queries. Do not hide a far-away deleted feature in the bounding-box gate.
         const auto original_bounds     = context.reference_mesh.bounding_box();
@@ -389,9 +395,9 @@ void write_model_stage_report(const ModelStageReportContext& context,
         // cracks. Prove all faces remain; never exempt deleted or merged real parts.
         if ((stage == "check" || stage == "advanced") && inspection.at("mesh_status") == "passed" &&
             inspection.at("check_complete") == true && change["reference_components"] != change["candidate_components"])
-            change["numerical_cleanup_preserves_surface"] = model_stage_preserves_surface(context.reference_mesh, reread);
+            change["numerical_cleanup_preserves_surface"] = model_stage_preserves_surface(context.reference_mesh, candidate);
         if (stage == "advanced" && inspection.at("mesh_status") == "passed" && inspection.at("check_complete") == true)
-            change["hole_fill"] = inspect_model_hole_fill(context.reference_mesh, reread);
+            change["hole_fill"] = inspect_model_hole_fill(context.reference_mesh, candidate);
     }
     json issues = json::object();
     for (const char* key :
@@ -409,7 +415,11 @@ void write_model_stage_report(const ModelStageReportContext& context,
                    {"stage", stage},
                    {"input_sha256", context.input_sha256},
                    {"reference_sha256", context.reference_sha256},
-                   {"artifact", {{"path", relative.generic_string()}, {"sha256", artifact_sha256}, {"readback_verified", true}}},
+                   {"artifact",
+                    {{"path", relative.generic_string()},
+                     {"sha256", artifact_sha256},
+                     {"readback_verified", !checked_export},
+                     {"verification", checked_export ? "binary_stl_count_and_size" : "physical_triangles"}}},
                    {"inspection",
                     {{"status", model_inspection_boundary(inspection).at("status")},
                      {"mesh_status", inspection.at("mesh_status")},

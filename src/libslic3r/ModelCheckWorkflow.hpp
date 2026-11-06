@@ -3,6 +3,7 @@
 
 #include "ModelRepair.hpp"
 #include "ModelInspection.hpp"
+#include "ModelReconstruction.hpp"
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -22,6 +23,7 @@ struct ModelCheckWorkflowOptions
     // Only meaningful with advanced_repair + repair_evidence. This records a
     // caller policy for recommendations; the workflow never closes/rebuilds.
     bool allow_boundary_closure = false;
+    ReconstructionAdmissionOptions reconstruction_admission;
     // Server integration only; defaults preserve the v4 report and workload.
     bool        stage_report = false;
     std::string inspection_mode = "full"; // basic: lightweight defects and one repair pass; full: all diagnostics.

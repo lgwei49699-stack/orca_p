@@ -195,7 +195,7 @@ std::size_t component_count(Surface& surface)
 void validate_output_surface(Surface& surface)
 {
     require(CGAL::is_closed(surface), "candidate_rejected", L("The float mesh is not closed."));
-    require(!PMP::does_self_intersect(surface), "candidate_rejected", L("The float mesh self-intersects."));
+    require(!PMP::does_self_intersect(surface), "self_intersection", L("The float mesh self-intersects."));
     // Valid handles and disconnected solids are allowed. The volume predicate
     // validates the orientation of nested boundaries, not just one arbitrary face.
     require(PMP::is_outward_oriented(surface) && PMP::does_bound_a_volume(surface), "candidate_rejected",
@@ -217,7 +217,22 @@ double sampled_distance(const Soup& from, const Soup& to, std::size_t& samples)
 {
     const auto target = triangles(to);
     Tree       tree(target.begin(), target.end());
-    tree.accelerate_distance_queries();
+    {
+        // CGAL's default distance hints repeat the first vertex of every face.
+        // Keep the same geometric hints once per vertex; all target triangles
+        // still participate in every exact nearest-surface query.
+        std::vector<Tree::Point_and_primitive_id> hints;
+        hints.reserve(std::min(to.points.size(), to.faces.size()));
+        std::vector<bool> used(to.points.size(), false);
+        for (size_t i = 0; i < to.faces.size(); ++i) {
+            const auto vertex = to.faces[i][0];
+            if (!used[vertex]) {
+                used[vertex] = true;
+                hints.emplace_back(to.points[vertex], target.begin() + i);
+            }
+        }
+        tree.accelerate_distance_queries(hints.begin(), hints.end());
+    }
     double     maximum_squared = 0;
     const auto sample          = [&](const Point& p) {
         maximum_squared = std::max(maximum_squared, double(tree.squared_distance(p)));

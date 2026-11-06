@@ -38,6 +38,7 @@ void write_model_stage_report(const ModelStageReportContext& context,
                               const nlohmann::json&          inspection,
                               const std::string&             stage,
                               const std::string&             repair_status,
-                              const nlohmann::json&          reconstruction);
+                              const nlohmann::json&          reconstruction,
+                              const std::string&             verified_reconstruction_sha256 = {});
 } // namespace Slic3r
 #endif

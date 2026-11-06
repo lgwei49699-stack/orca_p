@@ -172,9 +172,34 @@ json check_boundary(const json& check)
 {
     ModelRepairEvidencePolicy policy;
     policy.allow_boundary_closure = check.value("allow_boundary_closure", false);
-    return model_check_boundary(check.value("inspection", json()), check.value("repair_evidence", json::object()),
-                                check.value("section_evidence", json::object()), check.value("failure_kind", std::string{}),
-                                check.value("reconstruction_eligibility", json::object()), policy);
+    auto boundary = model_check_boundary(check.value("inspection", json()), check.value("repair_evidence", json::object()),
+                                         check.value("section_evidence", json::object()), check.value("failure_kind", std::string{}),
+                                         check.value("reconstruction_eligibility", json::object()), policy);
+    if (check.contains("reconstruction_admission")) {
+        auto& reconstruction = boundary["reconstruction"];
+        auto& admission = reconstruction["admission"] = check.at("reconstruction_admission");
+        // Stage publication can fail after the resource estimate was accepted.
+        if (reconstruction.at("assessment") != "evidence_present") {
+            admission["accepted"] = false;
+            admission["reason"] = reconstruction.at("reason");
+        }
+    }
+    return boundary;
+}
+
+void publish_reconstruction_admission(ModelCheckWorkflowReport& report, const ModelCheckWorkflowOptions& options,
+                                      const Model& model, const TriangleMesh* inspected_mesh)
+{
+    if (!options.advanced_repair || !options.repair_evidence)
+        return;
+    const auto evidence = check_boundary(report.check).at("reconstruction");
+    if (evidence.value("assessment", "") != "evidence_present" || evidence.value("applicability", "") != "eligible") {
+        report.check["reconstruction_admission"] = {{"accepted", false}, {"reason", evidence.at("reason")}};
+        return;
+    }
+    report.check["reconstruction_admission"] = inspected_mesh ?
+        model_reconstruction_admission(*inspected_mesh, options.reconstruction_admission) :
+        model_reconstruction_admission(model.mesh(), options.reconstruction_admission);
 }
 
 void require_completed_evidence(ModelCheckWorkflowReport& report)
@@ -251,6 +276,8 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
                                  {"slicing", "not_requested"},
                                  {"advanced_repair",
                                   {{"requested", options.advanced_repair}, {"status", options.advanced_repair ? "not_started" : "not_requested"}}}};
+    if (options.advanced_repair && options.repair_evidence)
+        validate_reconstruction_admission_options(options.reconstruction_admission);
     if (options.allow_boundary_closure && (!options.advanced_repair || !options.repair_evidence))
         throw std::invalid_argument("Boundary closure evidence requires advanced repair and repair evidence.");
     if (!options.stage_report && !options.reference_file.empty())
@@ -422,10 +449,12 @@ static void run_model_check_workflow_impl(const ModelCheckWorkflowOptions& optio
             accepted.check["app_output_file"] = output.string();
         report = std::move(accepted);
         publish_section_evidence(report, reloaded, &retained_mesh);
+        publish_reconstruction_admission(report, options, reloaded, &retained_mesh);
         if (stage_context)
             stage_mesh = std::move(retained_mesh);
     } else {
         publish_section_evidence(report, working, stage_context ? &stage_mesh : nullptr);
+        publish_reconstruction_admission(report, options, working, stage_context ? &stage_mesh : nullptr);
     }
     if (options.advanced_repair && options.repair_evidence)
         require_completed_evidence(report);

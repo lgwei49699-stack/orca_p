@@ -43,6 +43,9 @@ bool available() noexcept;
 // The caller owns admission estimates, serialization of SDK jobs, and the
 // cooperative budget callback. Face caps are enforced here, but they are not a
 // hard ceiling on SDK intermediate allocations or a crash-containment boundary.
-Result rebuild(const Mesh& input, const Options& options);
+// Called synchronously after rebuilding, before any extra local repair. The
+// caller's independent check decides whether one intersection repair is needed.
+// Takes ownership so the source arrays can be freed after SDK import.
+Result rebuild(Mesh input, const Options& options, const std::function<bool(const Mesh&)>& needs_local_repair = {});
 
 } // namespace OrcaMeshLib

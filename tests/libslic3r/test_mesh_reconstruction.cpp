@@ -184,6 +184,27 @@ TEST_CASE("Complete reconstruction checks retain 256 solids and reject an incomp
     require_unchanged(mesh, saved);
 }
 
+TEST_CASE("Reconstruction validation distinguishes intersections from other rejected geometry", "[MeshReconstruction]")
+{
+    auto mesh = make_cube(3., 3., 3.);
+    nlohmann::json report;
+    SECTION("Overlapping closed surfaces need intersection repair")
+    {
+        auto other = make_cube(3., 3., 3.);
+        other.translate(1., 1., 1.);
+        mesh.merge(other);
+        REQUIRE_FALSE(validate_reconstruction_mesh(mesh, report, 100));
+        CHECK(report.at("reason") == "self_intersection");
+    }
+    SECTION("Open surfaces do not trigger intersection repair")
+    {
+        mesh.its.indices.pop_back();
+        REQUIRE_FALSE(validate_reconstruction_mesh(mesh, report, 100));
+        CHECK(report.at("reason") != "self_intersection");
+    }
+    CHECK(report.at("status") == "candidate_rejected");
+}
+
 TEST_CASE("Engine independent comparison is read only and retains warning semantics", "[MeshReconstruction]")
 {
     const auto                      source    = make_cube(10., 10., 10.);

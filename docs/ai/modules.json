@@ -407,7 +407,6 @@
         "tests/libslic3r/test_mesh_repair.cpp",
         "tests/libslic3r/test_saved_painting.cpp",
         "tests/libslic3r/test_mesh_reconstruction.cpp",
-        "tests/libslic3r/test_meshlib_winding_tile.cpp",
         "tests/libslic3r/test_model_reconstruction.cpp",
         "tests/libslic3r/test_inprocess_reconstruction_control.cpp",
         "tests/libslic3r/test_model_repair_evidence.cpp",

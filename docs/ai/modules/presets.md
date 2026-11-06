@@ -3,10 +3,12 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:7780c2d5a61121de36c4abb4af7bfd56f596d65abf0c23026f10b0abe2a355a0",
-  "reason": "2026-10-31：PrintConfig 仅增加 CLIConfig 中默认 false 的 texture_repair，未改打印工艺/喷嘴/耗材配置、FFF 默认或单位；正文说明与普通切片对照已补。"
+  "source_fingerprint": "sha256:5ce264b0304d6a5ffd72b0c2e92fb0b9c5d24b83c588702ff59e0fface2014b1",
+  "reason": "2026-11-06：复核 CLIMiscConfigDef 新增体素、格数、预估内存、时间四项准入参数；只供显式检查/高级修复/证据组合使用，未改 GUI 打印参数、预设或普通切片覆盖。正文已记录默认值和入口。"
 }
 -->
+
+2026-11-06：CLIMiscConfigDef 新增四项修复证据准入配置：reconstruction_voxel_mm=0.30、reconstruction_max_grid_cells=200000000、reconstruction_memory_mb=2048、reconstruction_timeout=60。memory_mb 是启动前内存估算门槛，不再用于运行中监测。这些参数不是打印预设，不进入 GUI 参数面板、机型/耗材/工艺覆盖或工程持久化；普通 FFF/SLA 参数和分盘配置不变。只有检查+高级修复+证据组合使用；独立重建保留原解析。见[准入交付](../validation/2026-11-06-reconstruction-admission-handoff.md)。
 
 ## 职责与边界
 

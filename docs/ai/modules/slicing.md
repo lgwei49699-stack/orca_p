@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "slicing",
-  "source_fingerprint": "sha256:d7c441874f73e7d9de710c2ef6ea9dff69f7d7b6bc50e69a0cf8184adbbbd31d",
-  "reason": "2026-11-03 Linux 2.3.2 合并。核对 Print、PrintApply 耗材槽修复与 CGAL 6.2.1 适配。"
+  "source_fingerprint": "sha256:90a8355508e3d2f248998d31bb7e59b8dc8295f38a217d7d51bb2aa0fe90ede1",
+  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
 }
 -->
 

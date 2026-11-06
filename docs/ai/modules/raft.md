@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "raft",
-  "source_fingerprint": "sha256:47e8083e846aec3d69aa11a0a2a42d023c378f6ec9057b94956d983deb1a66c4",
-  "reason": "2026-11-03 Linux 2.3.2 合并。核对发布线的打印状态和冲刷矩阵校验及几何依赖升级。"
+  "source_fingerprint": "sha256:fb7767532e4f64c18407b503afc7758c36db85e2f70fafc20cf599fe863d87f1",
+  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
 }
 -->
 

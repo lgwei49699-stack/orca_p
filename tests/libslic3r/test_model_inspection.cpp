@@ -1187,6 +1187,22 @@ TEST_CASE("Business check JSON is bounded and omits artifact paths", "[ModelRepa
         CHECK(extended == result);
     }
 
+    SECTION("Workflow failure revokes an earlier reconstruction admission")
+    {
+        // Admission is calculated before the stage report is written. An I/O
+        // failure there must not leave the public result authorizing a rebuild.
+        check["repair_evidence_requested"] = true;
+        check["reconstruction_admission"] = {{"accepted", true}, {"reason", "within_heuristic_budget"}, {"grid_cells", 64000}};
+        check["failure_kind"] = "io_failed";
+        check["failure_stage"] = "stage_report";
+        const auto failed = model_check_business_result(json::array({check}), -25, "Stage report failed");
+        const auto& reconstruction = failed["model_checks"][0]["boundary"]["reconstruction"];
+        CHECK(reconstruction["assessment"] == "blocked");
+        CHECK(reconstruction["admission"]["accepted"] == false);
+        CHECK(reconstruction["admission"]["reason"] == "workflow_failure");
+        CHECK(reconstruction["admission"]["grid_cells"] == 64000);
+    }
+
     SECTION("Internal sampled geometry never increases the public payload")
     {
         check["inspection"]["issues"]["boundary"]["faces"]           = std::vector<int>(10000, 1);

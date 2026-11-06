@@ -26,27 +26,18 @@ InProcessReconstructionEstimateInput small_estimate()
 }
 } // namespace
 
-TEST_CASE("In-process reconstruction rejects invalid budgets and missing monitors", "[ModelRepair][InProcessReconstruction]")
+TEST_CASE("In-process reconstruction rejects invalid deadlines and missing clocks", "[ModelRepair][InProcessReconstruction]")
 {
-    REQUIRE_THROWS_AS(InProcessReconstructionControl(0, 1024), std::invalid_argument);
-    REQUIRE_THROWS_AS(InProcessReconstructionControl(300001, 1024), std::invalid_argument);
-    REQUIRE_THROWS_AS(InProcessReconstructionControl(100, 127), std::invalid_argument);
-    REQUIRE_THROWS_AS(InProcessReconstructionControl(100, 4097), std::invalid_argument);
-    REQUIRE_THROWS_AS(InProcessReconstructionControl(100, 1024, {}), std::invalid_argument);
-    REQUIRE_THROWS_AS(InProcessReconstructionControl(100, 1024, [](uint64_t&) { return true; }, {}), std::invalid_argument);
+    REQUIRE_THROWS_AS(InProcessReconstructionControl(0), std::invalid_argument);
+    REQUIRE_THROWS_AS(InProcessReconstructionControl(300001), std::invalid_argument);
+    REQUIRE_THROWS_AS(InProcessReconstructionControl(100, {}), std::invalid_argument);
 }
 
 TEST_CASE("In-process reconstruction observes a sticky cooperative deadline", "[ModelRepair][InProcessReconstruction]")
 {
     using Clock                        = InProcessReconstructionControl::Clock;
     auto                           now = Clock::time_point{};
-    InProcessReconstructionControl control(
-        100, 128,
-        [](uint64_t& bytes_used) {
-            bytes_used = MIB;
-            return true;
-        },
-        [&] { return now; });
+    InProcessReconstructionControl control(100, [&] { return now; });
     control.poll();
     REQUIRE(control.keep_running());
     now += std::chrono::milliseconds(99);
@@ -62,74 +53,29 @@ TEST_CASE("In-process reconstruction observes a sticky cooperative deadline", "[
     REQUIRE(std::string(inprocess_reconstruction_stop_name(control.stop_reason())) == "timed_out");
 }
 
-TEST_CASE("In-process reconstruction memory budget includes the current host", "[ModelRepair][InProcessReconstruction]")
+TEST_CASE("In-process reconstruction stops on clock failure", "[ModelRepair][InProcessReconstruction]")
 {
-    uint64_t                       bytes_used = 128 * MIB;
-    InProcessReconstructionControl control(300000, 128, [&](uint64_t& bytes) {
-        bytes = bytes_used;
-        return true;
-    });
-    control.poll();
-    REQUIRE(control.keep_running());
-    ++bytes_used;
-    control.poll();
-    REQUIRE(control.stop_reason() == InProcessReconstructionStop::MemoryLimitExceeded);
-    REQUIRE(control.memory_bytes() == bytes_used);
-    REQUIRE(control.peak_memory_bytes() == bytes_used);
-    bytes_used = MIB;
-    control.poll();
-    REQUIRE_FALSE(control.keep_running());
-    REQUIRE(control.memory_bytes() == MIB);
-    REQUIRE(control.peak_memory_bytes() == 128 * MIB + 1);
-}
-
-TEST_CASE("In-process reconstruction never treats unknown monitoring as zero", "[ModelRepair][InProcessReconstruction]")
-{
-    SECTION("reader returns false")
-    {
-        InProcessReconstructionControl control(100, 128, [](uint64_t& bytes) {
-            bytes = MIB;
-            return false;
-        });
-        control.poll();
-        REQUIRE(control.stop_reason() == InProcessReconstructionStop::MonitorFailed);
-    }
-    SECTION("reader returns zero")
-    {
-        InProcessReconstructionControl control(100, 128, [](uint64_t& bytes) {
-            bytes = 0;
-            return true;
-        });
-        control.poll();
-        REQUIRE(control.stop_reason() == InProcessReconstructionStop::MonitorFailed);
-    }
-    SECTION("reader throws")
-    {
-        InProcessReconstructionControl control(100, 128, [](uint64_t&) -> bool { throw std::runtime_error("probe failure"); });
-        REQUIRE_NOTHROW(control.poll());
-        REQUIRE(control.stop_reason() == InProcessReconstructionStop::MonitorFailed);
-    }
     SECTION("clock throws during construction")
     {
-        InProcessReconstructionControl control(
-            100, 128,
-            [](uint64_t& bytes) {
-                bytes = MIB;
-                return true;
-            },
-            []() -> InProcessReconstructionControl::Clock::time_point { throw 1; });
+        InProcessReconstructionControl control(100, []() -> InProcessReconstructionControl::Clock::time_point { throw 1; });
+        REQUIRE(control.stop_reason() == InProcessReconstructionStop::MonitorFailed);
+    }
+    SECTION("clock throws during polling")
+    {
+        bool fail = false;
+        InProcessReconstructionControl control(100, [&]() -> InProcessReconstructionControl::Clock::time_point {
+            if (fail)
+                throw std::runtime_error("clock failure");
+            return {};
+        });
+        fail = true;
+        REQUIRE_NOTHROW(control.poll());
         REQUIRE(control.stop_reason() == InProcessReconstructionStop::MonitorFailed);
     }
     SECTION("clock moves backwards")
     {
-        auto                           now = InProcessReconstructionControl::Clock::time_point{};
-        InProcessReconstructionControl control(
-            100, 128,
-            [](uint64_t& bytes) {
-                bytes = MIB;
-                return true;
-            },
-            [&] { return now; });
+        auto now = InProcessReconstructionControl::Clock::time_point{};
+        InProcessReconstructionControl control(100, [&] { return now; });
         now -= std::chrono::milliseconds(1);
         control.poll();
         REQUIRE(control.stop_reason() == InProcessReconstructionStop::MonitorFailed);
@@ -138,10 +84,7 @@ TEST_CASE("In-process reconstruction never treats unknown monitoring as zero", "
 
 TEST_CASE("In-process reconstruction cancellation is atomic and does not detach work", "[ModelRepair][InProcessReconstruction]")
 {
-    InProcessReconstructionControl control(300000, 128, [](uint64_t& bytes) {
-        bytes = MIB;
-        return true;
-    });
+    InProcessReconstructionControl control(300000);
     std::promise<void>             entered;
     auto                           task = std::async(std::launch::async, [&] {
         entered.set_value();
@@ -242,4 +185,20 @@ TEST_CASE("In-process reconstruction admission is monotonic for finer voxel grid
     REQUIRE(fine.accepted);
     REQUIRE(fine.estimated_surface_cells >= coarse.estimated_surface_cells * 3);
     REQUIRE(fine.estimated_incremental_bytes > coarse.estimated_incremental_bytes);
+}
+
+TEST_CASE("Future-process workload is independent of check-process residency", "[InProcessReconstruction][ReconstructionAdmission]")
+{
+    auto input = small_estimate();
+    const auto running = estimate_inprocess_reconstruction(input);
+    REQUIRE(running.accepted);
+    input.memory_bytes = 0;
+    const auto workload = estimate_reconstruction_workload(input);
+    REQUIRE(workload.accepted);
+    REQUIRE(workload.estimated_incremental_bytes == running.estimated_incremental_bytes);
+    REQUIRE(workload.estimated_total_bytes == 0);
+    REQUIRE_FALSE(estimate_inprocess_reconstruction(input).accepted);
+    input.memory_bytes = 10 * 1024 * MIB;
+    REQUIRE(estimate_reconstruction_workload(input).estimated_incremental_bytes == workload.estimated_incremental_bytes);
+    REQUIRE_FALSE(estimate_inprocess_reconstruction(input).accepted);
 }

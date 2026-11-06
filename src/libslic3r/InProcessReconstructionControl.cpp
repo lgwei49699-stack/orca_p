@@ -35,7 +35,6 @@ const char* inprocess_reconstruction_stop_name(InProcessReconstructionStop reaso
     case InProcessReconstructionStop::None: return "running";
     case InProcessReconstructionStop::Canceled: return "canceled";
     case InProcessReconstructionStop::TimedOut: return "timed_out";
-    case InProcessReconstructionStop::MemoryLimitExceeded: return "memory_limit_exceeded";
     case InProcessReconstructionStop::MonitorFailed: return "monitor_failed";
     }
     return "monitor_failed";
@@ -98,15 +97,11 @@ bool current_reconstruction_memory_bytes(uint64_t& bytes) noexcept
     return bytes != 0;
 }
 
-InProcessReconstructionControl::InProcessReconstructionControl(unsigned     timeout_ms,
-                                                               size_t       memory_limit_mb,
-                                                               MemoryReader memory_reader,
-                                                               ClockReader  clock_reader)
-    : m_timeout_ms(timeout_ms), m_memory_limit_bytes(0), m_memory_reader(std::move(memory_reader)), m_clock_reader(std::move(clock_reader))
+InProcessReconstructionControl::InProcessReconstructionControl(unsigned timeout_ms, ClockReader clock_reader)
+    : m_timeout_ms(timeout_ms), m_clock_reader(std::move(clock_reader))
 {
-    if (timeout_ms == 0 || timeout_ms > 300000 || !valid_memory_budget(memory_limit_mb) || !m_memory_reader || !m_clock_reader)
-        throw std::invalid_argument("Invalid cooperative reconstruction budget or monitoring reader.");
-    m_memory_limit_bytes = uint64_t(memory_limit_mb) * BYTES_PER_MIB;
+    if (timeout_ms == 0 || timeout_ms > 300000 || !m_clock_reader)
+        throw std::invalid_argument("Invalid cooperative reconstruction deadline or clock reader.");
     try {
         m_started = m_clock_reader();
     } catch (...) {
@@ -132,15 +127,6 @@ void InProcessReconstructionControl::poll() noexcept
         m_elapsed_ms.store(uint64_t(elapsed), std::memory_order_relaxed);
         if (uint64_t(elapsed) >= m_timeout_ms)
             request_stop(InProcessReconstructionStop::TimedOut);
-        uint64_t bytes = 0;
-        if (!m_memory_reader(bytes) || bytes == 0) {
-            request_stop(InProcessReconstructionStop::MonitorFailed);
-            return;
-        }
-        m_memory_bytes.store(bytes, std::memory_order_relaxed);
-        m_peak_memory_bytes.store(std::max(bytes, m_peak_memory_bytes.load(std::memory_order_relaxed)), std::memory_order_relaxed);
-        if (bytes > m_memory_limit_bytes)
-            request_stop(InProcessReconstructionStop::MemoryLimitExceeded);
     } catch (...) {
         request_stop(InProcessReconstructionStop::MonitorFailed);
     }
@@ -150,23 +136,17 @@ void InProcessReconstructionControl::request_cancel() noexcept { request_stop(In
 bool InProcessReconstructionControl::keep_running() const noexcept { return stop_reason() == InProcessReconstructionStop::None; }
 InProcessReconstructionStop InProcessReconstructionControl::stop_reason() const noexcept { return m_stop.load(std::memory_order_relaxed); }
 uint64_t InProcessReconstructionControl::elapsed_ms() const noexcept { return m_elapsed_ms.load(std::memory_order_relaxed); }
-uint64_t InProcessReconstructionControl::memory_bytes() const noexcept { return m_memory_bytes.load(std::memory_order_relaxed); }
-uint64_t InProcessReconstructionControl::peak_memory_bytes() const noexcept { return m_peak_memory_bytes.load(std::memory_order_relaxed); }
 
-InProcessReconstructionEstimate estimate_inprocess_reconstruction(const InProcessReconstructionEstimateInput& input)
+InProcessReconstructionEstimate estimate_reconstruction_workload(const InProcessReconstructionEstimateInput& input)
 {
     InProcessReconstructionEstimate result;
     result.reason = "invalid_input_or_budget";
     if (input.input_faces == 0 || input.input_faces > MAX_INPUT_FACES || input.input_vertices == 0 ||
         input.input_vertices > 3 * input.input_faces || input.max_output_faces < 4 || input.max_output_faces > MAX_OUTPUT_FACES ||
-        !valid_memory_budget(input.memory_limit_mb) || !std::isfinite(input.surface_area_mm2) || input.surface_area_mm2 <= 0. ||
+        !std::isfinite(input.surface_area_mm2) || input.surface_area_mm2 <= 0. ||
         !std::isfinite(input.voxel_mm) || input.voxel_mm <= 0. || input.voxel_mm > std::numeric_limits<float>::max() ||
         float(input.voxel_mm) <= 0.)
         return result;
-    if (input.memory_bytes == 0) {
-        result.reason = "process_memory_unknown";
-        return result;
-    }
 
     bool                       any_extent = false;
     std::array<long double, 3> grid;
@@ -188,26 +168,47 @@ InProcessReconstructionEstimate estimate_inprocess_reconstruction(const InProces
         return result;
     const long double cells       = std::ceil(static_cast<long double>(input.surface_area_mm2) / voxel / voxel);
     const long double plane_cells = grid[0] * grid[1];
-    // SDK marching cubes retains per-layer invalid/sign masks until finalization.
-    // Reserve both masks; some layers may be empty. The distance slab also needs
-    // at least two XY planes plus the shared plane, even when that exceeds 32 MiB.
-    const long double grid_masks    = 2 * std::ceil(plane_cells / 64) * 8 * grid[2];
-    const long double distance_slab = std::max(32 * static_cast<long double>(BYTES_PER_MIB), 8 * plane_cells) + 4 * plane_cells;
-    const long double incremental   = std::ceil(grid_masks + distance_slab + 256 * static_cast<long double>(input.input_faces) +
-                                                48 * static_cast<long double>(input.input_vertices) +
-                                                128 * static_cast<long double>(input.max_output_faces) + 64 * cells);
-    const long double total         = std::ceil(incremental + input.memory_bytes);
+    // Allow for grid masks and temporary distance samples. Native MeshLib
+    // chooses its own allocation strategy; this estimate is only a preflight filter.
+    const long double grid_masks         = 2 * std::ceil(plane_cells / 64) * 8 * grid[2];
+    const long double distance_workspace = std::max(32 * static_cast<long double>(BYTES_PER_MIB), 8 * plane_cells) + 4 * plane_cells;
+    const long double incremental        = std::ceil(grid_masks + distance_workspace + 256 * static_cast<long double>(input.input_faces) +
+                                                     48 * static_cast<long double>(input.input_vertices) +
+                                                     128 * static_cast<long double>(input.max_output_faces) + 64 * cells);
     // Compare strictly below 2^64, avoiding an out-of-range integer cast even on
     // platforms where long double has only double precision.
     const long double uint64_end = std::ldexp(1.L, 64);
-    if (!std::isfinite(cells) || !std::isfinite(incremental) || !std::isfinite(total) || cells >= uint64_end || incremental >= uint64_end ||
-        total >= uint64_end) {
+    if (!std::isfinite(cells) || !std::isfinite(incremental) || cells >= uint64_end || incremental >= uint64_end) {
         result.reason = "memory_estimate_overflow";
         return result;
     }
     result.estimated_surface_cells     = uint64_t(cells);
     result.estimated_incremental_bytes = uint64_t(incremental);
-    result.estimated_total_bytes       = uint64_t(total);
+    result.accepted = true;
+    result.reason   = "workload_estimated";
+    return result;
+}
+
+InProcessReconstructionEstimate estimate_inprocess_reconstruction(const InProcessReconstructionEstimateInput& input)
+{
+    auto result = estimate_reconstruction_workload(input);
+    if (!result.accepted)
+        return result;
+    result.accepted = false;
+    if (!valid_memory_budget(input.memory_limit_mb)) {
+        result.reason = "invalid_input_or_budget";
+        return result;
+    }
+    if (input.memory_bytes == 0) {
+        result.reason = "process_memory_unknown";
+        return result;
+    }
+    const long double total = static_cast<long double>(result.estimated_incremental_bytes) + input.memory_bytes;
+    if (total >= std::ldexp(1.L, 64)) {
+        result.reason = "memory_estimate_overflow";
+        return result;
+    }
+    result.estimated_total_bytes = uint64_t(total);
     if (total > static_cast<long double>(input.memory_limit_mb) * BYTES_PER_MIB) {
         result.reason = "estimated_memory_budget_exceeded";
         return result;

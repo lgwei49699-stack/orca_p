@@ -3,12 +3,14 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:8b65a840f24536c5e81dae738b4cc20efc4b4559ee2c58b494612c93400c84dc",
-  "reason": "2026-11-03 复核 SDK 对照目标链接和 ABI 配置、Windows 测试库查找及 Linux 工作流。"
+  "source_fingerprint": "sha256:320e4f9f995dea14321be0180e9f78381c29fff27d5c2e2035c91e5822248ac2",
+  "reason": "删除已退出产品的绕数分块测试目标与 Linux 对应 CI 步骤；打包冒烟继续验证原生重建及产物完整性。已验证 Mac 构建。"
 }
 -->
 
-启用 SDK 且构建测试时增加独立的 meshlib_winding_tile_parity，继承适配器使用的 SDK 头文件和 ABI 配置，通过 CTest 对照固定 SDK。 Linux 候选工作流复用 AppImage 构建目录，执行绕数专项并要求至少命中一个 CTest。 [Mac 验证记录](../validation/2026-10-31-cgal-621-upgrade.md)
+删除已退出产品的绕数分块测试目标与 Linux 对应 CI 步骤；打包冒烟继续验证原生重建及产物完整性。已验证 Mac 构建。 [本轮验证](../validation/2026-10-31-cgal-621-upgrade.md)
+
+原绕数分块目标及对应 Linux CI 步骤已随算法删除；保留重建、阶段报告和最终 Linux 包搬迁后的冒烟验证。本轮只复用已验证的 Mac 构建，未运行 Linux 打包。
 
 ## 职责与边界
 

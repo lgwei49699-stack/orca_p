@@ -1711,6 +1711,12 @@ int CLI::run(int argc, char **argv)
     const bool repair_evidence_requested = m_config.opt_bool("repair_evidence");
     const bool boundary_policy_requested = std::find(m_requested_options.begin(), m_requested_options.end(),
                                                      "repair_evidence_close_boundaries") != m_requested_options.end();
+    const bool admission_options_requested = std::any_of(m_requested_options.begin(), m_requested_options.end(), [](const auto& key) {
+        return key == "reconstruction_voxel_mm" || key == "reconstruction_max_grid_cells" ||
+               key == "reconstruction_memory_mb" || key == "reconstruction_timeout";
+    });
+    const std::string admission_usage_error =
+        L("Reconstruction admission options require --check-model, --repair-model cgal and --repair-evidence.");
     const bool stage_options_requested   = std::any_of(m_requested_options.begin(), m_requested_options.end(), [](const auto& key) {
         return key == "model_stage_report" || key == "model_reference";
     });
@@ -1731,6 +1737,10 @@ int CLI::run(int argc, char **argv)
                                                         "repair_ignore_materials",
                                                         "repair_evidence",
                                                         "repair_evidence_close_boundaries",
+                                                        "reconstruction_voxel_mm",
+                                                        "reconstruction_max_grid_cells",
+                                                        "reconstruction_memory_mb",
+                                                        "reconstruction_timeout",
                                                         "model_stage_report",
                                                         "model_reference",
                                                         "model_inspection_mode"};
@@ -1746,6 +1756,8 @@ int CLI::run(int argc, char **argv)
                 throw std::invalid_argument("--check-model does not accept per-model slicing overrides.");
             if (cgal_repair_requested && m_config.opt_string("repair_model") != "cgal")
                 throw std::invalid_argument("--check-model supports only --repair-model cgal.");
+            if (admission_options_requested && (!cgal_repair_requested || !repair_evidence_requested))
+                throw std::invalid_argument(admission_usage_error);
             if (boundary_policy_requested && (!cgal_repair_requested || !repair_evidence_requested))
                 throw std::invalid_argument(boundary_policy_usage_error);
             if (m_config.opt_bool("export_obj") && m_config.opt_bool("export_stl"))
@@ -1761,6 +1773,13 @@ int CLI::run(int argc, char **argv)
             options.stage_report           = m_config.opt_bool("model_stage_report");
             options.reference_file         = m_config.opt_string("model_reference");
             options.inspection_mode        = m_config.opt_string("model_inspection_mode");
+            options.reconstruction_admission.voxel_mm        = m_config.opt_float("reconstruction_voxel_mm");
+            options.reconstruction_admission.max_grid_cells  = m_config.opt_int("reconstruction_max_grid_cells");
+            options.reconstruction_admission.memory_limit_mb = m_config.opt_int("reconstruction_memory_mb");
+            const int timeout_seconds = m_config.opt_int("reconstruction_timeout");
+            if (timeout_seconds < 1 || timeout_seconds > 300)
+                throw std::invalid_argument(L("Invalid reconstruction parameters or unsupported resource limits."));
+            options.reconstruction_admission.timeout_ms = unsigned(timeout_seconds) * 1000;
             run_model_check_workflow(options, check_report);
         } catch (const std::invalid_argument& error) {
             code    = CLI_INVALID_PARAMS;
@@ -1825,6 +1844,11 @@ int CLI::run(int argc, char **argv)
         const std::string message = L("--model-stage-report and --model-reference require --check-model or --reconstruct-model.");
         boost::nowide::cerr << message << std::endl;
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, message, sliced_info);
+        return CLI_INVALID_PARAMS;
+    }
+    if (admission_options_requested) {
+        boost::nowide::cerr << admission_usage_error << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, admission_usage_error, sliced_info);
         return CLI_INVALID_PARAMS;
     }
     if (boundary_policy_requested) {

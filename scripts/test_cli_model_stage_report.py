@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-from test_cli_model_check import triangle_count, validate_business_result, validate_issue_summary
+from test_cli_model_check import triangle_count, validate_business_result, validate_issue_summary, write_cap_fixture
 from reconstruction_test_helpers import FACES, VERTICES, binary_stl, digest, save_json
 
 
@@ -86,6 +86,8 @@ def create_fixtures(directory):
         source = existing.parent / (name + ".stl")
         paths[key] = directory / source.name
         paths[key].write_bytes(source.read_bytes())
+    paths["proper_crossing"] = directory / "proper-crossing.stl"
+    write_cap_fixture(paths["proper_crossing"])
     return paths
 
 
@@ -106,7 +108,9 @@ def check_stage_report(report, output, source, reference, stage):
     assert artifact_file.suffix.lower() == ".stl" and artifact_file.stat().st_size > 0, artifact
     assert triangle_count(artifact_file) > 0, artifact
     assert artifact["sha256"] == digest(artifact_file), artifact
-    assert artifact["readback_verified"] is True, artifact
+    assert artifact["readback_verified"] is (report["stage"] != "reconstruction"), artifact
+    if report["stage"] == "reconstruction":
+        assert artifact["verification"] == "binary_stl_count_and_size", artifact
 
     inspection = report["inspection"]
     assert inspection["status"] in ("passed", "defects_detected", "incomplete"), inspection
@@ -224,11 +228,12 @@ class Suite:
                         expected = old["boundary"]["reconstruction"]
                         assert all(report["reconstruction"][key] == expected[key]
                                    for key in ("assessment", "reason", "applicability")), (expected, report)
+                        assert report["reconstruction"].get("admission") == expected.get("admission"), (expected, report)
             if success and stage == "reconstruction":
                 legacy = json.loads((output / "reconstruction.json").read_text(encoding="utf-8"))
                 assert legacy["schema"] == "model_reconstruction_v1" and legacy["backend"] == "meshlib", legacy
                 assert legacy["status"] == "candidate_ready" and legacy["mesh_validated"] is True, legacy
-                assert legacy["export_round_trip"] == "passed", legacy
+                assert legacy["export_integrity"] == "passed", legacy
                 assert legacy["artifacts"]["input_sha256"] == digest(source), legacy
                 if report:
                     assert legacy["artifacts"]["candidate_sha256"] == report["artifact"]["sha256"], (legacy, report)
@@ -380,6 +385,15 @@ def main():
               flags=("--export-stl",), verify=expect_fractional_export)
     suite.run("advanced-intersections", fixtures["intersecting"], stage="advanced",
               verify=lambda r: expect_shape(r, status="defects_detected"))
+    def expect_grid_rejection(report):
+        gate = report["reconstruction"]["admission"]
+        assert report["reconstruction"]["assessment"] == "evidence_present", report
+        assert gate["accepted"] is False, gate
+        assert gate["reason"] in ("grid_cell_budget_exceeded", "backend_unavailable"), gate
+        assert report["artifact"]["readback_verified"] is True, report
+
+    suite.run("advanced-grid-budget", fixtures["proper_crossing"], stage="advanced",
+              flags=("--reconstruction-max-grid-cells", "1", "--export-stl"), verify=expect_grid_rejection)
     suite.run("check-unicode-path", fixtures["unicode"], verify=lambda r: expect_shape(r, status="passed"))
     suite.run("explicit-identical-reference", cube, reference=fixtures["unicode"],
               verify=lambda r: expect_shape(r, distances=(0., 0., 0.)))
