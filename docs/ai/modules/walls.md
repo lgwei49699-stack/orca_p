@@ -4,7 +4,7 @@
 {
   "id": "walls",
   "source_fingerprint": "sha256:feac540338a34b130e06eb2a1a843ac222a4a908551d874922f34820e4126611",
-  "reason": "2026-10-22将本批薄墙恢复与VariableWidth修正隔离为显式CLI运行时opt-in，默认false；关闭恢复旧拼接/分组/末组积分，GUI默认关闭。开启才保留两端完整分组和同段积分，无参数阈值放宽。补旧算法冻结结果、开启恢复及默认值测试，原min_length_factor参数工厂修正仍保留。 2026-10-22复核共享配置仅CLI层高边界，未改墙生成器参数/短墙过滤/默认路径修正开关。显式变层高会按既有规则重切墙，不把边界策略称为墙质量证明。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。 2026-10-30：复核本次共享PrintConfig.cpp差异仅在CLI配置区新增model_inspection_mode（默认full），由独立check-model入口读取；本模块使用的打印配置、默认值及执行路径均未改，不新增计算，正文无需改动。 2026-10-30末轮：PrintConfig 仅修正已有 CLI basic 检查范围帮助文字（去除七类全检误述），键/类型/默认值及本模块读取规则未改，已核对逐行差异；同步中英文。ModelCheckWorkflow 头仅更正范围注释，详细说明及测试见模型修复记录。 2026-10-30本模块仅因watch的PrintConfig.cpp中App检查帮助改为原生未连接边而更新指纹；无配置键/默认值/有效值或本模块算法变化，正文无需变更。"
+  "reason": "2026-11-06 归档补充：本次仅整理已有调查、链接及历史验证边界，不改本模块 C++ 或默认配置；云工艺现状已按当前源码纠正。 2026-10-22将本批薄墙恢复与VariableWidth修正隔离为显式CLI运行时opt-in，默认false；关闭恢复旧拼接/分组/末组积分，GUI默认关闭。开启才保留两端完整分组和同段积分，无参数阈值放宽。补旧算法冻结结果、开启恢复及默认值测试，原min_length_factor参数工厂修正仍保留。 2026-10-22复核共享配置仅CLI层高边界，未改墙生成器参数/短墙过滤/默认路径修正开关。显式变层高会按既有规则重切墙，不把边界策略称为墙质量证明。 2026-10-23本批复核共享PrintConfig增量仅CLITransform的model_layer_height_plan注册，空列表默认；不改本模块打印参数、默认值、算法或GUI入口，正文无需为该注册变化改写。 2026-10-30：复核本次共享PrintConfig.cpp差异仅在CLI配置区新增model_inspection_mode（默认full），由独立check-model入口读取；本模块使用的打印配置、默认值及执行路径均未改，不新增计算，正文无需改动。 2026-10-30末轮：PrintConfig 仅修正已有 CLI basic 检查范围帮助文字（去除七类全检误述），键/类型/默认值及本模块读取规则未改，已核对逐行差异；同步中英文。ModelCheckWorkflow 头仅更正范围注释，详细说明及测试见模型修复记录。 2026-10-30本模块仅因watch的PrintConfig.cpp中App检查帮助改为原生未连接边而更新指纹；无配置键/默认值/有效值或本模块算法变化，正文无需变更。"
 }
 -->
 
@@ -45,6 +45,8 @@ PerimeterGenerator 选择经典墙或 Arachne；WallToolPaths 根据边界及 be
 现有测试/工具范围：`tests/fff_print/test_fill.cpp`；`tests/fff_print/test_arachne_params.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
 
 `[ResidualIsland]`包含原生25点小岛的退化复现/显式开启恢复、关闭保持旧退化结果、非零旧路径不变、短线过滤与0墙圈不被绕过、共享端点8种排列方向、宽度/总长不变，以及普通墙/零宽/非接触路径的旧算法对照。`[DetailPathOptIn]`补旧分组/末组体积冻结值、默认关闭及Print模式切换缓存失效。GUI调用共享核心的默认关闭路径；CLI显式开启时经典细墙/补缝和Arachne同心填充接入运行时选择。修复、分盘入口没有新增算法。真实模型默认与旧版、开启与候选的G-code对照及用户明确不改GUI的边界见[本批记录](../validation/2026-10-18-slice-analysis.md)。
+
+[文字细节与自动选择分析](../validation/2026-10-15-text-wall-feature-analysis.md) 对照用户 OBJ 与经典墙 G-code，并验证直接读取现有文字顶面也可测出细笔画；最新方案按用户约束采用不切片、不修改模型的特征筛查，仅建议覆盖墙参数。当前未新增自动墙模式，未完成 Arachne 重切片验证。
 
 ## 分支现状
 

@@ -45,6 +45,80 @@ class FeatureParameterAuditTest(unittest.TestCase):
         self.assertIn('BRIDGE.bridge_flow', result['unverified_parameters'])
         self.assertIn('BED_ADHESION.brim_width', result['unverified_parameters'])
 
+    def test_support_interface_override_must_reach_gcode(self):
+        self.decision['processOverrides'] = {'support_interface_spacing': '0'}
+        self.snapshot['process']['support_interface_spacing'] = '0'
+        self.effective['support_interface_spacing'] = '0.21'
+        result = self.run_audit()
+        self.assertEqual([], result['decision_freeze_mismatches'])
+        self.assertIn('OVERHANG.support_interface_spacing', result['configuration_mismatches'])
+        self.effective['support_interface_spacing'] = '0.0'
+        result = self.run_audit()
+        self.assertEqual([], result['configuration_mismatches'])
+        parameters = next(row['parameters'] for row in result['items'] if row['item'] == 'OVERHANG')
+        spacing = next(row for row in parameters if row['key'] == 'support_interface_spacing')
+        self.assertEqual('MATCH', spacing['delivery'])
+        del self.effective['support_interface_spacing']
+        self.assertIn('OVERHANG.support_interface_spacing', self.run_audit()['unverified_parameters'])
+
+    def test_curved_surface_support_type_and_style_must_reach_gcode_together(self):
+        self.decision['processOverrides'] = {'support_type': 'normal(auto)', 'support_style': 'snug'}
+        self.snapshot['process'].update(self.decision['processOverrides'])
+        self.effective.update(support_type='tree(auto)', support_style='snug')
+        result = self.run_audit()
+        self.assertIn('CURVED_SURFACE.support_type', result['configuration_mismatches'])
+        self.effective['support_type'] = 'normal(auto)'
+        result = self.run_audit()
+        self.assertEqual([], result['configuration_mismatches'])
+        self.assertEqual([], result['decision_freeze_mismatches'])
+        self.assertFalse(result['physical_quality_verified'])
+
+    def test_detour_budget_must_keep_percent_units_through_final_gcode(self):
+        self.decision['processOverrides'] = {'max_travel_detour_distance': '50%'}
+        self.snapshot['process']['max_travel_detour_distance'] = '50%'
+        self.effective['max_travel_detour_distance'] = '50'
+        self.assertIn('TRAVEL_SURFACE.max_travel_detour_distance', self.run_audit()['configuration_mismatches'])
+        self.effective['max_travel_detour_distance'] = '50%'
+        self.assertEqual([], self.run_audit()['configuration_mismatches'])
+        self.assertEqual([], self.run_audit()['decision_freeze_mismatches'])
+
+    def test_retained_seam_gap_is_audited_without_turning_it_into_a_repair(self):
+        self.snapshot['process'].update(seam_gap='10%', seam_slope_type='none')
+        self.effective.update(seam_gap='10', seam_slope_type='none', nozzle_diameter='0.4')
+        self.assertIn('TRAVEL_SURFACE.seam_gap', self.run_audit()['configuration_mismatches'])
+        self.effective['seam_gap'] = '10%'
+        result = self.run_audit()
+        self.assertEqual([], result['configuration_mismatches'])
+        context = result['parameter_execution_context']['seam']
+        self.assertAlmostEqual(.04, context['configured_gap_mm'])
+        self.assertEqual('nozzle_diameter', context['percentage_basis'])
+        self.assertIsNone(context['actual_clipped_length_mm'])
+        self.assertEqual({}, result['parameter_execution_context']['automatic_parameter_changes'])
+
+    def test_scarf_setting_does_not_mean_gap_is_inactive_for_every_loop(self):
+        for mode in ('none', 'external', 'all'):
+            context = parameter_execution_context({'seam_gap': '.03', 'seam_slope_type': mode})['seam']
+            self.assertEqual(.03, context['configured_gap_mm'])
+            self.assertEqual(mode, context['scarf_setting'])
+            self.assertIsNone(context['actual_clipped_length_mm'])
+        for nozzle in (None, ['.4', '.6'], '0', 'NaN'):
+            self.assertIsNone(parameter_execution_context({'seam_gap': '10%', 'nozzle_diameter': nozzle})['seam']['configured_gap_mm'])
+        self.assertEqual(0, parameter_execution_context({'seam_gap': '0'})['seam']['configured_gap_mm'])
+        self.assertIsNone(parameter_execution_context({})['seam']['configured_gap_mm'])
+
+    def test_retained_interface_settings_are_also_checked(self):
+        retained = {'support_line_width': '0.42', 'support_interface_top_layers': '3',
+                    'support_top_z_distance': '0.2', 'support_interface_speed': '80',
+                    'support_interface_pattern': 'auto'}
+        self.snapshot['process'].update(retained)
+        self.effective.update(retained)
+        for key, value in retained.items():
+            with self.subTest(parameter=key):
+                self.effective[key] = '1'
+                self.assertIn('OVERHANG.' + key, self.run_audit()['configuration_mismatches'])
+                self.effective[key] = value
+        self.assertEqual([], self.run_audit()['configuration_mismatches'])
+
     def test_numeric_normalization_never_collapses_multi_material_or_invalid(self):
         self.assertEqual(normalized(['12.0']), normalized('12'))
         self.assertEqual(normalized(True), normalized('1'))

@@ -3,14 +3,21 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:b10431d6ba1b4825404548c11782945b18bbaca06678c1eead53b98cca53e9c3",
-  "reason": "2026-10-26在既有局部计划脚本补真实FIFO读取/收尾、普通修正前后对照、报告/细节/精简3MF组合及带管道非法请求拒绝；不新增依赖、业务开关、线上调用或自动试参。 2026-10-29仅本批修复原生/CLI回归：补洞、清理、内部面与输入兼容正反例，121断言/44CLI按身份复用，当前程序报告开关12次实测见修复记录；普通路径未改。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30补合master c0ccf31b22：Cura V1真实垫层接触锚点只修正计划首层空层误报，保留真实缺层保护和发布分支只读小轮廓分析；未更改实际路径、参数、普通修复或Linux打包配置。正文与测试说明按目标源码合并，目标回归见App发布记录。 2026-10-30 App最小交付：仅basic无显式报告STL路径取消中间导出/回读；高级仅committed导出，默认full/GUI/普通切片分盘不变。更新正文及AppBasicDelivery测试，45原生/56报告CLI和服务真实链路、耗时与未验证边界见App提速记录。 2026-10-31入库复核：仅2.5共享修复、环孔/薄壁与内部膜保护、事务/绘色/取消、重建预封口和自动外墙宽度回归；删除旧外层算法专用断言，保留实际残留与拒绝语义。不包含本地下载工具和参数审计改动，GUI/跨平台待验见修复对照记录。 2026-10-31 App inspection regression: cover seven positive categories, negative and incomplete results, shared volume admission, partial/no-change outcomes and topology-only transaction checks. Basic advanced CLI now mirrors the App command without full evidence; an explicit incomplete-evidence rejection remains. Native 275, check CLI 115, stage CLI 64 and ordinary CLI 64 passed; 37 G-code instruction hashes match baseline. Source and build identity, service mock/real-engine results and pending manual checks are recorded in the six-task review."
+  "source_fingerprint": "sha256:5cab8c489a6e90fd464cfb760ce056e58c77bcb9cd865040b32aa5293702a25a",
+  "reason": "2026-11-06 归档补充：本次仅整理已有调查、链接及历史验证边界，不改本模块 C++ 或默认配置；云工艺现状已按当前源码纠正。 2026-10-26在既有局部计划脚本补真实FIFO读取/收尾、普通修正前后对照、报告/细节/精简3MF组合及带管道非法请求拒绝；不新增依赖、业务开关、线上调用或自动试参。 2026-10-29仅本批修复原生/CLI回归：补洞、清理、内部面与输入兼容正反例，121断言/44CLI按身份复用，当前程序报告开关12次实测见修复记录；普通路径未改。 2026-10-29合入Linux发布分支：保留既有发布兼容修复和本次阶段报告新增说明，源文件自动合并，模块指纹按组合源码重算。 2026-10-30合入App修复：显式basic检查与分部件高级修复，默认full及普通切片/分盘不变；保留本发布分支兼容修复。指纹按合并后的实际源码复核，验证边界见2026-10-30-app-repair-release记录。 2026-10-30补合master c0ccf31b22：Cura V1真实垫层接触锚点只修正计划首层空层误报，保留真实缺层保护和发布分支只读小轮廓分析；未更改实际路径、参数、普通修复或Linux打包配置。正文与测试说明按目标源码合并，目标回归见App发布记录。 原工作区历史审核说明（保留原记录时点，不作为当前状态）：2026-10-30：App混合部件、空腔/薄件、严格零面积与删空回滚、异常/取消事务覆盖；CLI实际导出和next_action契约检查。215原生、63阶段、64普通场景通过，8本地引擎服务联调通过。 2026-10-30特征分支快进合入发布6fe1189e9，当前行为以合入源码及发布说明为准；本地历史文档、调试脚本仍未提交。 2026-10-30 App最小交付：仅basic无显式报告STL路径取消中间导出/回读；高级仅committed导出，默认full/GUI/普通切片分盘不变。更新正文及AppBasicDelivery测试，45原生/56报告CLI和服务真实链路、耗时与未验证边界见App提速记录。 2026-10-30修复回归迁移到2.5单次核心：实际闭合收益、无进展及保留原件、兼容零计数、绘色/取消/普通切层分盘。旧可修复开口夹具换为已存在bracket以继续覆盖封边策略正反与产物不变；未删除核心事务或结构保留验证。237原生/267CLI通过，普通真实G-code未验证。 2026-10-30续接新增部分双面管孔与开口管预封口的几何回归，保留上游接触实体/空腔及原事务绘色断言；原生262项，Alpha Wrap36/MeshLib42等CLI共345项通过。实际模型与最终二进制绑定，未把这些检查写成GUI/Linux/打印通过。 2026-10-30补内部封盖正反例、后期取消/只读委托、健康闭壳不误合并；bracket现修好，政策测试改为确定性竖直片并增加bracket CLI正例。保留单/双面孔内及跨孔膜原拒绝断言；264原生/346CLI通过，未替代GUI/实际G-code验证。 2026-10-30新增混合尺度薄实体、原点平移及相邻开口预封口回归，含原面保留和预算拒绝不改源件；先复现误删/误焊接再修正。268原生/12221断言、346CLI通过，20产物与前轮一致，不等于GUI/Linux/打印通过。 2026-10-30: extend annular-cap regression to 18 density/pose/duplicate combinations. Add two optional configured CLI slices for painted automatic outer width (nozzle default and object percentage), preserving existing failure checks. Final 274 native/integration, 88 repair CLI and 64 normal slicing/arrangement CLI pass; synthetic profiles and actual machine limits are distinguished. 2026-10-31 App inspection regression: cover seven positive categories, negative and incomplete results, shared volume admission, partial/no-change outcomes and topology-only transaction checks. Basic advanced CLI now mirrors the App command without full evidence; an explicit incomplete-evidence rejection remains. Native 275, check CLI 115, stage CLI 64 and ordinary CLI 64 passed; 37 G-code instruction hashes match baseline. Source and build identity, service mock/real-engine results and pending manual checks are recorded in the six-task review. 2026-11-03：离线参数审计纳入max_travel_detour_distance，区分百分比/绝对值并核对最终G-code，28项单测通过；不改引擎或线上路径，保留其他既有WIP。 2026-11-03：只读审计补接缝留口/斜接缝配置与喷嘴百分比语义，不推断实际闭环命中或自动清零；30项及当前眼镜最终配置核对通过，原生源码不变。 2026-11-03补齐曲面类别联动support_type的离线配置审计；仅补分类关联，不改变匹配或切片。新增回归先失败、修正后31项通过，五模型冻结/导出核对见工作进展；头骨原模板已有分项微小差额，严格报告校验仍保留失败。"
 }
 -->
 
-2026-10-31 App 检测回归：取消仅非流形边跳过；五项全阴性后的顶点/自交存在性阳性也进入一次高级，保留首次缺陷下界语义。健康反例、输入不变、内部 volume 准入、修后残留、取消及默认 full 隔离均覆盖。阶段 CLI 的 basic 高级用例按 App 实际命令不带 repair-evidence；另保留显式证据不完整时拒绝的用例。闭合但仍自交的原“repaired/passed”断言改为真实 partially_repaired/needs_repair，不以弱化检查维持旧成功。执行与构建身份见[六任务复核](../validation/2026-10-31-app-six-checks-review.md)：275 原生、115 检查 CLI、64 阶段 CLI、64 普通切片/分盘场景通过，37 份普通 G-code 指令与改前一致。历史部分结果/绘色/事务和 GUI 交接仍见[App记录](../validation/2026-10-30-app-basic-repair.md)。
+2026-10-30 App 最小交付测试补充：`test_model_inspection.cpp` 的 AppBasicDelivery 用健康/开放方块验证无检查产物、原件不变、仅 committed 导出及实际结果闭合；沿用已有 Inspection 测试验证默认业务报告。Java 真实引擎链路及耗时证据不新增生产调用，见[App 提速记录](../validation/2026-10-30-app-repair-latency.md)。
 
 ## 职责与边界
+
+2026-10-31 App 检测回归：取消仅非流形边跳过；五项全阴性后的顶点/自交存在性阳性也进入一次高级，保留首次缺陷下界语义。健康反例、输入不变、内部 volume 准入、修后残留、取消及默认 full 隔离均覆盖。阶段 CLI 的 basic 高级用例按 App 实际命令不带 repair-evidence；另保留显式证据不完整时拒绝的用例。闭合但仍自交的原“repaired/passed”断言改为真实 partially_repaired/needs_repair，不以弱化检查维持旧成功。执行与构建身份见[六任务复核](../validation/2026-10-31-app-six-checks-review.md)：275 原生、115 检查 CLI、64 阶段 CLI、64 普通切片/分盘场景通过，37 份普通 G-code 指令与改前一致。历史部分结果/绘色/事务和 GUI 交接仍见[App记录](../validation/2026-10-30-app-basic-repair.md)。
+
+
+2026-11-03接缝因果核对：离线参数审计补入`seam_gap`/`seam_slope_type`，保留值也核对冻结配置与最终G-code；留口百分比以单喷嘴直径换算，不按外墙线宽或孔径换算。实际裁剪长度保持未知，斜接缝配置并不证明所有闭环都命中。现有参数上下文解释接缝留口与未覆盖量的关系，不新增切片扫描或自动选参。30项单测及当前眼镜真实配置核对通过，所有配置均匹配；单变量留口清零实验未解决小孔，保留原模板。GUI/普通切片不调用该离线工具，无新增引擎开销；原生源码未改。详见[进展记录](../validation/2026-10-23-feature-strategy-progress.md)。
+
+2026-10-28补齐离线参数审计中的6个支撑界面关联值：线宽、顶界面层数、额外线距、顶Z间隙、速度与图案。它们与其他参数一样核对冻结快照到G-code有效配置，包含不变值；实心界面的合法0不能当缺失，决策已冻结但实际仍使用旧线距必须报告错配。只扩展既有审计目录，不新增生产校验、自动切片或调参循环，不改变GUI/CLI切片行为。新增两项回归覆盖丢失覆盖、合法0、缺失输出及5个保留项被改变；本轮真实切片与收益/退化记录见[特征策略进展](../validation/2026-10-23-feature-strategy-progress.md)。
 
 2026-10-23当前清理：evaluate_relief_height_candidate.py 可核对已保存的离线纯规划器结果，不再要求qualityOptimization、保护键或candidate能力协商。当前PAM生产响应只有一次生产计划，不返回该研发candidate字段。test_cli_regional_layer_plan.py 新增上游合法min0.12案例，策略细化预算由PAM负责；Orca仍拒绝非法数值和有效机器范围/实际层序不符。本批32局部计划、17报告场景及175项Python通过；GUI无此离线入口，普通GUI未手测。
 
@@ -21,6 +28,8 @@
 2026-10-23第六批：同一离线审计入口扩为16类/70个参数关联，补齐内外墙线宽、精确外墙及内外桥接的厚桥模式/密度/速度/流量，仍保留未改值。新增三类最大残留层的只读解释：有效截面保留/缺失、孔区侵入路径角色、表面/内部实体/桥接目标空白。解释前复用原报告合同核对单实例、完整层序、最大层索引/打印Z和分项和；缺报告、部分覆盖、非法归因与合法0不混用。孔侵入的bridge_area包含悬垂角色；分组名不能被理解为几何两端桥接已确证。只解释此类峰值，不能外推所有层；不从面积自动设置补偿、短线阈值、线宽或流量。新增5项测试，总14项及150项既有回归通过；原模型2次真实CLI和同身份原生探针的因果边界见[第六批记录](../validation/2026-10-23-feature-strategy-progress.md)。普通CLI/GUI业务和原应用二进制未改，不新增性能开销或线上重切。
 
 2026-10-23第五批新增`scripts/audit_feature_parameters.py`，只读已经存在的PDS请求、PAM最终决策、检测JSON及经现有合同校验的G-code/analysis产物；检查全部16类/61个关联值（包含未改项），分别核对最终覆盖→冻结快照、冻结值→有效导出配置。数值格式等价不报假差异，百分比与绝对值不能混同；缺项/多材料不当0，角色汇总不当区域因果证明，当前报告不采集的稀疏填充/Brim/Skirt角色显式列出。局部计划要求检测SHA/姿态一致，范围是否实际执行仍交给`check_regional_layer_scope.py`。输出缺失岛/孔侵入/实体空白所在层和采样/打印Z、名义宽高、流量/冷却观察及各类实物待验，不自动改配置、重切、选产物或打印。输出已存在拒绝覆盖；配置或决策冻结错配退出1，退出0仅表示这两类未错配，绝非实印合格。9项新单测及原模型历史同身份产物复核见[第五批记录](../validation/2026-10-23-feature-strategy-progress.md)；原模型仍有未解决的局部观察。GUI不适用：它是明确离线工具，不接普通切片或GUI执行链。
+
+2026-11-03补齐曲面类别的`support_type`与`support_style`联动审计，避免只看样式而漏掉该类别的支撑类型错配；同一参数在其他类别的核对保留。当前目录为16类、86个参数关联（非86个独立参数）。31项单测通过；5份当前匹配响应与冻结配置、最终G-code无错配/未核实参数。独立参数核对不替代完整报告验证：头骨孔侵入角色分项与总量相差约0.00000399mm²，原B模板已有同等差额，维持INVALID/严格校验失败，不补值或放宽容差。该改动仅离线工具，无GUI或线上路径变化；原始产物和身份见本轮进展。
 
 2026-10-23最新局部坡面研发：`scripts/check_regional_layer_scope.py`消费已由调用方绑定同源/姿态/有效配置的两份实际报告和`regional-slope-v1`计划，检查区间首尾属于基础层位、区间整分、首层/末层、上下限、真实局部层数/高度及范围外层底/顶/采样Z逐项一致。只检查“范围外层高=基础值”不能排除层位偏移，新工具明确覆盖该退步。附带同Z四项路径几何差异、名义宽高证据未知/新增角色；不宣称范围外所有路径字节相同，不跨采样Z累加面积评优，不自动选择打印文件。缺失宽高证据保留unknown，不补0或掩盖层位检查结果。7项新单测及实际6模型12切片的来源、结果、失败和边界见[独立进展记录](../validation/2026-10-23-feature-strategy-progress.md)。这是本地研发工具，普通GUI/CLI没有新增执行步骤，本批不改Orca C++；生产仍一次匹配一次切片。
 
@@ -67,6 +76,7 @@ Web全局对比保留材料唯一身份、乱序/重复、不同cap/冷却阈值
 - [test_gfd_cloud_config_dialog.cpp](../../../tests/gui/test_gfd_cloud_config_dialog.cpp)：保存/上传共用表单生命周期的独立wx测试，覆盖进度、异步完成、重复提交、忙时取消/关闭、启动/异常/服务端失败、取消结果及迟到回调。结果处理前要求原表单隐藏、模态退栈、父窗口可用；Cocoa原生模态不假定wx禁用标记变化。提交前增加嵌套登录返回检查，Mac arm64共43检查通过，不代表真实云写入或Windows视觉通过。
 - [test_gfd_modal_dialog.cpp](../../../tests/gui/test_gfd_modal_dialog.cpp)：独立 wx GUI 回归程序，不链接切片／云端业务，也不下发打印。正常结束、内层提示先结束再结束外层、提前隐藏、嵌套期间结束、关闭取消、进入循环时结束、连续重开，以及 Windows 的 InitDialog 结束路径，均检查窗口状态与退出结果；5 秒看门狗使循环残留明确失败。
 - [check_ai_module_docs.py](../../../scripts/check_ai_module_docs.py)：模块清单与 Git 工作区/暂存/提交快照检查。
+- [download_thingi10k.py](../../../scripts/download_thingi10k.py)：默认筛选带几何缺陷标记的官方 Thingi10K 原始 STL/OBJ，支持按类型、全部随机及文件 ID 下载，保存来源、许可、筛选理由和本地 SHA256；不调用应用，不修复、不缩放模型。
 - [capture_windows_gui_state.ps1](../../../scripts/capture_windows_gui_state.ps1)：Windows 下独立采集 OrcaSlicer 顶层窗口、线程输入与程序身份，辅助区分禁用窗口、隐藏弹窗、输入捕获和消息处理异常。
 - [capture_windows_gui_state.cmd](../../../scripts/capture_windows_gui_state.cmd)：双击入口，定位同目录 PS1，启用交互选择进程及采集后打开结果文件夹；保留退出码与错误文字，不自动提权或永久更改执行策略。
 - [copy_windows_active_log.cmd](../../../scripts/copy_windows_active_log.cmd) / [copy_windows_active_log.ps1](../../../scripts/copy_windows_active_log.ps1)：双击选择正在使用的日志，以兼容读写共享的只读句柄复制到桌面，保留源程序及原文件。
@@ -116,7 +126,9 @@ Web全局对比保留材料唯一身份、乱序/重复、不同cap/冷却阈值
 分离岛间距增加孔内岛单夹具双墙，共 36 次 CLI：已知参考截面 88 mm²、孔内剩余空白 12 mm²、2 岛、间距 1 mm；保留原分离块配置及 0.5 mm 基准，象脚补偿层 `lslices` 恢复行为据源码确认。U/C 槽和窄颈单岛不输出槽宽。新字段完整/非负/不足两岛 null 合同由脚本检查；原生包含斜对角、双向点边投影、闭合边、孔内岛、三岛最小、点接触、空层、合并单岛、大坐标、两实例不乘距离及只读复算。构建、首次启动超时与复测各留证据，不延长超时或放宽断言换取通过。
 
 
-`scripts/test_cli_model_stage_report.py` 在隔离目录验证显式阶段报告：旧v4兼容、原件/基准/回读产物身份、双向变化与部件统计、错误参数/已有报告保护，并可显式开启真实MeshLib案例。额外锁定距离采样和部件统计的协议字符串，部件统计须明确完成，避免计算口径与后端接受规则漂移。无匹配新构建不得运行旧程序证明改动；默认跳过SDK案例不算通过，结果写新证据目录，不改根result.json。后端两个仓库的纯mock及真实本地CLI契约测试另见业务接入记录，不启动远端中间件。
+`scripts/test_cli_model_stage_report.py` 在隔离目录验证显式阶段报告：旧v4兼容、原件/基准/回读产物身份、双向变化与部件统计、错误参数/已有报告保护，并可显式开启真实MeshLib案例。额外锁定距离采样和部件统计的协议字符串，部件统计须明确完成，避免计算口径与后端接受规则漂移。无匹配新构建不得运行旧程序证明改动；默认跳过SDK案例不算通过，结果写新证据目录，不改根result.json。后端两个仓库的纯mock及真实本地CLI契约测试另见业务接入记录，不启动远端中间件。 2026-10-28新增原边界补洞证明断言与原生正反例，当前51断言/2例、34项CLI及真实PDS链路结果见[局部修复采用](../validation/2026-10-28-local-repair-adoption.md)。
+
+同日真实样本修正新增数值裂缝正例与移动表面、丢面、重复替换、跨真实间隙合并反例；阶段CLI覆盖属性/颜色头STL可检查、直接彩色重建仍拒绝、数值裂缝清理证明及非零孤立面不豁免。当前65断言/4例、40阶段CLI通过。PDS实际流程使用15份已下载的Thingi10K原件、校验来源哈希，只有下载/OBS/任务存储替身，实际执行当前Orca；最终11份采用且网格检查通过、4份保留未解决，不代表打印质量或总体成功率。程序身份、单次重建参数及资源证据见同一进行中记录。
 
 
 
@@ -171,6 +183,36 @@ Windows GUI 采集脚本使用 PowerShell 5.1 与内嵌 C# P/Invoke，默认延�
 
 测试源码、测试程序、应用与资源配置四者身份应匹配，聚焦结果包含于完整结果时不重复计数。docs/ai/modules.json 是范围清单，新增文件必须分配模块或说明排除原因。
 
+Thingi10K 下载工具只用 Python 3.9+ 标准库，固定官方 Hugging Face 快照
+`2d5d3b2f3cd3711028ad75b12788c13b25559ec6`，以 `metadata/input_summary.csv` 的
+`ID` 和 `Link` 扩展名定位 `raw_meshes/<ID>.stl|obj`，不下载全量压缩包或重网格化版本。
+仓库根目录执行 `python3 scripts/download_thingi10k.py --count 100 --batch 1`，默认输出到用户
+`Downloads/Thingi10K/defects/batch-001/models`，索引和清单也独立保存在该批次目录；`--output`
+指定父目录，未指定 `--batch` 时使用第 1 批。默认 `--subset defects` 只选择五项元数据
+（Closed、Edge manifold、Vertex manifold、No duplicated faces、No degenerate faces）中
+至少一项明确 FALSE 的模型；NA/未知不算缺陷，仅多部件或 PWN 为 FALSE 不进入默认缺陷池。
+也可指定 `boundary`、`nonmanifold-edge`、`nonmanifold-vertex`、`duplicate`、`degenerate`
+分别筛选，保存到对应类型子目录；`metadata-clean` 仅表示七项元数据均为 TRUE 的对照组，
+不等于本机检测通过。索引不含自相交标记，不能借此筛选或排除自相交。
+`--subset all` 保持旧版的全量随机抽样及 `batch-001/models` 路径、选择顺序和清单身份，
+便于续跑已下载批次；`--ids 100026 100027` 同样保持旧路径，不能与显式 `--subset` 同用。
+已有目录不搬迁、不删除，新默认筛选不往旧批次混入样本。
+把批号改成 2 会取同一筛选池随机顺序的下一批，保存到 `batch-002`。同一轮必须保持
+`--subset`、`--count` 和 `--seed` 不变，才保证批次之间不重复；不同筛选类型可能包含同一模型，
+不能将其当成独立样本。筛选池少于一批时取全部，末批取剩余模型；空池及批号越界明确报错。
+同批清单记录选择参数，续跑参数不一致时拒绝混入。指定 ID 时批号只控制存储，不分页或跨批去重。
+`--dry-run` 只保存索引和选择清单；清单 `selection` 即使没有下载也保存各模型的筛选理由，
+`metadata_defects`/`metadata_defect_labels` 是数据集标记，`verification_status=not_run`
+明确尚未实际检测。控制台显示中文缺陷类型和批次分类统计（可重叠），不宣称检测或修复通过。
+每个模型默认最多 512 MiB，可用 `--max-mib` 调整；网络超时及重试次数分别由
+`--timeout`、`--retries` 控制。重复执行时按清单本地 SHA256 校验并跳过完整文件，失败下载
+重新开始，不做字节级断点续传；未知或被修改文件不覆盖。进程锁避免同目录脚本并发，强制
+终止后需确认无进程再移除锁；若在文件发布／清单落盘之间退出，未登记文件会安全拒绝，
+需保留文件并改用新目录，不保证断电恢复。清单中 SHA256 用于本地身份校验，不宣称具有官方摘要背书。
+原始损坏或空模型也保留，不将下载成功等同于网格健康；数据集标记不是当前检测器的验收结果。
+模型许可逐项保存，不能把仓库代码许可当作所有模型的许可。该工具不接入 GUI／修复 CLI，
+因此没有两端业务修改，也不需要应用构建或 GUI 验证。
+
 2026-10-29 模型修复报告提交复审：`test_model_reconstruction.cpp`覆盖局部圆盘补洞、零面积清理、数值裂缝、重叠实体内部面和真实薄实体/孔洞/外形变化反例；`test_cli_model_stage_report.py`补二进制颜色和ASCII非有限法向输入兼容，有限顶点、直接重建严格输入及文件身份保护继续验证。按当前源码/程序SHA256复用121原生断言/6例、44/44 CLI及普通切片/分盘证据；新测两份真实输入报告关/开各3轮、修复STL字节一致。成本、探针修正及Linux/GUI边界见[修复记录第九批](../validation/2026-10-28-local-repair-adoption.md)。不接入普通GUI，不连接业务依赖或下发打印。
 
 ## 失败与取消
@@ -194,9 +236,6 @@ Windows GUI 采集脚本使用 PowerShell 5.1 与内嵌 C# P/Invoke，默认延�
 
 2026-10-30：模型检查验证器显式区分默认 full 契约和 basic 的 `inspection_scope`。阶段 CLI 用例覆盖 basic 的检查/高级修复、开放面/穿插/薄片/退化面/孤立面、偏移参考拒绝及错误模式；full/重建继续核对原有双向采样字段，basic check/advanced 明确核对 not_requested/app_basic，不能把未计算写成零距离。普通默认路径用例继续保留。测试通过只覆盖 CLI 协议和本地模型，App 网络/轮询仍需统一部署后验收。
 
-2026-10-30 App 对齐 2.4.2 回归：basic 的未配对边与原生 `its_num_open_edges` 对照，并验证非流形边、退化、重复、方向冲突四项统计；自交和非流形顶点两项深检显式未请求且 count=null。覆盖开口、方向冲突、退化/重复、薄实体、穿插和非流形边；封闭穿插由 full 检出，但不触发 App 自动修复。验证非法索引/非有限坐标/空网格/容量限制仍拒绝，以及闭合修复候选的数据与闭合保护；App 不重复全检，默认 full 独立校验及绘色/回滚用例保留。真实模型采用实际引擎与模拟 DB/OBS 核对 App 阶段推进，耗时不等于 QA 网络和轮询时间。
-
-
 `test_slicing.cpp` 的 `[VariableLayerHeight]` 新增显式有界计划：首层0.1/0.24与普通层0.16–0.20、平滑开关、机器范围求交、非法浮点/范围、冲突分层设置，且对照旧adaptive重载未变。5项653断言通过，实际程序身份、同模型服务链路和报告开关验证见[质量策略记录](../validation/2026-10-22-bounded-quality-policy.md)。不替代GUI和真实打印验证。
 
 `scripts/test_cli_fixed_position_slice.py` 自带机器／工艺／耗材和小型 STL/OBJ，使用独立目录执行真实 CLI，
@@ -215,6 +254,26 @@ Linux 工作流在上传发布包前对解压后的 AppRun 执行同一回归，
 分盘脚本另用不对称四面体覆盖无镜像及全部七种镜像轴组合，避免对称方块掩盖反射丢失。含已有旋转/统一及非统一缩放、orient、主动摆盘、全局操作和实际切片，均覆盖单/多盘及JSON开关；按原始顶点与JSON逐点还原实际3MF，不固定某种等价欧拉角或镜像轴表示。切片案例检查有效挤出以及开关JSON时的G0/G1路径相同。镜像相关新增58次CLI调用，另加16次非等比缩放与定向的组合检查，专项总计154次；无法表达的剪切以实际3MF变换基向量不正交作独立核对，JSON明确拒绝而关闭JSON仍可导出工程；结果见[镜像修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。该定制JSON仅CLI提供，GUI无同名协议入口；不以脚本通过替代Linux/Windows和GUI的其他功能验收。
 
 `test_epone_presets.cpp` 的 `[Preset][GFDCloud]` 用临时用户目录保存两机型的云工艺和耗材，再执行 `save_user_presets` 与重新加载，核对机器子目录、兼容机型和各自层高/温度保持独立；不依赖云账号、不写真实用户预设。此共享存储测试不覆盖 Plater 的替换/另存弹窗、真实三档下拉和网络导入，合并后的构建/回归与 GUI 待验见[主记录](../validation/2026-10-04-smart-print-engine.md)。
+
+Thingi10K 下载工具的 `python3 scripts/tests/test_download_thingi10k.py -v` 在 macOS
+运行 57 项离线测试全部通过，覆盖字段解析、未知标记、确定性选择、网络／截断重试、
+网页和 LFS 指针拒绝、大小上限、原始空文件保留、续跑哈希及已有文件保护；分批用例验证
+互斥选择、末批／越界、独立目录续跑、配置变化拒绝、旧根文件保留及批目录软链接拒绝。
+新增用例验证默认五类缺陷严格筛选、未知和仅多部件/PWN 异常排除、单项类型、
+元数据正常对照组、筛选后分页/短首批、独立类型目录、dry-run 理由、旧版 all 清单续跑
+及 --ids 参数冲突。使用用户既有批次只读比对，`--subset all` 的 100 个 ID 及顺序与旧清单
+完全一致，不修改用户批次。
+固定官方索引有 9,998 个可下载 STL/OBJ，其中五类缺陷池 3,326 个；新默认前两批各 100 个，
+全部带缺陷标记且批次间无重复。隔离目录 `/tmp/thingi10k-filter-smoke.MGBG1S` 实际下载默认
+首样 `88380.stl` 并续跑校验跳过成功。通过用户运行中的独立本地网格检测器 API 只读复核该样例，
+得到开放边 57、非流形边 1、非流形顶点 3、自相交 642、退化面 25，其余两项为零，七项均 complete；
+此单样实测不代表全部筛选模型已验证，也不等同于 Orca 原生导入后的检测/修复结果。
+下载脚本本身未调用检测器，因此清单仍正确记录 `not_run`，不会把此次人工复核混入批次协议。
+此前在隔离临时
+目录下载真实官方索引和 `100026.stl`，再次运行跳过已完成文件；该样例 SHA256 与官方
+文件页的 `f1f1a4d7239df03d084d0e3dbfeba467f4e32a1f227b15b71e1e3881055479b5` 一致。
+对原链接扩展名 `.STL`、`.OBJ`、`.Obj` 的三个样例执行 HEAD，确认官方文件路径均为小写，
+不是直接沿用原链接大小写。未批量下载整个数据集，未进行模型修复、切片或 Windows／Linux 运行验收。
 
 Windows GUI 采集在 2026-10-09 收到同事现场 JSON：64 位 Windows PowerShell 5.1 下完成三次窗口／线程输入枚举及 249 次消息探测，均返回成功。它证明该环境下采集核心路径已执行；不替代多进程交互、错误处理、双击启动器或 Orca 修复验收。应用故障结论见[现场记录](../validation/2026-10-08-print-ui-freeze-log-analysis.md)。
 
@@ -286,6 +345,12 @@ Advancer3 下发协议专项目标 `gfd_print_options_tests` 位于 `tests/slic3
 
 本次 Linux 分支合入盘外 JSON 姿态修复的冲突处理与验证见[合并记录](../validation/2026-10-20-linux-overflow-merge.md)。
 
+2026-10-28 重建内部面采用专项：`[ModelStageReport][MaterialUnion]` 覆盖真实重叠体的内部面、数值接缝与0.001mm真实缝区分、外形膨胀、独立极薄实体丢失、贯通孔封堵、嵌套壳/内腔、开放壳及仅接触。服务测试验证完整重建限定、实际部件计数、外表面/bbox/reverse阈值、摘要缺失/无效与数值容差不得大于任务预算。真实15原件/普通切片分盘验证结果与当前二进制身份见[局部修复采用记录](../validation/2026-10-28-local-repair-adoption.md)，不能以夹具替代实际模型或实印验证。
+
+本地扩大修复验证的60件冻结原件、资源失败分类、40对切片及真实1秒超时回收结果见[本地修复采用记录](../validation/2026-10-28-local-repair-adoption.md)。样本中包括健康对照，不能把通过数量当缺陷修好率；虚拟床/关闭支撑的切片用于差异定位，不替代实物和真实服务验收。
+
+2026-10-30 App 对齐 2.4.2 回归：basic 的未配对边与原生 `its_num_open_edges` 对照，并验证非流形边、退化、重复、方向冲突四项统计；自交和非流形顶点两项深检显式未请求且 count=null。覆盖开口、方向冲突、退化/重复、薄实体、穿插和非流形边；封闭穿插由 full 检出，但不触发 App 自动修复。验证非法索引/非有限坐标/空网格/容量限制仍拒绝，以及闭合修复候选的数据与闭合保护；App 不重复全检，默认 full 独立校验及绘色/回滚用例保留。真实模型采用实际引擎与模拟 DB/OBS 核对 App 阶段推进，耗时不等于 QA 网络和轮询时间。
+
 2026-10-30 2.5修复核心回归：新增 `[MeshRepair]` 上游几何样例，更新 `[ModelRepair]`/`[MeshBoolean]`/`[ModelInspection]` 为整 volume 一次修复及真实残留语义。保留事务/绘色/取消、普通切层/分盘和 bracket 孔洞截面断言。CLI 验证 basic 完整修好、partial 实际净清理、纯平面 unresolved 后禁止常规导出，并用确定性竖直开放片保留残留开口策略的正反覆盖；bracket改为必须完整修好的CLI正例；不再依赖已退休的外层拆分/准备阶段计数。版本身份、实际结果及删除旧算法专用测试的依据见[移植记录](../validation/2026-10-30-thingi-repair-242-comparison.md)。
 
 2.5续接统一策略回归：`[MeshRepair]`补部分双面导出的内孔墙，继续要求接触实体内部界面清除和空腔保留；`[BoundaryClosure]`补缺两端盖的方管，检查预封口体积/环数及包覆后体积，防止逐环补盘失败后改成薄壳。原两种重建CLI真实执行范围分别为Alpha Wrap36项、MeshLib42项；最终构建身份及普通基础修复源码对照见[续接记录](../validation/2026-10-30-thingi-repair-242-comparison.md)。
@@ -295,3 +360,5 @@ Advancer3 下发协议专项目标 `gfd_print_options_tests` 位于 `tests/slic3
 2026-10-30续接保形回归：`[MeshRepair][PreserveSurface]`覆盖缺面大件旁完整薄实体（共享索引/三角汤两种表示）、远离原点的完整小实体；`[BoundaryClosure]`覆盖邻近开口部件不能在预封口阶段被焊接、只补面逐个保留原三角形、面预算拒绝不改源件。完整高级修复的焊接能力保持，预封口与最终近似包覆的不同职责分别断言。真实20份产物和两种重建CLI结果见同一续接记录。
 
 继续补验：环形补洞增加16/64/256边、倾斜/镜像与单双面导出组合；两项隐藏真实重建集成验证取消/超时/异常后的恢复及源件、变换和缓存保留。修复验收脚本提供工艺时另检查彩色OBJ外墙0的喷嘴自动与对象110%宽度，不提供工艺时原67项不变。88项修复验收、64项普通CLI切片及274原生/集成通过；合成工艺的初始加速度告警、彩色自动宽度失败及修正后的G-code对照分别保留，不能以合成工艺通过替代目标机型/GUI验收。
+
+2026-11-03离线审计补入`TRAVEL_SURFACE.max_travel_detour_distance`，核对PAM覆盖→快照→最终G-code中的百分比值，`50%`不能与`50mm`视为一致。28项当前单测通过。该工具仍只读，不做自动试参或打印；绕行上限生效后仍须独立统计实际空移、接缝附近路径和耗时，参数匹配不代表没有穿墙或实物质量已改善。

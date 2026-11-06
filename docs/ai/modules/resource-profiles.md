@@ -4,7 +4,7 @@
 {
   "id": "resource-profiles",
   "source_fingerprint": "sha256:c9d8e0cbdfd0a8ab0453d86f5e8a20659915262b5e63c7c28e725b173079540c",
-  "reason": "共享 EPONE 测试新增云导入回归，EPONE/Pro/Plus 资源、默认值和版本均未修改；无需改正文。"
+  "reason": "2026-11-06 整理历史文档：核对当前源码已包含工程有效工艺优先、嵌入工艺补缺逻辑；10 月撤回副本仅为历史，未撤回当前实现。本次无 C++、配置或 GUI 行为变更；历史验证不代表本轮重跑。"
 }
 -->
 

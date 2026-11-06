@@ -1,5 +1,7 @@
 # macOS 14 / Apple Silicon MeshLib 打包
 
+> 归档说明（2026-11-06）：本页保留调查当时的分支、构建、测试结果与待办；其中“当前／未提交／下一步”属于记录时点。此次只整理入库，不将历史结果视为当前发布验收。归档范围见[文档整理记录](2026-11-06-feature-documentation-consolidation.md)。
+
 ## 构建问题独立提交检查
 
 - 本次基准：`master` / `4e50224aca881146c0bab13aed9a18495cb4f838`。仅提交 macOS 构建目标选择、SDK 运行库准备/打包、CMake 链接目录及对应测试/文档；模型阶段报告、后端业务、GUI 排布和下载工具改动保持未提交。
@@ -77,3 +79,7 @@
 - 只读挂载镜像，sandbox-exec 禁止读取原 SDK、deps、准备库、zstd 构建目录、源 App 和 Homebrew，先验证 cat 读取确实被拒绝，再执行 cube MeshLib 重建：退出0、candidate_ready、runtime_identity_verified=true，两库实际从镜像内部加载。镜像已卸载。
 - 验证前后全部记录的源码、脚本、应用/测试程序和根 result.json 哈希未变；当前测试及报告对应本次新产物，不沿用上一轮结论。详细结果为 `user-rebuild-144848/verification.json`，命令和报告在同目录。
 - GUI 检查使用上面的最新 DMG，步骤沿用本记录 GUI 清单；本轮自动化没有代替原生 GUI 和 macOS14 实机检查，没有关闭用户已有 GUI 或修改用户配置。
+
+## 用户 GUI 启动反馈后续
+
+用户在15:06:37从源构建 App（同一主程序哈希）启动并操作分盘，随后反馈卡顿和官方2.5.0升级提示。复现采样确认更新说明长文本布局导致数秒主线程忙碌；分盘自身三次耗时48/17/19ms，盘外两个模型不相交但存在旧GUI累计位移路径。详见[GUI启动与分盘排查](2026-10-17-gui-startup-arrangement.md)。本次没有修改打包代码，不能据此归因为macOS14编译目标或MeshLib加载；DMG完整GUI清单与macOS14实机项仍未全部执行。
