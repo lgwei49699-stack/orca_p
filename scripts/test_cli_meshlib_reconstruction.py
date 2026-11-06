@@ -73,10 +73,11 @@ def check_execution_contract(report, process_id):
     assert execution["hard_timeout"] is False, execution
     assert execution["crash_isolation"] is False, execution
     limits = report["resource_limits"]
-    assert limits["budget_mode"] == "cooperative_process_memory", limits
+    assert limits["budget_mode"] == "preflight_memory_cooperative_timeout", limits
     expected_metric = {"Darwin": "physical_footprint", "Windows": "working_set"}.get(platform.system(), "resident_set")
     assert limits["memory_metric"] == expected_metric, limits
-    assert limits["observed_peak_memory_bytes"] > 0, limits
+    assert limits["memory_at_admission_bytes"] > 0, limits
+    assert "observed_peak_memory_bytes" not in limits, limits
     assert limits["hard_memory_limit"] is False, limits
 
 
@@ -339,7 +340,7 @@ def main():
                   flags=("--reconstruction-memory-mb", "4096"), expected_memory_limit_mb=4096)
         suite.run("explicit_memory_minimum_128", fixtures["cube"],
                   flags=("--reconstruction-memory-mb", "128"), expected_memory_limit_mb=128,
-                  statuses={"resource_limit", "memory_limit_exceeded"})
+                  statuses={"resource_limit"})
     suite.run("missing_risk_acceptance", fixtures["cube"], risk=False)
     suite.run("missing_voxel", fixtures["cube"], voxel=None)
     for label, value in (("zero", "0"), ("negative", "-0.1"), ("nan", "nan"),

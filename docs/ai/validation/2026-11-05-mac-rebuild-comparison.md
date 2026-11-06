@@ -1,8 +1,17 @@
 # Mac 本地 MeshLib 重建耗时与形状对照
 
-**当前执行状态（2026-11-06，审核完成，随本次提交入库）**：已实现通用的“原生候选先验收，合格保留，精确自交才额外修补一次并复验”。Mac arm64 构建及 CLI 验证完成，最终同批 100 件网格通过 77 件，改前 76 件的 STL 与距离检查结果全部保持一致；BODY 为唯一新增通过，无新增失败。38/39 重建单元/集成通过，唯一失败仍是此前开放穹顶变体；CLI 42/42、阶段报告 64/64、SDK-OFF 边界编译/调用检查通过。BODY / dragon 的 GUI 重建主流程已由 Computer Use 配合用户打开菜单完成：生成、保留、采用、导出、撤销和运行中取消通过，实际导出 STL 七项检查通过；另记录退出后进程驻留观察，不能扩展为整个 Mac 应用无问题。用户已授权审核后提交，本轮完整差异、构建身份及已知失败边界已复核；业务源码和已验证程序一致，清理旧策略文档后整理为中文提交；不推送、发布打包或操作服务器。GUI 仅使用隔离测试包。
+**2026-11-06 提交交付**：用户已授权提交并推送本批审核通过的 Orca 改动，然后只分析 `origin/linux/release2_3_2` 尚未合入的内容。提交前重新核对源码/程序 SHA256 与审核记录一致，复用已通过的运行结果；按规则再次执行全部/暂存模块检查和暂存空白检查。本轮不合并发布分支、不打标签、不部署。提交/推送结果及最新远端差异记录到本地 `build/diagnostics/reconstruction-delivery-20261106/`，具体提交号以 Git 历史为准。下文为提交前审核基线。
 
-**当前基准与实现**：工作目录 `/Users/liwei/Desktop/wiseBeginner/projects/slicer/orca-clubbot-mac-perf-20261103`，分支 `codex/meshlib-mac-adaptive-sampling-20261104`，提交前基线 HEAD `d512c9b4ec` 加本次重建改动。本轮最终程序 SHA256 `b125307d03c5b6b826a4ca195a3032a0a39fd99fdeff17bfbeb21974bbdab418`，源码/测试身份见 `build/diagnostics/body-validation-first-20261106/retained-identity.json`。同步值数组回调复用现有验收，保留原 SDK 候选供按需修补，避免再次导入改变拓扑；源数组导入后释放，外形距离加速点去重但不减少目标面/采样。普通切片、后端及第 2 项 `--repair-evidence` 准入不改。GUI 结果及独立退出观察见本文末记录；第 2 项仍等待用户根据阶段 1 的结果确认，本轮无新增自动重建轮次或准入阈值。
+**当前执行状态（2026-11-06，Orca 代码审核完成，本地未提交）**：已审核 acd2b468bc 上全部本轮未提交差异，修正 1 项失败结果不一致：资源准入通过后阶段报告发布失败，最终结果现在撤销许可而不再保留 accepted=true。其余新增准入、参数隔离和共享控制未发现代码阻塞项。用户确认的 0.30 mm、2 亿名义格、2048 MiB 启动前估算门槛、60秒协作时间预算保持；不恢复运行中的内存监测，不改 SDK 重建、网格验收或原件保护。没有修改后端、部署、打包、提交或推送。下一步可按交付文档接入后端并做真实链路验证；GUI 设置文案/交互仍待手测。
+
+**本轮审核修正证据**：`build/diagnostics/reconstruction-admission-review-20261106/regression-before.log` 记录修改前 273 断言中 2 处失败；现已通过。新增业务投影回归保留已计算工作量，只在最终依据不允许时撤销许可。最小构建命令 `cmake --build build/arm64 --config Release --target OrcaSlicer libslic3r_tests -j 6` 退出0，`build.log` 中仅有既有 ExtrusionEntity.hpp 临时对象 move 警告，本次未扩大范围修改。
+
+**当前身份**：工作区 `orca-clubbot-mac-perf-20261103`，分支 `codex/meshlib-mac-adaptive-sampling-20261104`，已推送 HEAD `acd2b468bc` 加本轮未提交修改。最新应用 SHA256 `462881ef9a8782d9e071d1536bd3bb5fe6e58902485a8ceec0065d2edab20855`，测试程序 `334d8f889a388e22ca7795656f2bd455ac4085fb82b72b30fc36b20a0042d49f`；构建目录核对为当前工作区、arm64 Release / MeshLib ON。源码/测试/程序/翻译身份见 `build/diagnostics/reconstruction-admission-review-20261106/identity.json`。审核开始时已核对上一轮全部已记录身份一致；后续只修改工作流结果投影及其测试。
+
+**最新验证**：最小构建退出0；70组1538断言、122检查CLI、65阶段报告CLI通过。真实 SDK 停止/复用1组157断言、42重建CLI及翻译查译是上一轮对应未变代码的通过证据，本次审核没有重复运行这些套件。当前环境无 clang-format，按相邻风格人工复核。GUI文案已同步并编译，但实际界面布局/按钮手测未执行；具体操作和输入见交付文档GUI清单，不沿用旧包证明新版。Git空白及35模块文档检查通过，后者0问题。
+
+**实施边界**：`--repair-evidence` 对高级修复后实际保留产物返回准入；默认模型健康不重建，预算拒绝保留高级产物。2 GiB 只做预估门槛，运行峰值可以超过它。正式重建启动前仅一次读取自身内存并加到工作量估算；运行中只有时间和取消检查，仍不能强制中断所有 SDK 阶段。报告 `budget_mode=preflight_memory_cooperative_timeout`，`memory_at_admission_bytes` 仅表示初始占用，删除旧运行峰值字段。普通切片/分盘路径未接入这些控制。历史77/100及BODY/dragon GUI数据作为原策略基线，未重跑100件、未声称本次全模型修复率或耗时改变。
+
 
 工具与身份：CodeGraph MCP 未暴露，CLI 已安装，但当前工作目录无 `.codegraph` 索引，按源码和模块文档继续，不初始化。开始时未发现并行构建；已有 Mac arm64 Release / MeshLib 3.1.3.429 SDK 构建供增量验证。GUI 和 CLI 共用 `ModelReconstruction → MeshLibAdapter`，本轮保持精度选择和既有网格验收；GUI 应用构建需同步更新，未执行的交互另列。
 
@@ -530,3 +539,39 @@ Computer Use 能操作 AX 菜单/原生弹窗，但主窗口坐标点击持续 `
 - BODY/dragon 已验证生成、采用、撤销、保留、导出及运行中取消；当前包没有补做所有历史 GUI 清单、全平台打包或实际打印。采样偏差及网格通过不保证所有设计细节恢复。
 
 模块文档全量与暂存区检查均为 35 个模块、0 个问题；`git diff --cached --check` 通过。当前源码与已验证构建一致，本文随实现一笔入库，不包含原始日志、模型或构建产物。后续第 2 项准入设计仍待用户确认，不因此次入库自动实施。
+
+
+## 2026-11-06 第 2 项：用户确认的准入预算
+
+静态复核现有 100 件原始模型 SHA-256、三角面与三轴包围盒，按 `Π max(1, ceil(size_axis / float(voxel)))` 回算名义体素格数，不重跑重建。1 亿格会拦 6 件，其中 `21_chantalla.stl`（约 1.815 亿格）此前已用 10.769 秒通过；2 亿格只拦 2 件，均为此前资源预估拒绝的超大模型，不拦这批 77 件成功模型。BLOCKS 约 1.751 亿格，仍会进入后续流程并可能返回空候选；不能增加模型名黑名单或以格数承诺准确耗时。静态证据为 `build/diagnostics/reconstruction-admission-20261106/grid-replay.json`，不入库。
+
+用户已选择 2 亿格方案。按现有几何证据判断是否值得重建，静态资源判断是否允许启动；内存上限和时间上限由原生协作控制与服务的进程预算继续约束。只增加一个资源准入结果和最少配置，不新增多档自动试参、候选循环或后端独立算法。
+
+### 第 2 项实现批次（本地未提交）
+
+已增加 `boundary.reconstruction.admission`，默认 0.30 mm / 200000000 格 / 2048 MiB / 60000 ms；仅显式 check-model + cgal + repair-evidence 组合计算。高级修复结果和已有证据原因/退出语义保持，预算拒绝仍保留高级修复产物。内存估算复用现有公式，提取几何工作量与当前进程驻留量两部分；后续重建仍检测整进程预算。两种入口不增加重建轮次或自动粗化。
+
+Mac arm64 Release 构建通过，首轮 13 组原生测试 120 断言、122 项检查 CLI 通过。随后消除共享估算提取中多余的一次包围盒遍历、增加阶段报告准入字段一致性回归，最终程序已重新构建，正在执行回归。未改后端或启动服务器验证。
+
+### 第 2 项最终验收与交接
+
+最终命令及证据目录均为 `build/diagnostics/reconstruction-admission-20261106/`：
+
+- `cmake --build build/arm64 --config Release --target OrcaSlicer libslic3r_tests -j 6`：退出 0，`build-final.log`；没有并行构建。
+- `libslic3r_tests '[ReconstructionAdmission],[InProcessReconstruction],[RepairEvidence],[Inspection],[ModelInspection]'`：退出 0，71 组1517断言，`unit-complete.log`。
+- `test_cli_model_check.py`：退出 0，122/122，`cli-check-final.log`。
+- `test_cli_model_stage_report.py --meshlib enabled`：退出 0，65/65，`stages-final.log`。首次新用例的共面相交夹具无确切穿透，不能预期资源判断；改用既有穿透夹具，没有修改证据规则。
+- `test_cli_meshlib_reconstruction.py`：退出 0，42/42，`meshlib-cli.log`。
+- `msgfmt --check-format`、`git diff --check`、`check_ai_module_docs.py --all`：退出 0；模块问题 0。未暂存或提交本轮改动。
+
+[后端交付](2026-11-06-reconstruction-admission-handoff.md)已写清字段、参数、模型身份、快检/完整验收、拒绝与硬超时处理。只读发现服务现有 `reconstructionVoxelMm(...)` 会按最长边/1024改精度，后续需移除以保证准入和执行一致；重建导出协议兼容仅在核对的服务未提交工作区中出现，不据此宣称已上线。下一步是后端小范围接入，当前不提前进入服务器验证。
+
+## 2026-11-06 用户确认：内存只在启动前估算
+
+在完成2亿格准入之后，用户进一步确认运行内存检查无需保留。本次删除控制器中的内存读取回调、内存/峰值原子字段、运行超限停止原因和对应分支；没有新增开关或另一套取消路径。时间与用户取消仍共用原子停止状态，后台任务保持 join，取消后源模型不变、后续可再次使用。
+
+`--reconstruction-memory-mb` 名称和范围保持128～4096 MiB。真正重建调用SDK前一次读取本进程内存，失败时仍不能当作0放行；预估超过配置值提前拒绝。通过后不采样、不因实际用量超过该值中断。GUI设置文字、CLI帮助、简中翻译和报告语义同步，不能将该变更表述成2GiB硬隔离或明显性能提升。
+
+最新证据目录 `build/diagnostics/reconstruction-preflight-only-20261106/`：`build.log`、`unit.log`、`sdk-control.log`、`cli-check.log`、`stages.log`、`meshlib-cli.log`，上述构建和验证退出码均0。运行内存测试随被删除功能移除，真实SDK生成/超时/取消/回调异常/再次使用仍通过；新CLI合同要求启动前测量值且禁止输出旧峰值字段。翻译完整CLI帮助去除启动日志后与MO键精确一致，GUI源串含两个%u占位符查译通过。
+
+后端交付同步注明新的报告字段和预估门槛含义，无需额外建立高频内存监控。本轮未改服务、未提交。GUI手测和实际后端链路仍是后续验收项，见[交付与GUI清单](2026-11-06-reconstruction-admission-handoff.md)。

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "multimaterial",
-  "source_fingerprint": "sha256:2e88466daf6538dec8af8fccdbf5cb8449151a647459b1664a739d7081f19d8b",
-  "reason": "2026-11-03 Linux 2.3.2 合并。合并 OBJ 颜色槽、耗材绑定及纹理修复后的面颜色映射。"
+  "source_fingerprint": "sha256:de2f7dfcdf6a8b7c4216b7a4e04ace22b8db852c147cec967ac6afe509b18ddd",
+  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
 }
 -->
 

@@ -42,6 +42,26 @@ constexpr size_t  OUTPUT_FACE_LIMIT = RECONSTRUCTION_MAX_OUTPUT_FACES;
 constexpr char    MESH_IDENTITY_DOMAIN[8] = {'O', 'R', 'C', 'A', 'R', 'C', '0', '1'};
 std::atomic<bool> reconstruction_running{false};
 
+InProcessReconstructionEstimateInput reconstruction_estimate_input(const TriangleMesh& mesh, const BoundingBoxf3& bounds,
+                                                                    double voxel_mm, size_t max_output_faces)
+{
+    InProcessReconstructionEstimateInput input;
+    input.input_faces      = mesh.its.indices.size();
+    input.input_vertices   = mesh.its.vertices.size();
+    input.max_output_faces = max_output_faces;
+    input.voxel_mm         = voxel_mm;
+    const auto extent      = bounds.size();
+    for (int axis = 0; axis < 3; ++axis)
+        input.extent_mm[axis] = extent[axis];
+    for (const auto& f : mesh.its.indices) {
+        const Vec3d a = mesh.its.vertices[f[0]].cast<double>();
+        const Vec3d b = mesh.its.vertices[f[1]].cast<double>();
+        const Vec3d c = mesh.its.vertices[f[2]].cast<double>();
+        input.surface_area_mm2 += 0.5 * (b - a).cross(c - a).norm();
+    }
+    return input;
+}
+
 std::string sha256_bytes(const void* bytes, size_t size)
 {
     unsigned char digest[EVP_MAX_MD_SIZE];
@@ -601,12 +621,12 @@ bool run_meshlib_in_process(const TriangleMesh&               source,
                             TriangleMesh&                     hull,
                             json&                             report)
 {
-    InProcessReconstructionControl control(limits.timeout_ms, limits.memory_limit_mb);
+    InProcessReconstructionControl control(limits.timeout_ms);
     report["execution"]                            = {{"mode", "in_process"},
                                                       {"process_id", current_reconstruction_process_id()},
                                                       {"hard_timeout", false},
                                                       {"crash_isolation", false}};
-    report["resource_limits"]["budget_mode"]       = "cooperative_process_memory";
+    report["resource_limits"]["budget_mode"]       = "preflight_memory_cooperative_timeout";
     report["resource_limits"]["hard_memory_limit"] = false;
     report["resource_limits"]["memory_metric"]     = reconstruction_memory_metric();
     report["parameters"]                           = {{"engine", "meshlib"},
@@ -616,7 +636,6 @@ bool run_meshlib_in_process(const TriangleMesh&               source,
                                                       {"max_input_faces", options.mesh.max_input_faces},
                                                       {"max_output_faces", options.mesh.max_output_faces}};
     const auto update_stop                         = [&] {
-        report["resource_limits"]["observed_peak_memory_bytes"] = control.peak_memory_bytes();
         report["resource_limits"]["cooperative_elapsed_ms"]     = control.elapsed_ms();
         if (!control.keep_running()) {
             report["status"] = inprocess_reconstruction_stop_name(control.stop_reason());
@@ -626,9 +645,6 @@ bool run_meshlib_in_process(const TriangleMesh&               source,
                 break;
             case InProcessReconstructionStop::TimedOut:
                 report["message"] = L("Reconstruction exceeded its time budget. The original model was kept.");
-                break;
-            case InProcessReconstructionStop::MemoryLimitExceeded:
-                report["message"] = L("Reconstruction exceeded the memory budget for the whole application. The original model was kept.");
                 break;
             case InProcessReconstructionStop::MonitorFailed:
                 report["message"] = L("Reconstruction stopped because resource monitoring failed. The original model was kept.");
@@ -643,23 +659,13 @@ bool run_meshlib_in_process(const TriangleMesh&               source,
         update_stop();
         return false;
     }
-    InProcessReconstructionEstimateInput estimate_input;
-    estimate_input.input_faces      = source.its.indices.size();
-    estimate_input.input_vertices   = source.its.vertices.size();
-    estimate_input.max_output_faces = options.mesh.max_output_faces;
-    estimate_input.voxel_mm         = options.voxel_mm;
-    estimate_input.memory_bytes     = control.memory_bytes();
-    estimate_input.memory_limit_mb  = limits.memory_limit_mb;
-    const auto bounds_mm            = source.bounding_box();
-    const auto extent               = bounds_mm.size();
-    for (int i = 0; i < 3; ++i)
-        estimate_input.extent_mm[i] = extent[i];
-    for (const auto& f : source.its.indices) {
-        const Vec3d a = source.its.vertices[f[0]].cast<double>();
-        const Vec3d b = source.its.vertices[f[1]].cast<double>();
-        const Vec3d c = source.its.vertices[f[2]].cast<double>();
-        estimate_input.surface_area_mm2 += 0.5 * (b - a).cross(c - a).norm();
-    }
+    const auto bounds_mm           = source.bounding_box();
+    auto estimate_input            = reconstruction_estimate_input(source, bounds_mm, options.voxel_mm, options.mesh.max_output_faces);
+    // Sample the current host once. The configured memory value is a preflight
+    // estimate threshold; runtime polling only checks the deadline/cancellation.
+    current_reconstruction_memory_bytes(estimate_input.memory_bytes);
+    report["resource_limits"]["memory_at_admission_bytes"] = estimate_input.memory_bytes;
+    estimate_input.memory_limit_mb = limits.memory_limit_mb;
     const auto estimate = estimate_inprocess_reconstruction(estimate_input);
     report["admission"] = {{"accepted", estimate.accepted},
                            {"reason", estimate.reason},
@@ -778,6 +784,48 @@ TriangleMesh read_bounded_model_stl(const std::string& path, std::string& sha256
 }
 
 std::string model_mesh_file_sha256(const std::string& path) { return sha256_file(fs::path(path)); }
+
+void validate_reconstruction_admission_options(const ReconstructionAdmissionOptions& options)
+{
+    if (!std::isfinite(options.voxel_mm) || options.voxel_mm <= 0. || options.voxel_mm > std::numeric_limits<float>::max() ||
+        float(options.voxel_mm) <= 0. || options.max_grid_cells == 0 || options.max_grid_cells > std::numeric_limits<int>::max() ||
+        options.memory_limit_mb < 128 || options.memory_limit_mb > 4096 || options.timeout_ms < 1000 || options.timeout_ms > 300000)
+        throw std::invalid_argument(L("Invalid reconstruction parameters or unsupported resource limits."));
+}
+
+nlohmann::json model_reconstruction_admission(const TriangleMesh& mesh, const ReconstructionAdmissionOptions& options)
+{
+    validate_reconstruction_admission_options(options);
+    json result = {{"accepted", false}, {"reason", "backend_unavailable"},
+                   {"voxel_mm", options.voxel_mm}, {"max_grid_cells", options.max_grid_cells},
+                   {"memory_limit_mb", options.memory_limit_mb}, {"timeout_ms", options.timeout_ms},
+                   {"estimate_is_upper_bound", false}};
+    if (!model_reconstruction_available())
+        return result;
+    const auto input    = reconstruction_estimate_input(mesh, mesh.bounding_box(), options.voxel_mm, OUTPUT_FACE_LIMIT);
+    const auto estimate = estimate_reconstruction_workload(input);
+    result["reason"] = estimate.reason;
+    if (!estimate.accepted)
+        return result;
+    // Nominal bounding grid; the memory heuristic separately includes SDK padding.
+    long double cells = 1.;
+    for (const auto extent : input.extent_mm)
+        cells *= std::max(1.L, std::ceil(static_cast<long double>(extent) / float(options.voxel_mm)));
+    result["estimated_incremental_bytes"] = estimate.estimated_incremental_bytes;
+    // A larger-than-uint64 grid is already over the supported configured cap.
+    result["grid_cells"] = cells < std::ldexp(1.L, 64) ? json(uint64_t(cells)) : json(nullptr);
+    if (cells > options.max_grid_cells) {
+        result["reason"] = "grid_cell_budget_exceeded";
+        return result;
+    }
+    if (estimate.estimated_incremental_bytes > uint64_t(options.memory_limit_mb) * 1024 * 1024) {
+        result["reason"] = "estimated_memory_budget_exceeded";
+        return result;
+    }
+    result["accepted"] = true;
+    result["reason"]   = "within_heuristic_budget";
+    return result;
+}
 
 bool model_reconstruction_available() noexcept { return OrcaMeshLib::available(); }
 
@@ -1054,7 +1102,7 @@ int run_model_reconstruction_cli(const std::vector<std::string>& args)
                     "Input limits: 3000000 faces, 256 MiB STL. Output limit: 1000000 faces.\n"
                     "Automatic budgets: 120/180/300 seconds and up to 1024/2048/4096 MiB by input size.\n"
                     "Automatic memory is capped at one quarter of physical RAM; explicit budgets override the defaults.\n"
-                    "MeshLib runs inside Orca. Time and whole-process memory limits are cooperative, not hard isolation.\n"
+                    "MeshLib runs inside Orca. Memory is checked only by preflight estimate; runtime cancellation is time-based.\n"
                     "Cancellation waits for SDK and validation work to return. Candidate confirmation and trial slicing are separate.\n");
                 return 0;
             }

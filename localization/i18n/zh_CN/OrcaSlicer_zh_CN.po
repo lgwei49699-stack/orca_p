@@ -20008,8 +20008,8 @@ msgstr "MeshLib 按所选体素尺寸重建模型。体素越小，耗时和内�
 
 #: src/slic3r/GUI/ModelReconstructionDialog.cpp
 #, c-format
-msgid "Cooperative budget: %u seconds, %u MiB for the whole application. Cancellation waits for reconstruction and validation to return; the original model is kept."
-msgstr "协作预算：%u 秒，整个应用 %u MiB。取消时需等待重建和检查返回，原模型会保留。"
+msgid "Time budget: %u seconds; preflight memory estimate limit: %u MiB. Memory is not monitored during reconstruction. Cancellation waits for reconstruction and validation to return; the original model is kept."
+msgstr "时间预算：%u 秒；启动前内存估算门槛：%u MiB。重建过程中不监测内存。取消需等待重建和验收返回，原模型会保留。"
 
 
 #: src/libslic3r/ModelReconstruction.cpp
@@ -20017,8 +20017,8 @@ msgid "Only the meshlib reconstruction engine is supported."
 msgstr "仅支持 MeshLib 重建引擎。"
 
 #: src/libslic3r/ModelReconstruction.cpp
-msgid "Usage: --reconstruct-model INPUT.stl --reconstruction-voxel-mm MM --outputdir NEW_DIRECTORY --accept-reconstruction-risk\nMeshLib is the only reconstruction engine. --reconstruction-engine meshlib is optional.\nOptions: --reconstruction-max-deviation MM --reconstruction-timeout SECONDS (1 to 300)\n         --reconstruction-memory-mb INTEGER (128 to 4096 MiB) --repair-evidence [0|1]\nOptional business report: --model-stage-report [0|1] --model-reference ORIGINAL.stl\nGenerates an approximate candidate only. The original is never overwritten. No automatic retries or fallback.\nSTL units are millimeters. Holes, cavities and fine details may change; colored STL is unsupported.\nMaximum deviation is a warning threshold, not a rejection limit.\nInput limits: 3000000 faces, 256 MiB STL. Output limit: 1000000 faces.\nAutomatic budgets: 120/180/300 seconds and up to 1024/2048/4096 MiB by input size.\nAutomatic memory is capped at one quarter of physical RAM; explicit budgets override the defaults.\nMeshLib runs inside Orca. Time and whole-process memory limits are cooperative, not hard isolation.\nCancellation waits for SDK and validation work to return. Candidate confirmation and trial slicing are separate.\n"
-msgstr "用法：--reconstruct-model INPUT.stl --reconstruction-voxel-mm MM --outputdir NEW_DIRECTORY --accept-reconstruction-risk\nMeshLib 是唯一重建引擎，可省略 --reconstruction-engine meshlib。\n选项：--reconstruction-max-deviation MM --reconstruction-timeout SECONDS（1 至 300）\n      --reconstruction-memory-mb INTEGER（128 至 4096 MiB）--repair-evidence [0|1]\n可选业务报告：--model-stage-report [0|1] --model-reference ORIGINAL.stl\n仅生成近似候选，绝不覆盖原件；不自动重试或回退。\nSTL 单位为毫米。孔洞、内腔和细节可能改变；不支持彩色 STL。\n最大偏差是提示阈值，不是拒绝条件。\n输入上限：3000000 面、256 MiB STL；输出上限：1000000 面。\n自动预算：按输入规模选择 120/180/300 秒，内存最多 1024/2048/4096 MiB。\n自动内存不超过物理内存的四分之一；显式预算覆盖默认值。\nMeshLib 在 Orca 进程内运行。时间和整个进程内存的限制是协作预算，不是硬隔离。\n取消需等待 SDK 和检查结束。候选确认与试切片是后续独立操作。\n"
+msgid "Usage: --reconstruct-model INPUT.stl --reconstruction-voxel-mm MM --outputdir NEW_DIRECTORY --accept-reconstruction-risk\nMeshLib is the only reconstruction engine. --reconstruction-engine meshlib is optional.\nOptions: --reconstruction-max-deviation MM --reconstruction-timeout SECONDS (1 to 300)\n         --reconstruction-memory-mb INTEGER (128 to 4096 MiB) --repair-evidence [0|1]\nOptional business report: --model-stage-report [0|1] --model-reference ORIGINAL.stl\nGenerates an approximate candidate only. The original is never overwritten. No automatic retries or fallback.\nSTL units are millimeters. Holes, cavities and fine details may change; colored STL is unsupported.\nMaximum deviation is a warning threshold, not a rejection limit.\nInput limits: 3000000 faces, 256 MiB STL. Output limit: 1000000 faces.\nAutomatic budgets: 120/180/300 seconds and up to 1024/2048/4096 MiB by input size.\nAutomatic memory is capped at one quarter of physical RAM; explicit budgets override the defaults.\nMeshLib runs inside Orca. Memory is checked only by preflight estimate; runtime cancellation is time-based.\nCancellation waits for SDK and validation work to return. Candidate confirmation and trial slicing are separate.\n"
+msgstr "用法：--reconstruct-model INPUT.stl --reconstruction-voxel-mm MM --outputdir NEW_DIRECTORY --accept-reconstruction-risk\nMeshLib 是唯一重建引擎，可省略 --reconstruction-engine meshlib。\n选项：--reconstruction-max-deviation MM --reconstruction-timeout SECONDS（1 至 300）\n      --reconstruction-memory-mb INTEGER（128 至 4096 MiB）--repair-evidence [0|1]\n可选业务报告：--model-stage-report [0|1] --model-reference ORIGINAL.stl\n仅生成近似候选，绝不覆盖原件；不自动重试或回退。\nSTL 单位为毫米。孔洞、内腔和细节可能改变；不支持彩色 STL。\n最大偏差是提示阈值，不是拒绝条件。\n输入上限：3000000 面、256 MiB STL；输出上限：1000000 面。\n自动预算：按输入规模选择 120/180/300 秒，内存最多 1024/2048/4096 MiB。\n自动内存不超过物理内存的四分之一；显式预算覆盖默认值。\nMeshLib 在 Orca 进程内运行。内存仅在启动前估算检查，运行时按时间预算协作取消。\n取消需等待 SDK 和检查结束。候选确认与试切片是后续独立操作。\n"
 
 msgid "The mesh has non-manifold geometry or open boundaries. You can import it as-is or repair it before importing."
 msgstr "模型存在非流形结构或开放边界。可直接导入，也可修复后再导入。"
@@ -20058,3 +20058,30 @@ msgstr "按当前体素大小，模型包围盒超过一亿格，重建可能较
 
 msgid "Exported reconstruction STL has an incorrect face count or file size."
 msgstr "重建 STL 的三角面数或文件长度与预期不符。"
+
+msgid "Reconstruction admission options require --check-model, --repair-model cgal and --repair-evidence."
+msgstr "重建准入参数需与 --check-model、--repair-model cgal 和 --repair-evidence 一起使用。"
+
+msgid "Reconstruction voxel size (mm)"
+msgstr "重建体素尺寸（mm）"
+
+msgid "Physical voxel size for repair-evidence admission. Does not reconstruct or change precision automatically."
+msgstr "修复依据准入判断使用的物理体素尺寸。不会自动重建或更改精度。"
+
+msgid "Maximum reconstruction grid cells"
+msgstr "重建网格格数上限"
+
+msgid "Maximum nominal bounding-grid cells for repair-evidence admission. This is not an estimate of elapsed time."
+msgstr "修复依据准入判断允许的包围盒名义网格格数上限。这不是耗时估计。"
+
+msgid "Reconstruction preflight memory budget (MiB)"
+msgstr "重建启动前内存预算（MiB）"
+
+msgid "Preflight memory estimate threshold for repair evidence and reconstruction. Memory is not monitored during reconstruction."
+msgstr "修复依据和重建使用的启动前内存估算门槛。重建过程中不监测内存。"
+
+msgid "Reconstruction time budget (seconds)"
+msgstr "重建时间预算（秒）"
+
+msgid "Time budget to pass to the subsequent reconstruction process. Some SDK operations may delay cooperative cancellation."
+msgstr "传递给后续重建进程的时间预算。某些 SDK 操作可能延迟响应协作取消。"

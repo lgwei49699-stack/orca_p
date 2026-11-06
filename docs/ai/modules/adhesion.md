@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "adhesion",
-  "source_fingerprint": "sha256:5cdd206d90b612f603d001c985da02f11a751da7279d48d18db959eafbffef5c",
-  "reason": "2026-11-03 Linux 2.3.2 合并。核对打印流程中的冲刷矩阵校验及共享几何依赖。"
+  "source_fingerprint": "sha256:b645d7f0a2d9e1d35267a13dfc8a3207bdd9ba5bfaa724722037c419a3984c1f",
+  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
 }
 -->
 

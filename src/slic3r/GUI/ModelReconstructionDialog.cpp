@@ -231,8 +231,9 @@ bool show_model_reconstruction_settings(wxWindow* parent, const BoundingBoxf3& b
                         "No automatic coarsening or fallback is performed. Surface deviation is a warning, not a rejection limit."),
                      570);
     add_wrapped_text(*content, *content_sizer,
-                     wxString::Format(_L("Cooperative budget: %u seconds, %u MiB for the whole application. "
-                                         "Cancellation waits for reconstruction and validation to return; the original model is kept."),
+                     wxString::Format(_L("Time budget: %u seconds; preflight memory estimate limit: %u MiB. "
+                                         "Memory is not monitored during reconstruction. Cancellation waits for reconstruction and validation "
+                                         "to return; the original model is kept."),
                                       options.limits.timeout_ms / 1000, static_cast<unsigned>(options.limits.memory_limit_mb)),
                      570);
     auto*      cost_label  = add_wrapped_text(*content, *content_sizer, wxEmptyString, 570);

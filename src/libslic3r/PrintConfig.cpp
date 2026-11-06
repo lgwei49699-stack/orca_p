@@ -8513,6 +8513,32 @@ CLIMiscConfigDef::CLIMiscConfigDef()
     def->cli_params = "0|1";
     def->set_default_value(new ConfigOptionBool(false));
 
+    // Service-side preflight only. Standalone reconstruction parses these
+    // resource options separately; ordinary print/GUI configurations ignore them.
+    def          = this->add("reconstruction_voxel_mm", coFloat);
+    def->label   = L("Reconstruction voxel size (mm)");
+    def->tooltip = L("Physical voxel size for repair-evidence admission. Does not reconstruct or change precision automatically.");
+    def->cli     = "reconstruction-voxel-mm";
+    def->set_default_value(new ConfigOptionFloat(0.30));
+
+    def          = this->add("reconstruction_max_grid_cells", coInt);
+    def->label   = L("Maximum reconstruction grid cells");
+    def->tooltip = L("Maximum nominal bounding-grid cells for repair-evidence admission. This is not an estimate of elapsed time.");
+    def->cli     = "reconstruction-max-grid-cells";
+    def->set_default_value(new ConfigOptionInt(200000000));
+
+    def          = this->add("reconstruction_memory_mb", coInt);
+    def->label   = L("Reconstruction preflight memory budget (MiB)");
+    def->tooltip = L("Preflight memory estimate threshold for repair evidence and reconstruction. Memory is not monitored during reconstruction.");
+    def->cli     = "reconstruction-memory-mb";
+    def->set_default_value(new ConfigOptionInt(2048));
+
+    def          = this->add("reconstruction_timeout", coInt);
+    def->label   = L("Reconstruction time budget (seconds)");
+    def->tooltip = L("Time budget to pass to the subsequent reconstruction process. Some SDK operations may delay cooperative cancellation.");
+    def->cli     = "reconstruction-timeout";
+    def->set_default_value(new ConfigOptionInt(60));
+
     def          = this->add("model_inspection_mode", coString);
     def->label   = L("Model inspection mode");
     def->tooltip = L("With --check-model, basic uses the native open-edge repair check; full keeps all diagnostics.");

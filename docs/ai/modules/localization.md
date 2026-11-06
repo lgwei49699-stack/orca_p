@@ -3,14 +3,18 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:3a19b7b3907e202fe257bc1b5e98172ff772c79827c3b23416e24384d800a614",
-  "reason": "新增网格成本提示与导出完整性错误的简体中文翻译，英文原文及翻译内容已静态复核；本轮 BODY/dragon GUI 使用英文，历史中文验证另见记录。"
+  "source_fingerprint": "sha256:0930859cca8f54a77b786e20b87a04683d1d521dcfe546f0fdc1ee9ce55e253f",
+  "reason": "2026-11-06：按用户确认移除运行内存采样/超限取消，保留启动前估算、计时/取消及候选验收；GUI/CLI报告及中英文说明同步，正文和交付清单已更新；当前构建与回归身份见验证记录，GUI手测未执行。"
 }
 -->
 
 新增网格成本提示与导出完整性错误的简体中文翻译，英文原文及翻译内容已静态复核；本轮 BODY/dragon GUI 使用英文，历史中文验证另见记录。 [本轮验证](../validation/2026-10-31-cgal-621-upgrade.md)
 
 超过一亿格时，重建设置提醒用户时间成本以及调大体素对小孔、薄壁的影响。 [Mac 实测](../validation/2026-10-31-cgal-621-upgrade.md)
+
+2026-11-06：四项 CLI 准入参数标签/说明及组合错误补齐英文与简中，说明体素不会自动改变、名义格数不是耗时预测、内存估计不是上界、取消可能延迟；没有新增 GUI 控件或调整 GUI 默认精度。翻译编译与运行范围见[准入交付](../validation/2026-11-06-reconstruction-admission-handoff.md)。
+
+2026-11-06：GUI 设置提示、CLI 完整帮助及准入参数说明同步中英文，明确内存只作启动前估算，重建中不监测；占位符保持两个 `%u`。`msgfmt --check-format`、GUI 源串和 CLI 完整帮助的 MO 查译通过，GUI 实际布局/语言切换待手测，清单见[交接](../validation/2026-11-06-reconstruction-admission-handoff.md#gui-本轮交接待界面手测)。
 
 ## 职责与边界
 

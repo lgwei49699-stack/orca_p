@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gcode-export",
-  "source_fingerprint": "sha256:8d7aed3370e0a1dca090b4021227154a7950ef08c84a5cd64af04720316554e5",
-  "reason": "2026-11-03 Linux 2.3.2 合并。核对工具顺序、擦料塔矩阵约束和几何依赖的组合版本。"
+  "source_fingerprint": "sha256:7d9f50781c519f2d6e3aa7e0ec24824d741232926f37a60afcca31f805b40db9",
+  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
 }
 -->
 

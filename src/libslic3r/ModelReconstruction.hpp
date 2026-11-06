@@ -3,6 +3,7 @@
 
 #include "MeshReconstruction.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -18,7 +19,7 @@ struct ReconstructionLimits
 {
     // Zero selects a size-aware budget. Explicit caller values are retained.
     unsigned              timeout_ms      = 0;
-    std::size_t           memory_limit_mb = 0;
+    std::size_t           memory_limit_mb = 0; // Preflight estimate threshold; no runtime memory cap.
     std::function<bool()> is_canceled;
     // Runs on the caller/UI thread. Cancellation waits for SDK work to return.
     std::function<void()> on_tick;
@@ -31,6 +32,21 @@ struct ModelReconstructionOptions
     // CLI requires an explicit size. GUI supplies the value shown to the user.
     double voxel_mm = 0.;
 };
+
+// Automatic CLI admission only. Explicit GUI/CLI reconstruction keeps its
+// existing user-selected precision and runtime limits.
+struct ReconstructionAdmissionOptions
+{
+    double   voxel_mm        = 0.30;
+    uint64_t max_grid_cells  = 200000000;
+    size_t   memory_limit_mb = 2048;
+    unsigned timeout_ms      = 60000;
+};
+
+void validate_reconstruction_admission_options(const ReconstructionAdmissionOptions& options);
+// Read-only resource estimate for an already inspected, eligible physical mesh.
+// Necessity/applicability stay in repair evidence; this never invokes MeshLib.
+nlohmann::json model_reconstruction_admission(const TriangleMesh& mesh, const ReconstructionAdmissionOptions& options);
 
 bool model_reconstruction_available() noexcept;
 

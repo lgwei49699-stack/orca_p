@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:391f7efee5ef5f7e089ff3c0231ed9cde277e4220c658e0f94503a9af487b325",
-  "reason": "显式重建导出后验证二进制 STL 面数、长度和哈希；重建阶段报告标记 binary_stl_count_and_size，其他阶段维持完整回读。"
+  "source_fingerprint": "sha256:154ffb1bf512a974042caf99042717149e625840424101b12b25bfa0767658a5",
+  "reason": "2026-11-06 审核：复核四项准入参数的组合限制、默认/非法值、独立重建解析及普通切片隔离；报告发布失败撤销准入许可，现有退出码与几何证据保留。内存仅启动前估算，CLI检查和阶段报告回归通过，GUI手测另列。"
 }
 -->
 
@@ -12,7 +12,13 @@
 
 显式重建在读入 STL 后、生成候选前向 stderr 提示超过一亿格的请求。进入资源预估的报告用 `admission.large_grid_warning` 记录该判断。提示允许继续处理，候选与退出码仍由重建结果决定。 [Mac 实测](../validation/2026-10-31-cgal-621-upgrade.md)
 
+2026-11-06：仅显式 `--check-model --repair-model cgal --repair-evidence` 增加 `boundary.reconstruction.admission`，在实际修后产物上判断默认 0.30 mm、2 亿名义格、2048 MiB 的资源准入，并返回 60 秒运行预算；四项均可配置。资源拒绝保留高级结果、既有 assessment 与正常退出语义，不启动重建；其他命令带准入参数拒绝，独立重建原解析不变。阶段报告同步相同对象。GUI 无自动流程，普通切片/分盘不调用。实现、验证及后端交接见[准入交付](../validation/2026-11-06-reconstruction-admission-handoff.md)。
+
+2026-11-06 用户确认简化：`--reconstruction-memory-mb` 保留名称和数值，仅为启动前估算门槛。显式重建运行中不采样/中断内存，仍有超时和取消；报告删除运行峰值，改为启动前占用，完整说明见[交付文档](../validation/2026-11-06-reconstruction-admission-handoff.md)。
+
 ## 职责与边界
+
+结果一致性：如果资源准入后阶段报告发布失败，业务投影把 `admission.accepted` 改为 false、reason 改为当前失败原因，保留已经计算的格数和内存估算。不能同时返回流程失败和允许重建；原退出码不变。
 
 本模块负责应用入口与 CLI。归属以[模块清单](../modules.json)的 `cli` 为准。
 

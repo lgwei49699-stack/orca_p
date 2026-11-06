@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-from test_cli_model_check import triangle_count, validate_business_result, validate_issue_summary
+from test_cli_model_check import triangle_count, validate_business_result, validate_issue_summary, write_cap_fixture
 from reconstruction_test_helpers import FACES, VERTICES, binary_stl, digest, save_json
 
 
@@ -86,6 +86,8 @@ def create_fixtures(directory):
         source = existing.parent / (name + ".stl")
         paths[key] = directory / source.name
         paths[key].write_bytes(source.read_bytes())
+    paths["proper_crossing"] = directory / "proper-crossing.stl"
+    write_cap_fixture(paths["proper_crossing"])
     return paths
 
 
@@ -226,6 +228,7 @@ class Suite:
                         expected = old["boundary"]["reconstruction"]
                         assert all(report["reconstruction"][key] == expected[key]
                                    for key in ("assessment", "reason", "applicability")), (expected, report)
+                        assert report["reconstruction"].get("admission") == expected.get("admission"), (expected, report)
             if success and stage == "reconstruction":
                 legacy = json.loads((output / "reconstruction.json").read_text(encoding="utf-8"))
                 assert legacy["schema"] == "model_reconstruction_v1" and legacy["backend"] == "meshlib", legacy
@@ -382,6 +385,15 @@ def main():
               flags=("--export-stl",), verify=expect_fractional_export)
     suite.run("advanced-intersections", fixtures["intersecting"], stage="advanced",
               verify=lambda r: expect_shape(r, status="defects_detected"))
+    def expect_grid_rejection(report):
+        gate = report["reconstruction"]["admission"]
+        assert report["reconstruction"]["assessment"] == "evidence_present", report
+        assert gate["accepted"] is False, gate
+        assert gate["reason"] in ("grid_cell_budget_exceeded", "backend_unavailable"), gate
+        assert report["artifact"]["readback_verified"] is True, report
+
+    suite.run("advanced-grid-budget", fixtures["proper_crossing"], stage="advanced",
+              flags=("--reconstruction-max-grid-cells", "1", "--export-stl"), verify=expect_grid_rejection)
     suite.run("check-unicode-path", fixtures["unicode"], verify=lambda r: expect_shape(r, status="passed"))
     suite.run("explicit-identical-reference", cube, reference=fixtures["unicode"],
               verify=lambda r: expect_shape(r, distances=(0., 0., 0.)))

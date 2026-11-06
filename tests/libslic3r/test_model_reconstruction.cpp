@@ -743,6 +743,9 @@ TEST_CASE("In-process MeshLib joins stopped work and remains reusable", "[.][Mes
         CHECK(result.report["execution"]["hard_timeout"] == false);
         CHECK(result.report["execution"]["crash_isolation"] == false);
         CHECK(result.report["resource_limits"]["hard_memory_limit"] == false);
+        CHECK(result.report["resource_limits"]["budget_mode"] == "preflight_memory_cooperative_timeout");
+        CHECK(result.report["resource_limits"]["memory_at_admission_bytes"].get<uint64_t>() > 0);
+        CHECK_FALSE(result.report["resource_limits"].contains("observed_peak_memory_bytes"));
         CHECK(result.report["engine"]["sdk"]["runtime_identity_verified"] == true);
         CHECK_FALSE(result.report["engine"].contains("sidecar"));
         CHECK(result.report["mesh_validated"] == true);
@@ -1471,4 +1474,58 @@ TEST_CASE("MeshLib output budget counts the simplified candidate and rejects exc
     CHECK(excess.mesh.faces.empty());
     CHECK(input.vertices == original.vertices);
     CHECK(input.faces == original.faces);
+}
+
+TEST_CASE("Automatic reconstruction admission uses physical grid and configured budgets", "[ReconstructionAdmission]")
+{
+    ReconstructionAdmissionOptions options;
+    CHECK(options.voxel_mm == 0.30);
+    CHECK(options.max_grid_cells == 200000000);
+    CHECK(options.memory_limit_mb == 2048);
+    CHECK(options.timeout_ms == 60000);
+    options.voxel_mm = 1.;
+    auto mesh = make_cube(100., 100., 100.);
+    const auto original = mesh;
+    options.max_grid_cells = 1000000;
+    auto result = model_reconstruction_admission(mesh, options);
+    if (!model_reconstruction_available()) {
+        REQUIRE_FALSE(result.at("accepted").get<bool>());
+        REQUIRE(result.at("reason") == "backend_unavailable");
+        return;
+    }
+    REQUIRE(result.at("accepted").get<bool>());
+    REQUIRE(result.at("grid_cells") == 1000000);
+    REQUIRE(result.at("timeout_ms") == 60000);
+    REQUIRE_FALSE(result.at("estimate_is_upper_bound").get<bool>());
+    options.max_grid_cells = 999999;
+    result = model_reconstruction_admission(mesh, options);
+    REQUIRE_FALSE(result.at("accepted").get<bool>());
+    REQUIRE(result.at("reason") == "grid_cell_budget_exceeded");
+    options.voxel_mm = 2.;
+    result = model_reconstruction_admission(mesh, options);
+    REQUIRE(result.at("accepted").get<bool>());
+    REQUIRE(result.at("grid_cells") == 125000);
+    REQUIRE(same_ordered_triangles(mesh, original));
+
+    // Thin broad geometry can fit the cell cap but exceed the surface-work budget.
+    options = ReconstructionAdmissionOptions{};
+    options.voxel_mm = 1.;
+    result = model_reconstruction_admission(make_cube(10000., 10000., 0.1), options);
+    REQUIRE_FALSE(result.at("accepted").get<bool>());
+    REQUIRE(result.at("grid_cells") == 100000000);
+    REQUIRE(result.at("reason") == "estimated_memory_budget_exceeded");
+}
+
+TEST_CASE("Automatic reconstruction admission validates configuration at entry", "[ReconstructionAdmission]")
+{
+    ReconstructionAdmissionOptions options;
+    SECTION("zero voxel") { options.voxel_mm = 0.; }
+    SECTION("nonfinite voxel") { options.voxel_mm = std::numeric_limits<double>::infinity(); }
+    SECTION("float underflow") { options.voxel_mm = std::numeric_limits<double>::min(); }
+    SECTION("empty grid cap") { options.max_grid_cells = 0; }
+    SECTION("negative CLI cap converted to unsigned") { options.max_grid_cells = uint64_t(-1); }
+    SECTION("unsupported memory") { options.memory_limit_mb = 4097; }
+    SECTION("no time budget") { options.timeout_ms = 0; }
+    SECTION("unsupported time budget") { options.timeout_ms = 300001; }
+    REQUIRE_THROWS_AS(validate_reconstruction_admission_options(options), std::invalid_argument);
 }

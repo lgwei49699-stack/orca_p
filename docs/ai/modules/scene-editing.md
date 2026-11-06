@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "scene-editing",
-  "source_fingerprint": "sha256:63d7f7c8e130271766d047365b381ee2eabb1b600d4d506009e3155f4264cfc1",
-  "reason": "复核默认 0.30 mm、物理包围盒成本提示及共享候选路径；BODY/dragon 的采用、导出、撤销、保留与运行中取消完成，退出驻留单列观察。"
+  "source_fingerprint": "sha256:e68749bf8346392673855bbf473961936d90e2c43df955f886e8b37f939fe223",
+  "reason": "2026-11-06：复核 GUI 重建设置提示改为启动前内存估算，运行不采样内存；选择精度、生成、采用、撤销及取消接线未改。共享实现和 GUI 待手测清单在模型修复模块，无需改写本模块交互流程。"
 }
 -->
 
