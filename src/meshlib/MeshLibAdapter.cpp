@@ -1,34 +1,27 @@
 #include "MeshLibAdapter.hpp"
-#include "WindingTile.hpp"
 #include "runtime_identity.hpp"
 
-#include <MRMesh/MRMeshProject.h>
-#include <MRMesh/MRBitSet.h>
 #include <MRMesh/MRMesh.h>
-#include <MRMesh/MRMeshDecimate.h>
-#include <MRMesh/MRBuffer.h>
 #include <MRMesh/MRMeshBuilder.h>
-#include <MRMesh/MRParallelFor.h>
-#include <MRMesh/MRQuadraticForm.h>
-#include <MRMesh/MRRingIterator.h>
+#include <MRMesh/MRMeshLoad.h>
+#include <MRMesh/MRFixSelfIntersections.h>
 #include <MRMesh/MRSystem.h>
 #include <MRMesh/MRTriMesh.h>
-#include <MRMesh/MRTriangleIntersection.h>
 #include <MRVoxels/MRRebuildMesh.h>
-#include <MRVoxels/MRMarchingCubes.h>
-#include <MRVoxels/MRCalcDims.h>
-#include <MRVoxels/MRMeshToDistanceVolume.h>
 #include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
+#include <cstring>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 
 #ifdef _WIN32
@@ -46,7 +39,6 @@ namespace fs                           = std::filesystem;
 using Json                             = nlohmann::json;
 using Clock                            = std::chrono::steady_clock;
 constexpr const char* SDK_VERSION      = "3.1.3.429";
-constexpr float       WINDING_NUMBER_BETA = 3.f;
 constexpr size_t      MAX_INPUT_FACES  = 3000000;
 constexpr size_t      MAX_OUTPUT_FACES = 1000000;
 static_assert(sizeof(float) == 4 && std::numeric_limits<float>::is_iec559);
@@ -178,32 +170,8 @@ Json verify_runtime_libraries(Progress& progress)
     return libraries;
 }
 
-Json parameters(const Options& options)
-{
-    return {{"voxel_mm", static_cast<float>(options.voxel_mm)},
-            {"input_mode", "independent_triangles"},
-            {"sign_mode", "HoleWindingNumber"},
-            {"offset_mode", "Standard"},
-            {"pre_subdivide", false},
-            {"close_holes_in_hole_winding_number", options.close_holes},
-            {"winding_number_threshold", 0.5},
-            {"winding_number_beta", WINDING_NUMBER_BETA},
-            {"decimate", true},
-            {"reduce_angle_iterations", 0},
-            {"tiny_edge_length_mm", -1.f},
-            {"decimation_max_error_mm", 0.25f * static_cast<float>(options.voxel_mm)},
-            {"decimation_optimize_vertex_position", false},
-            {"prevent_tetrahedron_collapse", true},
-            {"prevent_coplanar_overlap", true},
-            {"fragment_removal", "none"},
-            {"max_input_faces", options.max_input_faces},
-            {"max_output_faces", options.max_output_faces}};
-}
-
-// Reconstruction uses triangle geometry, not input adjacency. Keep each face
-// independent: welding non-manifold fans in the SDK STL loader can drop faces.
-// Only this private SDK representation is disconnected; the source model stays intact.
-MR::Mesh input_mesh(const Mesh& input, const Options& options, Progress& progress, int& skipped)
+// Use exact vertex sharing even when the input STL stored separate corners.
+MR::Mesh input_mesh(const Mesh& input, const Options& options, Progress& progress, bool& split_fans)
 {
     require(options.max_input_faces > 0 && options.max_input_faces <= MAX_INPUT_FACES && options.max_output_faces > 0 &&
                 options.max_output_faces <= MAX_OUTPUT_FACES,
@@ -211,169 +179,57 @@ MR::Mesh input_mesh(const Mesh& input, const Options& options, Progress& progres
     require(!input.faces.empty() && !input.vertices.empty(), "invalid_input", "Input mesh is empty.");
     require(input.faces.size() <= options.max_input_faces && input.vertices.size() <= 3 * options.max_input_faces, "resource_limit",
             "MeshLib input exceeds the face or vertex budget.");
-    MR::VertCoords points;
-    points.resize(3 * input.faces.size());
-    MR::Triangulation triangles;
-    triangles.resize(input.faces.size());
-    for (size_t face_id = 0; face_id < input.faces.size(); ++face_id) {
-        if ((face_id & 1023u) == 0)
+    // Load the selected volume through the same SDK STL importer as a file.
+    // The coordinates already include the object's physical transform.
+    static_assert(std::endian::native == std::endian::little);
+    const uint32_t count = static_cast<uint32_t>(input.faces.size());
+    std::string    bytes(84 + size_t(count) * 50, '\0');
+    std::memcpy(bytes.data() + 80, &count, sizeof(count));
+    for (size_t i = 0; i < count; ++i) {
+        if ((i & 1023u) == 0)
             progress.checkpoint();
-        const auto& face = input.faces[face_id];
-        for (size_t corner = 0; corner < 3; ++corner) {
-            require(face[corner] >= 0 && size_t(face[corner]) < input.vertices.size(), "invalid_input",
-                    "Input mesh contains an invalid vertex index.");
-            const auto& vertex = input.vertices[size_t(face[corner])];
-            require(std::isfinite(vertex[0]) && std::isfinite(vertex[1]) && std::isfinite(vertex[2]), "invalid_input",
+        for (size_t c = 0; c < 3; ++c) {
+            const auto id = input.faces[i][c];
+            require(id >= 0 && size_t(id) < input.vertices.size(), "invalid_input", "Input mesh contains an invalid vertex index.");
+            const auto& p = input.vertices[id];
+            require(std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]), "invalid_input",
                     "Input mesh contains a non-finite coordinate.");
-            const MR::VertId id(int(3 * face_id + corner));
-            points[id]                                  = {vertex[0], vertex[1], vertex[2]};
-            triangles[MR::FaceId(int(face_id))][corner] = id;
+            std::memcpy(bytes.data() + 84 + 50 * i + 12 * (1 + c), p.data(), 3 * sizeof(float));
         }
     }
-    MR::MeshBuilder::BuildSettings settings;
-    settings.skippedFaceCount = &skipped;
-    MR::Mesh source;
-    source.points = std::move(points);
-    // Independent triangles have six half-edges each; avoid parallel part copies.
-    source.topology.edgeReserve(6 * triangles.size());
-    MR::MeshBuilder::addTriangles(source.topology, triangles, settings);
-    progress.checkpoint();
-    return source;
-}
-
-// Supply the same SDK distance samples in Z slabs, reusing the shared plane.
-// This avoids a full XY slice cache for each meshing thread.
-template<typename Emit>
-MR::Expected<void> sample_distance_parts(const MR::Mesh&                  mesh,
-                                         float                            voxel,
-                                         const MR::Vector3f&              origin,
-                                         const MR::Vector3i&              dims,
-                                         const MR::DistanceToMeshOptions& options,
-                                         const Emit&                      emit,
-                                         const MR::ProgressCallback&      progress)
-{
-    MR::MeshToDistanceVolumeParams params;
-    params.vol.origin     = origin;
-    params.vol.dimensions = dims;
-    params.vol.voxelSize  = MR::Vector3f::diagonal(voxel);
-    params.dist           = {options, MR::SignDetectionMode::HoleWindingRule};
-    // Preserve the SDK's float evaluation order for voxel-center coordinates.
-    const auto       volume       = MR::meshToDistanceFunctionVolume(mesh, params);
-    constexpr size_t CHUNK_VALUES = 8 * 1024 * 1024;
-    const size_t     plane_size   = size_t(dims.x) * size_t(dims.y);
-    const int        depth        = std::max(2, int(std::min<size_t>(dims.z, CHUNK_VALUES / plane_size)));
-    const auto&        tree         = mesh.getAABBTree();
-    const auto&        dipoles      = mesh.getDipoles();
-    std::vector<float> overlap_values;
-    for (int z = 0; z < dims.z;) {
-        const int          count = std::min(depth, dims.z - z);
-        std::vector<float> values(plane_size * size_t(count));
-        std::copy(overlap_values.begin(), overlap_values.end(), values.begin());
-        const auto part_progress = MR::subprogress(progress, float(z + int(overlap_values.size() / plane_size)) / dims.z,
-                                                   float(z + count) / dims.z);
-        // The near-surface path already skips distant samples inside the SDK.
-        if (!options.nullOutsideMinMax) {
-            constexpr int side        = 8; // 512 samples per full tile
-            const int     first_layer = int(overlap_values.size() / plane_size);
-            const int     nx = (dims.x + side - 1) / side, ny = (dims.y + side - 1) / side;
-            const size_t  tiles  = size_t(nx) * ny * ((count - first_layer + side - 1) / side);
-            const auto    center = [&](const MR::Vector3i& p) {
-                return params.vol.origin + MR::mult(params.vol.voxelSize, MR::Vector3f(p) + MR::Vector3f::diagonal(0.5f));
-            };
-            if (!MR::ParallelFor(
-                    size_t(0), tiles,
-                    [&](size_t i) {
-                        const MR::Vector3i        start(int(i % nx) * side, int(i / nx % ny) * side,
-                                                        first_layer + int(i / (size_t(nx) * ny)) * side);
-                        const MR::Vector3i        end(std::min(dims.x, start.x + side), std::min(dims.y, start.y + side),
-                                                      std::min(count, start.z + side));
-                        const detail::WindingTile tile{mesh, tree, dipoles, center({start.x, start.y, z + start.z}),
-                                                       center({end.x - 1, end.y - 1, z + end.z - 1}), options.windingNumberBeta};
-                        const int                 sign = tile.certified_sign(options.windingNumberThreshold);
-                        for (int k = start.z; k < end.z; ++k)
-                            for (int y = start.y; y < end.y; ++y)
-                                for (int x = start.x; x < end.x; ++x) {
-                                    const MR::Vector3i pos(x, y, z + k);
-                                    const size_t       index = size_t(k) * plane_size + size_t(y) * dims.x + x;
-                                    if (sign) {
-                                        const auto projection = MR::findProjection(center(pos), mesh, options.maxDistSq, nullptr,
-                                                                                   options.minDistSq);
-                                        values[index]         = sign * std::sqrt(projection.distSq);
-                                    } else {
-                                        values[index] = volume.data(pos);
-                                    }
-                                }
-                    },
-                    part_progress, 1024 / (side * side * side)))
-                return MR::unexpectedOperationCanceled();
-        } else if (!MR::ParallelFor(
-                       overlap_values.size(), values.size(),
-                       [&](size_t i) {
-                           const MR::Vector3i p(int(i % size_t(dims.x)), int((i / size_t(dims.x)) % size_t(dims.y)),
-                                                z + int(i / plane_size));
-                           values[i] = volume.data(p);
-                       },
-                       part_progress))
-            return MR::unexpectedOperationCanceled();
-        if (z + count < dims.z)
-            overlap_values.assign(values.end() - plane_size, values.end());
-        auto result = emit(std::move(values), MR::Vector3i(dims.x, dims.y, count));
-        if (!result)
-            return result;
-        if (progress && !progress(float(z + count) / dims.z))
-            return MR::unexpectedOperationCanceled();
-        if (z + count == dims.z)
-            break;
-        z += count - 1;
+    {
+        std::istringstream   stream(std::move(bytes), std::ios::binary);
+        MR::MeshLoadSettings load;
+        load.telemetrySignal = false;
+        load.callback        = [&](float) { return progress(0.f); };
+        auto loaded          = MR::MeshLoad::fromBinaryStl(stream, load);
+        progress.checkpoint();
+        if (!loaded)
+            throw Failure("invalid_input", loaded.error());
+        if (size_t(loaded->topology.numValidFaces()) == count)
+            return std::move(*loaded);
     }
-    return {};
-}
 
-// Keep the SDK sampling and marching-cubes geometry, but release its temporary
-// mesher before building topology. Reserving the closed surface's half-edges
-// avoids repeated large reallocations and parallel topology copies.
-MR::Expected<MR::Mesh> rebuild_surface(const MR::Mesh& source, float voxel, bool close_holes, Progress& progress)
-{
-    const auto [origin, dims] = MR::calcOriginAndDimensions(source.computeBoundingBox(), voxel);
-    const auto voxel_size    = MR::Vector3f::diagonal(voxel);
-    MR::DistanceToMeshOptions distance;
-    distance.minDistSq              = 0.f;
-    distance.maxDistSq              = MR::sqr(1.001f * voxel);
-    distance.nullOutsideMinMax      = !close_holes;
-    distance.windingNumberThreshold = 0.5f;
-    distance.windingNumberBeta      = WINDING_NUMBER_BETA;
-    auto triangles = [&]() -> MR::Expected<MR::TriMesh> {
-        MR::MarchingCubesParams params;
-        params.origin     = origin;
-        params.lessInside = true;
-        bool extracting   = false;
-        // Sampling reports its own progress; keep SDK addPart cancellation active too.
-        params.cb = [&](float value) { return progress(extracting ? 0.72f + 0.08f * value : 0.f); };
-        MR::MarchingCubesByParts mesher(dims, params);
-        const auto emit = [&](std::vector<float>&& data, const MR::Vector3i& part_dims) {
-            MR::SimpleVolume part;
-            part.data      = std::move(data);
-            part.dims      = part_dims;
-            part.voxelSize = voxel_size;
-            return mesher.addPart(part);
-        };
-        auto sampled = sample_distance_parts(source, voxel, origin, dims, distance, emit,
-                                                              [&](float value) { return progress(0.72f * value); });
-        if (!sampled)
-            return MR::unexpected(sampled.error());
-        extracting = true;
-        return mesher.finalize();
-    }();
-    if (!triangles)
-        return MR::unexpected(triangles.error());
-    progress.checkpoint();
-    MR::Mesh candidate;
-    candidate.points = std::move(triangles->points);
-    candidate.topology.edgeReserve(3 * triangles->tris.size());
-    const auto added = MR::MeshBuilder::addTriangles(candidate.topology, triangles->tris);
-    require(added == triangles->tris.size(), "candidate_rejected", "MeshLib output topology counts are inconsistent.");
-    progress.checkpoint();
-    return candidate;
+    // The SDK can omit faces in conflicting non-manifold fans. Preserve those
+    // inputs as independent triangles before invoking the single rebuild.
+    split_fans = true;
+    MR::Mesh source;
+    source.points.resize(3 * size_t(count));
+    MR::Triangulation triangles;
+    triangles.resize(count);
+    for (size_t i = 0; i < count; ++i) {
+        if ((i & 1023u) == 0)
+            progress.checkpoint();
+        for (int c = 0; c < 3; ++c) {
+            const MR::VertId id(int(3 * i + c));
+            const auto&      p               = input.vertices[input.faces[i][c]];
+            source.points[id]                = {p[0], p[1], p[2]};
+            triangles[MR::FaceId(int(i))][c] = id;
+        }
+    }
+    source.topology.edgeReserve(6 * size_t(count));
+    MR::MeshBuilder::addTriangles(source.topology, triangles);
+    return source;
 }
 
 Mesh copy_candidate(const MR::Mesh& mesh, size_t face_limit, Progress& progress)
@@ -413,23 +269,31 @@ Mesh copy_candidate(const MR::Mesh& mesh, size_t face_limit, Progress& progress)
 
 bool available() noexcept { return true; }
 
-Result rebuild(const Mesh& input, const Options& options)
+Result rebuild(Mesh input, const Options& options, const std::function<bool(const Mesh&)>& needs_local_repair)
 {
     const auto started = Clock::now();
     Result     result;
     Progress   progress(options.progress);
-    Json       report = {{"schema", "meshlib_adapter_v1"}, {"engine", "meshlib"},          {"execution", "in_process"},
-                         {"sdk_version", SDK_VERSION},     {"status", "failed"},           {"parameters", Json::object()},
-                         {"input", Json::object()},        {"output", Json::object()},     {"elapsed_ms", Json::object()},
-                         {"skipped_face_count", 0},        {"duplicated_vertex_count", 0}, {"candidate_validated", false},
-                         {"print_ready", false},           {"fragment_removal", "none"},   {"runtime_identity_verified", false}};
+    Json       report = {{"schema", "meshlib_adapter_v1"},
+                         {"engine", "meshlib"},
+                         {"execution", "in_process"},
+                         {"sdk_version", SDK_VERSION},
+                         {"status", "failed"},
+                         {"parameters", Json::object()},
+                         {"input", Json::object()},
+                         {"output", Json::object()},
+                         {"elapsed_ms", Json::object()},
+                         {"skipped_face_count", 0},
+                         {"candidate_validated", false},
+                         {"print_ready", false},
+                         {"fragment_removal", "none"},
+                         {"runtime_identity_verified", false}};
     try {
         progress.checkpoint();
         require(std::isfinite(options.voxel_mm) && options.voxel_mm >= static_cast<double>(std::numeric_limits<float>::denorm_min()) &&
                     options.voxel_mm <= static_cast<double>(std::numeric_limits<float>::max()),
                 "invalid_options", "Voxel size must be finite, positive and representable as a float.");
         const float voxel                        = static_cast<float>(options.voxel_mm);
-        report["parameters"]                     = parameters(options);
         const auto identity_started              = Clock::now();
         report["runtime_libraries"]              = verify_runtime_libraries(progress);
         report["runtime_identity_verified"]      = true;
@@ -437,187 +301,72 @@ Result rebuild(const Mesh& input, const Options& options)
         // Diagnostic only: this API may return a build date, not an SDK version.
         report["sdk_runtime_version"]    = MR::GetMRVersionString();
         report["input"]                  = {{"faces", input.faces.size()}, {"vertices", input.vertices.size()}, {"units", "mm"}};
-        int        skipped               = 0;
+        bool       split_fans            = false;
         const auto load_started          = Clock::now();
-        auto       source                = input_mesh(input, options, progress, skipped);
+        auto       source                = input_mesh(input, options, progress, split_fans);
         report["elapsed_ms"]["sdk_load"] = elapsed_ms(load_started);
-        report["skipped_face_count"]     = skipped;
+        report["skipped_face_count"]     = input.faces.size() - source.topology.numValidFaces();
         progress.checkpoint();
         report["input"]["loaded_faces"]    = source.topology.numValidFaces();
         report["input"]["loaded_vertices"] = source.topology.numValidVerts();
-        require(skipped == 0 && size_t(source.topology.numValidFaces()) == input.faces.size(), "input_faces_skipped",
+        require(size_t(source.topology.numValidFaces()) == input.faces.size(), "input_faces_skipped",
                 "MeshLib omitted input faces while constructing topology; refusing to rebuild a truncated model.");
+        input = {};
 
-        const auto rebuild_started       = Clock::now();
-        auto       candidate             = rebuild_surface(source, voxel, options.close_holes, progress);
-        report["elapsed_ms"]["rebuild"]    = elapsed_ms(rebuild_started);
-        report["selected_sign_mode"]      = int(MR::SignDetectionMode::HoleWindingRule);
-        report["selected_sign_mode_name"] = MR::asString(MR::SignDetectionMode::HoleWindingRule);
+        MR::RebuildMeshSettings settings;
+        settings.voxelSize                     = voxel;
+        settings.closeHolesInHoleWindingNumber = options.close_holes;
+        settings.reduceAngleNumIters           = 1;
+        // SDK import may reconnect an open source before Auto inspects it.
+        // An explicit hole-filling request must use the mode that closes holes.
+        if (options.close_holes)
+            settings.signMode = MR::SignDetectionModeShort::HoleWindingNumber;
+        // Keep the SDK's subdivision and winding accuracy defaults. Subdivision
+        // accelerates large source facets without changing the requested voxel.
+        settings.progress                    = [&](float value) { return progress(value); };
+        settings.onSignDetectionModeSelected = [&](MR::SignDetectionMode mode) {
+            report["selected_sign_mode"]      = int(mode);
+            report["selected_sign_mode_name"] = MR::asString(mode);
+        };
+        report["parameters"]            = {{"voxel_mm", voxel},
+                                           {"input_mode", split_fans ? "independent_triangles" : "shared_vertices"},
+                                           {"offset_mode", "Standard"},
+                                           {"sign_mode", options.close_holes ? "HoleWindingNumber" : "Auto"},
+                                           {"pre_subdivide", settings.preSubdivide},
+                                           {"close_holes_in_hole_winding_number", options.close_holes},
+                                           {"decimate", settings.decimate},
+                                           {"winding_number_threshold", settings.windingNumberThreshold},
+                                           {"winding_number_beta", settings.windingNumberBeta},
+                                           {"reduce_angle_iterations", settings.reduceAngleNumIters}};
+        const auto rebuild_started      = Clock::now();
+        auto       candidate            = MR::rebuildMesh(source, settings);
+        report["elapsed_ms"]["rebuild"] = elapsed_ms(rebuild_started);
         progress.checkpoint();
         if (!candidate)
             throw Failure("engine_error", candidate.error());
-        // Sampling no longer holds winding references; simplification only uses the candidate.
         source = MR::Mesh{};
-        const auto           simplify_started = Clock::now();
-        MR::DecimateSettings decimation;
-        decimation.maxError          = 0.25f * voxel; // Same voxel-relative error metric as SDK rebuildMesh.
-        decimation.stabilizer        = 1e-5f;
-        decimation.optimizeVertexPos = false;
-        // copy_candidate already compacts valid faces and vertices into the output mesh.
-        decimation.packMesh          = false;
-        struct LocalFace
-        {
-            MR::VertId   a, b;
-            MR::Vector3d normal;
-        };
-        std::vector<LocalFace> local_faces;
-        decimation.preCollapse = [&](MR::EdgeId edge, const MR::Vector3f& position) {
-            const auto& topology = candidate->topology;
-            // Preserve the smallest closed shell. A tetrahedron with coincident
-            // vertices is already collapsed, so allow the SDK to eliminate it.
-            if (topology.getOrgDegree(edge) == 3 && topology.getOrgDegree(edge.sym()) == 3) {
-                const auto& a = candidate->points[topology.org(edge)];
-                const auto& b = candidate->points[topology.dest(edge)];
-                const auto& c = candidate->points[topology.dest(topology.next(edge))];
-                const auto& d = candidate->points[topology.dest(topology.next(edge.sym()))];
-                if (a != b && a != c && a != d && b != c && b != d && c != d)
-                    return false;
-            }
-            // A five-vertex closed shell becomes a tetrahedron after collapse.
-            // Keep its signed volume: near-coplanar faces can otherwise invert a cavity.
-            const auto degree_a = topology.getOrgDegree(edge), degree_b = topology.getOrgDegree(edge.sym());
-            if ((degree_a == 3 && degree_b == 4) || (degree_a == 4 && degree_b == 3)) {
-                std::vector<MR::VertId> vertices{topology.org(edge), topology.dest(edge)};
-                for (const auto end : {edge, edge.sym()})
-                    for (const auto ring : MR::orgRing(topology, end)) {
-                        const auto v = topology.dest(ring);
-                        if (std::find(vertices.begin(), vertices.end(), v) == vertices.end())
-                            vertices.push_back(v);
-                    }
-                if (vertices.size() == 5) {
-                    std::vector<MR::FaceId> faces;
-                    bool entire_shell = true;
-                    for (const auto v : vertices)
-                        for (const auto ring : MR::orgRing(topology, v)) {
-                            if (std::find(vertices.begin(), vertices.end(), topology.dest(ring)) == vertices.end() ||
-                                !topology.left(ring)) {
-                                entire_shell = false;
-                                break;
-                            }
-                            const auto f = topology.left(ring);
-                            if (std::find(faces.begin(), faces.end(), f) == faces.end())
-                                faces.push_back(f);
-                        }
-                    if (entire_shell && faces.size() == 6) {
-                        double before = 0., after = 0.;
-                        const MR::Vector3d p(position);
-                        for (const auto f : faces) {
-                            const auto ids = topology.getTriVerts(f);
-                            const double volume = MR::dot(MR::Vector3d(candidate->points[ids[0]]) - p,
-                                MR::cross(MR::Vector3d(candidate->points[ids[1]]) - p,
-                                          MR::Vector3d(candidate->points[ids[2]]) - p));
-                            before += volume;
-                            bool moved = false;
-                            for (const auto id : ids)
-                                if (id == topology.org(edge) || id == topology.dest(edge))
-                                    moved = true;
-                            // All moved faces contain p after collapse and contribute zero.
-                            if (!moved)
-                                after += volume;
-                        }
-                        if (before != 0. && (after == 0. || (before < 0.) != (after < 0.)))
-                            return false;
-                    }
-                }
-            }
-            local_faces.clear();
-            for (const auto end : {edge, edge.sym()}) {
-                for (const auto adjacent : MR::orgRing(topology, end)) {
-                    const auto face = topology.left(adjacent);
-                    if (!face || face == topology.left(edge) || face == topology.right(edge))
-                        continue; // These two faces disappear during collapse.
-                    const auto a = topology.dest(adjacent), b = topology.dest(topology.next(adjacent));
-                    const auto normal = MR::cross(MR::Vector3d(candidate->points[a]) - MR::Vector3d(position),
-                                                  MR::Vector3d(candidate->points[b]) - MR::Vector3d(position));
-                    // Every surviving face shares the collapsed vertex. Adjacent faces
-                    // with opposite coplanar normals overlap across their shared edge.
-                    for (const auto& previous : local_faces) {
-                        const bool shared_edge = a == previous.a || a == previous.b || b == previous.a || b == previous.b;
-                        if (shared_edge && MR::dot(normal, previous.normal) < 0 && MR::cross(normal, previous.normal).lengthSq() == 0)
-                            return false;
-                    }
-                    const MR::Vector3d p(position), pa(candidate->points[a]), pb(candidate->points[b]);
-                    for (const auto& previous : local_faces)
-                        if (a != previous.a && a != previous.b && b != previous.a && b != previous.b &&
-                            MR::doTrianglesIntersect(p, pa, pb, p, MR::Vector3d(candidate->points[previous.a]),
-                                                     MR::Vector3d(candidate->points[previous.b])))
-                            return false;
-                    // Check unchanged faces incident to either fixed corner. A valid shared
-                    // edge is not a crossing; coplanar edges entering a face need a separate test.
-                    for (const auto shared : {a, b}) {
-                        const auto other = shared == a ? b : a;
-                        const MR::Vector3d origin(candidate->points[shared]);
-                        const auto u = p - origin, v = MR::Vector3d(candidate->points[other]) - origin;
-                        const auto n = MR::cross(u, v);
-                        for (const auto neighbor : MR::orgRing(topology, shared)) {
-                            const auto id = topology.dest(neighbor);
-                            if (id != other && id != topology.org(edge) && id != topology.dest(edge)) {
-                                const auto w = MR::Vector3d(candidate->points[id]) - origin;
-                                if (n.lengthSq() != 0. && MR::dot(n, w) == 0.) {
-                                    const auto left = MR::cross(u, w), right = MR::cross(w, v);
-                                    if ((MR::dot(left, n) > 0. && MR::dot(right, n) > 0.) ||
-                                        (left.lengthSq() == 0. && MR::dot(u, w) > 0.) ||
-                                        (right.lengthSq() == 0. && MR::dot(v, w) > 0.))
-                                        return false;
-                                }
-                            }
-                            if (!topology.left(neighbor))
-                                continue;
-                            const auto third = topology.dest(topology.next(neighbor));
-                            if (id == other || third == other || id == topology.org(edge) || id == topology.dest(edge) ||
-                                third == topology.org(edge) || third == topology.dest(edge))
-                                continue;
-                            if (MR::doTrianglesIntersect(origin, p, MR::Vector3d(candidate->points[other]), origin,
-                                                         MR::Vector3d(candidate->points[id]), MR::Vector3d(candidate->points[third])))
-                                return false;
-                        }
-                    }
-                    local_faces.push_back({a, b, normal});
-                }
-            }
-            return true;
-        };
-        const auto simplified = [&] {
-            // Limit the collapse queue without splitting the mesh. All passes share
-            // the initial quadrics and accumulated error; do not reset it per region.
-            constexpr int regions = 4;
-            auto forms = MR::computeFormsAtVertices(MR::MeshPart(*candidate), decimation.stabilizer,
-                                                   decimation.angleWeightedDistToPlane, decimation.notFlippable);
-            progress.checkpoint();
-            decimation.vertForms = &forms;
-            const auto initial_faces = candidate->topology.getValidFaces();
-            for (int i = 0; i < regions; ++i) {
-                auto region = MR::getSubdividePart(initial_faces, regions, i);
-                auto partial = decimation;
-                partial.region = &region;
-                partial.touchNearBdEdges = false;
-                partial.progressCallback = [&](float value) { return progress(0.8f + 0.2f * (i + value) / (regions + 1)); };
-                const auto step = MR::decimateMesh(*candidate, partial);
-                progress.checkpoint();
-                if (step.cancelled)
-                    return step;
-            }
-            // Simplify the retained region boundaries on the same complete mesh.
-            decimation.progressCallback = [&](float value) { return progress(0.8f + 0.2f * (regions + value) / (regions + 1)); };
-            return MR::decimateMesh(*candidate, decimation);
-        }();
-        progress.checkpoint();
-        if (simplified.cancelled)
-            throw Failure("cancelled", "MeshLib simplification was canceled.");
-        report["elapsed_ms"]["simplify"]       = elapsed_ms(simplify_started);
         const auto copy_started                = Clock::now();
         result.mesh                            = copy_candidate(*candidate, options.max_output_faces, progress);
         report["elapsed_ms"]["candidate_copy"] = elapsed_ms(copy_started);
+        // Keep the SDK topology intact: reimporting a failed candidate can
+        // change the local repair. A valid native candidate needs no repair.
+        if (needs_local_repair && needs_local_repair(result.mesh)) {
+            progress.checkpoint();
+            result.mesh = {};
+            const auto cleanup_started = Clock::now();
+            MR::SelfIntersections::Settings cleanup;
+            cleanup.method           = MR::SelfIntersections::Settings::Method::CutAndFill;
+            cleanup.subdivideEdgeLen = voxel;
+            cleanup.callback         = [&](float value) { return progress(value); };
+            const auto cleaned       = MR::SelfIntersections::fix(*candidate, cleanup);
+            report["elapsed_ms"]["local_cleanup"] = elapsed_ms(cleanup_started);
+            progress.checkpoint();
+            if (!cleaned)
+                throw Failure("engine_error", cleaned.error());
+            const auto recopy_started = Clock::now();
+            result.mesh = copy_candidate(*candidate, options.max_output_faces, progress);
+            report["elapsed_ms"]["candidate_copy"] = report["elapsed_ms"]["candidate_copy"].get<double>() + elapsed_ms(recopy_started);
+        }
         report["output"]                       = {{"faces", result.mesh.faces.size()}, {"vertices", result.mesh.vertices.size()}};
         progress.checkpoint();
         result.status  = "candidate_generated";

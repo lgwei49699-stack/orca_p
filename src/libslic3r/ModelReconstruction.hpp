@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 namespace Slic3r {
+class BoundingBoxf3;
 class Model;
 class ModelObject;
 
@@ -32,6 +33,9 @@ struct ModelReconstructionOptions
 };
 
 bool model_reconstruction_available() noexcept;
+
+// Optional cost advice for the selected physical voxel size; never changes the request.
+const char* model_reconstruction_grid_warning(const BoundingBoxf3& bounds_mm, double voxel_mm);
 
 // Resolves only resource limits, preserving cancellation/tick callbacks. Physical
 // RAM is an upper bound for automatic budgets, not an estimate of free memory.

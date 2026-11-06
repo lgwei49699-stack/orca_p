@@ -194,7 +194,7 @@ void fit_scrollable_dialog(wxDialog& dialog, wxBoxSizer* root, wxScrolledWindow&
 
 } // namespace
 
-bool show_model_reconstruction_settings(wxWindow* parent, ModelReconstructionOptions& options)
+bool show_model_reconstruction_settings(wxWindow* parent, const BoundingBoxf3& bounds_mm, ModelReconstructionOptions& options)
 {
     if (!model_reconstruction_available()) {
         wxMessageBox(_L("This Orca build does not include the MeshLib SDK backend."), _L("Reconstruct model"), wxOK | wxICON_WARNING,
@@ -223,7 +223,7 @@ bool show_model_reconstruction_settings(wxWindow* parent, ModelReconstructionOpt
         grid->Add(control, 1, wxEXPAND);
         return control;
     };
-    auto* voxel     = add_parameter(_L("Voxel size (mm)"), options.voxel_mm > 0. ? options.voxel_mm : 0.1, 0.001, 100.0, 0.01);
+    auto* voxel     = add_parameter(_L("Voxel size (mm)"), options.voxel_mm > 0. ? options.voxel_mm : 0.3, 0.001, 100.0, 0.01);
     auto* deviation = add_parameter(_L("Surface deviation warning threshold (mm)"), options.mesh.max_deviation_mm, 0.001, 100.0, 0.05);
     content_sizer->Add(grid, 0, wxEXPAND | wxALL, dialog.FromDIP(12));
     add_wrapped_text(*content, *content_sizer,
@@ -235,6 +235,28 @@ bool show_model_reconstruction_settings(wxWindow* parent, ModelReconstructionOpt
                                          "Cancellation waits for reconstruction and validation to return; the original model is kept."),
                                       options.limits.timeout_ms / 1000, static_cast<unsigned>(options.limits.memory_limit_mb)),
                      570);
+    auto*      cost_label  = add_wrapped_text(*content, *content_sizer, wxEmptyString, 570);
+    const auto update_cost = [cost_label, content, bounds_mm](double value) {
+        const char* warning = model_reconstruction_grid_warning(bounds_mm, value);
+        if (warning) {
+            cost_label->SetLabel(wxGetTranslation(from_u8(warning)));
+            cost_label->Wrap(content->FromDIP(570));
+        }
+        cost_label->Show(warning != nullptr);
+        content->Layout();
+        content->FitInside();
+    };
+    update_cost(voxel->GetValue());
+    voxel->Bind(wxEVT_TEXT, [update_cost](wxCommandEvent& event) {
+        double value = 0.;
+        event.GetString().ToDouble(&value);
+        update_cost(value);
+        event.Skip();
+    });
+    voxel->Bind(wxEVT_SPINCTRLDOUBLE, [update_cost](wxSpinDoubleEvent& event) {
+        update_cost(event.GetValue());
+        event.Skip();
+    });
     auto* consent = new wxCheckBox(content, wxID_ANY, _L("I understand that reconstruction changes the model's shape."));
     content_sizer->Add(consent, 0, wxALL, dialog.FromDIP(12));
     auto* buttons  = dialog.CreateStdDialogButtonSizer(wxOK | wxCANCEL);

@@ -5657,7 +5657,7 @@ void ObjectList::reconstruct_model()
         if (ram / (1024 * 1024) >= 8192)
             options.limits.memory_limit_mb = std::max(options.limits.memory_limit_mb, size_t(2048));
 #endif
-        if (!show_model_reconstruction_settings(parent, options))
+        if (!show_model_reconstruction_settings(parent, original->bounding_box_exact(), options))
             return;
         if (!source_is_current()) {
             notify_stale();

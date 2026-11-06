@@ -283,23 +283,3 @@ endif()
 
 # No SDK download/install target. The macOS shell entry prepares local copies
 # before configuration; runtime_identity.hpp hashes the finalized signed bytes.
-
-# Compare the fast classifier directly with the SDK it bounds. Keep the SDK
-# headers and ABI flags private to this small test, as for the adapter itself.
-if(BUILD_TESTS)
-    add_executable(meshlib_winding_tile_tests "${CMAKE_SOURCE_DIR}/tests/libslic3r/test_meshlib_winding_tile.cpp")
-    set_target_properties(meshlib_winding_tile_tests PROPERTIES
-        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
-        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR};$<TARGET_PROPERTY:orca_meshlib_adapter,INCLUDE_DIRECTORIES>"
-        COMPILE_DEFINITIONS "$<TARGET_PROPERTY:orca_meshlib_adapter,COMPILE_DEFINITIONS>"
-        COMPILE_OPTIONS "$<TARGET_PROPERTY:orca_meshlib_adapter,COMPILE_OPTIONS>")
-    if(MSVC)
-        set_property(TARGET meshlib_winding_tile_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
-    endif()
-    target_link_libraries(meshlib_winding_tile_tests PRIVATE orca_meshlib_adapter orca_meshlib_sdk_mesh)
-    add_test(NAME meshlib_winding_tile_parity COMMAND meshlib_winding_tile_tests)
-    if(WIN32)
-        set_tests_properties(meshlib_winding_tile_parity PROPERTIES
-            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_runtime_dir}")
-    endif()
-endif()

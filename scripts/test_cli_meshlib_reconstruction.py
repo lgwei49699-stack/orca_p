@@ -86,7 +86,7 @@ def check_meshlib_candidate(report, source, output, process_id, sdk_version):
     assert report.get("sdk_version") == sdk_version, report
     assert report.get("mesh_validated") is True, report
     assert report.get("candidate_file") == "candidate.stl", report
-    assert report.get("export_round_trip") == "passed", report
+    assert report.get("export_integrity") == "passed", report
     candidate = check_candidate_file(output / "candidate.stl")
     engine = report["engine"]
     assert isinstance(engine, dict), engine

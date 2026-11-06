@@ -106,7 +106,9 @@ def check_stage_report(report, output, source, reference, stage):
     assert artifact_file.suffix.lower() == ".stl" and artifact_file.stat().st_size > 0, artifact
     assert triangle_count(artifact_file) > 0, artifact
     assert artifact["sha256"] == digest(artifact_file), artifact
-    assert artifact["readback_verified"] is True, artifact
+    assert artifact["readback_verified"] is (report["stage"] != "reconstruction"), artifact
+    if report["stage"] == "reconstruction":
+        assert artifact["verification"] == "binary_stl_count_and_size", artifact
 
     inspection = report["inspection"]
     assert inspection["status"] in ("passed", "defects_detected", "incomplete"), inspection
@@ -228,7 +230,7 @@ class Suite:
                 legacy = json.loads((output / "reconstruction.json").read_text(encoding="utf-8"))
                 assert legacy["schema"] == "model_reconstruction_v1" and legacy["backend"] == "meshlib", legacy
                 assert legacy["status"] == "candidate_ready" and legacy["mesh_validated"] is True, legacy
-                assert legacy["export_round_trip"] == "passed", legacy
+                assert legacy["export_integrity"] == "passed", legacy
                 assert legacy["artifacts"]["input_sha256"] == digest(source), legacy
                 if report:
                     assert legacy["artifacts"]["candidate_sha256"] == report["artifact"]["sha256"], (legacy, report)

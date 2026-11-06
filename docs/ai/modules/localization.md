@@ -3,10 +3,14 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:a21d627b56d7e0d6795120861acbcdef06c52a77253a4b659c8e1684e6cd9b95",
-  "reason": "2026-11-03 Linux 2.3.2 合并。保留多 OBJ 耗材诊断、纹理导入和重建界面的简体中文翻译。"
+  "source_fingerprint": "sha256:3a19b7b3907e202fe257bc1b5e98172ff772c79827c3b23416e24384d800a614",
+  "reason": "新增网格成本提示与导出完整性错误的简体中文翻译，英文原文及翻译内容已静态复核；本轮 BODY/dragon GUI 使用英文，历史中文验证另见记录。"
 }
 -->
+
+新增网格成本提示与导出完整性错误的简体中文翻译，英文原文及翻译内容已静态复核；本轮 BODY/dragon GUI 使用英文，历史中文验证另见记录。 [本轮验证](../validation/2026-10-31-cgal-621-upgrade.md)
+
+超过一亿格时，重建设置提醒用户时间成本以及调大体素对小孔、薄壁的影响。 [Mac 实测](../validation/2026-10-31-cgal-621-upgrade.md)
 
 ## 职责与边界
 

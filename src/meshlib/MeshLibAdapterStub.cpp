@@ -4,7 +4,7 @@ namespace OrcaMeshLib {
 
 bool available() noexcept { return false; }
 
-Result rebuild(const Mesh&, const Options&)
+Result rebuild(Mesh, const Options&, const std::function<bool(const Mesh&)>&)
 {
     Result result;
     result.status  = "backend_unavailable";

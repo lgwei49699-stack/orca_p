@@ -3,10 +3,14 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:a95f8cd71b98b1f1520b0157a8a63459ca75d28a93645723aaa0c68dd871d090",
-  "reason": "2026-11-03 Linux 2.3.2 合并。核对普通 OBJ 的耗材绑定、显式纹理修复和 App 快速检查入口。"
+  "source_fingerprint": "sha256:391f7efee5ef5f7e089ff3c0231ed9cde277e4220c658e0f94503a9af487b325",
+  "reason": "显式重建导出后验证二进制 STL 面数、长度和哈希；重建阶段报告标记 binary_stl_count_and_size，其他阶段维持完整回读。"
 }
 -->
+
+显式重建导出后验证二进制 STL 面数、长度和哈希；重建阶段报告标记 binary_stl_count_and_size，其他阶段维持完整回读。 [本轮验证](../validation/2026-10-31-cgal-621-upgrade.md)
+
+显式重建在读入 STL 后、生成候选前向 stderr 提示超过一亿格的请求。进入资源预估的报告用 `admission.large_grid_warning` 记录该判断。提示允许继续处理，候选与退出码仍由重建结果决定。 [Mac 实测](../validation/2026-10-31-cgal-621-upgrade.md)
 
 ## 职责与边界
 

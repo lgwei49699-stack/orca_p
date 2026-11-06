@@ -91,7 +91,7 @@ struct InProcessReconstructionEstimate
 
 // Checked heuristic for rejecting clearly excessive requests before SDK work.
 // Includes input copies/topology, a candidate/validation reserve, surface work,
-// full-grid marching-cubes masks and the distance slab. This is not an upper
+// grid masks and distance-sampling workspace. This is not an upper
 // bound for MeshLib/CGAL memory. Runtime cooperative process-memory polling is still needed.
 InProcessReconstructionEstimate estimate_inprocess_reconstruction(const InProcessReconstructionEstimateInput& input);
 

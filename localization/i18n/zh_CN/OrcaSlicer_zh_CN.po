@@ -20052,3 +20052,9 @@ msgstr "修复纹理网格"
 
 msgid "Run advanced mesh repair before converting GLB/GLTF textures. Requires --export-texture-obj."
 msgstr "转换 GLB/GLTF 纹理前执行高级网格修复，需要同时使用 --export-texture-obj。"
+
+msgid "At this voxel size the bounding box spans over 100 million cells. Reconstruction may take longer. Larger voxels reduce work but can close small holes or erase thin walls."
+msgstr "按当前体素大小，模型包围盒超过一亿格，重建可能较慢。调大体素可以减少计算量，但可能封住小孔或丢失薄壁。"
+
+msgid "Exported reconstruction STL has an incorrect face count or file size."
+msgstr "重建 STL 的三角面数或文件长度与预期不符。"

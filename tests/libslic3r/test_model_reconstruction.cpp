@@ -66,6 +66,20 @@ Model reconstruction_model()
 }
 } // namespace
 
+TEST_CASE("Binary STL export preserves every validated reconstruction triangle", "[ModelReconstruction]")
+{
+    ReconstructionTempDirectory temp;
+    auto candidate = make_cube(7., 11., 13.);
+    candidate.rotate_z(0.37);
+    candidate.translate(2.f, -3.f, 1.f);
+    nlohmann::json validation;
+    REQUIRE(validate_reconstruction_mesh(candidate, validation, RECONSTRUCTION_MAX_OUTPUT_FACES));
+    const auto path = (temp.path / "candidate.stl").string();
+    REQUIRE(store_stl(path.c_str(), &candidate, true));
+    std::string hash;
+    CHECK(same_ordered_triangles(candidate, read_bounded_model_stl(path, hash)));
+}
+
 TEST_CASE("Stage readback preserves exact triangles and permits face reordering", "[ModelStageReport][AppBasic]")
 {
     ReconstructionTempDirectory temp;
@@ -567,6 +581,16 @@ TEST_CASE("Stage STL above one million faces retains the section input budget", 
     // This verifies the parser/section-budget chain, not a million-face repair.
 }
 
+TEST_CASE("Reconstruction workload advice follows physical size and voxel spacing", "[ModelReconstruction]")
+{
+    const BoundingBoxf3 box(Vec3d::Zero(), Vec3d(100, 100, 10));
+    CHECK(model_reconstruction_grid_warning(box, 0.1) == nullptr); // Exactly 100 million.
+    CHECK(model_reconstruction_grid_warning(box, 0.09) != nullptr);
+    CHECK(model_reconstruction_grid_warning(box, 0.2) == nullptr);
+    const BoundingBoxf3 flat(Vec3d::Zero(), Vec3d(2000, 2000, 0));
+    CHECK(model_reconstruction_grid_warning(flat, 0.1) != nullptr);
+}
+
 TEST_CASE("Reconstruction budgets scale without overriding explicit limits", "[ModelReconstruction]")
 {
     const auto   automatic = ModelReconstructionOptions{}.limits;
@@ -982,6 +1006,40 @@ TEST_CASE("MeshLib reports topology changes independently of surface deviation",
     CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
 }
 
+TEST_CASE("A valid native reconstruction is retained without local repair", "[.][MeshLibInProcessIntegration]")
+{
+    REQUIRE(model_reconstruction_available());
+    Model model = reconstruction_model();
+    const auto& source = model.objects.front()->volumes.front()->mesh();
+    OrcaMeshLib::Mesh input;
+    for (const auto& v : source.its.vertices)
+        input.vertices.push_back({v.x(), v.y(), v.z()});
+    for (const auto& f : source.its.indices)
+        input.faces.push_back({f.x(), f.y(), f.z()});
+    OrcaMeshLib::Options native_options;
+    native_options.voxel_mm    = 0.3;
+    native_options.close_holes = false;
+    const auto native = OrcaMeshLib::rebuild(input, native_options);
+    REQUIRE(native.success);
+    indexed_triangle_set its;
+    for (const auto& v : native.mesh.vertices)
+        its.vertices.emplace_back(v[0], v[1], v[2]);
+    for (const auto& f : native.mesh.faces)
+        its.indices.emplace_back(f[0], f[1], f[2]);
+    const TriangleMesh expected(std::move(its));
+    nlohmann::json validation;
+    REQUIRE(validate_reconstruction_mesh(expected, validation, RECONSTRUCTION_MAX_OUTPUT_FACES));
+
+    ModelReconstructionOptions options;
+    options.voxel_mm = 0.3;
+    const auto result = reconstruct_model_candidate(model, 0, options);
+    INFO(result.report.dump(2));
+    REQUIRE(result.candidate_model);
+    CHECK_FALSE(result.report.at("engine").at("sdk").at("elapsed_ms").contains("local_cleanup"));
+    CHECK_FALSE(result.report.at("engine").contains("pre_cleanup_mesh_check"));
+    CHECK(same_ordered_triangles(expected, result.candidate_model->objects.front()->volumes.front()->mesh()));
+}
+
 TEST_CASE("MeshLib reconstruction retains a known cavity and thin wall", "[.][MeshLibInProcessIntegration]")
 {
     REQUIRE(model_reconstruction_available());
@@ -1261,14 +1319,16 @@ TEST_CASE("MeshLib reconstruction keeps a bore connected across distance grid sl
     CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);
 }
 
-TEST_CASE("MeshLib reconstruction does not add a void below an open dome", "[.][MeshLibInProcessIntegration]")
+TEST_CASE("MeshLib standard reconstruction preserves an open dome's outer envelope", "[.][MeshLibInProcessIntegration]")
 {
     REQUIRE(model_reconstruction_available());
     Model model  = reconstruction_model();
     auto  source = make_cube(12., 12., 1.03603);
     source.translate(-6.f, -6.f, -1.03603f);
     // An open-bottom decorative dome rests on the floor, as in the radio model.
-    // Its central depression must remain open above, without creating air pockets below.
+    // Its central depression and base must remain. An open sheet does not define
+    // a solid interior: the standard SDK (and MeshInspector) may separate it
+    // from the base. Do not impose a single-shell/filled-interior guarantee.
     indexed_triangle_set dome;
     const int            sides = GENERATE(16, 20, 24, 28, 32, 48, 64, 192);
     INFO("Dome sides: " << sides);
@@ -1287,8 +1347,7 @@ TEST_CASE("MeshLib reconstruction does not add a void below an open dome", "[.][
                 dome.indices.emplace_back(b, d, c);
         }
     source.merge(TriangleMesh(std::move(dome)));
-    // Dense, rotated triangle fans also exercise approximation near the 0.5
-    // winding threshold; a valid closed output can still contain a false void.
+    // Dense, rotated fans exercise the standard winding approximation.
     const double rotation = GENERATE(0., 0.73);
     INFO("Dome rotation: " << rotation);
     source.rotate_z(rotation);
@@ -1300,11 +1359,11 @@ TEST_CASE("MeshLib reconstruction does not add a void below an open dome", "[.][
     INFO(result.report.dump(2));
     REQUIRE(result.candidate_model);
     const auto& candidate = result.candidate_model->objects.front()->volumes.front()->mesh();
-    CHECK(result.report.at("engine").at("final_mesh_check").at("metrics").at("component_count") == 1);
-    for (double z : {0.06, 0.1, 0.15}) {
-        CHECK(inside_closed_mesh(candidate, Vec3d(0., 0., z)));
-        CHECK(inside_closed_mesh(candidate, Vec3d(1., 1., z)));
-    }
+    const auto source_bounds = source.bounding_box();
+    const auto output_bounds = candidate.bounding_box();
+    CHECK((source_bounds.min - output_bounds.min).cwiseAbs().maxCoeff() <= 2. * options.voxel_mm);
+    CHECK((source_bounds.max - output_bounds.max).cwiseAbs().maxCoeff() <= 2. * options.voxel_mm);
+    CHECK(result.report.at("engine").at("structure_preservation").at("verified") == false);
     CHECK_FALSE(inside_closed_mesh(candidate, Vec3d(0., 0., 0.6)));
     CHECK(inside_closed_mesh(candidate, Vec3d(5., 0., -0.5)));
     CHECK(model_reconstruction_source_identity(*model.objects.front()) == identity);

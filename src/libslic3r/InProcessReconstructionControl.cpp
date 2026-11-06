@@ -188,14 +188,13 @@ InProcessReconstructionEstimate estimate_inprocess_reconstruction(const InProces
         return result;
     const long double cells       = std::ceil(static_cast<long double>(input.surface_area_mm2) / voxel / voxel);
     const long double plane_cells = grid[0] * grid[1];
-    // SDK marching cubes retains per-layer invalid/sign masks until finalization.
-    // Reserve both masks; some layers may be empty. The distance slab also needs
-    // at least two XY planes plus the shared plane, even when that exceeds 32 MiB.
-    const long double grid_masks    = 2 * std::ceil(plane_cells / 64) * 8 * grid[2];
-    const long double distance_slab = std::max(32 * static_cast<long double>(BYTES_PER_MIB), 8 * plane_cells) + 4 * plane_cells;
-    const long double incremental   = std::ceil(grid_masks + distance_slab + 256 * static_cast<long double>(input.input_faces) +
-                                                48 * static_cast<long double>(input.input_vertices) +
-                                                128 * static_cast<long double>(input.max_output_faces) + 64 * cells);
+    // Allow for grid masks and temporary distance samples. Native MeshLib
+    // chooses its own allocation strategy; the runtime monitor enforces the budget cooperatively.
+    const long double grid_masks         = 2 * std::ceil(plane_cells / 64) * 8 * grid[2];
+    const long double distance_workspace = std::max(32 * static_cast<long double>(BYTES_PER_MIB), 8 * plane_cells) + 4 * plane_cells;
+    const long double incremental        = std::ceil(grid_masks + distance_workspace + 256 * static_cast<long double>(input.input_faces) +
+                                                     48 * static_cast<long double>(input.input_vertices) +
+                                                     128 * static_cast<long double>(input.max_output_faces) + 64 * cells);
     const long double total         = std::ceil(incremental + input.memory_bytes);
     // Compare strictly below 2^64, avoiding an out-of-range integer cast even on
     // platforms where long double has only double precision.
