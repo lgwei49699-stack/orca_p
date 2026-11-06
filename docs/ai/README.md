@@ -1,6 +1,6 @@
 # 开发与 AI 模块文档
 
-当前正文核对分支：`master`；初始化源码基线 `d73b954fc3af9bf68176805c0ccbcc6d96a3cb2d`。文档和工具直接在本分支维护，没有互相合并业务代码。后续以当前源码/指纹和 [分支边界](branch-scope.md) 为准。
+当前集成分支为 `linux/release2_3_2`，本轮来源和发布依赖见[集成记录](validation/2026-11-06-release-integration.md)。特征文档归档源于 `f7df7e11c8`，范围与验证见[整理记录](validation/2026-11-06-feature-documentation-consolidation.md)。最初的 `master/d73b954fc3` 仅是文档初始化基线，当前行为以所在分支源码、指纹和[分支边界](branch-scope.md)为准。
 
 ## 开始阅读
 
@@ -60,13 +60,23 @@ App 检测／修复精简：[2026-10-30 两阶段实现与本地耗时验证](va
 
 [Thingi10K 六模型与官方 2.4.2 / 2.5.0 修复对照](validation/2026-10-30-thingi-repair-242-comparison.md) 记录2.4.2/2.5.0 Beta实测、当前共享核心移植及全入口策略修正；包含孔壁保留、两种重建回归和待GUI/平台验证，历史证据与当前代码分开。
 
+[特征分支集中测试合并](validation/2026-10-30-feature-branch-consolidation.md) 记录发布分支回合、原工作区保留、影响范围与集中测试清单。
+
 [Linux 2.3.2 发布分支同步](validation/2026-10-26-release-2.3.2-merge.md) 记录此次 master/特征分支合并、发布配置保留及验证边界。
+
+[机关夹夹乐无支撑配置与实印不符](validation/2026-10-29-clamp-unexpected-support.md) 记录生产打印任务、历史3MF导入差异及旧系统切片，结论为方案导入与产物更新问题；仅分析，未修改引擎或生产数据。
+
+[飞机尾部承托与原打印包参数核对](validation/2026-10-23-airplane-tail-support-review.md) 记录实物缺陷对应的原 G-code 路径、截图与包内配置差异及待执行的重切清单；参数建议尚未实印验证。
+
+[AD5X 打印中跳过失败对象分析](validation/2026-10-19-ad5x-object-exclusion-analysis.md) 区分原厂屏幕能力、CLI 对象标记与自有平台远程控制缺口，附待执行的实机清单。
 
 [模型打印优化：方案与首批指标](validation/2026-10-18-slice-analysis.md) 记录总体指标、原生功能复用和默认关闭的 CLI 只读报告；不将报告导出视为自动优化或实印质量验收。
 
 [模型特征检测与一次匹配策略：工作进展](validation/2026-10-23-feature-strategy-progress.md) 是2026-10-23用户明确范围后的续接入口：G-code用于研发验证和修正规则，正常业务只匹配/切片一次，不建设线上多轮试参或自动择优。
 
 [历史归档](history/README.md) 保存原始规则与验证流水；[本轮检查结果](validation-report.md) 只说明文档工具验证，不表示重新验证了切片算法。
+
+[2026-10-13 OBJ 盖子空层与退出码 156 排查](validation/2026-10-13-obj-tree-support-156.md) 记录输入身份、短墙过滤单因素对照及本地／线上构建差异。
 
 ```sh
 python3 scripts/check_ai_module_docs.py --all

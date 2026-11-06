@@ -4,7 +4,7 @@
 {
   "id": "raft",
   "source_fingerprint": "sha256:fb7767532e4f64c18407b503afc7758c36db85e2f70fafc20cf599fe863d87f1",
-  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
+  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。 2026-11-06 合并复核：保留发布分支的现有引擎及验证说明，补入特征分支历史调查和离线审计／下载工具；非测试工具模块源码未随文档归档变化，测试工具指纹按组合源码重新核对。"
 }
 -->
 
@@ -66,5 +66,7 @@ Cura V1 合法首层气隙被中间普通支撑误判的问题由共享 GCode �
 [10-08 专题记录](../../../doc/print_settings/support/raft_geometry_trial_progress.md#2026-10-08-当前调查ep3-plus-复杂轮廓断开与平滑对照)。
 
 ## 关联模块
+
+[10 月底部空层调查](../validation/2026-10-27-raft-bottom-empty-layers.md) 区分海绵宝宝的气隙校验误判与勺子的 ZigZag 扫描范围缺陷；独立候选验证和正式源码修复状态分别记录，不能将关闭垫层后通过统一归因为误判。
 
 [普通、树状与有机支撑](support.md)、[自动分盘与打印板](arrangement.md)、[填充、顶底面与窄区](fill.md)、[Brim、Skirt 与平台附着](adhesion.md)、[FFF 切片步骤与层状态](slicing.md)。

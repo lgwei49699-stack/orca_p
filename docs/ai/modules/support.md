@@ -4,7 +4,7 @@
 {
   "id": "support",
   "source_fingerprint": "sha256:96f228b304f786468ce47dfbe57e771ca06f43ea9261170d785259dfbaccc118",
-  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
+  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。 2026-11-06 合并复核：保留发布分支的现有引擎及验证说明，补入特征分支历史调查和离线审计／下载工具；非测试工具模块源码未随文档归档变化，测试工具指纹按组合源码重新核对。"
 }
 -->
 
@@ -50,6 +50,8 @@ CuraV1 中间／顶部的 ZigZag 在 `fill_expolygon_generate_paths` 中使用�
 
 `[OffsetFill]` 以双薄片构造实际偏心垫层，检查五层路径、覆盖范围／面积与床面边界；
 GUI／CLI 共享入口、真实任务对照及 GUI 待验见[偏心垫层修复](../validation/2026-10-25-cura-raft-offset-fill.md)。
+
+10 月 EP3Plus 45 条“开启支撑后通过”记录的逐层复核见[支撑与空层重新分类](../validation/2026-10-28-support-empty-layer-reclassification.md)。开启支撑后通过不能单独证明模型路径已恢复；应分别检查模型截面、实际挤出和垫层路径。
 
 `[FloatingWarning]` 覆盖无挤出微区、真实周长墙、GapFill、实际线宽相交；龙模型优化前后同有效配置运动命令一致。全量支撑旧用例的摆放夹具异常与新专项结果分列，见[验证记录](../validation/2026-10-04-smart-print-engine.md#2026-10-07-悬空微区与切片包导出修正)，不将失败抹成全量通过。
 

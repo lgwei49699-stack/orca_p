@@ -20,8 +20,8 @@ CATALOG = {
     'FINE_DETAIL': 'wall_generator min_feature_size min_bead_width initial_layer_min_bead_width min_length_factor outer_wall_line_width inner_wall_line_width precise_outer_wall',
     'THIN_CONNECTION': 'minimum_sparse_infill_area',
     'RELIEF': 'layer_height initial_layer_print_height',
-    'CURVED_SURFACE': 'layer_height support_style',
-    'OVERHANG': 'enable_support support_type support_style enable_overhang_speed overhang_1_4_speed overhang_2_4_speed overhang_3_4_speed overhang_4_4_speed filament.enable_overhang_bridge_fan filament.overhang_fan_speed filament.overhang_fan_threshold',
+    'CURVED_SURFACE': 'layer_height support_type support_style',
+    'OVERHANG': 'enable_support support_type support_style enable_overhang_speed overhang_1_4_speed overhang_2_4_speed overhang_3_4_speed overhang_4_4_speed support_line_width support_interface_top_layers support_interface_spacing support_top_z_distance support_interface_speed support_interface_pattern filament.enable_overhang_bridge_fan filament.overhang_fan_speed filament.overhang_fan_threshold',
     'BRIDGE': 'bridge_speed bridge_flow bridge_density thick_bridges internal_bridge_speed internal_bridge_flow internal_bridge_density thick_internal_bridges filament.enable_overhang_bridge_fan filament.overhang_fan_speed filament.internal_bridge_fan_speed',
     'FLOATING_START': 'enable_support support_type support_on_build_plate_only',
     'BED_ADHESION': 'brim_type brim_width brim_object_gap initial_layer_speed raft_layers',
@@ -32,7 +32,7 @@ CATALOG = {
     'SHELL_SURFACE': 'wall_loops top_shell_layers bottom_shell_layers top_shell_thickness bottom_shell_thickness top_surface_pattern gap_fill_target gap_infill_speed filter_out_gap_fill',
     'INFILL_COST': 'sparse_infill_density sparse_infill_pattern',
     'HOLE_CLEARANCE': 'xy_hole_compensation xy_contour_compensation elefant_foot_compensation',
-    'TRAVEL_SURFACE': 'reduce_crossing_wall seam_position filament.filament_retraction_length filament.filament_retraction_speed',
+    'TRAVEL_SURFACE': 'reduce_crossing_wall max_travel_detour_distance seam_position seam_gap seam_slope_type filament.filament_retraction_length filament.filament_retraction_speed',
 }
 PATHS = {
     'FINE_DETAIL': ['outer_wall', 'inner_wall', 'gap_infill'],
@@ -172,8 +172,23 @@ def parameter_execution_context(effective):
     # A disabled master does not command a fan speed of 0: ordinary cooling still applies.
     internal_target = (external_fan if fan_source == 'INHERIT_OVERHANG' else internal_fan
                        if fan_source == 'INDEPENDENT' else None) if master is True else None
+    gap = numeric('seam_gap')
+    gap_raw = normalized(effective.get('seam_gap'))
+    nozzle = numeric('nozzle_diameter')
+    if gap_raw is not None and gap_raw.endswith('%'):
+        try:
+            gap = float(gap_raw[:-1]) * nozzle / 100 if nozzle is not None and nozzle > 0 else None
+        except (ValueError, OverflowError):
+            gap = None
+    gap = gap if gap is not None and math.isfinite(gap) and gap >= 0 else None
     return {
         'scope': 'effective_configuration_semantics_not_actual_path_execution',
+        'seam': {'configured_gap_mm': gap, 'percentage_basis': 'nozzle_diameter',
+                 'scarf_setting': normalized(effective.get('seam_slope_type')),
+                 'actual_clipped_length_mm': None,
+                 'limitations': ['闭环留口是沿路径末端裁剪的长度，不是孔径补偿或缺失面积。',
+                                 '实际启用斜接缝的闭环不裁剪该留口；只配置斜接缝不代表所有层、内外轮廓都命中。',
+                                 '未覆盖量含接缝留口等影响，不能单凭面积降低判定质量改善或自动清零留口。']},
         'bridge': {'requested_external_speed_mm_s': bridge, 'requested_internal_speed_mm_s': internal,
                    'internal_percentage_basis': 'bridge_speed',
                    'limitations': ['内外桥接分别取值；首层、流量上限及冷却可继续限速。',

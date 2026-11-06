@@ -4,7 +4,7 @@
 {
   "id": "walls",
   "source_fingerprint": "sha256:f134e5f7d4b518aab3845807d9bf9053e20c549c4aa02096f61470edc584f3f7",
-  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
+  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。 2026-11-06 合并复核：保留发布分支的现有引擎及验证说明，补入特征分支历史调查和离线审计／下载工具；非测试工具模块源码未随文档归档变化，测试工具指纹按组合源码重新核对。"
 }
 -->
 
@@ -45,6 +45,8 @@ PerimeterGenerator 选择经典墙或 Arachne；WallToolPaths 根据边界及 be
 现有测试/工具范围：`tests/fff_print/test_fill.cpp`；`tests/fff_print/test_arachne_params.cpp`。测试范围与实际通过记录分开，执行要求见[验证规范](../validation.md)。
 
 `[ResidualIsland]`包含原生25点小岛的退化复现/显式开启恢复、关闭保持旧退化结果、非零旧路径不变、短线过滤与0墙圈不被绕过、共享端点8种排列方向、宽度/总长不变，以及普通墙/零宽/非接触路径的旧算法对照。`[DetailPathOptIn]`补旧分组/末组体积冻结值、默认关闭及Print模式切换缓存失效。GUI调用共享核心的默认关闭路径；CLI显式开启时经典细墙/补缝和Arachne同心填充接入运行时选择。修复、分盘入口没有新增算法。真实模型默认与旧版、开启与候选的G-code对照及用户明确不改GUI的边界见[本批记录](../validation/2026-10-18-slice-analysis.md)。
+
+[文字细节与自动选择分析](../validation/2026-10-15-text-wall-feature-analysis.md) 对照用户 OBJ 与经典墙 G-code，并验证直接读取现有文字顶面也可测出细笔画；最新方案按用户约束采用不切片、不修改模型的特征筛查，仅建议覆盖墙参数。当前未新增自动墙模式，未完成 Arachne 重切片验证。
 
 ## 分支现状
 

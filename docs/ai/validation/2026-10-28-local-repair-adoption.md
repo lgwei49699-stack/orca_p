@@ -1,6 +1,12 @@
 # 局部修复结果采用：进行中
 
+> 归档说明（2026-11-06）：本页保留调查当时的分支、构建、测试结果与待办；其中“当前／未提交／下一步”属于记录时点。此次只整理入库，不将历史结果视为当前发布验收。归档范围见[文档整理记录](2026-11-06-feature-documentation-consolidation.md)。
+
 ## 当前执行状态
+
+- 2026-10-29 迁移方案再次核对/简化：刷新远端后 Orca/PDS/主服务 master 仍分别为 `625b37a266` / `6b6ba2e` / `865da7f3b`。在两个 Java 仓库 master 的全部 Java 源码中检索 `finalModelUrl`、getter、setter 均无匹配；PDS 的 ModelRepairResult 和主服务 PrintabilityProcessRecord 也均无此字段。结合用户对现有字段的追问，建议修复独立迁移不新增 finalModelUrl，沿用 outputModelUrls；下方迁移计划已修正，仍属待实施方案。功能分支的 DTO/ModelRepairSelection 不能原样搬入。只补分析文档，未创建分支、改业务代码或执行构建。
+
+- 2026-10-29 修复独立迁移分析（本轮用户要求先分析）：已刷新 Orca 两个远端 master、PDS/主服务 origin master 与 develop；未创建/切换分支、未迁移业务代码、未构建、未提交或推送。本轮基准与建议见下方“从 master 提取修复链路”。既有真实模型和构建证据仍属于原分支，不能当作待建分支的验证结果。
 
 - 2026-10-29 Orca入库审核完成，未发现本批阻塞项：仅整理模型修复报告及对应测试/文档为一笔提交，不推送；PDS/其他服务留待单独审核。审核基准 `f9bcf0afe0` / `codex/model-feature-analysis-20261018`。普通切片/分盘和无报告修复不调用新增比对，CGAL/MeshLib修复算法未变。当前程序报告开关实测见下方第九批。无关文档、参数审计、下载脚本和 result.json 保留，选择性暂存。
 
@@ -18,6 +24,21 @@
 - CodeGraph MCP未暴露、CLI可用，现有索引内容身份未完整复核，本批按模块文档和已定位源码核查；没有初始化/复制索引。工具状态不替代代码与二进制验证。
 
 ## 决策与验证范围
+
+### 2026-10-29 从 master 提取修复链路（分析方案，尚未实施）
+
+- Orca 当前源分支 `codex/model-feature-analysis-20261018` / `aa39c82eb278014fa9046b44daf2fd932905db8f`。本轮刷新后的业务远端基准为 `codeup/master` / `625b37a266`；`origin/master` / `a808436159` 是较旧的 GitHub master，不能混用。本地 `master` / `c0ccf31b22` 比 Codeup 多一笔 Cura V1 垫层/G-code 修正，属于另一工作目录，未经本轮授权不携带、不覆盖。
+- Orca master 已有 CGAL 高级修复、MeshLib adapter/重建核心、明确穿插分类和重建建议。对当前源分支比较，`ModelRepair`、`ModelInspection`、`ModelRepairEvidence` 和 `MeshLibAdapter` 源码无差异。本次提取重点是阶段报告、相对原件的保形验收证据和 Linux MeshLib 打包，不重新实现算法。
+- Orca 需要提取：`ModelStageReport.*`；`MeshReconstruction.*` 的阶段比较/实体并集证据；`ModelCheckWorkflow.*` 和 `ModelReconstruction.*` 的显式报告接入、有限 STL 读取及报告参数；`InProcessReconstructionControl.hpp` 的 Clock 类型一致性修正；相关测试、英文/简中提示、模块正文/归属。`OrcaSlicer.cpp`、`PrintConfig.cpp` 和 libslic3r CMake 只取修复参数、派发和源文件登记的必要改动。
+- Linux 需要提取：`src/meshlib/CMakeLists.txt` 的 RPATH/旧 TBB 符号隔离、`package_meshlib_linux.py`、两个 Linux 打包模板、SDK 固定版本/校验及脱离构建机 SDK 的运行验收脚本和相应测试。现有 master 的普通切片/分盘打包检查保留。不能用只有 SDK 源码的构建替代实际可加载 MeshLib 的最终包。
+- 可定位的源提交为 `f653f0a47f`（阶段报告基础）、`aa39c82eb2`（修复保形验收），Linux 打包另涉及混合合并提交 `bc6684f180`。建议按最终文件/补丁块提取，不能直接合入整个功能分支，也不能只 cherry-pick 最新一笔而漏掉基础依赖；目标分支应保留 master 后续独立修正。
+- PDS 当前 `d305818`，最新 `origin/master` 为 `6b6ba2e`。master 已有异步修复任务，repair 分支实际执行 `--auto-repair-model 1 --export-stl`；独立 CHECK 执行 `--check-model`。需提取/适配 `ModelRepairWorkflow`、`ModelRepairTaskProcessor`、Dispatcher/JobService 的期限/恢复/检查点处理、ModelRepairConfig、内部阶段常量及对应测试。重建仅在高级修复后具备完整且适用的证据时执行一次；失败、拒绝、超时保留先前已采用结果。`OrcaSliceServiceImpl`、GeneralConfig、SliceReq/层高 DTO、SliceJob 分析字段和相关数据库迁移不在修复依赖链中，不提取。ModelFileService 差异只有空行，不提取。
+- PDS 契约简化建议：保留 master 的 ModelRepairResult 字段 `modelCheck/repairStatus/repairPassed/outputModelUrls/before/repairActions/after`；不搬功能分支新增的 finalModelUrl/finalModelSource/selectionReason/policy/stages 公共字段，不删除原 before/repairActions/after。本单模型流程的 outputModelUrls 只放已验收采用的一个输出；初始化保留原件，每次通过验收并上传后写入现有 result_json 检查点，失败仅改任务状态/错误，不覆盖这个检查点。阶段细节可用内部报告、日志及已有修复信息 Map 承载。无须为了最终文件字段修改 App 或增加 interface DTO 字段。新引擎镜像从提取后源码重新打包，不直接照搬功能分支 v2.0.27。
+- 主服务当前 `d09374371`，最新 `origin/master` 为 `865da7f3b`。master 在任务非 success 时直接 fallback 原件；success 后依据 not_needed/repaired/unresolved 和 outputModelUrls 第一项交付。需最小修改两类 PrintabilityProcessStepHandler：任务结束且存在有效的已验收输出时沿用该文件；后续阶段失败不丢掉该输出，仍如实记录执行失败/未修复完整；没有有效输出时才回到原件，processing 不交付、取消/终态不被晚到结果覆盖。现有 ModelRepairSelection 依赖 finalModelUrl 等新增字段，不直接迁移；PrintabilityProcessRecord 无需添加重复模型地址。结果保存沿用现有业务模型 URL 和结果 JSON，不新增区域表或数据库列。App 请求、状态和最终模型字段不变；独立检查、OBJ 跳过及管理端同步 StlRepairApi 不自动扩大范围。
+- 对外状态需适配旧契约，不能把内部 stage 状态直接塞给旧主服务：健康且无需高级/重建使用 not_needed；修复并检查通过使用 repaired；保留可交付产物但缺陷未解决使用 unresolved，repairPassed/modelCheck/after 反映最终所选模型，不能因任务结束就写通过。执行失败仍保留 failed，不为了让旧代码接收 URL 伪装任务成功。
+- 检查顺序：初始基础处理后检查→有缺陷才高级修复→复查实际产物并验收保形→仍有完整且适用的重建依据才执行一次 MeshLib→复查重建实际产物并决定采用/保留。高级及重建命令已有后检查，消费相应报告，不另加一次重复检查进程。检查未完成/资源失败不自动等同于需要重建；保形验收始终相对同一原件，失败保留上一已采用文件。
+- 不提取 Blender/PAM/Compare/Web、特征检测、参数匹配、局部/自适应层高、细节路径优化、G-code/SliceAnalysis；不回退 master 自带的切片/分盘改动。只改修复任务入口不能保证 Linux 链接配置零影响，需实际验证。
+- 后续实施顺序：各目标仓库分别从本次确认的 master 建独立工作目录/修复分支，提取源码与针对性文档测试；先构建 Orca 验证健康/高级修复/需要重建/不应重建/采用/拒绝/超时保留，核对普通切片和分盘输出；然后用最终 Linux 包运行服务契约及 App 现有异步入口联调。旧分支测试可作为样本与对照，不代替新源码、新包的测试。本轮仅完成源码/差异分析。
 
 ### 第九批：2026-10-29 Orca提交审核与当前程序性能
 

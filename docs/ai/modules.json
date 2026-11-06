@@ -1745,6 +1745,7 @@
         "scripts/copy_windows_active_log.cmd",
         "scripts/copy_windows_active_log.ps1",
         "scripts/check_ai_module_docs.py",
+        "scripts/download_thingi10k.py",
         "scripts/evaluate_layer_height_candidate.py",
         "scripts/evaluate_relief_height_candidate.py",
         "scripts/check_regional_layer_scope.py",
@@ -1775,6 +1776,7 @@
         "scripts/tests/test_macos_build_compatibility.py",
         "scripts/tests/test_macos_runtime_bundle.py",
         "scripts/tests/test_check_ai_module_docs.py",
+        "scripts/tests/test_download_thingi10k.py",
         "scripts/tests/test_layer_height_candidate.py",
         "scripts/tests/test_relief_height_candidate.py",
         "scripts/tests/test_regional_layer_scope.py",
@@ -1808,7 +1810,8 @@
         "scripts/tests/test_check_ai_module_docs.py"
       ],
       "tests": [
-        "scripts/tests/test_check_ai_module_docs.py"
+        "scripts/tests/test_check_ai_module_docs.py",
+        "scripts/tests/test_download_thingi10k.py"
       ],
       "test_note": "修改文档工具时在临时 Git 仓库验证部分暂存、分支切换、文件增删改名和坏映射。AI 负责必要的测试目标构建及测试；业务测试按 validation.md 核对或补齐当前构建，不用旧程序证明新代码通过。"
     },
