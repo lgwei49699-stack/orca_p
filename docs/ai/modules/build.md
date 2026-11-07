@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "build",
-  "source_fingerprint": "sha256:320e4f9f995dea14321be0180e9f78381c29fff27d5c2e2035c91e5822248ac2",
-  "reason": "删除已退出产品的绕数分块测试目标与 Linux 对应 CI 步骤；打包冒烟继续验证原生重建及产物完整性。已验证 Mac 构建。"
+  "source_fingerprint": "sha256:c24869d9d4c4909e5f13cb4b99c8cba1d26a155efbeaf026c2cdb917af0db955",
+  "reason": "核对 MeshRepair.cpp 与其他 CGAL 使用者的模板编译配置，移除单文件 TBB 宏并补充 Linux 与 Mac 回归记录。"
 }
 -->
 
@@ -107,7 +107,7 @@ Apple ld 的重复库告警通过链接器探测后才关闭，不重排或删�
 
 Windows GFD 设备选择的循环辅助实现注册在 `src/slic3r/CMakeLists.txt`，仍编入现有 GUI 库。`SLIC3R_GUI_TESTS=ON` 额外注册独立 `gfd_modal_dialog_tests`，仅编译辅助实现并链接 wx core/base；不为测试链接整套切片／云端业务。该开关默认关闭，运行需交互桌面。`.gitattributes` 仅为本次两个 Windows 诊断 CMD 固定 `eol=crlf`，保证同步代码后的启动器换行格式，不改变其他文件的检出规则。
 
-2.5修复核心移植保留CGAL5.6.3；`MeshRepair.cpp`加入libslic3r_cgal并单独启用CGAL_LINKED_WITH_TBB，链接现有TBB::tbb。其余布尔/重建编译宏不变，未升级第三方快照。当前平台构建及跨平台待验证范围见[对齐记录](../validation/2026-10-30-thingi-repair-242-comparison.md)。
+当前发布分支使用 CGAL 6.2.1。`MeshRepair.cpp` 与其余源码继承相同的 CGAL 编译配置，避免 `Kd_tree` 等共享模板在同一程序内采用不同的内存布局。高级修复自身的部件并行仍使用 `TBB::tbb`。 [高级修复崩溃与平台回归](../validation/2026-11-07-cgal-repair-build.md)
 
 ## 修改与验证
 
