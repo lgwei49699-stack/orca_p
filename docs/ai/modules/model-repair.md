@@ -4,7 +4,7 @@
 {
   "id": "model-repair",
   "source_fingerprint": "sha256:8a3ab809ff4b440af25d5b9c285c1558895b9b780659101b873a4b22c4c14e4c",
-  "reason": "2026-11-06 发布前文档核对：修正 MeshLib README 中过期的运行内存监测／未实现准入说明，补齐 STL 产物字段和 Slicer 配套依赖；与共享控制器、CLI 报告和既有交付记录一致。本轮不改 C++；GUI 手测边界保留。"
+  "reason": "2026-11-06 后端交接文档：复核 basic 阳性触发、高级残留证据、MeshLib 完整候选验收和 binary_stl_count_and_size 导出合同，增加后端调用入口；本轮不改 C++，指纹不变。资源配置与未接入后端差距单列，未新增运行或 GUI 通过结论。"
 }
 -->
 
@@ -31,6 +31,8 @@ GUI 与 CLI 共用一次 MeshLib 原生重建，恢复 SDK 默认预细分和绕
 本模块负责模型检测、修复与保色。归属以[模块清单](../modules.json)的 `model-repair` 为准。
 
 ## 入口与调用
+
+当前发布版的后端调用见[完整交接](../validation/2026-11-06-backend-model-repair-handoff.md)。basic/full 是检查及高级修复的检查范围，不是两套 MeshLib 重建算法；前序检查未枚举完但已明确检出缺陷可触发高级修复，重建候选仍须完整验收。交接按首检、完整高级验收、准入、重建、产物采用分别说明。
 
 - [ModelRepair.cpp](../../../src/libslic3r/ModelRepair.cpp)：repair_model/repair_staged_model；私有候选与事务提交。
 - [MeshBoolean.cpp](../../../src/libslic3r/MeshBoolean.cpp)：网格布尔、分割与 CGAL／Mcut 适配；保留全项检测及严格修复兼容入口。

@@ -1,6 +1,6 @@
 # 开发与 AI 模块文档
 
-当前集成分支为 `linux/release2_3_2`，本轮来源和发布依赖见[集成记录](validation/2026-11-06-release-integration.md)。特征文档归档源于 `f7df7e11c8`，范围与验证见[整理记录](validation/2026-11-06-feature-documentation-consolidation.md)。最初的 `master/d73b954fc3` 仅是文档初始化基线，当前行为以所在分支源码、指纹和[分支边界](branch-scope.md)为准。
+日常开发在 `master` 进行。Linux 2.3.2 打包分支为 `linux/release2_3_2`，11 月 6 日的集成来源和发布依赖见[集成记录](validation/2026-11-06-release-integration.md)。特征文档归档源于 `f7df7e11c8`，范围与验证见[整理记录](validation/2026-11-06-feature-documentation-consolidation.md)。最初的 `master/d73b954fc3` 仅是文档初始化基线，当前行为以所在分支源码、指纹和[分支边界](branch-scope.md)为准。
 
 ## 开始阅读
 
@@ -11,6 +11,8 @@
 日常入口以 `AGENTS.md` 为准；`CLAUDE.md` 仅为兼容其他客户端的短转接，无需重复阅读。代码图可用时辅助定位，不可用时文档与源码足以继续任务。
 
 App 检测／修复精简：[2026-10-30 两阶段实现与本地耗时验证](validation/2026-10-30-app-repair-latency.md)（本地验证通过，轻量化保持原流程，QA／真机待验）。
+
+后端接入说明：[模型检查、高级修复与 MeshLib 重建交接](validation/2026-11-06-backend-model-repair-handoff.md)。包含 basic 首检、full 高级验收、重建准入、命令模板、产物字段和后端待改清单；引擎交付不等于后端已联调。
 
 ## 模块索引
 

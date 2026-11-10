@@ -4,7 +4,7 @@
 {
   "id": "cli",
   "source_fingerprint": "sha256:154ffb1bf512a974042caf99042717149e625840424101b12b25bfa0767658a5",
-  "reason": "2026-11-06 审核：复核四项准入参数的组合限制、默认/非法值、独立重建解析及普通切片隔离；报告发布失败撤销准入许可，现有退出码与几何证据保留。内存仅启动前估算，CLI检查和阶段报告回归通过，GUI手测另列。"
+  "reason": "2026-11-06 后端交接文档：按当前 release 源码复核三阶段命令、basic/full 适用范围、准入参数限制、退出及阶段报告字段，新增接入入口；本轮没有源码变化，指纹保持，未重跑引擎或 GUI。此前回归身份见原验证记录。"
 }
 -->
 
@@ -23,6 +23,8 @@
 本模块负责应用入口与 CLI。归属以[模块清单](../modules.json)的 `cli` 为准。
 
 ## 入口与调用
+
+后端实施优先阅读[完整调用交接](../validation/2026-11-06-backend-model-repair-handoff.md)：首检 basic，允许重建的高级阶段 full + evidence，只有显式准入允许才启动独立重建。独立重建不接受 inspection-mode/max-grid-cells；full 阶段报告省略 scope，不能要求其字面值为 full。文档同时区分现有引擎与后端待接入项。
 
 - [OrcaSlicer.cpp](../../../src/OrcaSlicer.cpp)：main → CLI::run；动作、模型加载与导出路由。
 - [OrcaSlicer.hpp](../../../src/OrcaSlicer.hpp)：CLI 动作与配置成员的接口边界。
