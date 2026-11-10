@@ -20085,3 +20085,15 @@ msgstr "重建时间预算（秒）"
 
 msgid "Time budget to pass to the subsequent reconstruction process. Some SDK operations may delay cooperative cancellation."
 msgstr "传递给后续重建进程的时间预算。某些 SDK 操作可能延迟响应协作取消。"
+
+msgid "Arrange by Source Group"
+msgstr "按来源组分盘"
+
+msgid "Try whole source groups on each plate in input order. A group needing multiple plates occupies them exclusively."
+msgstr "按输入顺序尝试将整个来源组放入当前盘。一个组需要多盘时，单独占用这些盘。"
+
+msgid "Model Source Group"
+msgstr "模型来源组"
+
+msgid "Positive source group number of this component for --arrange-by-source-group."
+msgstr "此组件使用 --arrange-by-source-group 分盘时的来源组编号，取值为正整数。"

@@ -3,10 +3,13 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:de8535f5f064a4ee3fc29d934a6cdfe0e02257d9a5f1cc42efe345eac1f3fd8e",
-  "reason": "2026-11-06 审核：增加报告发布失败撤销重建许可的业务投影回归，修改前2断言失败，修改后70组1538断言、122检查CLI和65阶段报告CLI通过；未改 SDK 及真实重建用例，既有证据分版本保留。 2026-11-06 合并复核：保留发布分支的现有引擎及验证说明，补入特征分支历史调查和离线审计／下载工具；非测试工具模块源码未随文档归档变化，测试工具指纹按组合源码重新核对。"
+  "source_fingerprint": "sha256:76afcbc52498b653c1de71ad103a97dfcb9468fe2104a2a8799381db4fc74668",
+  "reason": "2026-11-10：新增来源组 CLI 回归，用 3MF 成员和 G-code 验证整组试摆，按模型名核对耗材槽，覆盖擦料塔、越界及参数冲突。"
 }
 -->
+
+`scripts/test_cli_source_group_arrange.py` 接受当前 CLI 以及 `--machine`、`--process`、`--filament` 三份已解析配置。它在隔离目录生成合成组件，检查真实切片、3MF 对象归属、盘外 JSON、组间回退、耗材槽位、擦料塔重新试摆及参数冲突。 [来源组验证](../validation/2026-11-10-cli-source-group-arrangement.md)
+
 
 将重建 STL 的逐三角面验证保留在回归；覆盖原生重建穹盖、自交、输出面数与取消，删除仅供旧绕数采样模块使用的测试。 [本轮验证](../validation/2026-10-31-cgal-621-upgrade.md)
 

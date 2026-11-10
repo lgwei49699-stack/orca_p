@@ -3,10 +3,33 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:154ffb1bf512a974042caf99042717149e625840424101b12b25bfa0767658a5",
-  "reason": "2026-11-06 后端交接文档：按当前 release 源码复核三阶段命令、basic/full 适用范围、准入参数限制、退出及阶段报告字段，新增接入入口；本轮没有源码变化，指纹保持，未重跑引擎或 GUI。此前回归身份见原验证记录。"
+  "source_fingerprint": "sha256:36067d170b60e7ca328bd6abb7e0c52309d0c39c1cb21b11ba4af3ec7bfe7c49",
+  "reason": "2026-11-10：CLI 增加来源组开关和组件组号，用 arm64 发布包核对互斥参数、盘外 JSON、按对象绑定耗材及实际切片。"
 }
 -->
+
+## 按来源组分盘
+
+原始 OBJ 已拆出的 STL／OBJ 组件按位置参数顺序传入。每个文件配一个同名的 `--model` 块，并用 `--model-source-group N` 标明来源。组号为正整数，最多 10 个不同来源；首次出现的顺序决定试摆优先级。此编号只参与本次排盘，耗材仍按现有选项和 OBJ／MTL 绑定。
+
+下例沿用服务分盘时忽略擦料塔的设置。将文件名替换为已解析的机型、工艺、耗材和组件路径，在仓库根目录执行。
+
+```sh
+mkdir -p out
+./build/arm64/src/Release/OrcaSlicer.app/Contents/MacOS/OrcaSlicer \
+  --load-settings 'machine.json;process.json' --load-filaments filament.json \
+  --arrange 1 --auto-plate 1 --arrange-by-source-group 1 --ignore-wipe-tower \
+  --model body.obj --model-source-group 1 \
+  --model eyes.obj --model-source-group 1 \
+  --model base.stl --model-source-group 2 \
+  --export-model-transforms --export-3mf layout.3mf --outputdir out \
+  body.obj eyes.obj base.stl
+```
+
+`out/result.json` 中的 `model_transforms` 和 `out/layout.3mf` 使用现有输出格式。需要实际切片时在同一条命令加 `--slice 0`。省略 `--ignore-wipe-tower` 时按实际机料和工艺决定每盘的塔占位。
+
+开关默认关闭。来源组模式要求全局多盘自动排布，与按颜色分盘、旧的手动排布组、按颜色拆分、显式单盘、合并为单一对象及整盘重复互斥。普通自动排盘和桌面 GUI 使用原入口。 [算法和边界](arrangement.md)
+
 
 显式重建导出后验证二进制 STL 面数、长度和哈希；重建阶段报告标记 binary_stl_count_and_size，其他阶段维持完整回读。 [本轮验证](../validation/2026-10-31-cgal-621-upgrade.md)
 

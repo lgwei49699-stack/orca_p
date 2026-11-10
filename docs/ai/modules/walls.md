@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "walls",
-  "source_fingerprint": "sha256:f134e5f7d4b518aab3845807d9bf9053e20c549c4aa02096f61470edc584f3f7",
-  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。 2026-11-06 合并复核：保留发布分支的现有引擎及验证说明，补入特征分支历史调查和离线审计／下载工具；非测试工具模块源码未随文档归档变化，测试工具指纹按组合源码重新核对。"
+  "source_fingerprint": "sha256:a92f6b4fbb0b04628cbf6adef13f81527a87f927b0d8b556f17f9892e9046fc7",
+  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。周长墙与 Arachne 可变线宽的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
 }
 -->
 

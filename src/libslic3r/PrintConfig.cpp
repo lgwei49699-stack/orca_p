@@ -8130,6 +8130,12 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->cli     = "arrange-by-color";
     def->set_default_value(new ConfigOptionBool(false));
 
+    def          = this->add("arrange_by_source_group", coBool);
+    def->label   = L("Arrange by Source Group");
+    def->tooltip = L("Try whole source groups on each plate in input order. A group needing multiple plates occupies them exclusively.");
+    def->cli     = "arrange-by-source-group";
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("repetitions", coInt);
     def->label = L("Repetition count");
     def->tooltip = L("Repetition count of the whole model.");
@@ -8217,6 +8223,13 @@ CLITransformConfigDef::CLITransformConfigDef()
     def->tooltip    = L("Explicit runtime arrange group for the current --model block. Overrides automatic color grouping.");
     def->cli        = "model-arrange-group";
     def->cli_params = "group";
+    def->set_default_value(new ConfigOptionStrings());
+
+    def             = this->add("model_source_group", coStrings);
+    def->label      = L("Model Source Group");
+    def->tooltip    = L("Positive source group number of this component for --arrange-by-source-group.");
+    def->cli        = "model-source-group";
+    def->cli_params = "id";
     def->set_default_value(new ConfigOptionStrings());
 
     def             = this->add("model_color", coStrings);

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "adhesion",
-  "source_fingerprint": "sha256:b645d7f0a2d9e1d35267a13dfc8a3207bdd9ba5bfaa724722037c419a3984c1f",
-  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
+  "source_fingerprint": "sha256:fd381afbf9a81b9f74475ec69648b3e9a4c0d3eb2bd78606ab798e538e9a35b9",
+  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。Brim、Skirt 与平台附着的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
 }
 -->
 

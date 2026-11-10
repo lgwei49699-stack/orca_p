@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:5ce264b0304d6a5ffd72b0c2e92fb0b9c5d24b83c588702ff59e0fface2014b1",
-  "reason": "2026-11-06：复核 CLIMiscConfigDef 新增体素、格数、预估内存、时间四项准入参数；只供显式检查/高级修复/证据组合使用，未改 GUI 打印参数、预设或普通切片覆盖。正文已记录默认值和入口。"
+  "source_fingerprint": "sha256:1e32ac1bc8fe081b98517ca499c9508cb0ae72ce124c0964dee0120cc33ae14e",
+  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。配置定义、预设继承与资源更新的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
 }
 -->
 

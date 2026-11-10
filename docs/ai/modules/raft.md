@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "raft",
-  "source_fingerprint": "sha256:fb7767532e4f64c18407b503afc7758c36db85e2f70fafc20cf599fe863d87f1",
-  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。 2026-11-06 合并复核：保留发布分支的现有引擎及验证说明，补入特征分支历史调查和离线审计／下载工具；非测试工具模块源码未随文档归档变化，测试工具指纹按组合源码重新核对。"
+  "source_fingerprint": "sha256:2b4077d4783efdf45ef1ee5cccf0dcfccc1d8e016ef2fcb6534591e85a89aef7",
+  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。筏层计划、合并与分块的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
 }
 -->
 

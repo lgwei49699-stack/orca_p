@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "multimaterial",
-  "source_fingerprint": "sha256:de2f7dfcdf6a8b7c4216b7a4e04ace22b8db852c147cec967ac6afe509b18ddd",
-  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
+  "source_fingerprint": "sha256:bd949c5af61f19c980e4d4fe8f4f26827b596839cd1872516248779d7af22d4c",
+  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。多材料、颜色分配与擦料塔的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
 }
 -->
 

@@ -61,6 +61,7 @@
         "src/OrcaSlicer.cpp",
         "src/OrcaSlicer.hpp",
         "src/CLIRegionalLayerPlan.hpp",
+        "src/CLISourceGroupArrange.hpp",
         "src/OrcaSlicer_app_msvc.cpp"
       ],
       "watch": [
@@ -79,6 +80,7 @@
         "scripts/reconstruction_test_helpers.py",
         "scripts/test_cli_model_check.py",
         "scripts/test_cli_oversized_arrange.py",
+        "scripts/test_cli_source_group_arrange.py",
         "scripts/test_cli_slice_analysis.py",
         "scripts/test_cli_slice_features.py",
         "scripts/test_cli_fixed_position_slice.py",
@@ -310,6 +312,7 @@
         "src/slic3r/GUI/PlateSettingsDialog.hpp"
       ],
       "watch": [
+        "src/CLISourceGroupArrange.hpp",
         "src/libslic3r/PrintConfig.cpp",
         "src/libslic3r/PrintConfig.hpp"
       ],
@@ -321,6 +324,7 @@
       ],
       "tests": [
         "tests/libslic3r/test_model_arrange.cpp",
+        "scripts/test_cli_source_group_arrange.py",
         "tests/libnest2d/**"
       ],
       "test_note": "修改 Arrange、ModelArrange 时同时检查 GUI ArrangeJob；跑本分支 model_arrange 测试，并验证固定项、空盘、100／180 mm、显式与自动间距。盘名需保存重开及 headless 导出，不能调用要求 OpenGL 上下文的绘制。"
@@ -1767,6 +1771,7 @@
         "scripts/reconstruction_test_helpers.py",
         "scripts/test_cli_plate_names.py",
         "scripts/test_cli_oversized_arrange.py",
+        "scripts/test_cli_source_group_arrange.py",
         "scripts/test_cli_repair_acceptance.py",
         "scripts/test_cli_texture_repair.py",
         "scripts/test_cli_repair_materials.py",

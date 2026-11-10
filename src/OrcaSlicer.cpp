@@ -88,6 +88,7 @@
 
 #include "OrcaSlicer.hpp"
 #include "CLIRegionalLayerPlan.hpp"
+#include "CLISourceGroupArrange.hpp"
     // BBS: add exception handler for win32
 #include <wx/stdpaths.h>
 #ifdef WIN32
@@ -1706,6 +1707,44 @@ int CLI::run(int argc, char **argv)
     const bool has_explicit_arrange_group = std::any_of(m_model_cli_specs.begin(), m_model_cli_specs.end(),
                                                         [](const ModelCliSpec& spec) { return spec.arrange_group.has_value(); });
 
+    const bool                    arrange_by_source_group = m_config.opt_bool("arrange_by_source_group");
+    std::map<size_t, std::string> source_group_by_object;
+    std::string                   source_group_error;
+    if (arrange_by_source_group) {
+        const auto specified = [&](const std::string& key) {
+            return std::find(m_requested_options.begin(), m_requested_options.end(), key) != m_requested_options.end();
+        };
+        if (m_config.opt_bool("arrange_by_color") || m_config.opt_bool("split_by_color") || has_explicit_arrange_group)
+            source_group_error = "--arrange-by-source-group conflicts with --arrange-by-color, --split-by-color and --model-arrange-group.";
+        else if (m_actions.empty())
+            source_group_error = "Select a CLI action such as --export-model-transforms or --slice 0 for source group arrangement.";
+        else if (m_config.opt_int("arrange") != 1 || (specified("auto_plate") && m_config.opt_int("auto_plate") == 0) ||
+                 m_config.opt_int("slice") != 0 || m_config.opt_int("repetitions") > 1 || specified("assemble") || specified("split") ||
+                 !m_config.opt_string("load_assemble_list").empty())
+            source_group_error =
+                "--arrange-by-source-group requires --arrange 1 for global multi-plate arrangement of separate components.";
+        else if (m_input_files.empty() || m_input_files.size() != m_model_cli_specs.size() ||
+                 !std::all_of(m_model_cli_specs.begin(), m_model_cli_specs.end(), [](const ModelCliSpec& spec) {
+                     return spec.source_group && (boost::algorithm::iends_with(spec.model_token, ".obj") ||
+                                                  boost::algorithm::iends_with(spec.model_token, ".stl"));
+                 }))
+            source_group_error = "Each STL or OBJ input requires a matching --model block with --model-source-group.";
+        else {
+            std::set<std::string> groups;
+            for (const ModelCliSpec& spec : m_model_cli_specs)
+                groups.insert(*spec.source_group);
+            if (groups.size() > 10)
+                source_group_error = "--arrange-by-source-group supports up to 10 distinct source groups.";
+        }
+    } else if (std::any_of(m_model_cli_specs.begin(), m_model_cli_specs.end(),
+                           [](const ModelCliSpec& spec) { return spec.source_group.has_value(); }))
+        source_group_error = "--model-source-group requires --arrange-by-source-group.";
+    if (!source_group_error.empty()) {
+        boost::nowide::cerr << source_group_error << std::endl;
+        record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, source_group_error, sliced_info);
+        flush_and_exit(CLI_INVALID_PARAMS);
+    }
+
     // Validate before material catalog loading and before the no-action GUI branch.
     const bool cgal_repair_requested     = std::find(m_actions.begin(), m_actions.end(), "repair_model") != m_actions.end();
     const bool repair_evidence_requested = m_config.opt_bool("repair_evidence");
@@ -2707,6 +2746,9 @@ int CLI::run(int argc, char **argv)
                         if (object_extruder_id != 0) {
                             o->config.set_key_value("extruder", new ConfigOptionInt(object_extruder_id));
                         }
+
+                        if (arrange_by_source_group)
+                            source_group_by_object.emplace(o->id().id, *m_model_cli_specs.at(input_index).source_group);
 
                         //default not orient for all, if need to orient use the action
                         //orients_requirement.insert(std::pair<size_t, bool>(o->id().id, false));
@@ -4678,6 +4720,8 @@ int CLI::run(int argc, char **argv)
         for (auto& model : m_models)
             for (ModelObject* o : model.objects) {
                 ModelObject* new_object = m.add_object(*o);
+                if (arrange_by_source_group)
+                    source_group_by_object.emplace(new_object->id().id, source_group_by_object.at(o->id().id));
                 for (size_t i = 0; i < o->instances.size(); ++i)
                     if (project_input_instances.count(o->instances[i]->id().id) != 0)
                         project_input_instances.insert(new_object->instances[i]->id().id);
@@ -5524,6 +5568,8 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "ignore_wipe_tower = " << m_config.opt_bool("ignore_wipe_tower");
         } else if (opt_key == "split_by_color") {
             BOOST_LOG_TRIVIAL(info) << "split_by_color = " << m_config.opt_bool("split_by_color") << ", will split multi-extruder objects before arrange";
+        } else if (opt_key == "arrange_by_source_group") {
+            BOOST_LOG_TRIVIAL(info) << "arrange_by_source_group = " << arrange_by_source_group;
         } else if (opt_key == "arrange_by_color") {
             BOOST_LOG_TRIVIAL(info) << "arrange_by_color = " << m_config.opt_bool("arrange_by_color")
                                     << ", will keep different runtime color groups on separate plates";
@@ -5533,9 +5579,10 @@ int CLI::run(int argc, char **argv)
             BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature = " << m_config.opt_float("cli_nozzle_temperature");
         } else if (opt_key == "cli_nozzle_temperature_initial_layer") {
             BOOST_LOG_TRIVIAL(info) << "cli_nozzle_temperature_initial_layer = " << m_config.opt_float("cli_nozzle_temperature_initial_layer");
-        } else if (opt_key == "model" || opt_key == "model_filaments" || opt_key == "model_arrange_group" || opt_key == "model_color" ||
-                   opt_key == "model_position" || opt_key == "model_scale" || opt_key == "model_rotate" || opt_key == "model_support" ||
-                   opt_key == "model_process" || opt_key == "model_layer_height_plan" || opt_key == "thumbnail_image") {
+        } else if (opt_key == "model" || opt_key == "model_filaments" || opt_key == "model_arrange_group" ||
+                   opt_key == "model_source_group" || opt_key == "model_color" || opt_key == "model_position" || opt_key == "model_scale" ||
+                   opt_key == "model_rotate" || opt_key == "model_support" || opt_key == "model_process" ||
+                   opt_key == "model_layer_height_plan" || opt_key == "thumbnail_image") {
             BOOST_LOG_TRIVIAL(info) << "Multi-model parameter " << opt_key << " already processed during model loading phase.";
         } else {
             boost::nowide::cerr << "error: option not implemented yet: " << opt_key << std::endl;
@@ -5707,6 +5754,12 @@ int CLI::run(int argc, char **argv)
             }
         }
     }
+    // Source-group probes test the final Z extent, including --ensure-on-bed
+    // for an oriented object. Arrange only changes XY and rotation about Z.
+    if (arrange_by_source_group && m_config.opt_bool("ensure_on_bed"))
+        for (Model& model : m_models)
+            for (ModelObject* object : model.objects)
+                object->ensure_on_bed();
     //BBS: clear the orient objects lists
     orients_requirement.clear();
 
@@ -6405,9 +6458,29 @@ int CLI::run(int argc, char **argv)
 
                 BOOST_LOG_TRIVIAL(info) << "auto_plate_value=" << auto_plate_value << " force_single_plate=" << force_single_plate;
 
+                std::vector<std::string> source_ids;
+                if (arrange_by_source_group) {
+                    source_ids.reserve(selected.size());
+                    for (const auto& part : selected)
+                        source_ids.push_back(source_group_by_object.at(part.model_instance->get_object()->id().id));
+                }
+                auto arrange_selected = [&] {
+                    if (!arrange_by_source_group) {
+                        arrangement::arrange(selected, unselected, beds, arrange_cfg);
+                    } else if (!arrange_cli_source_groups(selected, source_ids, unselected, beds, Polygon(get_bed_shape(m_print_config)),
+                                                          arrange_cfg, MAX_PLATE_COUNT)) {
+                        const std::string message = "Source group arrangement failed: invalid footprint or physical plate limit exceeded.";
+                        record_exit_reson(outfile_dir, CLI_OBJECT_ARRANGE_FAILED, 0, message, sliced_info);
+                        boost::nowide::cerr << message << std::endl;
+                        return false;
+                    }
+                    return true;
+                };
+
                 //Step-3:do the arrange
                 BOOST_LOG_TRIVIAL(info) << boost::format("start %1% th arranging...")%arrange_count;
-                arrangement::arrange(selected, unselected, beds, arrange_cfg);
+                if (!arrange_selected())
+                    flush_and_exit(CLI_OBJECT_ARRANGE_FAILED);
 
                 // In normal global multi-plate mode, reserve wipe towers only
                 // on beds whose actual arranged material composition needs
@@ -6513,7 +6586,8 @@ int CLI::run(int argc, char **argv)
                         unselected = unselected_without_wipe_towers;
                         append_cli_wipe_towers(unselected, tower_plan);
                         arrangement::update_unselected_items_inflation(unselected, &m_print_config, arrange_cfg);
-                        arrangement::arrange(selected, unselected, beds, arrange_cfg);
+                        if (!arrange_selected())
+                            flush_and_exit(CLI_OBJECT_ARRANGE_FAILED);
 
                         ArrangeWipeTowerPlan actual_plan =
                             arrange_wipe_tower_plan(m_print_config, selected, unselected_without_wipe_towers, arrange_cfg);
@@ -6554,7 +6628,8 @@ int CLI::run(int argc, char **argv)
                         unselected = unselected_without_wipe_towers;
                         append_cli_wipe_towers(unselected, legacy_fallback_plan);
                         arrangement::update_unselected_items_inflation(unselected, &m_print_config, arrange_cfg);
-                        arrangement::arrange(selected, unselected, beds, arrange_cfg);
+                        if (!arrange_selected())
+                            flush_and_exit(CLI_OBJECT_ARRANGE_FAILED);
 
                         BOOST_LOG_TRIVIAL(warning)
                             << "CLI arrange: per-bed wipe tower plan did not stabilize; fell back to legacy all-bed reservation on "
@@ -7257,7 +7332,8 @@ int CLI::run(int argc, char **argv)
             //already applied after process settings were loaded
         } else if (opt_key == "split_by_color") {
             //will be processed after model loading, before orient/arrange
-        } else if (opt_key == "arrange_by_color" || opt_key == "model_arrange_group" || opt_key == "model_color") {
+        } else if (opt_key == "arrange_by_source_group" || opt_key == "arrange_by_color" || opt_key == "model_arrange_group" ||
+                   opt_key == "model_source_group" || opt_key == "model_color") {
             // runtime arrange groups were resolved while loading each model
         } else if (opt_key == "cli_nozzle_temperature") {
             //already applied after filament config loading
@@ -9086,8 +9162,9 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
     m_model_cli_specs.clear();
     ModelCliSpec *current = nullptr;
 
-    const std::set<std::string> model_keys = {"model",       "model-filaments", "model-arrange-group", "model-color",  "model-position",
-                                              "model-scale", "model-rotate",    "model-support",       "model-process", "model-layer-height-plan"};
+    const std::set<std::string> model_keys =
+        {"model",        "model-filaments", "model-arrange-group", "model-source-group",     "model-color", "model-position", "model-scale",
+         "model-rotate", "model-support",   "model-process",       "model-layer-height-plan"};
 
     for (int i = 1; i < argc; ++i) {
         std::string token = argv[i];
@@ -9128,7 +9205,15 @@ bool CLI::parse_model_cli_specs(int argc, char **argv)
         if (token == "model-filaments") target = &current->filament_group;
         else if (token == "model-arrange-group")
             target = &current->arrange_group;
-        else if (token == "model-color")
+        else if (token == "model-source-group") {
+            const size_t first_digit = value.find_first_not_of('0');
+            if (first_digit == std::string::npos || value.find_first_not_of("0123456789") != std::string::npos) {
+                boost::nowide::cerr << "--model-source-group requires a positive integer." << std::endl;
+                return false;
+            }
+            value.erase(0, first_digit);
+            target = &current->source_group;
+        } else if (token == "model-color")
             target = &current->color;
         else if (token == "model-position") target = &current->position;
         else if (token == "model-scale") target = &current->scale;

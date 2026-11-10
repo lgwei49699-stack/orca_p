@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "sla",
-  "source_fingerprint": "sha256:e1cc7f8984eb460af50467e07664c142b20ead2b852797a10489afcb5a433d16",
-  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
+  "source_fingerprint": "sha256:94c36587898d448311234397d289da4b417aabb7d6586e73cfdeb5fe643f45d5",
+  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。SLA 切片与支撑的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
 }
 -->
 

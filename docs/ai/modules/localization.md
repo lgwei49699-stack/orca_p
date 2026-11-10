@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:0930859cca8f54a77b786e20b87a04683d1d521dcfe546f0fdc1ee9ce55e253f",
-  "reason": "2026-11-06：按用户确认移除运行内存采样/超限取消，保留启动前估算、计时/取消及候选验收；GUI/CLI报告及中英文说明同步，正文和交付清单已更新；当前构建与回归身份见验证记录，GUI手测未执行。"
+  "source_fingerprint": "sha256:f892d28f6c0fe1ff51f895676b629f707eef2703d8a17c05b1684cd5bb2bb126",
+  "reason": "2026-11-10：新增来源组开关及模型组号的四项简中帮助文案，已用 msgfmt 编译。"
 }
 -->
 

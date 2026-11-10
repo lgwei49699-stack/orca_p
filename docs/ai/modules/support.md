@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "support",
-  "source_fingerprint": "sha256:96f228b304f786468ce47dfbe57e771ca06f43ea9261170d785259dfbaccc118",
-  "reason": "2026-11-10：归档梵高模型底部承托的 Mac 路径对照，核对有机树首层兜底、垫层接触区与普通支撑间隙；本例按模型几何结案，支撑源码指纹沿用现值。"
+  "source_fingerprint": "sha256:e284d4f02a10920f929a7b53a4c94af0382cbdf4f8e3e0c8bbde7249c33c2563",
+  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。普通、树状与有机支撑的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
 }
 -->
 

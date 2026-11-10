@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-parameters",
-  "source_fingerprint": "sha256:89ad8aa45dc1e4a7d391a63187970283ccadbf5616a893c8ac485a40e0a57dc7",
-  "reason": "2026-11-06：复核共享 PrintConfig 差异仅在 CLIMiscConfigDef 新增四项重建准入配置并明确内存为启动前估算；未改本模块工艺参数、默认值或执行路径，无需修改正文。"
+  "source_fingerprint": "sha256:dddfc49eb38ab2c2c3b17877dcd48f63e154a5085f888c3cb51e35ff060e57f1",
+  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。参数面板与对象覆盖的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
 }
 -->
 
