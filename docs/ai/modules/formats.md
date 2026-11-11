@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "formats",
-  "source_fingerprint": "sha256:8c96b58eeeb851be4dc5671e62b380f46df0ff8b06e5bf2118729b2fe8da7112",
-  "reason": "MTL读色改为明确Kd优先，逐材质记录存在标记；缺Kd回退Ka。共享GUI/CLI路径，43个OBJ用例/5987断言、15例多OBJ及原EP7黑白逐面对照通过；纹理与显式绑定保持，GUI手工待验。 2026-11-06 合并复核：保留发布分支的现有引擎及验证说明，补入特征分支历史调查和离线审计／下载工具；非测试工具模块源码未随文档归档变化，测试工具指纹按组合源码重新核对。"
+  "source_fingerprint": "sha256:9a6f78220bf53d5fee9477a7da4f72919d1694cccd12fa09aeed4d486368c830",
+  "reason": "2026-11-11：核对 MTL 的显式 Kd、Ka、有无颜色、三角面与四边形材质覆盖范围；完整集合仅在调用方请求时收集。"
 }
 -->
 
@@ -21,6 +21,8 @@
 - [PNGReadWrite.cpp](../../../src/libslic3r/PNGReadWrite.cpp)：`decode_png`／`decode_colored_png` 解码灰度和彩色图像；PNG 写入由同文件辅助接口承担。
 
 ## 核心流程
+
+CLI 按色与来源联合排盘时，OBJ 导入按原始面的 `usemtl` 覆盖范围收集已用颜色；四边形拆出的两面继承同一材质。显式 Kd 优先，其次为显式 Ka，未使用的材质声明不参与颜色集合。没有绑定的面、材质缺少颜色或缺少 MTL 时，整件进入未知色候选；完整显式耗材绑定可以提供打印颜色。 [验证记录](../validation/2026-11-11-cli-color-source-arrangement.md)
 
 Model 导入分派 STL/OBJ/3MF/STEP 等格式；bbs_3mf 读写工程模型、配置、盘及切片数据，OBJ 保留材质或颜色映射，STL 主要保存网格。GCodeThumbnails 把渲染或读入的图片压缩写入 G-code；PNGReadWrite 是公共图片解码入口。
 

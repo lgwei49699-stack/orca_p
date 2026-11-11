@@ -3,12 +3,12 @@
 <!-- module-review
 {
   "id": "test-tools",
-  "source_fingerprint": "sha256:76afcbc52498b653c1de71ad103a97dfcb9468fe2104a2a8799381db4fc74668",
-  "reason": "2026-11-10：新增来源组 CLI 回归，用 3MF 成员和 G-code 验证整组试摆，按模型名核对耗材槽，覆盖擦料塔、越界及参数冲突。"
+  "source_fingerprint": "sha256:18d5f72f6c17beb6761dd5a45aceaa84f1f36c0e9d044cb6849ff5590d21592e",
+  "reason": "2026-11-11：加入实际 OBJ/MTL、STL、显式绑定、同来源回盘与真切片回归；保留先前越界盘顺序用例。"
 }
 -->
 
-`scripts/test_cli_source_group_arrange.py` 接受当前 CLI 以及 `--machine`、`--process`、`--filament` 三份已解析配置。它在隔离目录生成合成组件，检查真实切片、3MF 对象归属、盘外 JSON、组间回退、耗材槽位、擦料塔重新试摆及参数冲突。 [来源组验证](../validation/2026-11-10-cli-source-group-arrangement.md)
+`scripts/test_cli_source_group_arrange.py` 接受当前 CLI 以及 `--machine`、`--process`、`--filament` 三份已解析配置。它在隔离目录生成合成组件，检查真实切片、3MF 对象归属、纯 JSON 模式中的超大件插盘顺序及后续组件回填、组间回退、耗材槽位、擦料塔重新试摆及参数冲突。 [来源组验证](../validation/2026-11-10-cli-source-group-arrangement.md)
 
 
 将重建 STL 的逐三角面验证保留在回归；覆盖原生重建穹盖、自交、输出面数与取消，删除仅供旧绕数采样模块使用的测试。 [本轮验证](../validation/2026-10-31-cgal-621-upgrade.md)
@@ -289,6 +289,8 @@ Thingi10K 下载工具只用 Python 3.9+ 标准库，固定官方 Hugging Face �
 固定位置脚本追加已有3MF与新增STL/OBJ混合、单盘/多盘、盘内/完全越界/部分越界及显式盘号，成功时三个对象必须均有实际挤出路径。分盘脚本追加全局旋转/缩放/三轴组合、per-model叠加、自动定向、切片及repetitions复制；用JSON重建源顶点并与3MF实际顶点逐点比对，不仅检查包围盒或退出码。不同对象已有不同volume旋转时各自验证；无法用rotation+scale表达的剪切应明确拒绝，而不导出JSON时仍可保存3MF。格式层新增 `[PlateReferences]`，范围与失败语义见[格式模块](formats.md)。
 
 ## 修改与验证
+
+`scripts/test_cli_source_group_arrange.py` 还覆盖颜色集合顺序、不同混色集合、不增加新颜色的同来源回盘、纯色整批跳过、未知色、显式绑定和实际多盘切片。 [颜色与来源用例](../validation/2026-11-11-cli-color-source-arrangement.md)
 
 `[FlushMatrixCompatibility]` 覆盖10种真实Print生命周期场景：完整自定义矩阵、过小、缺键、空、非方阵、换色量向量缺项、完整矩阵含手动0，以及0/1/2项颜色表。显式设置4份喷嘴/耗材参数及工具0/3，验证完整配置、倍率、生成擦料塔、G-code矩阵和重复apply缓存；测试使用绝对临时导出路径、有效输出结果对象并恢复资源目录。`[WipeTowerSlots]` 追加换料排序入口的空集合、有效顺序、工具越界、起始工具越界和缺行检查，保护早于擦料塔读取的路径。
 

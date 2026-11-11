@@ -43,6 +43,7 @@ struct ObjNewMtl
     std::array<float, 3>  Tf;
     std::array<float, 3>  Ka{};
     std::array<float, 3>  Kd{};
+    bool                  has_ka{false};
     bool                  has_kd{false}; // Explicit black is different from an omitted diffuse color.
     std::array<float, 3>  Ks;
     std::array<float, 3>  Ke;

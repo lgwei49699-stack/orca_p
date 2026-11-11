@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "model",
-  "source_fingerprint": "sha256:9ad559187dc8ed33ca3ff2af30ba523d88b288524050a98d452af449b773500d",
-  "reason": "新增仅安装已验证匹配凸包的 ModelVolume 接口，同时清理二维投影缓存；独立重建把凸包计算留在受限 worker，避免主进程重算和复制后的旧轮廓复用。"
+  "source_fingerprint": "sha256:a9e13d43adceef06866f6916047fea83d619996980474f132abfc93bd05f3822",
+  "reason": "2026-11-11：核对模型读入函数的可选颜色集合输出、部分面材质的对齐，以及旧调用默认参数。"
 }
 -->
 
@@ -13,6 +13,8 @@
 本模块负责模型数据与网格属性。归属以[模块清单](../modules.json)的 `model` 为准。
 
 ## 入口与调用
+
+`Model::read_from_file` 的可选输出 `obj_arrange_palette` 由 CLI 在联合分盘时传入，复用本次 OBJ 导入的面材质。GUI 调用沿用默认导入和交互式颜色映射。 [格式规则](formats.md)
 
 - [Model.hpp](../../../src/libslic3r/Model.hpp)：定义 Model→ModelObject→ModelVolume／ModelInstance 的所有权、ID 和配置接口。
 - [Model.cpp](../../../src/libslic3r/Model.cpp)：`Model::read_from_file`／`read_from_archive` 分发导入；复制与链接更新保留对象结构。

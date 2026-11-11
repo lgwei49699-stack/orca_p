@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "cli",
-  "source_fingerprint": "sha256:36067d170b60e7ca328bd6abb7e0c52309d0c39c1cb21b11ba4af3ec7bfe7c49",
-  "reason": "2026-11-10：CLI 增加来源组开关和组件组号，用 arm64 发布包核对互斥参数、盘外 JSON、按对象绑定耗材及实际切片。"
+  "source_fingerprint": "sha256:069c216c7efb6541adef7efdffed0cf27cde9f50572fb556fa6156770584d0ab",
+  "reason": "2026-11-11：核对三种调用方式的路由、显式来源号约束、颜色优先级及 JSON 盘号；联合模式复用既有参数和结果结构。"
 }
 -->
 
@@ -28,7 +28,11 @@ mkdir -p out
 
 `out/result.json` 中的 `model_transforms` 和 `out/layout.3mf` 使用现有输出格式。需要实际切片时在同一条命令加 `--slice 0`。省略 `--ignore-wipe-tower` 时按实际机料和工艺决定每盘的塔占位。
 
-开关默认关闭。来源组模式要求全局多盘自动排布，与按颜色分盘、旧的手动排布组、按颜色拆分、显式单盘、合并为单一对象及整盘重复互斥。普通自动排盘和桌面 GUI 使用原入口。 [算法和边界](arrangement.md)
+按来源组试摆要求全局多盘自动排布。两个全局开关 `--arrange-by-source-group` 与 `--arrange-by-color` 互斥；前者按空间合组，后者可配合每件的来源号按颜色合组。来源组模式与手动排布组、按颜色拆分、显式单盘、合并为单一对象及整盘重复互斥。 [算法和边界](arrangement.md)
+
+### 按组件的颜色集合分盘
+
+在上述命令中把 `--arrange-by-source-group 1` 换成 `--arrange-by-color 1`，每个 `--model` 块保留来源号。颜色来自实际使用的 OBJ 面材质或显式耗材绑定，STL 也可在自身的块中使用 `--model-color '#FF0000'` 指定排盘色。来源号或颜色集合都不需要写入响应。省略所有来源号时，`--arrange-by-color` 沿用既有主色分盘。 [输入与验证](../validation/2026-11-11-cli-color-source-arrangement.md)
 
 
 显式重建导出后验证二进制 STL 面数、长度和哈希；重建阶段报告标记 binary_stl_count_and_size，其他阶段维持完整回读。 [本轮验证](../validation/2026-10-31-cgal-621-upgrade.md)
@@ -133,11 +137,9 @@ CLI 预检查与 Print::apply 一致，关闭打印的对象／实例不参与�
 本改动补 CLI 生命周期及界面禁用实例的检查入口，未修改共享排布／切层算法；回归及部署交接见
 [固定位置切片修复记录](../validation/2026-10-19-cli-fixed-position-slicing.md)。
 
-`--export-model-transforms` 仅在已解析的多盘模式（auto_plate_value != 0，含历史省略默认）中重映射越界/无归属实例：先核对 `contain_instance` 归属，再用只读 `check_outside` 及共享 `calc_print_volume_state(BuildVolume)` 复核当前几何与真实床面轮廓，避免异形床只按外接矩形误判，区分真正盘内与仅有编辑归属；不依赖可能在 `--ensure-on-bed` 后过期的盘外状态缓存，每个越界实例按输出遍历顺序分配一个独立 `plate_index`，从实际盘数量开始递增，XY 为有效 `printable_area` 包围盒中心（盘内坐标），Z固定为0，表示独立返回盘上以底面贴床呈现。若本次执行排布，其旋转／缩放从排布前的实例快照组合导出，保留合法输入变换和已完成的自动定向，不带入失败搜索附带的旋转；复制新实例补记快照，重试不覆盖原记录。不排布时仍使用实际姿态。普通盘内实例保持实际姿态、原盘号与坐标规则，包括原有正/负底面Z；字段结构不变，不增加 `outside`/`position_space`。多盘不重排导出也沿用位置投影规则，正常原始模型先登记归属而不误当盘外。显式 `--auto-plate 0` 不创建虚拟返回盘、不居中、不归零：保留实际姿态和归属，未登记实例沿历史回退到盘0，XYZ为实际包围盒底面中心；重开多盘工程但不重排时也保留实际归属和世界坐标。只读投影不修改模型或盘列表，不受真实36盘容量限制，也不改变实际排布、切片退出码、GUI或3MF。返回虚拟盘号不能当作真实切片盘号；位置规则见[原验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)，姿态对照见[盘外姿态记录](../validation/2026-10-20-cli-overflow-pose.md)。
+`--export-model-transforms` 仅在已解析的多盘模式（auto_plate_value != 0，含历史省略默认）中重映射越界/无归属实例：先核对 `contain_instance` 归属，再用只读 `check_outside` 及共享 `calc_print_volume_state(BuildVolume)` 复核当前几何与真实床面轮廓，避免异形床只按外接矩形误判，区分真正盘内与仅有编辑归属；不依赖可能在 `--ensure-on-bed` 后过期的盘外状态缓存，每个越界实例单独占一个展示盘。分盘服务仅请求变换 JSON 时，原始组件按排布前输入顺序为超大件插入盘号，正常组件复用所属盘的展示盘号。附带切片或工程导出的命令将超大件编号接在实际盘之后。XY 为有效 `printable_area` 包围盒中心（盘内坐标），Z固定为0，表示独立返回盘上以底面贴床呈现。若本次执行排布，其旋转／缩放从排布前的实例快照组合导出，保留合法输入变换和已完成的自动定向，不带入失败搜索附带的旋转；复制新实例补记快照，重试不覆盖原记录。不排布时仍使用实际姿态。普通盘内实例保持实际姿态与坐标规则，包括原有正/负底面Z；字段结构不变，不增加 `outside`/`position_space`。多盘不重排导出也沿用位置投影规则，正常原始模型先登记归属而不误当盘外。显式 `--auto-plate 0` 不创建虚拟返回盘、不居中、不归零：保留实际姿态和归属，未登记实例沿历史回退到盘0，XYZ为实际包围盒底面中心；重开多盘工程但不重排时也保留实际归属和世界坐标。只读投影不修改模型或盘列表，不受真实36盘容量限制，也不改变实际排布、切片退出码、GUI或3MF。返回虚拟盘号不能当作真实切片盘号；位置规则见[原验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)，姿态对照见[盘外姿态记录](../validation/2026-10-20-cli-overflow-pose.md)。
 
 命令行加载的机器／耗材／工艺配置与输入工程的配置合成为有效配置，再应用动作及对象覆盖。输入顺序、单位变换、多盘及颜色分组都会影响输出，不能只比较命令末尾几个参数。日志、进程退出码与结果 JSON 分别核对。
-
-`--export-model-transforms` 仅在返回 JSON 中重映射越界/无归属实例：先核对 `contain_instance` 归属，再用只读 `check_outside` 复核当前几何，区分真正盘内与仅有编辑归属；不依赖可能在 `--ensure-on-bed` 后过期的盘外状态缓存，每个越界实例按输出遍历顺序分配一个独立 `plate_index`，从实际盘数量开始递增，XY 为有效 `printable_area` 包围盒中心（盘内坐标），Z固定为0，表示独立返回盘上以底面贴床呈现；旋转和缩放保持实际输出。普通盘内实例保持原盘号与坐标规则，包括原有正/负底面Z；字段结构不变，不增加 `outside`/`position_space`。此规则同样用于显式单盘和不重排导出；只读投影不修改模型或盘列表，不受真实36盘容量限制，也不改变实际排布、切片退出码、GUI或3MF。返回虚拟盘号不能当作真实切片盘号；复现与对照见[验证记录](../validation/2026-10-17-cli-oversized-arrangement.md)。
 
 `--repair-evidence-close-boundaries 0|1` 默认false，仅允许与 `--check-model --repair-model cgal --repair-evidence` 同时启用。值1是调用方明确承诺“输入应为闭合实体、允许填补剩余开口”，仅影响重建建议，不执行封口、重建或采用；不从STL格式、面数或组件数猜测设计意图。`boundary.reconstruction.policy` 记录版本1及实际 `allow_boundary_closure`。显式传0也必须在该组合使用；普通修复/导出和独立重建早分流均拒绝这个策略参数，独立 MeshLib 重建仍使用自己的风险确认及体素参数。该选项不是对旧 `--auto-repair-model 0|1` 的替代。
 

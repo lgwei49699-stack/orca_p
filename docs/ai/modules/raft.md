@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "raft",
-  "source_fingerprint": "sha256:2b4077d4783efdf45ef1ee5cccf0dcfccc1d8e016ef2fcb6534591e85a89aef7",
-  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。筏层计划、合并与分块的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
+  "source_fingerprint": "sha256:50217d3393e9dd2582f56ce00b3dca4eccceb6bc0639e0484bdfbbf6c42aa202",
+  "reason": "2026-11-11：核对共享 PrintConfig 的 CLI 帮助差异，筏层参数及路径实现保持原值。"
 }
 -->
 

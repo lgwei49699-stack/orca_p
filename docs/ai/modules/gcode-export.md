@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gcode-export",
-  "source_fingerprint": "sha256:faae8bb790c782d1aaebd927538e4ac725c2ab8f13f26664d99b98aa6cbd543d",
-  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。G-code 生成与后处理的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
+  "source_fingerprint": "sha256:1877756b2ee4d0ffe0a0eb3d79582399314dbe0454c124f7062bb06bc81ec8c5",
+  "reason": "2026-11-11：共享配置变更为 CLI 提示文本；联合模式向已有导出流程提供实际盘和材料映射，检查包内 G-code。"
 }
 -->
 

@@ -7,30 +7,44 @@
 #include <algorithm>
 #include <map>
 #include <numeric>
+#include <string>
 #include <vector>
 
 namespace Slic3r {
 
-// Group ids are in input order, parallel to items. Trials only mutate arrangement
+struct CLIArrangeSource
+{
+    std::string              source;
+    std::vector<std::string> colors; // Sorted distinct RGB values; empty means unknown.
+};
+
+// Source descriptors are in input order, parallel to items. Trials only mutate arrangement
 // polygons. The caller applies setters once, after the final wipe-tower pass.
-inline bool arrange_cli_source_groups(arrangement::ArrangePolygons&       items,
-                                      const std::vector<std::string>&     source_ids,
-                                      const arrangement::ArrangePolygons& fixed,
-                                      const Points&                       packing_bed,
-                                      const Polygon&                      printable_bed,
-                                      const arrangement::ArrangeParams&   params,
-                                      int                                 bed_limit)
+inline bool arrange_cli_source_groups(arrangement::ArrangePolygons&        items,
+                                      const std::vector<CLIArrangeSource>& sources,
+                                      bool                                 by_color,
+                                      const arrangement::ArrangePolygons&  fixed,
+                                      const Points&                        packing_bed,
+                                      const Polygon&                       printable_bed,
+                                      const arrangement::ArrangeParams&    params,
+                                      int                                  bed_limit)
 {
     using namespace arrangement;
     using Indices = std::vector<size_t>;
-    if (items.size() != source_ids.size() || items.empty() ||
+    if (items.size() != sources.size() || items.empty() ||
         std::any_of(items.begin(), items.end(), [](const ArrangePolygon& part) { return part.poly.contour.size() < 3; }))
         return false;
 
-    std::vector<Indices>          groups;
-    std::map<std::string, size_t> index_by_source;
+    using GroupKey = std::pair<std::string, std::vector<std::string>>;
+    std::vector<Indices>       groups;
+    std::map<GroupKey, size_t> index_by_group;
     for (size_t i = 0; i < items.size(); ++i) {
-        const auto entry = index_by_source.emplace(source_ids[i], groups.size());
+        const auto& source = sources[i];
+        if (by_color && source.colors.size() > 1) {
+            groups.push_back({i}); // A multicolor component is one indivisible candidate.
+            continue;
+        }
+        const auto entry = index_by_group.emplace(GroupKey{source.source, source.colors}, groups.size());
         if (entry.second)
             groups.emplace_back();
         groups[entry.first->second].push_back(i);
@@ -94,63 +108,110 @@ inline bool arrange_cli_source_groups(arrangement::ArrangePolygons&       items,
         return layout;
     };
 
-    int             first_bed   = 0;
-    ArrangePolygons local_fixed = obstacles_from(first_bed, true);
-    Indices         all(items.size());
-    std::iota(all.begin(), all.end(), size_t{0});
-    ArrangePolygons all_layout = trial(all, local_fixed);
-    if (arrange_result_fits_single_plate(all_layout)) {
-        items = std::move(all_layout);
+    struct Layout
+    {
+        int             first_bed;
+        Indices         indices;
+        ArrangePolygons packed;
+    };
+    // Replace a layout only after every member fits the same physical bed.
+    const auto try_add = [&](Layout& bed, const Indices& add, const ArrangePolygons& obstacles) {
+        Indices candidate = bed.indices;
+        candidate.insert(candidate.end(), add.begin(), add.end());
+        ArrangePolygons packed = trial(candidate, obstacles);
+        if (!arrange_result_fits_single_plate(packed))
+            return false;
+        bed.indices = std::move(candidate);
+        bed.packed  = std::move(packed);
         return true;
+    };
+
+    int             first_bed   = 0;
+    ArrangePolygons local_fixed = obstacles_from(0, true);
+    ArrangePolygons all_layout;
+    if (!by_color || std::all_of(sources.begin(), sources.end(), [&](const auto& s) { return s.colors == sources.front().colors; })) {
+        Indices all(items.size());
+        std::iota(all.begin(), all.end(), size_t{0});
+        all_layout = trial(all, local_fixed);
+        if (arrange_result_fits_single_plate(all_layout)) {
+            items = std::move(all_layout);
+            return true;
+        }
     }
 
-    ArrangePolygons   result = items;
+    std::vector<Layout> layouts;
     std::vector<bool> placed(groups.size(), false);
-    int               first_order = 0;
     for (size_t anchor = 0; anchor < groups.size(); ++anchor) {
         if (placed[anchor])
             continue;
         if (first_bed != 0)
             local_fixed = obstacles_from(first_bed, true);
+        const Indices& bundle = groups[anchor];
+        const auto&    key    = sources[bundle.front()];
+        Layout         bed{first_bed, bundle, groups.size() == 1 ? std::move(all_layout) : trial(bundle, local_fixed)};
+        placed[anchor] = true;
+        if (arrange_result_fits_single_plate(bed.packed)) {
+            const auto add_matching_groups = [&](const std::vector<std::string>& colors) {
+                for (size_t next = anchor + 1; next < groups.size(); ++next) {
+                    if (!placed[next] && sources[groups[next].front()].colors == colors && try_add(bed, groups[next], local_fixed))
+                        placed[next] = true;
+                }
+            };
+            add_matching_groups(key.colors);
 
-        Indices         accepted = groups[anchor];
-        ArrangePolygons layout   = groups.size() == 1 ? std::move(all_layout) : trial(accepted, local_fixed);
-        placed[anchor]           = true;
-        // A split or overflowing anchor owns its entire layout exclusively.
-        if (arrange_result_fits_single_plate(layout)) {
-            for (size_t next = anchor + 1; next < groups.size(); ++next) {
-                if (placed[next])
+            // All remaining exact-color partners were tried first. A lone pure bundle
+            // can now return to a mixed sibling (including one later in the input).
+            if (by_color && key.colors.size() == 1 && bed.indices.size() == bundle.size()) {
+                const auto is_home = [&](size_t i) {
+                    const auto& sibling = sources[i];
+                    return sibling.source == key.source && sibling.colors.size() > 1 &&
+                           std::binary_search(sibling.colors.begin(), sibling.colors.end(), key.colors.front());
+                };
+                bool returned = false;
+                for (Layout& previous : layouts) {
+                    if (arrange_result_fits_single_plate(previous.packed) &&
+                        std::any_of(previous.indices.begin(), previous.indices.end(), is_home) &&
+                        try_add(previous, bundle, obstacles_from(previous.first_bed, true))) {
+                        returned = true;
+                        break;
+                    }
+                }
+                if (returned)
                     continue;
-                Indices candidate = accepted;
-                candidate.insert(candidate.end(), groups[next].begin(), groups[next].end());
-                ArrangePolygons candidate_layout = trial(candidate, local_fixed);
-                if (arrange_result_fits_single_plate(candidate_layout)) {
-                    accepted     = std::move(candidate);
-                    layout       = std::move(candidate_layout);
-                    placed[next] = true;
+                for (size_t next = anchor + 1; next < groups.size(); ++next) {
+                    size_t sibling = groups[next].front();
+                    if (!placed[next] && is_home(sibling) && try_add(bed, groups[next], local_fixed)) {
+                        placed[next] = true;
+                        add_matching_groups(sources[sibling].colors);
+                        break;
+                    }
                 }
             }
-        } else if (std::any_of(fixed.begin(), fixed.end(), [&](const ArrangePolygon& obstacle) { return obstacle.bed_idx > first_bed; })) {
-            // A one-bed trial only saw the anchor bed's obstacles. Before
-            // adopting a split layout, restore the remaining beds' reservations.
-            layout = trial(accepted, obstacles_from(first_bed, false));
+        } else if (std::any_of(fixed.begin(), fixed.end(), [&](const auto& obstacle) { return obstacle.bed_idx > first_bed; })) {
+            bed.packed = trial(bundle, obstacles_from(first_bed, false));
         }
-        int next_bed = first_bed;
-        for (size_t j = 0; j < accepted.size(); ++j) {
-            ArrangePolygon& part = layout[j];
-            if (part.bed_idx >= 0) {
-                if (part.bed_idx >= bed_limit - first_bed)
-                    return false;
-                part.bed_idx += first_bed;
-                part.itemid += first_order;
-                next_bed = std::max(next_bed, part.bed_idx + 1);
-            }
-            result[accepted[j]] = std::move(part);
+        for (const auto& part : bed.packed) {
+            if (part.bed_idx < 0)
+                continue;
+            if (part.bed_idx >= bed_limit - bed.first_bed)
+                return false;
+            first_bed = std::max(first_bed, bed.first_bed + part.bed_idx + 1);
         }
-        first_bed = next_bed;
-        first_order += static_cast<int>(layout.size());
+        layouts.push_back(std::move(bed));
     }
-    items = std::move(result);
+
+    int first_order = 0;
+    for (auto& bed : layouts) {
+        for (size_t j = 0; j < bed.indices.size(); ++j) {
+            auto& part = bed.packed[j];
+            if (part.bed_idx >= 0) {
+                part.bed_idx += bed.first_bed;
+                part.itemid += first_order;
+            }
+            items[bed.indices[j]] = std::move(part);
+        }
+        first_order += static_cast<int>(bed.indices.size());
+    }
     return true;
 }
 

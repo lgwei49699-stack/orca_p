@@ -401,7 +401,7 @@ bool load_obj_material_libraries(const char* path, std::vector<std::string>& lib
     return true;
 }
 
-bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::string& message, bool geometry_only)
+bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::string& message, bool geometry_only, bool collect_palette)
 {
     if (meshptr == nullptr)
         return false;
@@ -503,11 +503,13 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
     }
     int indices[ONE_FACE_SIZE];
     int uvs[ONE_FACE_SIZE];
+    size_t                                        material_run = 0;
     std::unordered_map<std::string, unsigned int> material_name_to_id;
     for (size_t i = 0; i < data.vertices.size();)
         if (data.vertices[i].coordIdx == -1)
             ++ i;
         else {
+            const size_t face_start = i;
             int cnt = 0;
             while (i < data.vertices.size())
                 if (const ObjParser::ObjVertex &vertex = data.vertices[i ++]; vertex.coordIdx == -1) {
@@ -575,13 +577,31 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
                         obj_info.face_colors.emplace_back(face_color);
                     }
                 };
-                auto set_face_color_by_mtl = [&data, &set_face_color, &obj_info, &material_name_to_id](int face_index) {
+                auto set_face_color_by_mtl = [&](int face_index) {
                     const auto record_material = [&obj_info, &material_name_to_id](const std::string &name) {
                         auto [it, inserted] = material_name_to_id.emplace(name, static_cast<unsigned int>(obj_info.material_names.size()));
                         if (inserted)
                             obj_info.material_names.emplace_back(name);
                         obj_info.face_material_ids.emplace_back(it->second);
                     };
+                    if (collect_palette) {
+                        // vertexIdxFirst also accounts for faces preceding the first usemtl and for quad triangulation.
+                        while (material_run + 1 < data.usemtls.size() && size_t(data.usemtls[material_run + 1].vertexIdxFirst) <= face_start)
+                            ++material_run;
+                        const auto& use = data.usemtls[material_run];
+                        if (face_start < size_t(use.vertexIdxFirst)) {
+                            obj_info.face_material_ids.push_back(std::numeric_limits<unsigned int>::max());
+                            obj_info.uncolored_faces.push_back(face_index);
+                            return;
+                        }
+                        record_material(use.name);
+                        const auto def = mtl_data.new_mtl_unmap.find(use.name);
+                        if (!skip_material_data && def != mtl_data.new_mtl_unmap.end() && (def->second->has_kd || def->second->has_ka))
+                            set_face_color(face_index, use.name);
+                        else if (!skip_material_data)
+                            obj_info.uncolored_faces.push_back(face_index);
+                        return;
+                    }
                     if (data.usemtls.size() == 1) {
                         record_material(data.usemtls[0].name);
                         set_face_color(face_index, data.usemtls[0].name);
@@ -624,11 +644,17 @@ bool load_obj(const char* path, TriangleMesh* meshptr, ObjInfo& obj_info, std::s
     return true;
 }
 
-bool load_obj(const char* path, Model* model, ObjInfo& obj_info, std::string& message, const char* object_name_in, bool geometry_only)
+bool load_obj(const char*  path,
+              Model*       model,
+              ObjInfo&     obj_info,
+              std::string& message,
+              const char*  object_name_in,
+              bool         geometry_only,
+              bool         collect_palette)
 {
     TriangleMesh mesh;
 
-    bool ret = load_obj(path, &mesh, obj_info, message, geometry_only);
+    bool ret = load_obj(path, &mesh, obj_info, message, geometry_only, collect_palette);
 
     if (ret) {
         std::string  object_name;

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "walls",
-  "source_fingerprint": "sha256:a92f6b4fbb0b04628cbf6adef13f81527a87f927b0d8b556f17f9892e9046fc7",
-  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。周长墙与 Arachne 可变线宽的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
+  "source_fingerprint": "sha256:496d33528698c05322bdc358fdc814665c29f12cda0a53fada159a4a95678664",
+  "reason": "2026-11-11：PrintConfig 差异只涉及 CLI 分组帮助，墙参数、路径生成及默认值相同。"
 }
 -->
 

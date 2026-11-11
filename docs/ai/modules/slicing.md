@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "slicing",
-  "source_fingerprint": "sha256:aca1405a680f8b17850050f22aca2ec221c208e443e5f4ebcda4700b80d9fc6c",
-  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。FFF 切片步骤与层状态的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
+  "source_fingerprint": "sha256:4ca6db02b39a4ae19f20b88d06c862f234f50f47116162a233e3e895863f4c4b",
+  "reason": "2026-11-11：共享 PrintConfig 的两项 CLI 提示发生变化；切片层规划沿用既有实现，联合模式使用已确认的真实多盘布局。"
 }
 -->
 

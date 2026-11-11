@@ -13,6 +13,89 @@ import zipfile
 from test_cli_oversized_arrange import project_state, save_json, write_box
 
 
+def verify_color_sources(work, run, box):
+    red, black, green = "#FF0000", "#000000", "#00FF00"
+    mtl = work / "palette.mtl"
+    mtl.write_text("newmtl red\nKd 1 0 0\nnewmtl black\nKd 0 0 0\nnewmtl green\nKa 0 1 0\n"
+                   "newmtl empty\nNs 20\nnewmtl unused\nKd 1 1 1\n")
+
+    def obj(label, group, materials):
+        name = label + ".obj"
+        text = ["mtllib palette.mtl", "v 0 0 0", "v 6 0 0", "v 0 6 0", "v 0 0 6"]
+        for face, material in zip(("1 3 2", "1 2 4", "2 3 4", "3 1 4"), materials):
+            if material is not None:
+                text.append("usemtl " + material)
+            text.append("f " + face)
+        (work / name).write_text("\n".join(text) + "\n")
+        return name, group
+
+    def verify(label, parts, expected, *, colors=None, options=None, **flags):
+        opts = dict(options or {})
+        for name, color in (colors or {}).items():
+            opts[name] = ["--model-color", color]
+        _, state = run(label, parts, mode=False, extra=("--arrange-by-color", "1"), model_opts=opts, **flags)
+        assert [set(plate) for plate in state["members"]] == [{part[0] for part in plate} for plate in expected], label
+
+    mixed = obj("red-black", 1, ["red", "black", "red", "black"])
+    reverse = obj("black-red", 2, ["black", "red", "black", "red"])
+    rgb = obj("red-black-green", 3, ["red", "black", "green", "black"])
+    rr = obj("red-only", 1, ["red"] * 4)
+    other_red = box("other-red", 4, (10, 10, 1))
+    pure_green = box("green", 1, (10, 10, 1))
+    # A future red partner has priority over the earlier mixed sibling. A green
+    # sibling may not join red+black, nor the unrelated red+black+green plate.
+    verify("palette-exact", [mixed, reverse, rr, pure_green, rgb, other_red],
+           [[mixed, reverse], [rr, other_red], [pure_green], [rgb]],
+           colors={pure_green[0]: green, other_red[0]: red}, sliced=True)
+    verify("palette-return", [mixed, reverse, rr, pure_green], [[mixed, reverse, rr], [pure_green]], colors={pure_green[0]: green})
+    verify("palette-return-later", [rr, mixed, reverse], [[rr, mixed, reverse]])
+    # The file palette and each object's actual default slot survive a mixed OBJ/STL batch,
+    # even when the last OBJ has only one color. A group label does not bind a filament.
+    with zipfile.ZipFile(work / "palette-return" / "layout.3mf") as archive:
+        filament_colors = json.loads(archive.read("Metadata/project_settings.config"))["filament_colour"]
+        objects = ET.fromstring(archive.read("Metadata/model_settings.config")).findall("object")
+        base_colors = {}
+        for obj_state in objects:
+            name = obj_state.find("metadata[@key='name']").get("value")
+            slot = int(obj_state.find("metadata[@key='extruder']").get("value"))
+            base_colors[name] = filament_colors[slot - 1]
+        assert base_colors[mixed[0]] == red and base_colors[reverse[0]] == black
+    # Without source IDs, the same OBJs still use their first face color.
+    _, legacy = run("legacy-primary-color", [(mixed[0], None), (reverse[0], None)], mode=False, extra=("--arrange-by-color",))
+    assert len(legacy["members"]) == 2
+    verify("palette-mixed-tower", [mixed, reverse, rgb], [[mixed, reverse], [rgb]], tower=True)
+    oversized = box("palette-overflow", 1, (150, 140, 2))
+    rows, _ = run("palette-preview", [oversized, mixed, pure_green], mode=False, project=False, extra=("--arrange-by-color",),
+                  model_opts={pure_green[0]: ["--model-color", green]})
+    row = next(r for r in rows if r["object_name"] == oversized[0])
+    assert row["plate_index"] == 0 and row["position"] == [50, 50, 0]
+    # Incomplete coverage, missing material definition, and unknown MTL color
+    # belong to the default group. Explicit black is still a known color.
+    unknown = box("unknown", 6, (10, 10, 1))
+    unresolved = obj("unresolved", 2, ["red", "undefined", "red", "red"])
+    partial = obj("before-usemtl", 3, [None, "red", "red", "red"])
+    no_rgb = obj("no-kd-or-ka", 4, ["empty"] * 4)
+    known_black = box("black", 1, (8, 8, 1))
+    verify("palette-unknown", [rr, unknown, unresolved, known_black, partial, no_rgb],
+           [[rr], [unknown, unresolved, partial, no_rgb], [known_black]], colors={known_black[0]: black})
+    # A small component must not leak out of its own (source, red) bundle.
+    a = box("red-anchor", 1, (74, 74, 1))
+    b = box("red-small", 2, (10, 10, 1))
+    c = box("red-large", 2, (69, 69, 1))
+    d = box("red-later", 3, (9, 9, 1))
+    verify("palette-atomic", [a, b, c, d], [[a, d], [b, c]], colors={p[0]: red for p in [a, b, c, d]})
+    # The final explicit per-material binding can turn a two-color OBJ into
+    # one effective color. Group metadata must not replace its slot assignments.
+    blue = str(work / "second.json")
+    mapped = box("bound-stl", 8, (10, 10, 1))
+    verify("palette-bindings", [mixed, mapped], [[mixed, mapped]],
+           options={mixed[0]: ["--model-filaments", blue + ";" + blue], mapped[0]: ["--model-color", "#1100BB", "--model-filaments", blue]})
+    verify("palette-partial-bound", [partial, mapped], [[partial, mapped]],
+           options={part[0]: ["--model-filaments", blue] for part in [partial, mapped]}, sliced=True)
+    run("palette-missing-id", [rr, (other_red[0], None)], mode=False, extra=("--arrange-by-color", "1"),
+        error="Each STL or OBJ input")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
@@ -35,12 +118,14 @@ def main():
     save_json(work / "second.json", dict(json.loads(filament.read_text()), filament_colour=["#1100BB"]))
     (work / "data").mkdir()
 
-    def run(label, components, *, mode=True, extra=(), sliced=False, tower=False, error=None, model_opts=None):
+    def run(label, components, *, mode=True, extra=(), sliced=False, tower=False, error=None, model_opts=None, project=True):
         out = work / label
         out.mkdir()
         flags = ["--load-settings", f"{work / 'machine.json'};{work / ('tower.json' if tower else 'process.json')}",
-                 "--load-filaments", str(filament), "--export-model-transforms", "--export-3mf", "layout.3mf",
+                 "--load-filaments", str(filament), "--export-model-transforms",
                  "--arrange", "1", "--arrange-spacing", "2", "--allow-multicolor-oneplate"]
+        if project:
+            flags += ["--export-3mf", "layout.3mf"]
         if mode:
             flags += ["--arrange-by-source-group", "1"]
         if sliced:
@@ -67,6 +152,8 @@ def main():
         rows = result["model_transforms"]
         assert len({r["instance_id"] for r in rows}) == len(components) == len(rows)
         assert {r["object_name"] for r in rows} == {name for name, _ in components}
+        if not project:
+            return rows, None
         actual = project_state(out / "layout.3mf")
         # A JSON-only overflow plate cannot appear in real printable membership.
         for idx, plate in enumerate(actual["members"]):
@@ -126,6 +213,34 @@ def main():
     row = next(r for r in rows if r["object_name"] == tall[0])
     assert row["plate_index"] == len(state["members"]) and row["position"] == [50, 50, 0]
 
+    # Only the stand-alone preview interleaves overflow. Inserting display plates
+    # must not change placement, including XY on a physical bed beyond the first.
+    leading = box("leading-overflow", 8, (170, 120, 2))
+    anchor = box("first-bed", 1, (70, 70, 2))
+    follower = box("later-on-first", 2, small)
+    last = box("second-bed", 3, (75, 75, 2))
+    layout_inputs = [leading, anchor, oversized, tall, follower, last]
+    ordinary_inputs = [leading, oversized, box("second-overflow", 7, (130, 150, 2)), anchor, follower, last]
+    for grouped in (True, False):
+        case = "preview-order-" + ("grouped" if grouped else "ordinary")
+        components = layout_inputs if grouped else [(name, None) for name, _ in ordinary_inputs]
+        reference, state = run(case + "-project", components, mode=grouped, model_opts=opts)
+        preview, _ = run(case, components, mode=grouped, model_opts=opts, project=False)
+        by_name = {r["object_name"]: r for r in reference}
+        indices = {r["object_name"]: r["plate_index"] for r in preview}
+        assert len(set(indices.values())) == len(state["members"]) + 3
+        if grouped:
+            assert [indices[name] for name, _ in components] == [0, 1, 2, 3, 1, 4]
+        else:
+            assert [indices[name] for name, _ in components[:3]] == [0, 1, 2]
+        for plate in state["members"]:
+            assert len({indices[name] for name in plate}) == 1
+        for r in preview:
+            assert all(r[k] == by_name[r["object_name"]][k] for k in ("position", "rotation", "scale"))
+
+    rows, _ = run("preview-only-overflow", [leading, oversized], model_opts=opts, project=False)
+    assert {r["object_name"]: r["plate_index"] for r in rows} == {leading[0]: 0, oversized[0]: 1}
+
     tiny = [box(f"tiny-{i}", 20 - i, (5, 5, 1)) for i in range(10)]
     rows, state = run("ten-all-fit", tiny)
     legacy, control = run("ordinary", [(name, None) for name, _ in tiny], mode=False)
@@ -157,6 +272,8 @@ def main():
     tower_parts = [box(f"tower-part-{i}", 7, (53, 53, 2)) for i in range(2)]
     _, state = run("tower-pass", [*tower_parts, extra_part], tower=True)
     assert members(state)[-1] == {extra_part[0]} and len(members(state)) >= 3
+
+    verify_color_sources(work, run, box)
 
     for label, components, mode, extra, error in (
         ("no-switch", tiny[:1], False, (), "--model-source-group requires"),

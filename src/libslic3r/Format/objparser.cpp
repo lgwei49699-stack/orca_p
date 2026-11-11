@@ -446,6 +446,7 @@ static bool        mtl_parseline(const char *line, MtlData &data)
                     data.new_mtl_unmap[cur_mtl_name]->Ka[0] = x;
                     data.new_mtl_unmap[cur_mtl_name]->Ka[1] = y;
                     data.new_mtl_unmap[cur_mtl_name]->Ka[2] = z;
+                    data.new_mtl_unmap[cur_mtl_name]->has_ka = true;
                 }
             } else if (cur_char == 'd') {
                 EATWS();

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "localization",
-  "source_fingerprint": "sha256:f892d28f6c0fe1ff51f895676b629f707eef2703d8a17c05b1684cd5bb2bb126",
-  "reason": "2026-11-10：新增来源组开关及模型组号的四项简中帮助文案，已用 msgfmt 编译。"
+  "source_fingerprint": "sha256:ca7becd363ccded62b3d56acb4f2cc747775fc30ec9e3103a0a7588bfe6ac907",
+  "reason": "2026-11-11：核对两个现有 CLI 参数的新英文提示及其简体中文译文，msgfmt 检查通过。"
 }
 -->
 

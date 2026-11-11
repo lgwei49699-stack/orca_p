@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "gui-parameters",
-  "source_fingerprint": "sha256:dddfc49eb38ab2c2c3b17877dcd48f63e154a5085f888c3cb51e35ff060e57f1",
-  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。参数面板与对象覆盖的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
+  "source_fingerprint": "sha256:a438662f7724f6f5717384f4179627b814d725b531abd77d16667ea95943f069",
+  "reason": "2026-11-11：PrintConfig 改动位于 CLI 分组参数的帮助文字，GUI 参数注册、默认值及显示逻辑沿用原实现。"
 }
 -->
 

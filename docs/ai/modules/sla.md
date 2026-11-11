@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "sla",
-  "source_fingerprint": "sha256:94c36587898d448311234397d289da4b417aabb7d6586e73cfdeb5fe643f45d5",
-  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。SLA 切片与支撑的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
+  "source_fingerprint": "sha256:267fd54cc5a11f1b77a623884e93875c7a9484daf2c9123dfb2ab67caa5f1b62",
+  "reason": "2026-11-11：共享 PrintConfig 差异限于 CLI 分组说明，SLA 支撑和切片配置无变更。"
 }
 -->
 

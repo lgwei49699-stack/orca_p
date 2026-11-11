@@ -1674,7 +1674,8 @@ public:
                                 std::string*                     obj_primary_color_group   = nullptr,
                                 bool                             obj_geometry_only         = false,
                                 bool                             obj_require_color_mapping = false,
-                                bool*                            obj_materials_ignored     = nullptr);
+                                bool*                            obj_materials_ignored     = nullptr,
+                                std::vector<std::string>*        obj_arrange_palette       = nullptr);
     // BBS
     static bool obj_import_vertex_color_deal(const std::vector<unsigned char>& vertex_filament_ids,
                                              const unsigned char&              first_extruder_id,

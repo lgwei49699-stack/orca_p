@@ -1708,21 +1708,27 @@ int CLI::run(int argc, char **argv)
                                                         [](const ModelCliSpec& spec) { return spec.arrange_group.has_value(); });
 
     const bool                    arrange_by_source_group = m_config.opt_bool("arrange_by_source_group");
-    std::map<size_t, std::string> source_group_by_object;
+    const bool                    has_source_ids          = std::any_of(m_model_cli_specs.begin(), m_model_cli_specs.end(),
+                                                                        [](const ModelCliSpec& spec) { return spec.source_group.has_value(); });
+    const bool                    color_by_source         = m_config.opt_bool("arrange_by_color") && has_source_ids;
+    const bool                    use_source_groups       = arrange_by_source_group || color_by_source;
+    std::map<size_t, size_t>      input_by_source_object;
+    std::vector<CLIArrangeSource> arrange_sources(use_source_groups ? m_input_files.size() : 0);
     std::string                   source_group_error;
-    if (arrange_by_source_group) {
+    if (use_source_groups) {
         const auto specified = [&](const std::string& key) {
             return std::find(m_requested_options.begin(), m_requested_options.end(), key) != m_requested_options.end();
         };
-        if (m_config.opt_bool("arrange_by_color") || m_config.opt_bool("split_by_color") || has_explicit_arrange_group)
-            source_group_error = "--arrange-by-source-group conflicts with --arrange-by-color, --split-by-color and --model-arrange-group.";
+        if ((arrange_by_source_group && m_config.opt_bool("arrange_by_color")) || m_config.opt_bool("split_by_color") ||
+            has_explicit_arrange_group)
+            source_group_error =
+                "Source grouping conflicts with --split-by-color, --model-arrange-group or selecting both arrangement modes.";
         else if (m_actions.empty())
             source_group_error = "Select a CLI action such as --export-model-transforms or --slice 0 for source group arrangement.";
         else if (m_config.opt_int("arrange") != 1 || (specified("auto_plate") && m_config.opt_int("auto_plate") == 0) ||
                  m_config.opt_int("slice") != 0 || m_config.opt_int("repetitions") > 1 || specified("assemble") || specified("split") ||
                  !m_config.opt_string("load_assemble_list").empty())
-            source_group_error =
-                "--arrange-by-source-group requires --arrange 1 for global multi-plate arrangement of separate components.";
+            source_group_error = "Source grouping requires --arrange 1 for global multi-plate arrangement of separate components.";
         else if (m_input_files.empty() || m_input_files.size() != m_model_cli_specs.size() ||
                  !std::all_of(m_model_cli_specs.begin(), m_model_cli_specs.end(), [](const ModelCliSpec& spec) {
                      return spec.source_group && (boost::algorithm::iends_with(spec.model_token, ".obj") ||
@@ -1731,14 +1737,15 @@ int CLI::run(int argc, char **argv)
             source_group_error = "Each STL or OBJ input requires a matching --model block with --model-source-group.";
         else {
             std::set<std::string> groups;
-            for (const ModelCliSpec& spec : m_model_cli_specs)
-                groups.insert(*spec.source_group);
+            for (size_t i = 0; i < m_model_cli_specs.size(); ++i) {
+                arrange_sources[i].source = *m_model_cli_specs[i].source_group;
+                groups.insert(arrange_sources[i].source);
+            }
             if (groups.size() > 10)
-                source_group_error = "--arrange-by-source-group supports up to 10 distinct source groups.";
+                source_group_error = "Source grouping supports up to 10 distinct source groups.";
         }
-    } else if (std::any_of(m_model_cli_specs.begin(), m_model_cli_specs.end(),
-                           [](const ModelCliSpec& spec) { return spec.source_group.has_value(); }))
-        source_group_error = "--model-source-group requires --arrange-by-source-group.";
+    } else if (has_source_ids)
+        source_group_error = "--model-source-group requires --arrange-by-source-group or --arrange-by-color.";
     if (!source_group_error.empty()) {
         boost::nowide::cerr << source_group_error << std::endl;
         record_exit_reson(outfile_dir, CLI_INVALID_PARAMS, 0, source_group_error, sliced_info);
@@ -2332,7 +2339,7 @@ int CLI::run(int argc, char **argv)
         std::find(m_transforms.begin(), m_transforms.end(), "split_by_color") != m_transforms.end() && m_config.opt_bool("split_by_color");
     const bool arrange_by_color = std::find(m_transforms.begin(), m_transforms.end(), "arrange_by_color") != m_transforms.end() &&
                                   m_config.opt_bool("arrange_by_color");
-    const bool arrange_grouping_enabled  = arrange_by_color || has_explicit_arrange_group;
+    const bool arrange_grouping_enabled  = (arrange_by_color && !color_by_source) || has_explicit_arrange_group;
     bool allow_multicolor_oneplate = resolve_arrange_allow_multicolor_oneplate(
         m_config.option<ConfigOptionBool>("allow_multicolor_oneplate", true)->value, split_by_color);
     if (split_by_color)
@@ -2342,12 +2349,13 @@ int CLI::run(int argc, char **argv)
                                 << ", explicit_groups=" << has_explicit_arrange_group;
     const std::vector<int>  loaded_filament_ids  = m_config.option<ConfigOptionInts>("load_filament_ids", true)->values;
     const std::vector<int>  clone_objects  = m_config.option<ConfigOptionInts>("clone_objects", true)->values;
-    // Only ordinary OBJ imports use this compatibility path. Keep explicit
-    // per-model/per-file bindings, cloning, mixed inputs and repair unchanged.
-    const bool legacy_obj_batch = !has_model_filament_mapping && !cgal_repair_requested && loaded_filament_ids.empty() &&
-                                  clone_objects.empty() && !m_input_files.empty() &&
-                                  std::all_of(m_input_files.begin(), m_input_files.end(),
-                                              [](const std::string& path) { return boost::algorithm::iends_with(path, ".obj"); });
+    // STL companions in palette-aware arrangement carry no local OBJ colors.
+    // Preserve the same global OBJ palette across these mixed input batches.
+    const bool auto_obj_batch = !has_model_filament_mapping && !cgal_repair_requested && loaded_filament_ids.empty() &&
+                                clone_objects.empty() && !m_input_files.empty() &&
+                                (color_by_source || std::all_of(m_input_files.begin(), m_input_files.end(), [](const std::string& path) {
+                                     return boost::algorithm::iends_with(path, ".obj");
+                                 }));
     // Color-based renumbering is safe only when every supplied slot uses the
     // same default profile. Different profiles retain their original slot
     // bindings, even with load_defaultfila: that flag fills missing parameters,
@@ -2357,7 +2365,7 @@ int CLI::run(int argc, char **argv)
                                                          [&load_filaments](const std::string& path) {
                                                              return path == load_filaments.front();
                                                          });
-    const bool merge_obj_palettes = legacy_obj_batch && shared_obj_default_filament && m_input_files.size() > 1;
+    const bool merge_obj_palettes = auto_obj_batch && shared_obj_default_filament && m_input_files.size() > 1;
     //when load objects from stl/obj, the total used filaments set
     std::set<int> used_filament_set;
     if (has_model_filament_mapping && !loaded_filament_ids.empty()) {
@@ -2463,8 +2471,10 @@ int CLI::run(int argc, char **argv)
                 model = Model::read_from_file(file, &config, &config_substitutions, strategy, &plate_data_src, &project_presets,
                                               &is_bbl_3mf, &file_version, nullptr, nullptr, nullptr, plate_to_slice, nullptr,
                                               auto_repair_model, collect_repair_report ? &model_repair_info.report : nullptr,
-                                              explicit_material_slots, arrange_by_color ? &detected_obj_color_group : nullptr,
-                                              repair_ignore_materials, repair_preserve_colors, &input_materials_ignored);
+                                              explicit_material_slots,
+                                              arrange_by_color && !color_by_source ? &detected_obj_color_group : nullptr,
+                                              repair_ignore_materials, repair_preserve_colors, &input_materials_ignored,
+                                              color_by_source ? &arrange_sources[input_index].colors : nullptr);
                 if (arrange_grouping_enabled) {
                     const ModelCliSpec* model_spec   = input_index < m_model_cli_specs.size() ? &m_model_cli_specs[input_index] : nullptr;
                     const std::string explicit_group = model_spec && model_spec->arrange_group ? *model_spec->arrange_group : std::string();
@@ -2747,8 +2757,8 @@ int CLI::run(int argc, char **argv)
                             o->config.set_key_value("extruder", new ConfigOptionInt(object_extruder_id));
                         }
 
-                        if (arrange_by_source_group)
-                            source_group_by_object.emplace(o->id().id, *m_model_cli_specs.at(input_index).source_group);
+                        if (use_source_groups)
+                            input_by_source_object.emplace(o->id().id, input_index);
 
                         //default not orient for all, if need to orient use the action
                         //orients_requirement.insert(std::pair<size_t, bool>(o->id().id, false));
@@ -3241,7 +3251,7 @@ int CLI::run(int argc, char **argv)
     // filament. Reuse only an unambiguous default; never replace/reorder supplied
     // profiles or infer a physical spool from its color. Explicit bindings keep
     // their existing normalization above.
-    if (legacy_obj_batch && obj_multicolor_auto_mapping && !effective_load_filaments.empty() &&
+    if (auto_obj_batch && obj_multicolor_auto_mapping && !effective_load_filaments.empty() &&
         effective_load_filaments.size() < obj_multicolor_filament_colors.size()) {
         const auto first = std::find_if(effective_load_filaments.begin(), effective_load_filaments.end(),
                                         [](const std::string& path) { return !path.empty(); });
@@ -4713,6 +4723,35 @@ int CLI::run(int argc, char **argv)
 
     // BBS: merge these models into one
     BOOST_LOG_TRIVIAL(info) << "total " << m_models.size() << " models, " << orients_requirement.size() << " objects" << std::endl;
+    if (color_by_source) {
+        const auto* colors = m_print_config.option<ConfigOptionStrings>("filament_colour");
+        for (size_t i = 0; i < arrange_sources.size(); ++i) {
+            auto&       palette = arrange_sources[i].colors;
+            const auto& spec    = m_model_cli_specs[i];
+            if (spec.color) {
+                palette = {*spec.color};
+                continue;
+            }
+            auto slots = model_material_slots[i];
+            if (i < loaded_filament_ids.size() && loaded_filament_ids[i] > 0 && boost::algorithm::iends_with(spec.model_token, ".stl"))
+                slots.push_back(static_cast<unsigned int>(loaded_filament_ids[i]));
+            if (slots.empty())
+                continue;
+            palette.clear();
+            for (unsigned int slot : slots) {
+                const std::string color = colors && slot > 0 && slot <= colors->values.size() ? colors->values[slot - 1] : std::string();
+                if ((color.size() != 7 && color.size() != 9) || color.front() != '#' ||
+                    color.find_first_not_of("0123456789abcdefABCDEF", 1) != std::string::npos) {
+                    palette.clear();
+                    break;
+                }
+                palette.push_back(boost::to_upper_copy(color.substr(0, 7)));
+            }
+            std::sort(palette.begin(), palette.end());
+            palette.erase(std::unique(palette.begin(), palette.end()), palette.end());
+        }
+    }
+
     if (m_models.size() > 1) {
         BOOST_LOG_TRIVIAL(info) << "merge all the models into one\n";
         Model m;
@@ -4720,8 +4759,8 @@ int CLI::run(int argc, char **argv)
         for (auto& model : m_models)
             for (ModelObject* o : model.objects) {
                 ModelObject* new_object = m.add_object(*o);
-                if (arrange_by_source_group)
-                    source_group_by_object.emplace(new_object->id().id, source_group_by_object.at(o->id().id));
+                if (use_source_groups)
+                    input_by_source_object.emplace(new_object->id().id, input_by_source_object.at(o->id().id));
                 for (size_t i = 0; i < o->instances.size(); ++i)
                     if (project_input_instances.count(o->instances[i]->id().id) != 0)
                         project_input_instances.insert(new_object->instances[i]->id().id);
@@ -5756,7 +5795,7 @@ int CLI::run(int argc, char **argv)
     }
     // Source-group probes test the final Z extent, including --ensure-on-bed
     // for an oriented object. Arrange only changes XY and rotation about Z.
-    if (arrange_by_source_group && m_config.opt_bool("ensure_on_bed"))
+    if (use_source_groups && m_config.opt_bool("ensure_on_bed"))
         for (Model& model : m_models)
             for (ModelObject* object : model.objects)
                 object->ensure_on_bed();
@@ -5821,13 +5860,18 @@ int CLI::run(int argc, char **argv)
     // Failed packing may still change an instance's rotation. Preserve the
     // effective pose after input transforms/orientation for JSON-only overflow
     // plates, without changing the actual arrangement or exported geometry.
+    const bool order_preview = export_transforms && need_arrange && !force_single_plate && plate_data_src.empty() && m_actions.size() == 1;
+    std::vector<size_t>                        preview_input_order;
     std::map<size_t, Geometry::Transformation> instance_transforms_before_arrange;
     const auto                                 remember_instance_transforms = [&](const Model& model) {
         if (!export_transforms || force_single_plate)
             return;
         for (const ModelObject* object : model.objects)
-            for (const ModelInstance* instance : object->instances)
-                instance_transforms_before_arrange.emplace(instance->id().id, instance->get_transformation());
+            for (const ModelInstance* instance : object->instances) {
+                const auto saved = instance_transforms_before_arrange.emplace(instance->id().id, instance->get_transformation());
+                if (order_preview && saved.second)
+                    preview_input_order.push_back(instance->id().id);
+            }
     };
     if (need_arrange || !assemble_plate_info_list.empty())
         for (const Model& model : m_models)
@@ -6458,17 +6502,18 @@ int CLI::run(int argc, char **argv)
 
                 BOOST_LOG_TRIVIAL(info) << "auto_plate_value=" << auto_plate_value << " force_single_plate=" << force_single_plate;
 
-                std::vector<std::string> source_ids;
-                if (arrange_by_source_group) {
-                    source_ids.reserve(selected.size());
+                std::vector<CLIArrangeSource> selected_sources;
+                if (use_source_groups) {
+                    selected_sources.reserve(selected.size());
                     for (const auto& part : selected)
-                        source_ids.push_back(source_group_by_object.at(part.model_instance->get_object()->id().id));
+                        selected_sources.push_back(
+                            arrange_sources.at(input_by_source_object.at(part.model_instance->get_object()->id().id)));
                 }
                 auto arrange_selected = [&] {
-                    if (!arrange_by_source_group) {
+                    if (!use_source_groups) {
                         arrangement::arrange(selected, unselected, beds, arrange_cfg);
-                    } else if (!arrange_cli_source_groups(selected, source_ids, unselected, beds, Polygon(get_bed_shape(m_print_config)),
-                                                          arrange_cfg, MAX_PLATE_COUNT)) {
+                    } else if (!arrange_cli_source_groups(selected, selected_sources, color_by_source, unselected, beds,
+                                                          Polygon(get_bed_shape(m_print_config)), arrange_cfg, MAX_PLATE_COUNT)) {
                         const std::string message = "Source group arrangement failed: invalid footprint or physical plate limit exceeded.";
                         record_exit_reson(outfile_dir, CLI_OBJECT_ARRANGE_FAILED, 0, message, sliced_info);
                         boost::nowide::cerr << message << std::endl;
@@ -7012,6 +7057,8 @@ int CLI::run(int argc, char **argv)
                     const bool  export_separately = !force_single_plate && it == instance_to_plate.end();
                     const int   plate_idx      = export_separately ? next_export_plate++ : (it != instance_to_plate.end() ? it->second : 0);
                     const auto  before_arrange = instance_transforms_before_arrange.find(instance->id().id);
+                    if (order_preview && before_arrange == instance_transforms_before_arrange.end())
+                        preview_input_order.push_back(instance->id().id);
                     const bool  use_before_arrange = export_separately && before_arrange != instance_transforms_before_arrange.end();
                     const auto& export_transform   = use_before_arrange ? before_arrange->second : instance->get_transformation();
 
@@ -7110,6 +7157,31 @@ int CLI::run(int argc, char **argv)
                                             << ", Position: (" << export_x << "," << export_y << "," << export_z << ")"
                                             << ", Rotation (deg): (" << euler.x()*180.0/M_PI << "," << euler.y()*180.0/M_PI << "," << euler.z()*180.0/M_PI << ")"
                                             << ", Scale: (" << scale.x() << "," << scale.y() << "," << scale.z() << ")";
+                }
+            }
+        }
+        // Layout finalization may reorder the objects. Assign preview numbers in the
+        // captured input order, after all coordinates have used their physical bed.
+        if (order_preview && next_export_plate > plate_count) {
+            std::unordered_map<size_t, size_t> row_by_instance;
+            for (size_t i = 0; i < model_transforms_json.size(); ++i)
+                row_by_instance.emplace(model_transforms_json[i].at("instance_id").get<size_t>(), i);
+
+            int              next_display = 0;
+            std::vector<int> display_by_physical;
+            for (size_t id : preview_input_order) {
+                const auto row = row_by_instance.find(id);
+                if (row == row_by_instance.end()) // Clone removed by an arrangement retry.
+                    continue;
+                json&     number       = model_transforms_json[row->second].at("plate_index");
+                const int layout_plate = number.get<int>();
+                if (layout_plate >= plate_count) {
+                    number = next_display++;
+                } else {
+                    // Preserve physical bed order even if an earlier input occupies a later bed.
+                    while (static_cast<int>(display_by_physical.size()) <= layout_plate)
+                        display_by_physical.push_back(next_display++);
+                    number = display_by_physical[layout_plate];
                 }
             }
         }

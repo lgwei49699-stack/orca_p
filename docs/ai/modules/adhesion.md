@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "adhesion",
-  "source_fingerprint": "sha256:fd381afbf9a81b9f74475ec69648b3e9a4c0d3eb2bd78606ab798e538e9a35b9",
-  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。Brim、Skirt 与平台附着的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
+  "source_fingerprint": "sha256:4a6d3944238663259c9106da073d7fa11f4d078e70778dde925e3d9d55459eab",
+  "reason": "2026-11-11：核对 PrintConfig 变更，联合分盘复用排布约束，brim 和 skirt 配置沿用既有值。"
 }
 -->
 

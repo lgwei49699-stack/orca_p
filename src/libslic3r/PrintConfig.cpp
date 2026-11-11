@@ -8125,8 +8125,8 @@ CLITransformConfigDef::CLITransformConfigDef()
 
     def          = this->add("arrange_by_color", coBool);
     def->label   = L("Arrange by Color");
-    def->tooltip = L("Keep models with different primary OBJ/MTL colors or STL --model-color values on separate plates without splitting "
-                     "model geometry.");
+    def->tooltip = L(
+        "Arrange by primary color, or pass --model-source-group on every component to arrange by its full set of colors and source.");
     def->cli     = "arrange-by-color";
     def->set_default_value(new ConfigOptionBool(false));
 
@@ -8227,7 +8227,7 @@ CLITransformConfigDef::CLITransformConfigDef()
 
     def             = this->add("model_source_group", coStrings);
     def->label      = L("Model Source Group");
-    def->tooltip    = L("Positive source group number of this component for --arrange-by-source-group.");
+    def->tooltip = L("Positive source group number of this component for --arrange-by-source-group or palette-aware --arrange-by-color.");
     def->cli        = "model-source-group";
     def->cli_params = "id";
     def->set_default_value(new ConfigOptionStrings());

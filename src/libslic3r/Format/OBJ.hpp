@@ -17,6 +17,7 @@ typedef std::function<void(std::vector<RGBA> &input_colors, bool is_single_color
 struct ObjInfo {
     std::vector<RGBA> vertex_colors;
     std::vector<RGBA> face_colors;
+    std::vector<size_t> uncolored_faces; // Only recorded for CLI palette-aware import.
     // Distinct usemtl names in first face-use order and the corresponding
     // local material index for every triangulated face.
     std::vector<std::string>   material_names;
@@ -45,13 +46,19 @@ struct GeneralExtruderConfig
 // Geometry-only import does not open MTL libraries or import colors/UV/material assignments.
 // Default import is material-aware, but missing MTL libraries fall back to geometry
 // without source colors/UVs. Existing but invalid libraries still fail to parse.
-extern bool load_obj(const char* path, TriangleMesh* mesh, ObjInfo& vertex_colors, std::string& message, bool geometry_only = false);
+extern bool load_obj(const char*   path,
+                     TriangleMesh* mesh,
+                     ObjInfo&      vertex_colors,
+                     std::string&  message,
+                     bool          geometry_only   = false,
+                     bool          collect_palette = false);
 extern bool load_obj(const char*  path,
                      Model*       model,
                      ObjInfo&     vertex_colors,
                      std::string& message,
-                     const char*  object_name   = nullptr,
-                     bool         geometry_only = false);
+                     const char*  object_name     = nullptr,
+                     bool         geometry_only   = false,
+                     bool         collect_palette = false);
 // Read the distinct usemtl names which are actually assigned to faces, preserving
 // their first face-use order. This intentionally does not require the MTL file.
 extern bool load_obj_material_names(const char *path, std::vector<std::string> &material_names, std::string &message);

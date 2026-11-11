@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "support",
-  "source_fingerprint": "sha256:e284d4f02a10920f929a7b53a4c94af0382cbdf4f8e3e0c8bbde7249c33c2563",
-  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。普通、树状与有机支撑的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
+  "source_fingerprint": "sha256:9cb5e744a04077c8defef203c32f60475106331e4e8ff108988c4865be91a895",
+  "reason": "2026-11-11：核对共享 PrintConfig 的分盘帮助文本，支撑配置、生成和间距处理沿用原实现。"
 }
 -->
 

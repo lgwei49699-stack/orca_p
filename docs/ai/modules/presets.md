@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "presets",
-  "source_fingerprint": "sha256:1e32ac1bc8fe081b98517ca499c9508cb0ae72ce124c0964dee0120cc33ae14e",
-  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。配置定义、预设继承与资源更新的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
+  "source_fingerprint": "sha256:f28a0eb980e63a9bf81fa72bc2d8569a311c09eee61d9bf3a250ddc94b3cefd6",
+  "reason": "2026-11-11：核对 PrintConfig 的两个 CLI 提示，配置项名称、类型、预设和默认值相同。"
 }
 -->
 

@@ -3,8 +3,8 @@
 <!-- module-review
 {
   "id": "fill",
-  "source_fingerprint": "sha256:3bb02709df6910eb5498f3fc6412d06e4ffe6bdce844bc25aefe65356cd7748f",
-  "reason": "2026-11-10：复核 PrintConfig 变化仅新增两个 CLI 分盘参数。填充、顶底面与窄区的配置定义、入口与执行逻辑沿用原行为，正文无需调整。"
+  "source_fingerprint": "sha256:fb7c2c250b1160d03732cd7708264189a08115e5cf2301fc80932c21d4443057",
+  "reason": "2026-11-11：检查 PrintConfig 差异，颜色分组帮助未改变填充参数和路径生成。"
 }
 -->
 

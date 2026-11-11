@@ -349,7 +349,8 @@ Model Model::read_from_file(const std::string&               input_file,
                             std::string*                     obj_primary_color_group,
                             bool                             obj_geometry_only,
                             bool                             obj_require_color_mapping,
-                            bool*                            obj_materials_ignored)
+                            bool*                            obj_materials_ignored,
+                            std::vector<std::string>*        obj_arrange_palette)
 {
     Model model;
 
@@ -357,6 +358,8 @@ Model Model::read_from_file(const std::string&               input_file,
         *obj_materials_ignored = false;
     if (obj_primary_color_group != nullptr)
         obj_primary_color_group->clear();
+    if (obj_arrange_palette != nullptr)
+        obj_arrange_palette->clear();
 
     DynamicPrintConfig temp_config;
     ConfigSubstitutionContext temp_config_substitutions_context(ForwardCompatibilitySubstitutionRule::EnableSilent);
@@ -386,7 +389,7 @@ Model Model::read_from_file(const std::string&               input_file,
         ObjInfo                 obj_info;
         if (obj_geometry_only && obj_material_extruder_ids != nullptr)
             throw Slic3r::RuntimeError("Geometry-only OBJ import cannot bind source materials to filaments.");
-        result = load_obj(input_file.c_str(), &model, obj_info, message, nullptr, obj_geometry_only);
+        result = load_obj(input_file.c_str(), &model, obj_info, message, nullptr, obj_geometry_only, obj_arrange_palette != nullptr);
         if (result && obj_materials_ignored != nullptr)
             *obj_materials_ignored = obj_geometry_only || obj_info.missing_mtl;
         if (result && !obj_geometry_only) {
@@ -445,7 +448,14 @@ Model Model::read_from_file(const std::string&               input_file,
                     std::vector<unsigned char> face_filament_ids;
                     face_filament_ids.reserve(obj_info.face_material_ids.size());
                     unsigned int max_slot = 0;
+                    // A face before the first usemtl has no binding of its own. A
+                    // single explicitly selected spool covers the whole component.
+                    const bool uniform_binding = obj_arrange_palette != nullptr &&
+                                                 std::all_of(material_slots.begin(), material_slots.end(),
+                                                             [&](unsigned int slot) { return slot == material_slots.front(); });
                     for (unsigned int local_material_id : obj_info.face_material_ids) {
+                        if (uniform_binding && local_material_id == std::numeric_limits<unsigned int>::max())
+                            local_material_id = 0;
                         if (local_material_id >= material_slots.size())
                             throw Slic3r::RuntimeError("OBJ face references an unresolved usemtl material: " + input_file);
                         const unsigned int slot = material_slots[local_material_id];
@@ -486,6 +496,8 @@ Model Model::read_from_file(const std::string&               input_file,
                             std::string color_str = rgba_to_html(color);
 
                             if (color_to_id.find(color_str) == color_to_id.end()) {
+                                if (obj_arrange_palette != nullptr && next_id >= CONST_FILAMENTS.size())
+                                    throw Slic3r::RuntimeError("Too many MTL colors for automatic filament mapping.");
                                 color_to_id[color_str]        = next_id;
                                 filament_id_to_color[next_id] = color_str;
                                 next_id++;
@@ -494,6 +506,23 @@ Model Model::read_from_file(const std::string&               input_file,
                             face_filament_ids.push_back(color_to_id[color_str]);
                         }
 
+                        if (obj_arrange_palette != nullptr) {
+                            if (obj_info.uncolored_faces.empty()) {
+                                for (const auto& entry : color_to_id)
+                                    obj_arrange_palette->push_back(entry.first);
+                            } else {
+                                // Preserve the painted faces in a partially defined MTL. Unassigned faces use slot 1.
+                                std::vector<unsigned char> aligned(obj_info.face_material_ids.size(), 1);
+                                size_t                     unknown = 0, known = 0;
+                                for (size_t face = 0; face < aligned.size(); ++face) {
+                                    if (unknown < obj_info.uncolored_faces.size() && obj_info.uncolored_faces[unknown] == face)
+                                        ++unknown;
+                                    else
+                                        aligned[face] = face_filament_ids.at(known++);
+                                }
+                                face_filament_ids = std::move(aligned);
+                            }
+                        }
                         if (!face_filament_ids.empty()) {
                             has_color_mapping = true;
                             result            = obj_import_face_color_deal(face_filament_ids, first_extruder_id, &model);
